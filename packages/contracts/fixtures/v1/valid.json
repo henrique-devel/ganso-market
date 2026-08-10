@@ -1,0 +1,132 @@
+[
+  {
+    "name": "execution-mode-paper",
+    "schema_id": "urn:ganso-market:contracts:v1:execution-mode",
+    "data": "paper"
+  },
+  {
+    "name": "reason-code-single-token",
+    "schema_id": "urn:ganso-market:contracts:v1:reason-code",
+    "data": "READY"
+  },
+  {
+    "name": "reason-code-uppercase-snake",
+    "schema_id": "urn:ganso-market:contracts:v1:reason-code",
+    "data": "DEPENDENCY_UNAVAILABLE"
+  },
+  {
+    "name": "money-zero",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "0",
+      "decimals": 9,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-large-positive",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "900719925474099312345678901234567890",
+      "decimals": 6,
+      "asset_id": "asset:fixture"
+    }
+  },
+  {
+    "name": "money-negative",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "-42",
+      "decimals": 0,
+      "asset_id": "asset:fixture"
+    }
+  },
+  {
+    "name": "event-identity-confirmed",
+    "schema_id": "urn:ganso-market:contracts:v1:event-identity",
+    "data": {
+      "idempotency_key": "fixture:event:confirmed:1",
+      "slot": "18446744073709551615",
+      "commitment": "confirmed",
+      "source_timestamp": "2026-08-10T15:00:00.123Z",
+      "received_at": "2026-08-10T15:00:00.456Z",
+      "parser_version": "1.2.3-rc.1+build.5",
+      "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "name": "data-freshness-fresh",
+    "schema_id": "urn:ganso-market:contracts:v1:data-freshness",
+    "data": {
+      "status": "fresh",
+      "as_of": "2026-08-10T15:00:00Z",
+      "checked_at": "2026-08-10T15:00:00.010Z",
+      "age_ms": 10,
+      "max_age_ms": 1000,
+      "reason_codes": []
+    }
+  },
+  {
+    "name": "data-freshness-unknown",
+    "schema_id": "urn:ganso-market:contracts:v1:data-freshness",
+    "data": {
+      "status": "unknown",
+      "as_of": "2026-08-10T15:00:00Z",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "age_ms": 0,
+      "max_age_ms": 1000,
+      "reason_codes": ["SOURCE_TIMESTAMP_MISSING"]
+    }
+  },
+  {
+    "name": "service-health-live",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "market-engine",
+      "status": "live",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-correlation-live",
+      "reason_codes": [],
+      "checks": []
+    }
+  },
+  {
+    "name": "service-health-ready",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "ready",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-correlation-ready",
+      "reason_codes": [],
+      "checks": [
+        {
+          "name": "postgres",
+          "status": "ready",
+          "reason_codes": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "service-health-not-ready",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "not_ready",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-correlation-not-ready",
+      "reason_codes": ["DEPENDENCY_UNAVAILABLE"],
+      "checks": [
+        {
+          "name": "postgres",
+          "status": "not_ready",
+          "reason_codes": ["DEPENDENCY_UNAVAILABLE"]
+        }
+      ]
+    }
+  }
+]

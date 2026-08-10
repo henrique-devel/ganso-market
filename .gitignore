@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+target/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+infra/secrets/local/*
+!infra/secrets/local/.gitkeep
+*.log
+.DS_Store

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "execution_mode": "paper",
+  "database": {
+    "host": "postgres",
+    "port": 5432,
+    "name": "ganso_market",
+    "user": "ganso_market",
+    "connect_timeout_ms": 1000
+  },
+  "services": {
+    "api": {
+      "bind_address": "0.0.0.0",
+      "port": 3000
+    },
+    "market_engine": {
+      "bind_address": "0.0.0.0",
+      "port": 8081
+    },
+    "model_worker": {
+      "bind_address": "0.0.0.0",
+      "port": 8090
+    }
+  },
+  "logging": {
+    "level": "info"
+  }
+}

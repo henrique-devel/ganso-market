@@ -1,0 +1,6 @@
+[project]
+name = "ganso-model-worker"
+version = "0.1.0"
+description = "RFC-001 health-only model worker"
+requires-python = ">=3.9"
+dependencies = []

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ganso-market:contracts:v1:service-health",
+  "title": "ServiceHealth v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "service",
+    "status",
+    "checked_at",
+    "execution_mode",
+    "correlation_id",
+    "reason_codes",
+    "checks"
+  ],
+  "properties": {
+    "service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["live", "ready", "not_ready"]
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "execution_mode": {
+      "$ref": "urn:ganso-market:contracts:v1:execution-mode"
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:ganso-market:contracts:v1:reason-code"
+      },
+      "uniqueItems": true
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "reason_codes"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ready", "not_ready"]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:ganso-market:contracts:v1:reason-code"
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

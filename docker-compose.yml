@@ -1,0 +1,199 @@
+name: ganso-market
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: ganso_market
+      POSTGRES_USER: ganso_market
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: UTC
+    command: ["postgres", "-c", "timezone=UTC", "-c", "max_connections=40"]
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ganso_market -d ganso_market"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 256
+
+  migrate:
+    image: postgres:18.4-bookworm
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ganso_market
+      PGUSER: ganso_market
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: UTC
+    entrypoint: ["/bin/sh", "/migrations/apply.sh"]
+    secrets:
+      - postgres_password
+    volumes:
+      - ./infra/migrations/apply.sh:/migrations/apply.sh:ro
+      - ./migrations:/migrations/sql:ro
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+
+  market-engine:
+    build:
+      context: .
+      dockerfile: services/market-engine/Dockerfile
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+    expose:
+      - "8081"
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+    expose:
+      - "3000"
+    networks:
+      - backend
+      - edge
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 384m
+    cpus: 0.75
+    pids_limit: 128
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    expose:
+      - "8080"
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: 5s
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+
+  model-worker:
+    profiles: ["model"]
+    build:
+      context: .
+      dockerfile: workers/model-worker/Dockerfile
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+    expose:
+      - "8090"
+    networks:
+      - backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/live', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+
+  nginx:
+    image: nginx:1.30.4-alpine3.24
+    ports:
+      - target: 8080
+        published: "${GANSO_HTTP_PORT:-8080}"
+        host_ip: "127.0.0.1"
+        protocol: tcp
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+
+secrets:
+  postgres_password:
+    file: ./infra/secrets/local/postgres_password
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
+    internal: true
+  edge: {}

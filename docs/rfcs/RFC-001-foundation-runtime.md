@@ -1,6 +1,7 @@
 # RFC-001 — Fundação e runtime
 
-**Status:** draft  
+**Status:** implemented
+
 **Dependências:** nenhuma  
 **Bloqueia:** todas as demais RFCs  
 

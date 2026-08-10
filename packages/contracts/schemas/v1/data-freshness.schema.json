@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ganso-market:contracts:v1:data-freshness",
+  "title": "DataFreshness v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "as_of",
+    "checked_at",
+    "age_ms",
+    "max_age_ms",
+    "reason_codes"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["fresh", "stale", "unknown"]
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "age_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_age_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:ganso-market:contracts:v1:reason-code"
+      },
+      "uniqueItems": true
+    }
+  }
+}

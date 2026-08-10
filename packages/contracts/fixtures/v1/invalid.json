@@ -1,0 +1,270 @@
+[
+  {
+    "name": "execution-mode-live",
+    "schema_id": "urn:ganso-market:contracts:v1:execution-mode",
+    "data": "live"
+  },
+  {
+    "name": "execution-mode-unknown",
+    "schema_id": "urn:ganso-market:contracts:v1:execution-mode",
+    "data": "unknown"
+  },
+  {
+    "name": "reason-code-lowercase",
+    "schema_id": "urn:ganso-market:contracts:v1:reason-code",
+    "data": "dependency_unavailable"
+  },
+  {
+    "name": "reason-code-double-underscore",
+    "schema_id": "urn:ganso-market:contracts:v1:reason-code",
+    "data": "DEPENDENCY__UNAVAILABLE"
+  },
+  {
+    "name": "money-raw-json-float",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": 1.5,
+      "decimals": 9,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-raw-decimal-string",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "1.5",
+      "decimals": 9,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-raw-exponent",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "1e9",
+      "decimals": 9,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-raw-leading-zero",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "00",
+      "decimals": 9,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-raw-negative-zero",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "-0",
+      "decimals": 9,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-decimals-float",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "1",
+      "decimals": 1.5,
+      "asset_id": "SOL"
+    }
+  },
+  {
+    "name": "money-asset-empty",
+    "schema_id": "urn:ganso-market:contracts:v1:money-amount",
+    "data": {
+      "raw": "1",
+      "decimals": 9,
+      "asset_id": ""
+    }
+  },
+  {
+    "name": "event-slot-leading-zero",
+    "schema_id": "urn:ganso-market:contracts:v1:event-identity",
+    "data": {
+      "idempotency_key": "fixture:event:invalid-slot",
+      "slot": "01",
+      "commitment": "confirmed",
+      "source_timestamp": "2026-08-10T15:00:00Z",
+      "received_at": "2026-08-10T15:00:00Z",
+      "parser_version": "1.0.0",
+      "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "name": "event-source-timestamp-not-utc",
+    "schema_id": "urn:ganso-market:contracts:v1:event-identity",
+    "data": {
+      "idempotency_key": "fixture:event:offset-time",
+      "slot": "1",
+      "commitment": "processed",
+      "source_timestamp": "2026-08-10T12:00:00-03:00",
+      "received_at": "2026-08-10T15:00:00Z",
+      "parser_version": "1.0.0",
+      "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "name": "event-received-at-without-timezone",
+    "schema_id": "urn:ganso-market:contracts:v1:event-identity",
+    "data": {
+      "idempotency_key": "fixture:event:no-timezone",
+      "slot": "1",
+      "commitment": "finalized",
+      "source_timestamp": "2026-08-10T15:00:00Z",
+      "received_at": "2026-08-10T15:00:00",
+      "parser_version": "1.0.0",
+      "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "name": "event-parser-version-not-semver",
+    "schema_id": "urn:ganso-market:contracts:v1:event-identity",
+    "data": {
+      "idempotency_key": "fixture:event:parser-version",
+      "slot": "1",
+      "commitment": "confirmed",
+      "source_timestamp": "2026-08-10T15:00:00Z",
+      "received_at": "2026-08-10T15:00:00Z",
+      "parser_version": "v1.0",
+      "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "name": "event-payload-hash-uppercase",
+    "schema_id": "urn:ganso-market:contracts:v1:event-identity",
+    "data": {
+      "idempotency_key": "fixture:event:hash",
+      "slot": "1",
+      "commitment": "confirmed",
+      "source_timestamp": "2026-08-10T15:00:00Z",
+      "received_at": "2026-08-10T15:00:00Z",
+      "parser_version": "1.0.0",
+      "payload_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  {
+    "name": "data-freshness-status-unsupported",
+    "schema_id": "urn:ganso-market:contracts:v1:data-freshness",
+    "data": {
+      "status": "expired",
+      "as_of": "2026-08-10T15:00:00Z",
+      "checked_at": "2026-08-10T15:00:01Z",
+      "age_ms": 1000,
+      "max_age_ms": 1000,
+      "reason_codes": []
+    }
+  },
+  {
+    "name": "data-freshness-checked-at-not-utc",
+    "schema_id": "urn:ganso-market:contracts:v1:data-freshness",
+    "data": {
+      "status": "stale",
+      "as_of": "2026-08-10T15:00:00Z",
+      "checked_at": "2026-08-10T12:00:01-03:00",
+      "age_ms": 1000,
+      "max_age_ms": 500,
+      "reason_codes": ["STALE_DATA"]
+    }
+  },
+  {
+    "name": "data-freshness-negative-age",
+    "schema_id": "urn:ganso-market:contracts:v1:data-freshness",
+    "data": {
+      "status": "fresh",
+      "as_of": "2026-08-10T15:00:00Z",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "age_ms": -1,
+      "max_age_ms": 1000,
+      "reason_codes": []
+    }
+  },
+  {
+    "name": "service-health-status-unknown",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "unknown",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-unknown-status",
+      "reason_codes": [],
+      "checks": []
+    }
+  },
+  {
+    "name": "service-health-live-execution-mode",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "ready",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "live",
+      "correlation_id": "fixture-live-mode",
+      "reason_codes": [],
+      "checks": []
+    }
+  },
+  {
+    "name": "service-health-checked-at-not-utc",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "ready",
+      "checked_at": "2026-08-10T12:00:00-03:00",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-offset-time",
+      "reason_codes": [],
+      "checks": []
+    }
+  },
+  {
+    "name": "service-health-invalid-reason-code",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "not_ready",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-invalid-reason",
+      "reason_codes": ["database unavailable"],
+      "checks": []
+    }
+  },
+  {
+    "name": "service-health-invalid-correlation-id",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "ready",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": ".invalid-correlation",
+      "reason_codes": [],
+      "checks": []
+    }
+  },
+  {
+    "name": "service-health-check-status-live",
+    "schema_id": "urn:ganso-market:contracts:v1:service-health",
+    "data": {
+      "service": "api",
+      "status": "ready",
+      "checked_at": "2026-08-10T15:00:00Z",
+      "execution_mode": "paper",
+      "correlation_id": "fixture-check-live",
+      "reason_codes": [],
+      "checks": [
+        {
+          "name": "postgres",
+          "status": "live",
+          "reason_codes": []
+        }
+      ]
+    }
+  }
+]

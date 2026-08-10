@@ -4,6 +4,33 @@ Ferramenta pessoal e single-user para pesquisa, paper trading e, depois dos gate
 
 Este repositório começa pelos documentos que governam o desenvolvimento. A implementação deve seguir o PRD e uma RFC ativa por vez.
 
+## Estado implementado
+
+A RFC-001 fornece agora um runtime mínimo, ainda sem lógica de mercado:
+
+- `market-engine` em Rust, limitado a bootstrap e health;
+- API Fastify sem rotas de autenticação funcionais;
+- web React/Vite que mostra somente health real;
+- `model-worker` Python opcional, sem modelo;
+- PostgreSQL com três tabelas fundacionais;
+- Nginx local, sem certificado real nesta RFC.
+
+O único modo aceito é `paper`. Não existem signer, wallet, Yellowstone,
+estratégia, ordem ou execução neste código.
+
+Para reproduzir localmente:
+
+```sh
+make doctor
+make install
+make verify
+make up
+```
+
+O gateway usa `127.0.0.1:8080` por padrão. Consulte
+[`docs/runbooks/development.md`](docs/runbooks/development.md) antes de subir o
+ambiente. `make down` encerra os containers sem apagar o volume do PostgreSQL.
+
 ## Decisões já fechadas
 
 - Uso exclusivo do proprietário; não é SaaS e não receberá fundos de terceiros.
@@ -22,6 +49,11 @@ Este repositório começa pelos documentos que governam o desenvolvimento. A imp
 - [PRD do MVP](docs/PRD.md)
 - [Índice e ordem das RFCs](docs/RFC_INDEX.md)
 - [Prompt mestre da IA de desenvolvimento](prompts/AI_DEVELOPER_SYSTEM_PROMPT.md)
+- [Arquitetura da fundação](docs/architecture/foundation.md)
+- [Runbook de desenvolvimento](docs/runbooks/development.md)
+- [Dependências e licenças](docs/DEPENDENCIES.md)
+- [Evidência de verificação da RFC-001](docs/test-results/RFC-001.md)
+- [Handoff e continuidade do projeto](docs/HANDOFF.md)
 
 ## Ordem de desenvolvimento
 

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ganso-market:contracts:v1:execution-mode",
+  "title": "ExecutionMode v1",
+  "type": "string",
+  "enum": ["paper"]
+}

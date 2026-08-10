@@ -1,0 +1,29 @@
+{
+  "name": "ganso-market",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "packages/contracts"
+  ],
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": ">=24.0.0 <27",
+    "npm": ">=11.17.0 <12"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "format": "prettier --write package.json tsconfig.base.json 'apps/**/*.{ts,tsx,json,css,html}' 'packages/**/*.{ts,json}'",
+    "format:check": "prettier --check package.json tsconfig.base.json 'apps/**/*.{ts,tsx,json,css,html}' 'packages/**/*.{ts,json}'",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

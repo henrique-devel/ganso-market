@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ganso-market:contracts:v1:money-amount",
+  "title": "MoneyAmount v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["raw", "decimals", "asset_id"],
+  "properties": {
+    "raw": {
+      "type": "string",
+      "pattern": "^(?:0|-?[1-9][0-9]*)$"
+    },
+    "decimals": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "asset_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

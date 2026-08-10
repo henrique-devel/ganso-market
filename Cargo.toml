@@ -1,0 +1,14 @@
+[workspace]
+members = ["services/market-engine"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.96"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true

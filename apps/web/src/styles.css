@@ -1,0 +1,143 @@
+:root {
+  color: #e8eee9;
+  background: #0c1310;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 25% 15%, rgb(48 111 74 / 18%), transparent 34rem),
+    #0c1310;
+}
+
+button {
+  font: inherit;
+}
+
+.shell {
+  width: min(44rem, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: clamp(4rem, 12vh, 8rem) 0 3rem;
+}
+
+.header {
+  margin-bottom: 2rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  color: #8eaa98;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0.75rem;
+  color: #f6faf7;
+  font-size: clamp(2.5rem, 8vw, 4.75rem);
+  line-height: 0.95;
+  letter-spacing: -0.055em;
+}
+
+.scope {
+  max-width: 34rem;
+  margin-bottom: 0;
+  color: #aab8af;
+  line-height: 1.6;
+}
+
+.status-card {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.5rem;
+  border: 1px solid #28372e;
+  border-radius: 1rem;
+  background: rgb(19 30 24 / 82%);
+  box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 22%);
+}
+
+.status-card h2 {
+  margin-bottom: 0.35rem;
+  font-size: 1.1rem;
+}
+
+.status-card p {
+  margin-bottom: 0.65rem;
+  color: #aab8af;
+  line-height: 1.5;
+}
+
+.status-card code {
+  color: #c5d2c9;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.status-dot {
+  flex: 0 0 auto;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: 0.3rem;
+  border-radius: 999px;
+  background: #829086;
+  box-shadow: 0 0 0 0.3rem rgb(130 144 134 / 12%);
+}
+
+.status-card[data-state="ready"] .status-dot {
+  background: #57d68d;
+  box-shadow: 0 0 0 0.3rem rgb(87 214 141 / 13%);
+}
+
+.status-card[data-state="not_ready"] .status-dot {
+  background: #f3b760;
+  box-shadow: 0 0 0 0.3rem rgb(243 183 96 / 13%);
+}
+
+.status-card[data-state="unreachable"] .status-dot {
+  background: #e2776a;
+  box-shadow: 0 0 0 0.3rem rgb(226 119 106 / 13%);
+}
+
+.refresh {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #35483c;
+  border-radius: 0.65rem;
+  color: #dfe8e2;
+  background: #17231c;
+  cursor: pointer;
+}
+
+.refresh:hover {
+  background: #1d2c23;
+}
+
+.refresh:focus-visible {
+  outline: 2px solid #66d697;
+  outline-offset: 3px;
+}

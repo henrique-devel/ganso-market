@@ -1,0 +1,9 @@
+.git
+.gitignore
+.venv
+node_modules
+target
+**/dist
+**/__pycache__
+infra/secrets/local
+*.log
