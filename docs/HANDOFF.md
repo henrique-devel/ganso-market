@@ -1,6 +1,6 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-10
+- Última atualização: 2026-08-14
 - Branch principal: `main`
 - Modo permitido no runtime atual: `paper`
 
@@ -13,23 +13,30 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 - **FATO VERIFICADO:** RFC-001 implementada e verificada localmente.
 - **FATO VERIFICADO:** runtime composto por PostgreSQL, market-engine Rust,
   API Fastify, web React/Vite, worker Python opcional e Nginx local.
-- **FATO VERIFICADO:** somente Nginx publica porta, fixada em
-  `127.0.0.1`; PostgreSQL, engine, worker e métricas permanecem internos.
+- **FATO VERIFICADO:** somente Nginx publica porta. Desenvolvimento usa
+  `127.0.0.1:8080`; o novo modo standalone usa `0.0.0.0:80`. PostgreSQL,
+  engine, worker e métricas permanecem internos.
 - **FATO VERIFICADO:** auth, Yellowstone, modelos, estratégias, wallet,
   signer, ordens e execução não existem nesta entrega.
-- **FATO VERIFICADO:** nenhum container está ativo; o volume local
+- **FATO VERIFICADO:** nenhum container está ativo na máquina local; o volume local
   `ganso-market_postgres_data` está preservado.
-- **FATO VERIFICADO:** existe uma alteração local anterior do proprietário em
-  `prompts/AI_DEVELOPER_SYSTEM_PROMPT.md`. Ela não pertence à RFC-001 e não deve
-  ser descartada, formatada ou incluída em outro commit sem decisão explícita.
-- **BLOQUEIO/TODO:** não houve deploy ou teste operacional no Hetzner CPX42.
+- **FATO INFORMADO:** o proprietário reconstruiu o servidor em 2026-08-14. A
+  RFC-001A e o runbook de limpeza do host antigo estão obsoletos e não devem ser
+  executados.
+- **FATO VERIFICADO:** o host reconstruído usa Ubuntu 22.04 x86_64, usuário
+  `root`, host key Ed25519 confirmada e checkout em `/opt/ganso-market`.
+- **FATO VERIFICADO:** Docker 29.7.2 e Compose 5.4.0 foram instalados pelo
+  repositório oficial; o serviço Docker está ativo e habilitado no boot.
+- **FATO VERIFICADO:** o standalone foi publicado e validado externamente em
+  `http://178.105.65.251/` em 2026-08-14.
 
 ## Sequência de RFCs
 
 | RFC | Estado de acompanhamento | Evidência/condição |
 | --- | --- | --- |
 | RFC-001 — Fundação e runtime | Implementada localmente | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md) |
-| RFC-002 — Auth e HTTPS por IP | Próxima candidata; não iniciada | Resolver HTTP público informado versus HTTPS obrigatório no PRD antes de publicar |
+| RFC-001A — Limpeza e preservação Yellowstone | Substituída pelo rebuild | Não executar no host novo |
+| RFC-002 — Auth e HTTP | Draft a revisar | Bootstrap standalone não depende dela; auth continua obrigatória antes de dados sensíveis |
 | RFC-003 — Yellowstone | Não iniciada | Não antecipar durante a RFC-002 |
 | RFC-004 — Eventos e persistência | Não iniciada | Depende da RFC-003 |
 | RFC-005 — Wallet, risco e signer | Não iniciada | Live continua proibido; depende das gates anteriores |
@@ -39,13 +46,24 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 
 ## Evidência mais recente
 
-- `make verify`: sucesso; 94 testes TypeScript, 14 Rust e 16 Python,
-  além de formatadores, linters, builds, scanner e política do Compose.
-- `make integration`: sucesso com o volume preservado; 79.590.061 bytes
-  agregados em seis containers.
+- `make verify`: sucesso em 2026-08-14; 94 testes TypeScript, 22 Rust, nove do
+  worker e 93 dos scripts, além de formatadores, linters, builds, scanner e
+  política do Compose.
 - Smoke isolado com volume novo: sucesso; primeiro boot, migration,
   reaplicação idempotente, perda/recuperação do PostgreSQL e shutdown sem
-  órfãos; 78.753.395 bytes agregados.
+  órfãos; 79.307.242 bytes agregados em seis containers.
+- Fluxo standalone isolado: `server-up`, `server-status`, `server-health` e
+  `server-down` passaram, incluindo readiness interno do market-engine.
+- Deploy remoto: cinco containers persistentes ativos, migration `0001`
+  aplicada com exit `0`, frontend/API live/API ready em HTTP 200 pelo IPv4
+  público e execução confirmada em modo `paper`.
+- No host, somente SSH e Nginx estão publicados; Nginx usa `0.0.0.0:80`, sem
+  listener `[::]:80`. UFW permanece inativo e não foi alterado.
+- O volume temporário dos dois smokes foi removido após validação literal; o
+  volume canônico `ganso-market_postgres_data` foi preservado.
+- O volume canônico local contém checksum histórico diferente para a migration
+  `0001` e por isso o migrador o rejeita. Nada foi regravado ou apagado; esse
+  estado local não afeta um servidor reconstruído com volume novo.
 - Budget configurado: 2.684.354.560 bytes e 4 vCPU, incluindo worker opcional
   e migrador one-shot.
 - Inventário determinístico: 289 dependências npm/Cargo de registro com
@@ -67,32 +85,36 @@ Os comandos e resultados completos estão em
 7. Logs de aplicação/access são JSON, têm correlation ID quando aplicável e
    não registram query string recebida.
 8. `make down` e o smoke não removem volumes por padrão.
-9. Nenhuma publicação HTTP externa é autorizada pela RFC-001.
+9. A fundação standalone pode publicar somente Nginx em IPv4/TCP 80; nenhum
+   serviço interno ganha porta no host.
 
 ## Decisões pendentes e riscos residuais
 
-- **BLOQUEIO/TODO — exposição:** o contexto do proprietário menciona HTTP no
-  IP público, enquanto o PRD exige HTTPS e reserva HTTP para ACME/redirect.
-  Não publicar até o proprietário resolver o conflito.
-- **BLOQUEIO/TODO — host:** CPU, RAM, SSD, arquitetura e toolchains do CPX42
-  ainda não foram medidos/verificados por esta entrega.
+- **DECISÃO — exposição:** o bootstrap standalone usa HTTP direto em
+  `0.0.0.0:80`, sem firewall gerenciado pelo projeto, domínio, TLS, Certbot ou
+  443. Essa autorização cobre somente a fundação sem auth/wallet/execução.
+- **BLOQUEIO/TODO — Yellowstone:** uma credencial nova e slots avançando ainda
+  precisam ser confirmados antes de iniciar ingestão.
+- **BLOQUEIO/TODO — wallet:** a recuperação offline da hot wallet deve ser
+  comprovada antes de qualquer implementação de wallet/signer.
 - **RISCO:** não há backup externo automático, HA ou recuperação garantida do
   PostgreSQL, por decisão de escopo atual.
 - **RISCO:** `ServiceHealth` é reproduzido manualmente entre linguagens; os
   schemas v1 são normativos, mas existe risco futuro de drift.
-- **RISCO:** o market-engine tem endpoints testados, porém não possui
-  `healthcheck` declarativo no Compose.
+- **RISCO:** o market-engine não possui `healthcheck` declarativo no Compose;
+  `make server-health` cobre sua readiness pela rede interna.
 - **RISCO:** scanners de segredo são defesa em profundidade, não prova
   matemática de ausência de toda codificação possível.
 
 ## Próximo passo mínimo
 
-1. O proprietário confirma qual RFC está ativa na próxima sessão.
-2. Se for a RFC-002, resolver primeiro o conflito HTTP/HTTPS.
-3. Ler integralmente PRD, RFC-002 e este handoff.
-4. Verificar `git status` e preservar a mudança local do prompt.
-5. Executar `make doctor` e `make verify` antes de alterar infraestrutura.
-6. Implementar somente auth/HTTPS; não antecipar Yellowstone ou live.
+1. Revisar e reescrever a RFC-002 para autenticação no perímetro standalone.
+2. Não adicionar login, tokens, wallet ou controles privados ao HTTP público
+   antes dessa revisão.
+3. Para operação atual, usar `cd /opt/ganso-market` seguido de
+   `make server-status`, `make server-health` ou `make server-logs`.
+4. Versionar/publicar o working tree antes de adotar atualizações por Git; o
+   primeiro deploy foi transferido como pacote sem `.git`.
 
 ## Como atualizar este handoff
 

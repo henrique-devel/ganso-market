@@ -4,9 +4,12 @@ SHELL := /bin/sh
 PYTHON ?= python3
 VENV := .venv
 RUFF := $(VENV)/bin/ruff
+SERVER_ENV ?= deploy/server.env
+SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 
 .PHONY: help doctor install init-secrets format format-check lint test build verify \
-	contracts-check compose-config licenses up migrate integration resource-check secret-scan down
+	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \
+	server-init server-config server-up server-health server-status server-logs server-update server-down
 
 help:
 	@echo "Ganso Market RFC-001"
@@ -16,6 +19,12 @@ help:
 	@echo "  make up             sobe o runtime local em 127.0.0.1"
 	@echo "  make integration    testa Compose, readiness e shutdown"
 	@echo "  make down           encerra sem apagar volumes"
+	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
+	@echo "  make server-health  verifica frontend, API, banco e engine"
+	@echo "  make server-status  mostra o estado dos containers"
+	@echo "  make server-logs    acompanha os logs do runtime"
+	@echo "  make server-update  reconstrói e atualiza o runtime"
+	@echo "  make server-down    encerra o runtime sem apagar o banco"
 
 doctor:
 	@./scripts/check_toolchains.sh
@@ -85,3 +94,35 @@ resource-check:
 
 down:
 	docker compose --profile model down --remove-orphans
+
+server-init:
+	@if [ ! -f "$(SERVER_ENV)" ]; then \
+		cp deploy/server.env.example "$(SERVER_ENV)"; \
+		echo "configuração criada em $(SERVER_ENV)"; \
+	fi
+	@$(PYTHON) scripts/init_dev_secrets.py
+
+server-config: server-init
+	@$(SERVER_COMPOSE) config --quiet
+
+server-up: server-config
+	$(SERVER_COMPOSE) up --build --detach --remove-orphans --wait --wait-timeout 180
+	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
+
+server-health:
+	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
+
+server-status:
+	@$(SERVER_COMPOSE) ps
+
+server-logs:
+	$(SERVER_COMPOSE) logs --follow --tail 100
+
+server-update: server-config
+	$(SERVER_COMPOSE) pull --ignore-buildable
+	$(SERVER_COMPOSE) build --pull
+	$(SERVER_COMPOSE) up --detach --force-recreate --remove-orphans --wait --wait-timeout 180
+	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
+
+server-down:
+	$(SERVER_COMPOSE) --profile model down --remove-orphans

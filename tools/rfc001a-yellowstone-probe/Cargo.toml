@@ -1,0 +1,14 @@
+[package]
+name = "ganso-rfc001a-yellowstone-probe"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.96"
+
+[dependencies]
+futures = "=0.3.33"
+libc = "=0.2.189"
+tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+yellowstone-grpc-client = "=13.3.0"
+yellowstone-grpc-proto = "=12.5.0"

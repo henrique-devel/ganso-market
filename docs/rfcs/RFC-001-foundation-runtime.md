@@ -57,7 +57,7 @@ Se o ambiente encontrado justificar stack diferente, pare antes de mudar a decis
    - API;
    - frontend estático;
    - model-worker em profile opcional;
-   - Nginx preparado, mas sem certificado real nesta RFC.
+   - Nginx preparado somente em loopback; publicação HTTP pertence à RFC-002.
 4. Criar configuração tipada com precedência explícita:
    - defaults seguros;
    - arquivo de configuração não secreto;

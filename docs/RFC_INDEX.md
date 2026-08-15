@@ -16,7 +16,8 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 | RFC | Título | Dependências | Resultado |
 |---|---|---|---|
 | [RFC-001](rfcs/RFC-001-foundation-runtime.md) | Fundação e runtime | nenhuma | monorepo, Compose, configuração e observabilidade mínima |
-| [RFC-002](rfcs/RFC-002-auth-ip-https.md) | Auth e HTTPS por IP | RFC-001 | painel protegido por senha/tokens e TLS confiável |
+| [RFC-001A](rfcs/RFC-001A-server-cleanup-yellowstone.md) | Histórico: limpeza do Ganso-bot | superseded pelo rebuild | não executar no host novo |
+| [RFC-002](rfcs/RFC-002-auth-ip-http.md) | Auth e perímetro a revisar | RFC-001 | draft deve ser reescrito antes da implementação |
 | [RFC-003](rfcs/RFC-003-yellowstone-ingestion.md) | Ingestão Yellowstone | RFC-001 | stream filtrado, filas e backpressure |
 | [RFC-004](rfcs/RFC-004-events-storage.md) | Eventos e persistência | RFC-003 | decoders, estado, PostgreSQL e TTL |
 | [RFC-005](rfcs/RFC-005-wallet-risk-signer.md) | Wallet, risco e signer | RFC-001 e RFC-004 | fronteira de assinatura local e políticas |
@@ -31,5 +32,6 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 - `in-progress`: a IA está trabalhando.
 - `implemented`: critérios comprovados.
 - `blocked`: uma condição de parada foi atingida.
+- `superseded`: uma decisão posterior substituiu a RFC; não executar.
 
 Nenhuma RFC pode ser marcada `implemented` apenas porque houve geração de código.

@@ -45,8 +45,10 @@ ambiente. Campo desconhecido, schema diferente de `1`, arquivo ilegível,
 secret vazio/multilinha ou modo diferente de `paper` rejeitam o boot.
 
 O arquivo versionado é [`config/runtime.json`](../../config/runtime.json). O
-secret local é gerado por `make init-secrets`, recebe modo `0600`, fica em
-`infra/secrets/local/` e é ignorado pelo Git. Seu valor nunca é impresso.
+secret local é gerado por `make init-secrets`, fica em um diretório `0700` e
+recebe modo `0644` para ser legível pelos UIDs não-root dos containers. Ele
+permanece em `infra/secrets/local/`, ignorado pelo Git, e seu valor nunca é
+impresso.
 O migrador rejeita conteúdo vazio, multilinha, NUL ou maior que 4 KiB e cria um
 `PGPASSFILE` temporário `0600`; o valor não é exportado como variável.
 Private key e seed não pertencem a esta RFC e nunca usam env.
@@ -93,10 +95,11 @@ de portas a partir da configuração canônica do Compose. Isso é budget, não
 benchmark; RSS idle real é registrado apenas quando `make integration` ou
 `make resource-check` é executado com o daemon disponível.
 
-## TLS e exposição pública
+## Exposição pública
 
-A RFC-001 não instala certificado. O Nginx fica restrito a loopback. O contexto
-atual menciona um endereço HTTP público, mas o PRD exige HTTPS e reserva HTTP
-para ACME/redirecionamento. Portanto esta fundação não autoriza deploy público;
-essa decisão permanece bloqueada até a RFC-002 ou instrução explícita que
-resolva o conflito de segurança.
+O modo de desenvolvimento mantém o Nginx em `127.0.0.1:8080`. Após o rebuild do
+servidor informado em 2026-08-14, o modo standalone pode publicar somente o
+Nginx em `0.0.0.0:80`, sem firewall gerenciado por este projeto, TLS, ACME,
+domínio ou porta 443. PostgreSQL, API, engine e worker continuam sem portas no
+host. Essa exceção serve apenas para a fundação atual, que não contém auth,
+wallet, tokens ou execução; esses recursos exigem uma nova revisão de perímetro.

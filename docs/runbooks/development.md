@@ -25,7 +25,9 @@ curl --fail http://127.0.0.1:8080/api/health/ready
 
 `make init-secrets` cria um password aleatório apenas para o PostgreSQL local.
 Ele não sobrescreve o arquivo existente e nunca mostra seu conteúdo. Não copie
-o arquivo para Git, logs, fixtures ou chat.
+o arquivo para Git, logs, fixtures ou chat. O diretório fica em `0700`; o
+arquivo fica em `0644` para que os UIDs não-root dos containers consigam ler o
+bind mount. Fora desse diretório privado, o arquivo não é acessível no host.
 
 O worker opcional sobe somente com:
 
@@ -55,8 +57,8 @@ da instalação, testes unitários não consultam mainnet nem APIs externas.
 ## Falhas esperadas e diagnóstico
 
 - `CONFIG_INVALID`: confira JSON, schema `1`, campos conhecidos e modo `paper`.
-- `SECRET_FILE_*`: execute `make init-secrets` e confira que o arquivo é regular
-  e `0600`; não imprima seu valor.
+- `SECRET_FILE_*`: execute `make init-secrets` e confira que o diretório está em
+  `0700` e o arquivo regular em `0644`; não imprima seu valor.
 - `POSTGRES_UNAVAILABLE`: liveness deve continuar 200 e readiness deve ficar
   503. Veja apenas tipo/reason code dos logs; não adicione DSN completa.
 - checksum de migration divergente: não edite uma migration aplicada. Crie uma

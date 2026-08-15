@@ -1,4 +1,4 @@
-# Dependências e licenças — RFC-001
+# Dependências e licenças — RFC-001 e RFC-001A
 
 Versões foram consultadas nos registros oficiais em 2026-08-10 e são fixadas
 nos manifests/lockfiles ou tags completas de imagem. O projeto é pessoal e
@@ -34,6 +34,10 @@ Fonte: metadados do [registro npm](https://www.npmjs.com/).
 | tracing / tracing-subscriber | 0.1.44 / 0.3.23 | MIT |
 | uuid | 1.24.0 | Apache-2.0 OR MIT |
 | tower (testes) | 0.5.3 | MIT |
+| futures | 0.3.33 | MIT OR Apache-2.0 |
+| libc | 0.2.189 | MIT OR Apache-2.0 |
+| yellowstone-grpc-client | 13.3.0 | Apache-2.0 |
+| yellowstone-grpc-proto | 12.5.0 | Apache-2.0 |
 
 Fonte: metadados do [crates.io](https://crates.io/).
 

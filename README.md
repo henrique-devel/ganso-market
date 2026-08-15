@@ -13,7 +13,7 @@ A RFC-001 fornece agora um runtime mínimo, ainda sem lógica de mercado:
 - web React/Vite que mostra somente health real;
 - `model-worker` Python opcional, sem modelo;
 - PostgreSQL com três tabelas fundacionais;
-- Nginx local, sem certificado real nesta RFC.
+- Nginx em loopback no desenvolvimento e modo standalone direto na porta 80.
 
 O único modo aceito é `paper`. Não existem signer, wallet, Yellowstone,
 estratégia, ordem ou execução neste código.
@@ -31,11 +31,16 @@ O gateway usa `127.0.0.1:8080` por padrão. Consulte
 [`docs/runbooks/development.md`](docs/runbooks/development.md) antes de subir o
 ambiente. `make down` encerra os containers sem apagar o volume do PostgreSQL.
 
+Para um Ubuntu dedicado reconstruído, sem firewall, TLS ou serviços extras,
+consulte [`docs/runbooks/single-server.md`](docs/runbooks/single-server.md). O
+fluxo reduzido é `sudo ./deploy/install-docker-ubuntu.sh` e `make server-up`.
+
 ## Decisões já fechadas
 
 - Uso exclusivo do proprietário; não é SaaS e não receberá fundos de terceiros.
-- Servidor-alvo: Hetzner CPX42, consumindo um endpoint Yellowstone/Geyser já existente.
-- Painel público somente em `https://<IP_DO_SERVIDOR>`.
+- Servidor-alvo: Hetzner CPX42 em `178.105.65.251`, consumindo um endpoint Yellowstone/Geyser externo já existente.
+- A fundação standalone publica o painel diretamente em `http://178.105.65.251/`, sem firewall gerenciado pelo projeto e sem publicação IPv6.
+- Sem domínio, HTTPS, Certbot ou porta 443 nesse bootstrap.
 - Uma conta com senha, access token e refresh token; sem MFA/passkey.
 - Hot wallet pública esperada: `8qE2V1zbcui9RnNsKajVrJ1zS34bMFkumWA9h95Bx8AV`.
 - A chave privada nunca entra no Git, banco, logs, fixtures ou frontend.
@@ -49,8 +54,11 @@ ambiente. `make down` encerra os containers sem apagar o volume do PostgreSQL.
 - [PRD do MVP](docs/PRD.md)
 - [Índice e ordem das RFCs](docs/RFC_INDEX.md)
 - [Prompt mestre da IA de desenvolvimento](prompts/AI_DEVELOPER_SYSTEM_PROMPT.md)
+- [Registro do servidor e acesso SSH](docs/ops/SERVER_ACCESS.md)
 - [Arquitetura da fundação](docs/architecture/foundation.md)
 - [Runbook de desenvolvimento](docs/runbooks/development.md)
+- [Runbook do servidor único](docs/runbooks/single-server.md)
+- [Histórico: limpeza do Ganso-bot, não executar após rebuild](docs/runbooks/server-cleanup-ganso-bot.md)
 - [Dependências e licenças](docs/DEPENDENCIES.md)
 - [Evidência de verificação da RFC-001](docs/test-results/RFC-001.md)
 - [Handoff e continuidade do projeto](docs/HANDOFF.md)
@@ -58,12 +66,16 @@ ambiente. `make down` encerra os containers sem apagar o volume do PostgreSQL.
 ## Ordem de desenvolvimento
 
 1. RFC-001 — Fundação e runtime.
-2. RFC-002 — Autenticação e HTTPS por IP.
-3. RFC-003 — Ingestão Yellowstone.
-4. RFC-004 — Eventos, persistência e retenção.
-5. RFC-005 — Hot wallet, risk guard e signer.
-6. RFC-006 — Paper trading, estratégias e gates do modelo.
-7. RFC-007 — Polymarket analytics/paper.
-8. RFC-008 — Execução beta Solana, somente depois das gates.
+2. Bootstrap standalone — estrutura implementada neste rebuild.
+3. RFC-002 — autenticação, após reescrever o perímetro sem firewall.
+4. RFC-003 — Ingestão Yellowstone.
+5. RFC-004 — Eventos, persistência e retenção.
+6. RFC-005 — Hot wallet, risk guard e signer.
+7. RFC-006 — Paper trading, estratégias e gates do modelo.
+8. RFC-007 — Polymarket analytics/paper.
+9. RFC-008 — Execução beta Solana, somente depois das gates.
+
+A RFC-001A é registro histórico e foi substituída pelo rebuild; não deve ser
+executada no host novo.
 
 Execução live não é consequência automática de terminar código. Ela exige os critérios objetivos da RFC-006 e a ativação manual prevista na RFC-005.

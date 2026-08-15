@@ -3,7 +3,17 @@
 **Status:** escopo-base aprovado para desenvolvimento  
 **Data:** 2026-08-10  
 **Tipo:** ferramenta pessoal, single-user  
-**Infraestrutura-alvo:** Hetzner CPX42  
+**Infraestrutura-alvo:** Hetzner CPX42 — `178.105.65.251`
+
+## Emenda operacional — bootstrap standalone (2026-08-14)
+
+O servidor anterior foi reconstruído. A fundação atual, que expõe apenas a UI
+inicial e healthchecks e ainda não possui autenticação, wallet ou execução, pode
+rodar diretamente em `0.0.0.0:80`, sem firewall gerenciado pelo projeto, TLS,
+domínio ou serviços auxiliares. Essa emenda substitui os gates de RFC-001A e de
+allowlist apenas para o bootstrap da fundação. Os requisitos de perímetro das
+seções posteriores precisam ser revistos antes de adicionar login, tokens,
+dados privados ou controles de execução.
 
 ## 1. Visão do produto
 
@@ -20,7 +30,8 @@ O produto deve transformar dados de mercado em decisões reproduzíveis e explic
 - A hot wallet esperada é `8qE2V1zbcui9RnNsKajVrJ1zS34bMFkumWA9h95Bx8AV`; o endereço foi validado sintaticamente como Base58 de 32 bytes.
 - Esse endereço é público. Seed e private key são segredos e nunca devem aparecer no repositório ou nos dados da aplicação.
 - O servidor CPX42 é consumidor de Yellowstone/Geyser; não hospeda validator/RPC Agave.
-- O painel fica acessível pela internet usando somente o IP público e HTTPS.
+- O painel ficará acessível em `http://178.105.65.251/`, repetindo o modelo do Ganso-bot, somente depois da RFC-001A e da autenticação da RFC-002.
+- O bootstrap publica somente Nginx em IPv4/TCP 80, sem firewall gerenciado pelo projeto; a aplicação não publica IPv6 e não há HTTPS, domínio, Certbot ou porta 443 nessa etapa.
 - A autenticação é senha + access token + refresh token.
 - Não haverá MFA ou passkey no MVP.
 - Não haverá backup externo automático, HA, failover ou promessa de recuperação do histórico.
@@ -90,6 +101,13 @@ Ele acessa o painel pelo navegador, escolhe canais/estratégias, configura limit
 
 O CPX42 possui 8 vCPUs AMD compartilhadas, 16 GB de RAM e 320 GB de SSD. A carga sustentada alvo é inferior a cinco vCPUs, preservando margem para picos de ingestão e saídas.
 
+O registro operacional do host, acesso SSH e fingerprint informado fica em
+[`docs/ops/SERVER_ACCESS.md`](ops/SERVER_ACCESS.md). O novo checkout de produção
+usa `/home/ganso/ganso-market`. O checkout `/home/ganso/ganso-bot` e seus
+volumes serão removidos sem backup pela RFC-001A somente depois da comprovação
+de recuperação da wallet e de uma conexão Yellowstone nova. A remoção local não
+deve executar qualquer ação no portal/API que cancele a assinatura externa.
+
 O sistema será um monorepo com poucos processos:
 
 - `market-engine`: Yellowstone, decoders, features, estratégias, risk guard e executor;
@@ -97,7 +115,7 @@ O sistema será um monorepo com poucos processos:
 - `model-worker`: inferência e jobs leves;
 - `postgres`: estado operacional, auditoria e histórico recente;
 - `web`: frontend estático;
-- `nginx`: TLS por IP e proxy.
+- `nginx`: único proxy publicado no host, em IPv4/TCP 80 no modo standalone.
 
 ## 6. Requisitos funcionais
 
@@ -109,26 +127,27 @@ O sistema será um monorepo com poucos processos:
 **AUTH-04** O access token é opaco, aleatório, revogável e expira em até 15 minutos.  
 **AUTH-05** O refresh token é opaco, rotacionado e expira em até sete dias.  
 **AUTH-06** No servidor são armazenados somente hashes dos tokens.  
-**AUTH-07** O refresh token usa cookie `HttpOnly`, `Secure` e `SameSite=Strict`.  
+**AUTH-07** O refresh token usa cookie `HttpOnly` e `SameSite=Strict`; `Secure` fica desativado exclusivamente enquanto o beta operar em HTTP.
 **AUTH-08** Reutilização de refresh token revoga a sessão.  
 **AUTH-09** Logout, troca ou recuperação de senha revogam todas as sessões.  
 **AUTH-10** Login possui atraso progressivo e bloqueio temporário.  
 **AUTH-11** Operações mutáveis validam CSRF, `Origin` e `Host`.  
 
-### 6.2 HTTPS por IP
+### 6.2 HTTP no servidor standalone
 
-**NET-01** O painel responde apenas no IP público configurado.  
-**NET-02** HTTP na porta 80 existe somente para ACME e redirecionamento.  
-**NET-03** Todo acesso de aplicação usa HTTPS na porta 443.  
-**NET-04** O certificado cobre o IP e é aceito por navegadores sem instalar CA privada.  
-**NET-05** Certificados de IP do Let’s Encrypt são curtos; a renovação deve ser automática e monitorada.  
-**NET-06** Somente 80/443 são públicas para a aplicação; PostgreSQL, signer e métricas internas não são expostos.  
-**NET-07** Respostas aplicam HSTS, CSP, `X-Content-Type-Options` e política de frame.  
+**NET-01** O painel responde em `http://178.105.65.251/`.
+**NET-02** Nginx é o único entrypoint público da aplicação e publica apenas a porta 80.
+**NET-03** O bootstrap não instala nem gerencia firewall; Nginx faz bind IPv4 explícito em `0.0.0.0:80`.
+**NET-04** Nenhum outro serviço ou porta da aplicação é publicado no host.
+**NET-05** Não existem certificado, Certbot, ACME, domínio ou porta 443 no MVP.
+**NET-06** PostgreSQL, engine, worker, signer e métricas permanecem internos.
+**NET-07** Nginx rejeita Host inesperado e respostas aplicam CSP, `X-Content-Type-Options`, política de frame e referrer policy.
+**NET-08** O perímetro deve ser revisto antes de publicar login, tokens, wallet, dados privados ou controles de execução.
+**NET-09** Nginx/Docker não fazem bind em `[::]:80`.
 
-O Let’s Encrypt disponibiliza certificados públicos de IP com validade aproximada de seis dias. A implantação deve usar um cliente ACME compatível, como Certbot 5.4+, e recarregar o proxy depois da renovação:
-
-- https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html
-- https://letsencrypt.org/2026/03/11/shorter-certs-certbot
+HTTP não criptografa conteúdo e, sem firewall, qualquer origem que alcance o IP
+pode abrir a fundação atual. Essa decisão é aceita apenas enquanto o painel não
+possui autenticação, tokens, wallet, dados privados ou execução.
 
 ### 6.3 Ingestão Solana
 
@@ -214,7 +233,7 @@ O painel pode reduzir os limites. Aumentos acima dos tetos exigem alteração lo
 
 ### Login
 
-1. Operador acessa `https://<IP>`.
+1. Operador acessa `http://<IP>` diretamente no servidor standalone.
 2. Informa usuário e senha.
 3. API emite access e refresh tokens.
 4. Painel carrega saúde, estado e modo atual.
@@ -287,7 +306,8 @@ Não fazer backup rotineiro não autoriza armazenar a private key sem recuperaç
 
 ### Produto
 
-- Login, logout e renovação de sessão funcionam pelo IP HTTPS.
+- Login, logout e renovação exigem uma revisão de perímetro antes de serem publicados.
+- IPv4 chega somente ao gateway na porta 80; IPv6 não possui listener da aplicação.
 - Dashboard apresenta feeds, oportunidades, risco, posições e decisões.
 - Pump/PumpSwap são decodificados com fixtures verificadas.
 - As duas estratégias iniciais funcionam em paper: pós-validação e graduação/reteste.
@@ -297,7 +317,8 @@ Não fazer backup rotineiro não autoriza armazenar a private key sem recuperaç
 ### Segurança
 
 - Varredura encontra somente as portas públicas previstas.
-- Certificado de IP é confiável e renovado automaticamente.
+- O deploy publica somente Nginx em `0.0.0.0:80` e mantém serviços internos sem bind no host.
+- Não existe serviço publicado na porta 443.
 - Busca por padrões e revisão manual não encontram material secreto.
 - O signer recusa keyfile cuja pubkey não corresponda ao endereço configurado.
 - Transação alterada depois do risk approval é recusada.
@@ -334,6 +355,7 @@ Resultados positivos de paper trading não são evidência suficiente de lucro f
 - O CPX42 é ponto único de falha.
 - CPU compartilhada pode introduzir jitter.
 - Sem backup, uma falha de disco pode apagar histórico, configurações e modelos locais.
+- Sem HTTPS, conteúdo pode ser interceptado por alguém com visibilidade do caminho de rede; por isso senha, tokens e dados privados não entram no bootstrap atual.
 - Sem MFA, o comprometimento da senha/sessão pode expor o painel.
 - Se o host e o signer forem comprometidos ao mesmo tempo, todo o saldo da hot wallet pode ser perdido.
 - Stops podem não executar em tokens ilíquidos.
@@ -345,6 +367,4 @@ Esses riscos são aceitos apenas enquanto o sistema for pessoal, operar exclusiv
 - CPX42 e recursos atuais: https://www.hetzner.com/cloud/regular-performance/
 - CPU compartilhada da linha CPX: https://docs.hetzner.com/cloud/servers/faq/
 - Requisitos que impedem usar o CPX42 como validator/RPC Agave: https://docs.anza.xyz/operations/requirements
-- Certificados públicos de IP: https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html
-- Certbot para certificado de IP: https://letsencrypt.org/2026/03/11/shorter-certs-certbot
 - Restrição geográfica da Polymarket: https://help.polymarket.com/en/articles/13364163-geographic-restrictions

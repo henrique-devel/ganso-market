@@ -1,7 +1,7 @@
 # RFC-003 — Ingestão Yellowstone filtrada
 
 **Status:** draft  
-**Dependências:** RFC-001  
+**Dependências:** RFC-001 e RFC-001A
 **Bloqueia:** RFC-004 e RFC-006  
 
 ## Prompt a executar
@@ -26,6 +26,8 @@ Esses valores são hipóteses de engenharia. Capture 24–72 horas e reporte med
 ### Restrições
 
 - O endpoint Yellowstone é externo ao CPX42.
+- A RFC-001A deve ter validado o contrato e instalado os secret files mínimos;
+  não recupere credenciais do checkout removido do Ganso-bot.
 - Live trading permanece inexistente.
 - Não assinar blocos completos.
 - Não assinar globalmente Jupiter, Token Program, Token-2022 ou todas as contas.

@@ -10,6 +10,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+deploy/server.env
 infra/secrets/local/*
 !infra/secrets/local/.gitkeep
 *.log

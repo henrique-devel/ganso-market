@@ -11,15 +11,29 @@ Você é o engenheiro principal do projeto Ganso Market. Seu objetivo é entrega
 - O projeto é uma ferramenta pessoal, single-user e sem finalidade comercial.
 - Não existem clientes, tenants, fundos de terceiros, cadastro público ou billing.
 - O host é um Hetzner CPX42 com 8 vCPU compartilhadas, 16 GB RAM e 320 GB SSD.
+- O IPv4 do host é `178.105.65.251`; o acesso histórico é
+  `ssh ganso@178.105.65.251`.
+- `claude-ganso-bot` é o nome provável da chave pública cliente cadastrada na
+  Hetzner, com fingerprint informado
+  `MD5:7b:a8:61:f5:b2:27:08:69:d2:ea:25:3d:33:ae:17:d1`. Confirme isso no
+  console; não trate esse valor como host key.
+- O registro operacional normativo é `docs/ops/SERVER_ACCESS.md`.
+- O checkout de produção do novo projeto fica em
+  `/home/ganso/ganso-market`; `/home/ganso/ganso-bot` é alvo exclusivo da
+  RFC-001A somente depois dos gates destrutivos.
 - O host consome Yellowstone/Geyser externo; ele não roda validator/RPC Agave.
 - Solana começa com Pump/PumpSwap.
 - O modo padrão é paper.
 - A hot wallet pública esperada é `8qE2V1zbcui9RnNsKajVrJ1zS34bMFkumWA9h95Bx8AV`.
 - A chave pública não é segredo. Seed e private key são segredos absolutos.
-- O painel público usa `https://<IP_DO_SERVIDOR>`.
+- O painel beta usa `http://178.105.65.251/`, repetindo o acesso do Ganso-bot.
+- A porta TCP/80 IPv4 deve ser liberada na Hetzner Firewall somente para o IP público do operador; não publicar a aplicação em IPv6.
+- Não implementar HTTPS, domínio, Certbot ou porta 443 no MVP.
+- Se a allowlist da porta 80 for removida, pare: HTTP aberto para qualquer origem IPv4 ou IPv6 não é permitido.
 - Auth é senha + access token + refresh token, sem MFA/passkey.
 - Não há backup externo automático, HA ou recuperação garantida do banco.
 - Polymarket é somente analytics/paper no escopo atual.
+
 
 ## Fontes de verdade
 
@@ -100,6 +114,12 @@ Se não houver RFC ativa, limite-se a inspecionar e propor o próximo passo; nã
 - Preferir PostgreSQL, filas internas/WAL e Parquet.
 - Backtests/retreinos pesados não concorrem com ingestão.
 - Não criar backup externo ou retenção ilimitada sem nova decisão do proprietário.
+- Não adicionar TLS/ACME ao beta enquanto a decisão de HTTP allowlisted estiver vigente.
+- Antes da RFC-002, executar a RFC-001A; nenhuma IA apaga o Ganso-bot sem
+  inventário literal, recuperação da wallet, probe Yellowstone/RPC e aprovação
+  explícita do proprietário.
+- Nunca cancelar a assinatura Yellowstone durante limpeza local.
+- Nunca usar prune global, glob ou diretório pai em remoção destrutiva.
 
 ## Fluxo obrigatório de cada atividade
 
@@ -152,6 +172,7 @@ Pare e peça decisão se:
 - a mudança habilitaria live antes das gates;
 - o requisito excede claramente o CPX42;
 - a solução exige perda silenciosa de eventos críticos;
+- a publicação HTTP estiver configurada para firewall `0.0.0.0/0` ou `::/0`, ou existir bind `[::]:80`;
 - o pedido contradiz o PRD em segurança, escopo ou fundos;
 - testes essenciais não podem ser executados e a falha pode afetar dinheiro.
 
