@@ -717,6 +717,25 @@ class ManifestValidationTests(unittest.TestCase):
                 rfc001a_manifest.load_manifest(manifest_path)
         self.assertEqual(raised.exception.code, "manifest-invalid-json")
 
+    def test_json_depth_limit_is_explicit_and_parser_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "manifest.json"
+            manifest_path.write_text(
+                "[" * rfc001a_manifest.MAX_JSON_DEPTH + "0" + "]" * rfc001a_manifest.MAX_JSON_DEPTH,
+                encoding="utf-8",
+            )
+            rfc001a_manifest.load_manifest(manifest_path)
+
+            manifest_path.write_text(
+                "[" * (rfc001a_manifest.MAX_JSON_DEPTH + 1)
+                + "0"
+                + "]" * (rfc001a_manifest.MAX_JSON_DEPTH + 1),
+                encoding="utf-8",
+            )
+            with self.assertRaises(rfc001a_manifest.ManifestReadError) as raised:
+                rfc001a_manifest.load_manifest(manifest_path)
+        self.assertEqual(raised.exception.code, "manifest-invalid-json")
+
 
 class ManifestCliTests(unittest.TestCase):
     def run_cli(

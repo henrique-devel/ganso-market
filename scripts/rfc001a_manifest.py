@@ -169,6 +169,7 @@ REQUIRED_GATES = frozenset(
 )
 
 MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_JSON_DEPTH = 64
 _LITERAL_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}\Z", re.ASCII)
 _LITERAL_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.:@+/-]{0,254}\Z", re.ASCII)
 _DOCKER_OBJECT_ID = re.compile(r"\A[0-9a-f]{64}\Z", re.ASCII)
@@ -237,6 +238,22 @@ def _reject_json_constant(_value: str) -> None:
     raise ManifestReadError("manifest-invalid-json-constant")
 
 
+def _reject_excessive_json_depth(value: Any) -> None:
+    """Enforce a parser-independent nesting limit without recursive traversal."""
+
+    stack = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if type(current) is dict:
+            if depth > MAX_JSON_DEPTH:
+                raise ManifestReadError("manifest-invalid-json")
+            stack.extend((child, depth + 1) for child in current.values())
+        elif type(current) is list:
+            if depth > MAX_JSON_DEPTH:
+                raise ManifestReadError("manifest-invalid-json")
+            stack.extend((child, depth + 1) for child in current)
+
+
 def load_manifest(path: Path | str) -> Any:
     """Load a bounded UTF-8 JSON document without exposing parse input."""
 
@@ -255,7 +272,7 @@ def load_manifest(path: Path | str) -> Any:
         raise ManifestReadError("manifest-not-utf8") from None
 
     try:
-        return json.loads(
+        manifest = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_json_constant,
@@ -264,6 +281,9 @@ def load_manifest(path: Path | str) -> Any:
         raise ManifestReadError("manifest-duplicate-key") from None
     except (json.JSONDecodeError, RecursionError):
         raise ManifestReadError("manifest-invalid-json") from None
+
+    _reject_excessive_json_depth(manifest)
+    return manifest
 
 
 def _fail(code: str) -> None:
