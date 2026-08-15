@@ -1,6 +1,6 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-14
+- Última atualização: 2026-08-15
 - Branch principal: `main`
 - Modo permitido no runtime atual: `paper`
 
@@ -29,10 +29,14 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
   repositório oficial; o serviço Docker está ativo e habilitado no boot.
 - **FATO VERIFICADO:** o standalone foi publicado e validado externamente em
   `http://178.105.65.251/` em 2026-08-14.
-- **FATO VERIFICADO:** o workflow de CI/CD foi implementado e validado
-  localmente, com deploy fail-closed. A chave restrita, os secrets do
-  environment `production` e `DEPLOY_ENABLED=true` ainda não foram instalados;
-  nenhum push ou alteração de credenciais GitHub foi feito nesta etapa.
+- **FATO VERIFICADO:** o workflow de CI/CD está publicado na `main`, o
+  environment `production` contém os dois secrets de deploy e a variável de
+  repositório `DEPLOY_ENABLED=true` está ativa. A chave Ed25519 dedicada usa o
+  comando forçado instalado no servidor; a cópia privada temporária local foi
+  removida depois do primeiro deploy.
+- **FATO VERIFICADO:** a primeira execução de produção do CD, no commit
+  `e11aaa6`, passou pelos gates de fonte e Compose, atualizou o servidor e
+  validou o gateway público com sucesso em 2026-08-15.
 
 ## Sequência de RFCs
 
@@ -50,8 +54,8 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 
 ## Evidência mais recente
 
-- `make verify`: sucesso em 2026-08-14; 94 testes TypeScript, 22 Rust, nove do
-  worker e 106 dos scripts, além de formatadores, linters, builds, scanner e
+- `make verify`: sucesso em 2026-08-15; 94 testes TypeScript, 22 Rust, nove do
+  worker e 107 dos scripts, além de formatadores, linters, builds, scanner e
   política do Compose.
 - `actionlint` 1.7.12: workflow de CI/CD aprovado; todas as actions externas
   estão fixadas por SHA imutável.
@@ -65,7 +69,9 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
   `server-down` passaram, incluindo readiness interno do market-engine.
 - Deploy remoto: cinco containers persistentes ativos, migration `0001`
   aplicada com exit `0`, frontend/API live/API ready em HTTP 200 pelo IPv4
-  público e execução confirmada em modo `paper`.
+  público e execução confirmada em modo `paper`. O primeiro deploy pelo GitHub
+  Actions está registrado na
+  [execução 31860868239](https://github.com/henrique-devel/ganso-market/actions/runs/31860868239).
 - No host, somente SSH e Nginx estão publicados; Nginx usa `0.0.0.0:80`, sem
   listener `[::]:80`. UFW permanece inativo e não foi alterado.
 - O volume temporário dos dois smokes foi removido após validação literal; o
@@ -114,6 +120,12 @@ Os comandos e resultados completos estão em
   `make server-health` cobre sua readiness pela rede interna.
 - **RISCO:** scanners de segredo são defesa em profundidade, não prova
   matemática de ausência de toda codificação possível.
+- **RISCO:** a chave de CD é equivalente a uma credencial `root`, apesar do
+  comando SSH forçado, porque o release verificado controla Dockerfiles,
+  Compose e Makefile executados no servidor.
+- **RISCO:** o rollback automático restaura código e containers, mas não desfaz
+  migrations; mudanças futuras de banco devem ser retrocompatíveis e ter
+  backup antes de qualquer migration destrutiva.
 
 ## Próximo passo mínimo
 
@@ -122,9 +134,9 @@ Os comandos e resultados completos estão em
    antes dessa revisão.
 3. Para operação atual, usar `cd /opt/ganso-market` seguido de
    `make server-status`, `make server-health` ou `make server-logs`.
-4. Publicar os commits locais no GitHub para ativar os gates de CI.
-5. O CD só deve ser habilitado depois de autorização explícita para instalar a
-   chave forçada no servidor e cadastrar os dois secrets de `production`.
+4. Todo push futuro em `main` executa os gates e, se aprovados, atualiza
+   produção; acompanhar a execução no GitHub Actions e confirmar os health
+   checks depois de mudanças de runtime ou migrations.
 
 ## Como atualizar este handoff
 
