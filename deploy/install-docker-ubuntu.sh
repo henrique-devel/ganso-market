@@ -19,7 +19,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install --yes ca-certificates curl git make python3
+apt-get install --yes ca-certificates curl git make python3 rsync
 
 if command -v docker >/dev/null 2>&1; then
   if ! docker compose version >/dev/null 2>&1; then

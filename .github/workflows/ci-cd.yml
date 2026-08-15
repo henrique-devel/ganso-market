@@ -1,0 +1,157 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  verify:
+    name: Verify source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Pin npm
+        run: npm install --global npm@11.17.0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.13.14
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@1fbea72663f6d4c03efaab13560c8a24cfd2a7cc # v1.9.0
+        with:
+          cache: false
+
+      - name: Install locked dependencies
+        run: make install
+
+      - name: Run the complete source gate
+        run: make verify
+
+  integration:
+    name: Verify Compose runtime
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show Docker versions
+        run: |
+          docker version
+          docker compose version
+
+      - name: Exercise the complete Compose runtime
+        run: make integration
+
+  deploy:
+    name: Deploy production
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs:
+      - verify
+      - integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    env:
+      DEPLOY_HOST: 178.105.65.251
+      DEPLOY_USER: root
+      DEPLOY_BASE_URL: http://178.105.65.251
+
+    steps:
+      - name: Check out the verified revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure the restricted deploy identity
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -eu
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          test -n "$DEPLOY_SSH_KEY"
+          install -d -m 0700 "$RUNNER_TEMP/ganso-market-ssh"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ganso-market-ssh/known_hosts"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ganso-market-ssh/deploy_key"
+          chmod 0600 \
+            "$RUNNER_TEMP/ganso-market-ssh/known_hosts" \
+            "$RUNNER_TEMP/ganso-market-ssh/deploy_key"
+          ssh-keygen -y -f "$RUNNER_TEMP/ganso-market-ssh/deploy_key" >/dev/null
+          ssh-keygen -F "$DEPLOY_HOST" \
+            -f "$RUNNER_TEMP/ganso-market-ssh/known_hosts" >/dev/null
+
+      - name: Build the immutable release archive
+        run: |
+          set -eu
+          git archive \
+            --format=tar.gz \
+            --output="$RUNNER_TEMP/ganso-market-release.tar.gz" \
+            "$GITHUB_SHA"
+          release_bytes=$(wc -c < "$RUNNER_TEMP/ganso-market-release.tar.gz" | tr -d ' ')
+          test "$release_bytes" -le 52428800
+
+      - name: Deploy through the forced server command
+        run: |
+          set -eu
+          ssh \
+            -T \
+            -i "$RUNNER_TEMP/ganso-market-ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/ganso-market-ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $GITHUB_SHA" \
+            < "$RUNNER_TEMP/ganso-market-release.tar.gz"
+
+      - name: Verify the public gateway
+        run: |
+          set -eu
+          curl --noproxy '*' --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 \
+            --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+            "$DEPLOY_BASE_URL/" >/dev/null
+          curl --noproxy '*' --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 \
+            --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+            "$DEPLOY_BASE_URL/api/health/live" >/dev/null
+          curl --noproxy '*' --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 \
+            --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+            "$DEPLOY_BASE_URL/api/health/ready" >/dev/null

@@ -41,17 +41,18 @@ init-secrets:
 format:
 	npm run format
 	cargo fmt --all
-	$(RUFF) format workers scripts
+	$(RUFF) format workers scripts deploy
 
 format-check:
 	npm run format:check
 	cargo fmt --all --check
-	$(RUFF) format --check workers scripts
+	$(RUFF) format --check workers scripts deploy
 
 lint:
 	npm run lint
 	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-	$(RUFF) check workers scripts
+	$(RUFF) check workers scripts deploy
+	@for file in deploy/*.sh infra/migrations/*.sh scripts/*.sh; do sh -n "$$file"; done
 
 test:
 	npm test
@@ -62,7 +63,7 @@ test:
 build:
 	npm run build
 	cargo build --workspace --locked
-	$(PYTHON) -m compileall -q workers/model-worker/src scripts
+	$(PYTHON) -m compileall -q workers/model-worker/src scripts deploy
 
 contracts-check:
 	npm run test --workspace @ganso-market/contracts

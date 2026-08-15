@@ -35,6 +35,11 @@ Para um Ubuntu dedicado reconstruído, sem firewall, TLS ou serviços extras,
 consulte [`docs/runbooks/single-server.md`](docs/runbooks/single-server.md). O
 fluxo reduzido é `sudo ./deploy/install-docker-ubuntu.sh` e `make server-up`.
 
+O workflow [CI/CD](.github/workflows/ci-cd.yml) executa a verificação completa
+e o smoke do Compose em pull requests e pushes. Depois de configurar a chave
+restrita e habilitar a variável conforme o runbook, todo push em `main` atualiza
+o servidor automaticamente e confirma os três endpoints públicos de health.
+
 ## Decisões já fechadas
 
 - Uso exclusivo do proprietário; não é SaaS e não receberá fundos de terceiros.

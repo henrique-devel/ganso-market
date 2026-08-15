@@ -1,12 +1,12 @@
 # Servidor único — instalação mínima
 
 Este modo executa somente o Ganso Market em um host Ubuntu dedicado. A máquina
-precisa de Docker Engine, Docker Compose, Git, Make, Python 3 e `curl`; Node,
-Rust, PostgreSQL e Nginx são fornecidos pelos containers.
+precisa de Docker Engine, Docker Compose, Git, Make, Python 3, `curl` e `rsync`;
+Node, Rust, PostgreSQL e Nginx são fornecidos pelos containers.
 
-O deploy não instala nem altera firewall, domínio, certificado, proxy externo,
-CI/CD ou ferramenta de observabilidade. O único bind no host é o gateway Nginx
-em `0.0.0.0:80`; PostgreSQL, API, engine e worker não publicam portas próprias.
+O deploy não instala nem altera firewall, domínio, certificado, proxy externo
+ou ferramenta de observabilidade. O único bind no host é o gateway Nginx em
+`0.0.0.0:80`; PostgreSQL, API, engine e worker não publicam portas próprias.
 
 ## Estado funcional atual
 
@@ -65,6 +65,59 @@ Execute `git pull --ff-only` antes somente quando o checkout tiver `.git`. O
 primeiro deploy em `/opt/ganso-market` foi transferido como pacote do working
 tree e não possui histórico Git; nesse caso, sincronize primeiro a nova versão
 dos arquivos e só depois execute `make server-update`.
+
+## CI/CD do GitHub
+
+O workflow `.github/workflows/ci-cd.yml` roda `make verify` e o smoke completo
+do Compose em pull requests, pushes para `main` e execuções manuais. O deploy
+acontece somente em `main`, depois dos dois gates, no environment GitHub
+`production`.
+
+Ativação única:
+
+1. Gere uma chave Ed25519 exclusiva para o GitHub Actions, sem reutilizar a
+   chave pessoal do operador.
+2. Copie somente a chave pública para o servidor e execute, como root:
+
+   ```sh
+   ./deploy/install-github-deploy-key.sh /caminho/chave.pub
+   ```
+
+3. No environment `production` do repositório GitHub, cadastre:
+   - `DEPLOY_SSH_KEY`: conteúdo da chave privada dedicada;
+   - `DEPLOY_KNOWN_HOSTS`: linha completa Ed25519 de `178.105.65.251`, já
+     validada pelo fingerprint registrado em `docs/ops/SERVER_ACCESS.md`.
+4. Crie a variável de repositório `DEPLOY_ENABLED=true`. Sem ela, os gates de
+   CI funcionam normalmente e o job de produção fica ignorado.
+5. Apague a cópia privada temporária do computador usado na configuração após
+   confirmar que o secret foi cadastrado.
+
+A entrada em `authorized_keys` usa `restrict` e um comando forçado instalado em
+`/usr/local/sbin`: o canal SSH não recebe shell, PTY ou forwarding. O workflow
+envia um arquivo produzido por `git archive`; o servidor valida caminhos,
+tipos, tamanho e secrets, cria backup do código e só então executa
+`make server-update`. Falha, timeout ou interrupção dentro do comando remoto,
+depois do início da cópia, restaura o código anterior e reinicia o runtime
+anterior. Os cinco backups de código mais recentes ficam em `.deploy/backups`,
+fora do contexto Docker. A checagem pública posterior deixa o workflow vermelho
+se a rede externa falhar, mas não reverte um runtime que já passou no health
+interno do servidor.
+
+Essa validação estrutural não é uma assinatura criptográfica da origem. Como o
+arquivo controla Makefile, Compose e Dockerfiles executados como root, a chave
+de deploy deve ser tratada como credencial equivalente a root mesmo sem shell
+interativo. Proteja `main` e o environment `production`, limite quem pode
+alterar seus secrets e rotacione a chave em caso de suspeita.
+
+O rollback não desfaz migrations já aplicadas. Toda migration entregue pelo CD
+deve continuar compatível com a versão anterior até existir um procedimento de
+backup e rollback do banco. O volume `ganso-market_postgres_data`,
+`deploy/server.env` e `infra/secrets/local/postgres_password` nunca são
+removidos ou substituídos pelo workflow.
+
+Para atualizar o próprio comando forçado depois de uma mudança revisada nesses
+scripts, repita manualmente o instalador da chave pública no servidor. O CD não
+se autoatribui permissão para substituir sua raiz de confiança.
 
 Para encerrar sem apagar os dados do PostgreSQL:
 

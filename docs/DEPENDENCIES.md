@@ -53,9 +53,10 @@ Fonte: metadados do [crates.io](https://crates.io/).
 | Nginx | 1.30.4-alpine3.24 | BSD-2-Clause |
 | Debian Bookworm / Alpine 3.24 | tags acima | múltiplas, por pacote da imagem |
 
-Tags foram confirmadas no repositório oficial de imagens do Docker Hub. Imagens
-ficam fixadas por tag completa; digest deve ser registrado no ambiente de deploy
-da RFC-002 para reprodutibilidade binária, sem antecipar publicação nesta RFC.
+Tags foram confirmadas no repositório oficial de imagens do Docker Hub. Cada
+referência usada pelos Dockerfiles e pelo Compose mantém a tag legível e fixa
+também o manifest multi-arquitetura por digest `sha256`, para que CI e produção
+resolvam os mesmos bytes.
 
 ## Transitivas
 

@@ -15,8 +15,8 @@
   },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "format": "prettier --write package.json tsconfig.base.json 'apps/**/*.{ts,tsx,json,css,html}' 'packages/**/*.{ts,json}'",
-    "format:check": "prettier --check package.json tsconfig.base.json 'apps/**/*.{ts,tsx,json,css,html}' 'packages/**/*.{ts,json}'",
+    "format": "prettier --write package.json tsconfig.base.json '.github/**/*.{yml,yaml}' 'apps/**/*.{ts,tsx,json,css,html}' 'packages/**/*.{ts,json}'",
+    "format:check": "prettier --check package.json tsconfig.base.json '.github/**/*.{yml,yaml}' 'apps/**/*.{ts,tsx,json,css,html}' 'packages/**/*.{ts,json}'",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
   },

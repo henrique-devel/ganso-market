@@ -1,9 +1,13 @@
 .git
 .gitignore
+.deploy
+.env
+.env.*
 .venv
 node_modules
 target
 **/dist
 **/__pycache__
+deploy/server.env
 infra/secrets/local
 *.log

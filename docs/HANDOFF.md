@@ -29,6 +29,10 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
   repositório oficial; o serviço Docker está ativo e habilitado no boot.
 - **FATO VERIFICADO:** o standalone foi publicado e validado externamente em
   `http://178.105.65.251/` em 2026-08-14.
+- **FATO VERIFICADO:** o workflow de CI/CD foi implementado e validado
+  localmente, com deploy fail-closed. A chave restrita, os secrets do
+  environment `production` e `DEPLOY_ENABLED=true` ainda não foram instalados;
+  nenhum push ou alteração de credenciais GitHub foi feito nesta etapa.
 
 ## Sequência de RFCs
 
@@ -47,8 +51,13 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 ## Evidência mais recente
 
 - `make verify`: sucesso em 2026-08-14; 94 testes TypeScript, 22 Rust, nove do
-  worker e 93 dos scripts, além de formatadores, linters, builds, scanner e
+  worker e 106 dos scripts, além de formatadores, linters, builds, scanner e
   política do Compose.
+- `actionlint` 1.7.12: workflow de CI/CD aprovado; todas as actions externas
+  estão fixadas por SHA imutável.
+- Smoke CI/CD isolado: sucesso com projeto e volume próprios, incluindo build
+  dos quatro serviços, migrations, health/degradação/recuperação e shutdown; o
+  volume temporário literal foi removido sem tocar no volume canônico.
 - Smoke isolado com volume novo: sucesso; primeiro boot, migration,
   reaplicação idempotente, perda/recuperação do PostgreSQL e shutdown sem
   órfãos; 79.307.242 bytes agregados em seis containers.
@@ -113,8 +122,9 @@ Os comandos e resultados completos estão em
    antes dessa revisão.
 3. Para operação atual, usar `cd /opt/ganso-market` seguido de
    `make server-status`, `make server-health` ou `make server-logs`.
-4. Versionar/publicar o working tree antes de adotar atualizações por Git; o
-   primeiro deploy foi transferido como pacote sem `.git`.
+4. Publicar os commits locais no GitHub para ativar os gates de CI.
+5. O CD só deve ser habilitado depois de autorização explícita para instalar a
+   chave forçada no servidor e cadastrar os dois secrets de `production`.
 
 ## Como atualizar este handoff
 
