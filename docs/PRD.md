@@ -15,6 +15,63 @@ allowlist apenas para o bootstrap da fundação. Os requisitos de perímetro das
 seções posteriores precisam ser revistos antes de adicionar login, tokens,
 dados privados ou controles de execução.
 
+## Emenda de escopo — atualização 2026 e execução Polymarket (2026-08-15)
+
+Esta emenda incorpora o estudo
+[`docs/research/direcao-e-roadmap-bots.md`](research/direcao-e-roadmap-bots.md)
+e uma decisão do proprietário. Ela tem precedência sobre trechos anteriores
+deste PRD que a contrariem, em especial a premissa de que a Polymarket
+permaneceria "analytics e paper trading somente enquanto a operação partir do
+Brasil".
+
+**Decisão do proprietário — risco jurisdicional aceito.** A execução real na
+Polymarket passa a ser objetivo do projeto, operada a partir de um servidor
+dedicado na Alemanha e com uma *burn wallet* (carteira descartável, capital
+limitado, na rede Polygon). O proprietário assume expressamente o risco
+jurisdicional e tributário desta escolha.
+
+Registros factuais da pesquisa, mantidos por transparência e a validar com
+assessoria jurídica/contábil — **não anulados pela localização do servidor**:
+
+- a elegibilidade da ToS da Polymarket considera a localização/residência do
+  usuário, não a do servidor; a seção 2.1.4 trata contorno de geoblock como
+  violação autônoma;
+- o Brasil está bloqueado pela Polymarket e pela regulação brasileira
+  (Resolução CMN 5.298/2026, SPA/Fazenda, bloqueio Anatel) desde abr/mai 2026;
+- residência fiscal brasileira tributa renda mundial até a Saída Definitiva
+  formalizada; obrigações de reporte (IN 1888 → DeCripto a partir de jul/2026)
+  valem mesmo sem imposto devido.
+
+Estes são riscos residuais **aceitos**, não eliminados. A *burn wallet* limita a
+perda máxima por comprometimento ou congelamento; ela não é um mecanismo de
+conformidade.
+
+**Proibição técnica mantida.** O software continua proibido de implementar VPN,
+proxy, spoofing de localização ou qualquer contorno técnico de geoblock. O
+acesso deve partir de infraestrutura real; a presença física e a elegibilidade
+legal do operador são responsabilidade do proprietário, fora do escopo do código.
+
+**Atualização de plataforma (Polymarket 2026).** O módulo Polymarket assume
+agora CLOB V2 (cutover 28/abr/2026), colateral pUSD (ERC-20 na Polygon, substitui
+USDC.e), taxas taker por categoria com makers a custo zero recebendo rebates e
+liquidity rewards, e os SDKs atuais (`py-sdk`/`ts-sdk`; `polymarket-cli` em Rust
+como referência de assinatura V2). Estratégia preferida: maker-side
+(rewards/rebates) e modelos de domínio (clima, macro agendado), com viés
+estrutural anti-longshot; latency-taking é não-objetivo.
+
+**Atualização do módulo Solana.** Hard vetoes e features de modelo passam a
+incluir detecção de bundle/insider (compras coordenadas no bloco de criação,
+clusters por fonte de funding, histórico do creator) e snapshot de verdicts de
+risco no momento da detecção; backtests são particionados por regime de
+fee/graduação; a execução usa envio privado (bundle Jito/conexão staked/swQoS)
+contra sanduíche.
+
+**Governança preservada.** A disciplina paper-first com gates objetivos
+permanece obrigatória para os dois módulos. A execução real na Polymarket é
+implementada pela RFC-009 e só é liberada após os gates da RFC-007/006, com
+canário de capital pequeno. Assumir o risco de jurisdição não autoriza pular
+gates de segurança, contabilidade ou calibração.
+
 ## 1. Visão do produto
 
 O Ganso Market é um painel pessoal para observar mercados, classificar oportunidades, simular operações e, quando os gates técnicos forem satisfeitos, executar operações limitadas com uma hot wallet exclusiva.
@@ -37,7 +94,8 @@ O produto deve transformar dados de mercado em decisões reproduzíveis e explic
 - Não haverá backup externo automático, HA, failover ou promessa de recuperação do histórico.
 - Em falha definitiva do SSD, a perda dos dados locais é um risco aceito.
 - A recuperação da hot wallet continua sendo responsabilidade do proprietário por meio de cópia offline mantida fora do servidor.
-- Polymarket é analytics e paper trading somente enquanto a operação partir do Brasil.
+- Polymarket: paper trading obrigatório até os gates; execução real autorizada pela emenda de 2026-08-15 (RFC-009), a partir de servidor na Alemanha e burn wallet dedicada na Polygon, com risco jurisdicional/tributário assumido pelo proprietário. Sem contorno técnico de geoblock.
+- A burn wallet da Polymarket é distinta da hot wallet Solana, vive na Polygon, guarda apenas capital limitado (a perda máxima aceita) e sua chave segue a mesma disciplina de segredo do signer.
 
 ## 3. Objetivos
 
@@ -70,9 +128,9 @@ Simular curva, AMM, taxas, slippage, latência, falhas e indisponibilidade de sa
 
 Permitir execução beta em Solana somente por uma hot wallet dedicada, dentro de uma allowlist e depois de simulação e validação integral da transação.
 
-### O-06 — Polymarket research
+### O-06 — Polymarket research, paper e execução maker-side
 
-Coletar dados públicos, estimar edge e executar paper trading sem implementar wallet, depósito ou envio real de ordens.
+Coletar dados públicos, estimar edge com calibração comprovada, simular ordens realistas (custos V2, book-walk, resolução/UMA) e — após os gates da RFC-007/006 — executar ordens reais maker-first com uma burn wallet dedicada na Polygon, conforme a RFC-009. Estratégias-alvo: market making para rewards/rebates e modelos de domínio (clima, macro agendado), com viés anti-longshot.
 
 ## 4. Não-objetivos
 
@@ -88,7 +146,8 @@ Coletar dados públicos, estimar edge e executar paper trading sem implementar w
 - LLM local, GPU ou treinamento deep learning no servidor.
 - Kubernetes, Kafka, ClickHouse ou microserviços numerosos.
 - Alta disponibilidade, réplica regional ou backup externo periódico.
-- Execução real em Polymarket no Brasil ou contorno de geoblock.
+- Contorno técnico de geoblock (VPN, proxy, spoofing de localização) em qualquer módulo.
+- Mercados de eleição na Polymarket (excluídos por risco regulatório e de oráculo).
 - Garantia de lucro, retorno ou disponibilidade de stop-loss.
 
 ## 5. Usuário e ambiente
@@ -223,11 +282,14 @@ O painel pode reduzir os limites. Aumentos acima dos tetos exigem alteração lo
 
 ### 6.9 Polymarket
 
-**POLY-01** Consumir somente APIs públicas e WebSocket de mercado.  
-**POLY-02** Não implementar autenticação CLOB, wallet, bridge, relayer, depósito ou endpoint real de ordem.  
-**POLY-03** `execution_mode` aceita somente `paper` no módulo Polymarket.  
-**POLY-04** UI marca todas as posições como simulação.  
-**POLY-05** Qualquer execução futura exige nova RFC e revisão de jurisdição.  
+**POLY-01** A fase de pesquisa/paper (RFC-007) consome somente APIs públicas e WebSocket de mercado (CLOB V2, Gamma, Data API).
+**POLY-02** Colateral é pUSD na Polygon; USDC.e está descontinuado. Assinatura de ordem segue EIP-712 V2 (domínio Exchange v2, auth L1 uma vez + L2 HMAC por request); negRisk usa o verifyingContract correto.
+**POLY-03** `execution_mode` do módulo aceita `paper` por padrão; `live` só é habilitado pela RFC-009, depois dos gates, e inicia sempre desarmado após restart.
+**POLY-04** A execução real usa uma burn wallet dedicada na Polygon, com capital limitado como perda máxima; a chave nunca aparece em Git, banco, logs, fixtures, métricas, frontend ou variáveis de ambiente.
+**POLY-05** Estratégia é maker-first (liquidity rewards + rebates); latency-taking e mercados de eleição são excluídos; viés estrutural anti-longshot.
+**POLY-06** A UI distingue claramente posições paper de live e exibe o modo e o kill switch.
+**POLY-07** Proibido contorno técnico de geoblock (VPN, proxy, spoofing); o acesso parte do servidor real na Alemanha.
+**POLY-08** Custos são modelados por categoria e versão (taker fee dinâmica, spread, gas Polygon, buffer de resolução/UMA); sinal só existe com edge após custos.
 
 ## 7. Fluxos principais
 
@@ -368,3 +430,7 @@ Esses riscos são aceitos apenas enquanto o sistema for pessoal, operar exclusiv
 - CPU compartilhada da linha CPX: https://docs.hetzner.com/cloud/servers/faq/
 - Requisitos que impedem usar o CPX42 como validator/RPC Agave: https://docs.anza.xyz/operations/requirements
 - Restrição geográfica da Polymarket: https://help.polymarket.com/en/articles/13364163-geographic-restrictions
+- Estudo que fundamenta a emenda de 2026-08-15: [`docs/research/direcao-e-roadmap-bots.md`](research/direcao-e-roadmap-bots.md) e relatórios em [`docs/research/reports/`](research/reports/)
+- Polymarket CLOB V2, pUSD e migração: https://docs.polymarket.com/v2-migration
+- Reporte cripto DeCripto (IN RFB 2.291/2025): https://kpmg.com/us/en/taxnewsflash/news/2025/12/tnf-brazil-implementation-of-decripto-for-cryptoasset-reporting-under-carf.html
+- Prediction markets no Brasil (CMN 5.298/2026 e SPA): https://igamingbusiness.com/legal-compliance/compliance/brazil-prediction-markets-illegal/

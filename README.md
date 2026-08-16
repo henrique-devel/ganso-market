@@ -52,11 +52,12 @@ o servidor automaticamente e confirma os três endpoints públicos de health.
 - Sem backup externo rotineiro, alta disponibilidade, multi-region ou recuperação garantida do banco.
 - A única cópia de recuperação indispensável é a da própria hot wallet, mantida offline pelo proprietário.
 - Solana começa com Pump/PumpSwap, paper por padrão.
-- Polymarket permanece analytics e paper trading enquanto o acesso partir do Brasil.
+- Polymarket: paper trading até os gates; execução real (RFC-009) autorizada pela emenda de 2026-08-15, a partir de servidor na Alemanha e burn wallet na Polygon, com risco jurisdicional/tributário assumido pelo proprietário e sem contorno de geoblock.
 
 ## Documentos
 
 - [PRD do MVP](docs/PRD.md)
+- [Estudo: direção e roadmap dos bots](docs/research/direcao-e-roadmap-bots.md)
 - [Índice e ordem das RFCs](docs/RFC_INDEX.md)
 - [Prompt mestre da IA de desenvolvimento](prompts/AI_DEVELOPER_SYSTEM_PROMPT.md)
 - [Registro do servidor e acesso SSH](docs/ops/SERVER_ACCESS.md)
@@ -76,9 +77,10 @@ o servidor automaticamente e confirma os três endpoints públicos de health.
 4. RFC-003 — Ingestão Yellowstone.
 5. RFC-004 — Eventos, persistência e retenção.
 6. RFC-005 — Hot wallet, risk guard e signer.
-7. RFC-006 — Paper trading, estratégias e gates do modelo.
-8. RFC-007 — Polymarket analytics/paper.
+7. RFC-006 — Paper trading, estratégias, bundle/insider e gates do modelo.
+8. RFC-007 — Polymarket analytics/paper (CLOB V2), com recorder e calibração.
 9. RFC-008 — Execução beta Solana, somente depois das gates.
+10. RFC-009 — Execução Polymarket maker-side, somente depois das gates da RFC-007 e aprovação.
 
 A RFC-001A é registro histórico e foi substituída pelo rebuild; não deve ser
 executada no host novo.

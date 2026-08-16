@@ -28,6 +28,10 @@ Converter intents aprovados em transações Pump/PumpSwap, simular, assinar, tra
 - Pump/PumpSwap direto apenas.
 - Sem Jupiter arbitrário, leverage, short, martingale ou retry agressivo.
 - Nunca aumentar slippage automaticamente.
+- Envio por caminho privado (bundle Jito e/ou conexão staked) contra ataque de
+  sanduíche; slippage sempre com teto.
+- Latência vem de swQoS/conexão staked, não de superpagar priority fee ou tip
+  (estudo empírico: tamanho de fee/tip não melhora inclusão de forma relevante).
 - Saldo limitado e sem auto-refill.
 - Live desligado depois de todo restart.
 - Signer precisa estar manualmente desbloqueado.

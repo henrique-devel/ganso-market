@@ -48,9 +48,10 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 | RFC-003 — Yellowstone | Não iniciada | Não antecipar durante a RFC-002 |
 | RFC-004 — Eventos e persistência | Não iniciada | Depende da RFC-003 |
 | RFC-005 — Wallet, risco e signer | Não iniciada | Live continua proibido; depende das gates anteriores |
-| RFC-006 — Paper e modelos | Não iniciada | Não existe simulador/modelo nesta fundação |
-| RFC-007 — Polymarket paper | Não iniciada | Analytics/paper somente |
-| RFC-008 — Execução beta Solana | Não iniciada | Proibida antes de todas as gates e aprovação explícita |
+| RFC-006 — Paper e modelos | Não iniciada; emendada 2026-08-15 (bundle/insider, regime, gates numéricos) | Não existe simulador/modelo nesta fundação |
+| RFC-007 — Polymarket paper (V2) | Não iniciada; emendada 2026-08-15 (V2/pUSD, recorder, clima/macro, anti-longshot) | Analytics/paper; habilita RFC-009 após gates |
+| RFC-008 — Execução beta Solana | Não iniciada; emendada 2026-08-15 (envio privado/swQoS) | Proibida antes de todas as gates e aprovação explícita |
+| RFC-009 — Execução Polymarket maker-side | Nova (2026-08-15) | Live V2 com burn wallet Polygon; risco jurisdicional aceito; só após gates da RFC-007 e aprovação |
 
 ## Evidência mais recente
 
@@ -87,9 +88,28 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 Os comandos e resultados completos estão em
 [`docs/test-results/RFC-001.md`](test-results/RFC-001.md).
 
+## Decisão de escopo — 2026-08-15 (estudo + jurisdição)
+
+- **FATO INFORMADO:** o proprietário decidiu perseguir execução real na
+  Polymarket a partir de um servidor na Alemanha, com burn wallet dedicada na
+  Polygon, **assumindo o risco jurisdicional e tributário**. Registro factual
+  mantido: elegibilidade da ToS olha a residência do usuário, não do servidor; o
+  Brasil está bloqueado; residência fiscal brasileira tributa renda mundial e
+  exige reporte (DeCripto). A burn wallet limita perda, não é conformidade.
+- **DECISÃO:** PRD emendado; RFC-007/006/008 atualizadas ao regime 2026; criada a
+  RFC-009 (execução Polymarket maker-side). Fonte:
+  [`docs/research/direcao-e-roadmap-bots.md`](research/direcao-e-roadmap-bots.md).
+- **INVARIANTE MANTIDA:** disciplina paper-first + gates objetivos para os dois
+  módulos; sem contorno técnico de geoblock em nenhuma RFC.
+- **TODO de implementação:** quando a RFC-008/009 forem implementadas,
+  `config/runtime.json` e os contratos precisarão de um valor `live` para
+  `execution_mode`, sempre iniciando desarmado após restart. Até lá, o runtime
+  permanece `paper`-only (invariante atual preservada).
+
 ## Decisões e invariantes vigentes
 
-1. `ExecutionMode` aceita exclusivamente `paper`.
+1. `ExecutionMode` aceita exclusivamente `paper` no runtime atual (o caminho
+   `live` só é introduzido pela RFC-008/009, gated e desarmado por padrão).
 2. Estratégia nunca acessa signer; nesta etapa sequer existe signer.
 3. Secrets entram por arquivo montado. Private key e seed nunca usam env,
    Git, banco, logs, fixtures ou frontend.
@@ -129,7 +149,12 @@ Os comandos e resultados completos estão em
 
 ## Próximo passo mínimo
 
-1. Revisar e reescrever a RFC-002 para autenticação no perímetro standalone.
+0. Fase 0 (emendas de PRD/RFC-006/007/008 + criação da RFC-009) concluída em
+   2026-08-15. Em paralelo e fora do código: obter parecer jurídico/tributário e
+   provisionar a burn wallet na Polygon (pré-condições da RFC-009).
+1. Revisar e reescrever a RFC-002 para autenticação no perímetro standalone; na
+   Fase 2, iniciar o recorder Polymarket (APIs públicas) em paralelo à trilha
+   Solana (RFC-003/004), pois dado não gravado é perdido.
 2. Não adicionar login, tokens, wallet ou controles privados ao HTTP público
    antes dessa revisão.
 3. Para operação atual, usar `cd /opt/ganso-market` seguido de
