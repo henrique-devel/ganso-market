@@ -12,10 +12,12 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run check",
     "start": "node dist/main.js",
+    "account": "node dist/account-cli.js",
     "test": "vitest run"
   },
   "dependencies": {
     "fastify": "5.11.3",
+    "hash-wasm": "4.12.0",
     "pg": "8.23.0"
   },
   "devDependencies": {

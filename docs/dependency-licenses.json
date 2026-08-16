@@ -2019,6 +2019,12 @@
     {
       "ecosystem": "npm",
       "license": "MIT",
+      "name": "hash-wasm",
+      "version": "4.12.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
       "name": "ipaddr.js",
       "version": "2.5.0"
     },

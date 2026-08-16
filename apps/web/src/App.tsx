@@ -1,11 +1,169 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  getSession,
+  login,
+  logout,
+  readCsrfCookie,
+  refreshSession,
+  type AuthenticatedSession,
+} from "./auth.js";
 import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
 
 const REFRESH_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 5_000;
 
+type AuthState =
+  | { readonly kind: "checking" }
+  | { readonly kind: "anonymous"; readonly error: string | null }
+  | { readonly kind: "authenticated"; readonly session: AuthenticatedSession };
+
 export function App() {
+  const [auth, setAuth] = useState<AuthState>({ kind: "checking" });
+  const [pending, setPending] = useState(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    void (async () => {
+      const refreshed = await refreshSession(readCsrfCookie());
+      if (!mounted.current) {
+        return;
+      }
+      if (refreshed.kind === "ok") {
+        const session = await getSession(refreshed.accessToken);
+        if (mounted.current && session !== null) {
+          setAuth({
+            kind: "authenticated",
+            session: { accessToken: refreshed.accessToken, ...session },
+          });
+          return;
+        }
+      }
+      if (mounted.current) {
+        setAuth({ kind: "anonymous", error: null });
+      }
+    })();
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const handleLogin = useCallback(
+    async (username: string, password: string): Promise<void> => {
+      setPending(true);
+      const outcome = await login(username, password);
+      if (!mounted.current) {
+        return;
+      }
+      setPending(false);
+      if (outcome.kind === "ok") {
+        setAuth({ kind: "authenticated", session: outcome.session });
+        return;
+      }
+      const error =
+        outcome.kind === "invalid"
+          ? "Usuário ou senha inválidos."
+          : outcome.kind === "locked"
+            ? "Muitas tentativas. Tente novamente mais tarde."
+            : "Falha ao contatar o servidor.";
+      setAuth({ kind: "anonymous", error });
+    },
+    [],
+  );
+
+  const handleLogout = useCallback(async (): Promise<void> => {
+    if (auth.kind !== "authenticated") {
+      return;
+    }
+    await logout(auth.session.accessToken, readCsrfCookie());
+    if (mounted.current) {
+      setAuth({ kind: "anonymous", error: null });
+    }
+  }, [auth]);
+
+  if (auth.kind === "checking") {
+    return (
+      <main className="shell">
+        <p className="scope">Verificando sessão…</p>
+      </main>
+    );
+  }
+
+  if (auth.kind === "anonymous") {
+    return (
+      <LoginPanel onSubmit={handleLogin} pending={pending} error={auth.error} />
+    );
+  }
+
+  return <Dashboard username={auth.session.username} onLogout={handleLogout} />;
+}
+
+export function LoginPanel({
+  onSubmit,
+  pending,
+  error,
+}: Readonly<{
+  onSubmit: (username: string, password: string) => void;
+  pending: boolean;
+  error: string | null;
+}>) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  return (
+    <main className="shell">
+      <header className="header">
+        <p className="eyebrow">Acesso restrito</p>
+        <h1>Ganso Market</h1>
+        <p className="scope">
+          Acesso HTTP restrito por firewall. Um único operador.
+        </p>
+      </header>
+      <form
+        className="login"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit(username, password);
+        }}
+      >
+        <label htmlFor="username">Usuário</label>
+        <input
+          id="username"
+          name="username"
+          autoComplete="username"
+          value={username}
+          onChange={(event) => {
+            setUsername(event.target.value);
+          }}
+        />
+        <label htmlFor="password">Senha</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => {
+            setPassword(event.target.value);
+          }}
+        />
+        {error === null ? null : (
+          <p className="login-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button type="submit" disabled={pending}>
+          {pending ? "Entrando…" : "Entrar"}
+        </button>
+      </form>
+    </main>
+  );
+}
+
+function Dashboard({
+  username,
+  onLogout,
+}: Readonly<{ username: string; onLogout: () => void }>) {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
   const mounted = useRef(true);
 
@@ -42,6 +200,12 @@ export function App() {
         <p className="scope">
           Estado operacional real. Nesta fundação não existe execução de ordens;
           o único modo configurável é paper.
+        </p>
+        <p className="session">
+          Sessão de <strong>{username}</strong>.{" "}
+          <button className="logout" type="button" onClick={onLogout}>
+            Sair
+          </button>
         </p>
       </header>
       <StatusPanel status={status} />

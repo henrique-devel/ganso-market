@@ -1,10 +1,14 @@
 # RFC-002 — Autenticação e HTTP por IP restrito
 
-**Status:** draft — perímetro precisa ser revisto após decisão de 2026-08-14
+**Status:** implementada no código (2026-08-15); publicação pública é gate operacional
 
-O modo standalone da fundação agora opera sem firewall. As exigências de
-allowlist abaixo não bloqueiam esse bootstrap, mas esta RFC deve ser reescrita
-antes de implementar autenticação ou publicar qualquer dado sensível.
+O código de autenticação single-user, os tokens rotativos, o endurecimento do
+gateway e a CLI de conta estão implementados e verificados
+([`docs/test-results/RFC-002.md`](../test-results/RFC-002.md)). Expor o painel
+autenticado no IP público continua condicionado à regra de firewall (ou TLS)
+descrita em [`docs/runbooks/auth-perimeter.md`](../runbooks/auth-perimeter.md) —
+o código não abre HTTP para o mundo por conta própria. O modelo de perímetro
+abaixo (HTTP + allowlist de IP na Hetzner) permanece válido.
 
 **Dependências:** RFC-001 e RFC-001A implementadas
 

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 
+import { registerAuthRoutes } from "./auth/http.js";
+import type { AuthService } from "./auth/service.js";
 import type { ApiConfig } from "./config.js";
 import type { ReadinessProbe } from "./database.js";
 import {
@@ -17,6 +19,8 @@ const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export interface BuildApiOptions {
   readonly config: ApiConfig;
   readonly readinessProbe: ReadinessProbe;
+  readonly authService?: AuthService;
+  readonly cookieSecure?: boolean;
   readonly logger?: boolean;
   readonly logSink?: LogSink;
   readonly clock?: () => Date;
@@ -158,14 +162,18 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     return reply.type("text/plain; version=0.0.4; charset=utf-8").send(body);
   });
 
+  if (options.authService !== undefined) {
+    registerAuthRoutes(app, {
+      service: options.authService,
+      ...(options.cookieSecure === undefined
+        ? {}
+        : { cookieSecure: options.cookieSecure }),
+    });
+  }
+
   app.setNotFoundHandler(async (request, reply) => {
-    const path = request.url.split("?", 1)[0];
-    const reasonCode =
-      path === "/auth/login"
-        ? "AUTH_UNAVAILABLE_IN_RFC_001"
-        : "ROUTE_NOT_FOUND";
     return reply.code(404).send({
-      reason_code: reasonCode,
+      reason_code: "ROUTE_NOT_FOUND",
       correlation_id: request.id,
     });
   });
@@ -185,9 +193,8 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     });
   });
 
-  app.log.info(
-    { auth_state: "unavailable", reason_code: "AUTH_UNAVAILABLE_IN_RFC_001" },
-    "auth_disabled",
-  );
+  if (options.authService === undefined) {
+    app.log.info({ auth_state: "unavailable" }, "auth_disabled");
+  }
   return app;
 }
