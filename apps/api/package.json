@@ -13,6 +13,7 @@
     "lint": "npm run check",
     "start": "node dist/main.js",
     "account": "node dist/account-cli.js",
+    "polymarket-recorder": "node dist/polymarket-recorder.js",
     "test": "vitest run"
   },
   "dependencies": {
