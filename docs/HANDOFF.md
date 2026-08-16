@@ -1,6 +1,6 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-15
+- Última atualização: 2026-08-16
 - Branch principal: `main`
 - Modo permitido no runtime atual: `paper`
 
@@ -16,8 +16,15 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 - **FATO VERIFICADO:** somente Nginx publica porta. Desenvolvimento usa
   `127.0.0.1:8080`; o novo modo standalone usa `0.0.0.0:80`. PostgreSQL,
   engine, worker e métricas permanecem internos.
-- **FATO VERIFICADO:** auth, Yellowstone, modelos, estratégias, wallet,
-  signer, ordens e execução não existem nesta entrega.
+- **FATO VERIFICADO:** implementados e testados offline (2026-08-15/16):
+  autenticação single-user (RFC-002), core de ingestão Yellowstone filtrada
+  (RFC-003), decoders/eventos de domínio Pump/PumpSwap (RFC-004) e o core do
+  recorder Polymarket (antecipa a RFC-007). `make verify` verde
+  (143 testes TypeScript, 74 Rust — 66 engine + 8 probe —, worker e scripts).
+- **FATO VERIFICADO:** ainda NÃO existem: modelos/estratégias, paper broker,
+  wallet, signer, ordens e execução ao vivo. A ingestão/decoders/recorder têm o
+  loop ao vivo desligado (não iniciados por container) — bloqueios de credencial
+  Yellowstone e de decisão de deploy documentados por RFC.
 - **FATO VERIFICADO:** nenhum container está ativo na máquina local; o volume local
   `ganso-market_postgres_data` está preservado.
 - **FATO INFORMADO:** o proprietário reconstruiu o servidor em 2026-08-14. A
@@ -44,9 +51,10 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 | --- | --- | --- |
 | RFC-001 — Fundação e runtime | Implementada localmente | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md) |
 | RFC-001A — Limpeza e preservação Yellowstone | Substituída pelo rebuild | Não executar no host novo |
-| RFC-002 — Auth e HTTP | Draft a revisar | Bootstrap standalone não depende dela; auth continua obrigatória antes de dados sensíveis |
-| RFC-003 — Yellowstone | Não iniciada | Não antecipar durante a RFC-002 |
-| RFC-004 — Eventos e persistência | Não iniciada | Depende da RFC-003 |
+| RFC-002 — Auth e HTTP | Implementada no código (2026-08-15) | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md); publicação pública gated pelo runbook de perímetro |
+| RFC-003 — Yellowstone | Core implementado e testado offline (2026-08-15) | [`docs/test-results/RFC-003.md`](test-results/RFC-003.md); loop ao vivo bloqueado por credencial |
+| RFC-004 — Eventos e persistência | Core implementado e testado offline (2026-08-15) | [`docs/test-results/RFC-004.md`](test-results/RFC-004.md); escrita ao vivo depende do feed |
+| Recorder Polymarket (antecipa RFC-007) | Core implementado e testado offline (2026-08-15) | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); coleta ao vivo é decisão de deploy |
 | RFC-005 — Wallet, risco e signer | Não iniciada | Live continua proibido; depende das gates anteriores |
 | RFC-006 — Paper e modelos | Não iniciada; emendada 2026-08-15 (bundle/insider, regime, gates numéricos) | Não existe simulador/modelo nesta fundação |
 | RFC-007 — Polymarket paper (V2) | Não iniciada; emendada 2026-08-15 (V2/pUSD, recorder, clima/macro, anti-longshot) | Analytics/paper; habilita RFC-009 após gates |
@@ -55,9 +63,10 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 
 ## Evidência mais recente
 
-- `make verify`: sucesso em 2026-08-15; 94 testes TypeScript, 22 Rust, nove do
-  worker e 107 dos scripts, além de formatadores, linters, builds, scanner e
-  política do Compose.
+- `make verify`: sucesso em 2026-08-16; 143 testes TypeScript, 74 Rust (66
+  engine + 8 probe), nove do worker e 107 dos scripts, além de formatadores,
+  linters, builds (incl. clippy `-D warnings`), scanner e política do Compose.
+  Migrations `0001`–`0004` presentes; inventário de licenças com 423 pacotes.
 - `actionlint` 1.7.12: workflow de CI/CD aprovado; todas as actions externas
   estão fixadas por SHA imutável.
 - Smoke CI/CD isolado: sucesso com projeto e volume próprios, incluindo build
@@ -149,19 +158,35 @@ Os comandos e resultados completos estão em
 
 ## Próximo passo mínimo
 
-0. Fase 0 (emendas de PRD/RFC-006/007/008 + criação da RFC-009) concluída em
-   2026-08-15. Em paralelo e fora do código: obter parecer jurídico/tributário e
-   provisionar a burn wallet na Polygon (pré-condições da RFC-009).
-1. Revisar e reescrever a RFC-002 para autenticação no perímetro standalone; na
-   Fase 2, iniciar o recorder Polymarket (APIs públicas) em paralelo à trilha
-   Solana (RFC-003/004), pois dado não gravado é perdido.
-2. Não adicionar login, tokens, wallet ou controles privados ao HTTP público
-   antes dessa revisão.
-3. Para operação atual, usar `cd /opt/ganso-market` seguido de
-   `make server-status`, `make server-health` ou `make server-logs`.
-4. Todo push futuro em `main` executa os gates e, se aprovados, atualiza
-   produção; acompanhar a execução no GitHub Actions e confirmar os health
-   checks depois de mudanças de runtime ou migrations.
+Fases 1 e 2 do roadmap implementadas no código e verificadas offline (RFC-002,
+RFC-003, RFC-004 e o recorder Polymarket). Os próximos passos para ativar o que
+está bloqueado:
+
+1. **Yellowstone:** confirmar credencial nova com slots avançando (o probe
+   `tools/rfc001a-yellowstone-probe` valida conectividade). Só então ligar o
+   receiver da RFC-003 no `run()` do engine e conectar o writer da RFC-004
+   (escrita microbatch, TTL/pruning). Sem isso, ingestão/decoders permanecem
+   testados offline.
+2. **Auth em produção:** antes de publicar login/tokens no IP público, aplicar a
+   regra de firewall (ou TLS) de [`docs/runbooks/auth-perimeter.md`](runbooks/auth-perimeter.md)
+   e criar a conta única via `node dist/account-cli.js create <user>`.
+3. **Recorder Polymarket:** decisão de deploy para rodar o processo
+   `polymarket-recorder` continuamente (novo serviço no Compose, dentro do
+   orçamento) e começar a gravar dados públicos desde já.
+4. **Depois das Fases 1–2:** RFC-005 (wallet/risk/signer) — pré-condição é a
+   comprovação de recuperação offline da hot wallet — seguida da RFC-006 (paper
+   e gates) e do restante da RFC-007 (baseline/calibração/paper broker).
+5. Para operação atual, usar `cd /opt/ganso-market` seguido de
+   `make server-status`, `make server-health` ou `make server-logs`. Todo push em
+   `main` executa os gates e, se aprovados, atualiza produção.
+
+### Bloqueios abertos
+
+- **Yellowstone:** credencial + slots avançando ainda não confirmados (RFC-003/004
+  ao vivo dependem disso).
+- **Wallet:** recuperação offline da hot wallet deve ser comprovada antes da RFC-005.
+- **Jurisdição (RFC-009):** parecer jurídico/tributário e provisionamento da burn
+  wallet na Polygon antes de qualquer execução real na Polymarket.
 
 ## Como atualizar este handoff
 
