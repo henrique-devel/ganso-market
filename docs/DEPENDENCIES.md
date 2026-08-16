@@ -34,6 +34,9 @@ Fonte: metadados do [registro npm](https://www.npmjs.com/).
 | time | 0.3.55 | MIT OR Apache-2.0 |
 | tracing / tracing-subscriber | 0.1.44 / 0.3.23 | MIT |
 | uuid | 1.24.0 | Apache-2.0 OR MIT |
+| sha2 (RFC-003/004 hashes) | 0.10.9 | MIT OR Apache-2.0 |
+| bs58 (pubkeys base58, RFC-004) | 0.5.1 | MIT OR Apache-2.0 |
+| tempfile (testes) | 3.24.0 | MIT OR Apache-2.0 |
 | tower (testes) | 0.5.3 | MIT |
 | futures | 0.3.33 | MIT OR Apache-2.0 |
 | libc | 0.2.189 | MIT OR Apache-2.0 |
