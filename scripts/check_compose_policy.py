@@ -11,7 +11,17 @@ FOUR_GIB = 4 * 1024 * 1024 * 1024
 
 def main() -> None:
     result = subprocess.run(
-        ["docker", "compose", "--profile", "model", "config", "--format", "json"],
+        [
+            "docker",
+            "compose",
+            "--profile",
+            "model",
+            "--profile",
+            "polymarket",
+            "config",
+            "--format",
+            "json",
+        ],
         check=True,
         capture_output=True,
         text=True,

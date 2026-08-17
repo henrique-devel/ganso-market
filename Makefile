@@ -9,6 +9,7 @@ SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 
 .PHONY: help doctor install init-secrets format format-check lint test build verify \
 	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \
+	recorder-up recorder-logs recorder-down \
 	server-init server-config server-up server-health server-status server-logs server-update server-down
 
 help:
@@ -19,6 +20,9 @@ help:
 	@echo "  make up             sobe o runtime local em 127.0.0.1"
 	@echo "  make integration    testa Compose, readiness e shutdown"
 	@echo "  make down           encerra sem apagar volumes"
+	@echo "  make recorder-up    sobe o recorder Polymarket (dados públicos)"
+	@echo "  make recorder-logs  acompanha os logs do recorder Polymarket"
+	@echo "  make recorder-down  encerra o recorder Polymarket"
 	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
 	@echo "  make server-health  verifica frontend, API, banco e engine"
 	@echo "  make server-status  mostra o estado dos containers"
@@ -94,7 +98,16 @@ resource-check:
 	$(PYTHON) scripts/check_runtime_memory.py
 
 down:
-	docker compose --profile model down --remove-orphans
+	docker compose --profile model --profile polymarket down --remove-orphans
+
+recorder-up: init-secrets
+	docker compose --profile polymarket up --build --detach polymarket-recorder
+
+recorder-logs:
+	docker compose --profile polymarket logs --follow --tail 100 polymarket-recorder
+
+recorder-down:
+	docker compose --profile polymarket rm --stop --force polymarket-recorder
 
 server-init:
 	@if [ ! -f "$(SERVER_ENV)" ]; then \

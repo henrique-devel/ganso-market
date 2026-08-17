@@ -1,3 +1,5 @@
+import { createAuthService } from "./auth/service.js";
+import { createPostgresAuthStore } from "./auth/store.js";
 import { loadConfig, ConfigError } from "./config.js";
 import {
   createDatabasePool,
@@ -9,9 +11,13 @@ import { buildApi } from "./server.js";
 async function run(): Promise<void> {
   const config = await loadConfig();
   const pool = createDatabasePool(config);
+  const authService = createAuthService({
+    store: createPostgresAuthStore(pool),
+  });
   const app = buildApi({
     config,
     readinessProbe: createPostgresReadinessProbe(pool),
+    authService,
   });
   const gracefulShutdown = createGracefulShutdown(app, pool);
   gracefulShutdown.install();

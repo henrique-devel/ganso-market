@@ -50,12 +50,14 @@ Fresh launch/primeiro slot não faz parte do MVP.
 3. Simular:
    - Pump bonding curve;
    - PumpSwap constant product;
-   - venue/transfer fees;
-   - priority fee e tip;
+   - venue/transfer fees por regime de fee vigente;
+   - priority fee e tip (incluindo a parcela de lucro cedida ao tip Jito em
+     estratégias competitivas);
    - ATA/rent;
    - slippage/impacto;
    - delay decisão-build-landing;
-   - falha/expiry;
+   - falha/expiry (transação que falha ainda queima priority fee; modelar taxa
+     de falha de rede sob congestão);
    - route disappearance;
    - LP removal;
    - gap/rug.
@@ -67,15 +69,25 @@ Fresh launch/primeiro slot não faz parte do MVP.
 
 ### Tarefas de features/modelo
 
-1. Implementar hard vetoes antes do modelo.
+1. Implementar hard vetoes antes do modelo, incluindo vetoes de
+   bundle/insider (o sniping lucrativo é majoritariamente jogo de insider):
+   - authority de mint/freeze ativa;
+   - % de supply comprada no bloco de criação acima do limite;
+   - N carteiras same-block / clusters com mesma fonte de funding;
+   - creator com histórico de rug (tokens anteriores que zeraram);
+   - liquidez/holders abaixo do piso; concentração do top holder acima do teto.
 2. Features mínimas:
    - authorities/extensões;
    - reserves reais e virtuais;
    - liquidez/impacto;
    - lifecycle/migração;
-   - creator history;
+   - creator history (ATH e desfecho dos tokens anteriores do creator);
    - concentração/clusters disponíveis;
-   - buyers/sellers/flow;
+   - detecção de bundle/insider: compras coordenadas no bloco de criação,
+     clusters por fonte de funding, proporção de supply em carteiras coordenadas;
+   - snapshot de verdict de risco (RugCheck/SolSniffer/GoPlus) capturado no
+     momento da detecção e guardado, para não vazar label pós-hoc;
+   - buyers/sellers/flow (cientes de contaminação por wash trading);
    - volatilidade/drawdown;
    - custo completo e sellability.
 3. Baselines determinísticos e regressão/logistic/gradient boosting somente se o dataset suportar.
@@ -85,8 +97,17 @@ Fresh launch/primeiro slot não faz parte do MVP.
    - P(graduation);
    - quantis de retorno líquido;
    - tempo até rug/migração/saída.
-5. Split temporal walk-forward.
-6. Dataset inclui tokens mortos, não graduados e pools sem saída.
+5. Split temporal walk-forward (k-fold vaza futuro; não usar).
+6. Dataset inclui tokens mortos, não graduados e pools sem saída, e é
+   **particionado por regime** de fee/graduação (Raydium→PumpSwap mar/2025;
+   Project Ascend set/2025; BOOST jul/2026), porque a taxa-base de graduação
+   variou >30x entre regimes; um classificador treinado num regime é
+   miscalibrado no seguinte.
+   - priors de graduação podem usar dataset aberto e comercialmente utilizável
+     (ex.: RED-PUMP, CC-BY); evitar datasets com licença não comercial
+     (ex.: MELT, CC BY-NC) para treino de bot de lucro;
+   - após o baseline inicial, treinar somente com dados gravados pelos coletores
+     do próprio projeto.
 7. Calibração e versão de modelo.
 8. Fallback explícito para baseline ou veto se modelo estiver stale.
 
@@ -119,9 +140,14 @@ Mínimo:
 - nenhum look-ahead detectado;
 - fees/slippage/latência/falha incluídos;
 - saída simulada e gap para zero testados;
-- hard vetoes testados;
+- hard vetoes (incl. bundle/insider) testados;
 - desempenho reportado por regime, sem esconder outliers;
 - limites inferiores e riscos apresentados;
+- gates numéricos objetivos (PASS/FAIL, não julgamento):
+  - ≥100 trades paper por estratégia (200–500 preferível) para significância;
+  - walk-forward efficiency ≥ 50%;
+  - Sharpe deflacionado pelo número de variantes testadas;
+  - go/no-go calculado assumindo haircut de 20–50% do resultado de paper ao vivo;
 - aprovação humana explícita ainda necessária.
 
 Não exija que um modelo apresente alpha para concluir a engenharia. Se não houver evidência, registre `NO_EVIDENCE_OF_ALPHA` e mantenha baseline/paper.

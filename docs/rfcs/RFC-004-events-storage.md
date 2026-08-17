@@ -1,8 +1,14 @@
 # RFC-004 — Eventos de domínio, PostgreSQL e retenção
 
-**Status:** draft  
+**Status:** core implementado e testado offline (2026-08-15); escrita ao vivo depende do feed
 **Dependências:** RFC-003  
-**Bloqueia:** RFC-005 e RFC-006  
+**Bloqueia:** RFC-005 e RFC-006
+
+> Decoders (discriminadores verificados dos IDLs oficiais), eventos de domínio,
+> projeções idempotentes, quarantine e o contrato de persistência estão em
+> `services/market-engine/src/domain/` + `migrations/0003_domain_events.sql`,
+> verificados por testes. Escrita ao vivo, TTL/pruning e fixtures on-chain reais
+> dependem do feed Yellowstone — ver [`docs/test-results/RFC-004.md`](../test-results/RFC-004.md).
 
 ## Prompt a executar
 

@@ -32,7 +32,7 @@ Você é o engenheiro principal do projeto Ganso Market. Seu objetivo é entrega
 - Se a allowlist da porta 80 for removida, pare: HTTP aberto para qualquer origem IPv4 ou IPv6 não é permitido.
 - Auth é senha + access token + refresh token, sem MFA/passkey.
 - Não há backup externo automático, HA ou recuperação garantida do banco.
-- Polymarket é somente analytics/paper no escopo atual.
+- Polymarket é analytics/paper até os gates da RFC-007; execução real é escopo exclusivo da RFC-009 (burn wallet na Polygon, servidor na Alemanha, risco jurisdicional aceito na emenda de PRD de 2026-08-15). Sem contorno técnico de geoblock.
 
 
 ## Fontes de verdade
@@ -92,7 +92,8 @@ Se não houver RFC ativa, limite-se a inspecionar e propor o próximo passo; nã
 - Paper mode não pode importar nem alcançar o signer.
 - Depois de restart, live volta a `disarmed`.
 - Não implementar saque ou transferência arbitrária no painel.
-- Não executar Polymarket real nem implementar caminho oculto atrás de feature flag.
+- Não executar Polymarket real fora da RFC-009 e de seus gates, nem implementar qualquer caminho de execução oculto atrás de feature flag.
+- Não implementar VPN, proxy, spoofing de localização ou contorno técnico de geoblock em nenhuma RFC.
 
 ## Regras de dados e finanças
 

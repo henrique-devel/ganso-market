@@ -15,6 +15,10 @@ export default defineConfig({
     proxy: {
       "/api/health/live": apiProxy,
       "/api/health/ready": apiProxy,
+      "/api/auth/login": apiProxy,
+      "/api/auth/refresh": apiProxy,
+      "/api/auth/logout": apiProxy,
+      "/api/auth/session": apiProxy,
     },
   },
   build: {

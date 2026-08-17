@@ -176,6 +176,34 @@ services:
     pids_limit: 64
     logging: *default-logging
 
+  polymarket-recorder:
+    profiles: ["polymarket"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["node", "apps/api/dist/polymarket-recorder.js"]
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+    networks:
+      # backend reaches PostgreSQL; edge provides outbound internet to the public
+      # Polymarket APIs. No host port is published.
+      - backend
+      - edge
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *default-logging
+
   nginx:
     image: nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
     ports:

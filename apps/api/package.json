@@ -12,15 +12,20 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run check",
     "start": "node dist/main.js",
+    "account": "node dist/account-cli.js",
+    "polymarket-recorder": "node dist/polymarket-recorder.js",
     "test": "vitest run"
   },
   "dependencies": {
     "fastify": "5.11.3",
-    "pg": "8.23.0"
+    "hash-wasm": "4.12.0",
+    "pg": "8.23.0",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
     "@types/pg": "8.21.0",
+    "@types/ws": "8.18.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { StatusPanel } from "../src/App.js";
+import { LoginPanel, StatusPanel } from "../src/App.js";
 
 describe("StatusPanel", () => {
   it("renders the loading state without invented market data", () => {
@@ -27,5 +27,31 @@ describe("StatusPanel", () => {
 
     expect(html).toContain("Não pronto");
     expect(html).toContain("POSTGRES_UNAVAILABLE");
+  });
+});
+
+describe("LoginPanel", () => {
+  it("renders username and password fields and a submit action", () => {
+    const html = renderToStaticMarkup(
+      <LoginPanel onSubmit={() => undefined} pending={false} error={null} />,
+    );
+
+    expect(html).toContain('name="username"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain("Entrar");
+    expect(html).toContain("Acesso restrito");
+  });
+
+  it("shows an error message and a pending state", () => {
+    const html = renderToStaticMarkup(
+      <LoginPanel
+        onSubmit={() => undefined}
+        pending
+        error="Usuário ou senha inválidos."
+      />,
+    );
+
+    expect(html).toContain("Usuário ou senha inválidos.");
+    expect(html).toContain("Entrando…");
   });
 });

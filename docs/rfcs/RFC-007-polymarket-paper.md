@@ -1,26 +1,48 @@
-# RFC-007 — Polymarket analytics e paper trading
+# RFC-007 — Polymarket analytics e paper trading (CLOB V2)
 
-**Status:** draft  
+**Status:** draft (atualizada pela emenda de PRD de 2026-08-15)
 **Dependências:** RFC-001, RFC-002 e RFC-004  
-**Pode avançar em paralelo com:** RFC-005/RFC-006 após os contratos comuns  
+**Pode avançar em paralelo com:** RFC-005/RFC-006 após os contratos comuns
+**Habilita:** RFC-009 (execução live) somente após os gates desta RFC
 
 ## Prompt a executar
 
-Você deve implementar a RFC-007 do Ganso Market: módulo Polymarket estritamente analytics e paper trading.
+Você deve implementar a RFC-007 do Ganso Market: módulo Polymarket de analytics
+e paper trading sobre a plataforma CLOB V2. Esta RFC é a fundação de dados,
+calibração e simulação; a execução real fica na RFC-009 e não é implementada
+aqui.
 
 ### Objetivo
 
-Descobrir mercados, acompanhar livros/regras, estimar probabilidade/edge com baseline transparente, gerar sinais explicáveis e simular ordens sem autenticação de trading.
+Descobrir mercados, gravar livros/regras/trades desde o dia 1, estimar
+probabilidade/edge com baseline transparente e calibração comprovada, gerar
+sinais explicáveis e simular ordens realistas com o fee schedule V2 — sem
+autenticação de trading e sem broadcast.
 
 ### Restrição não negociável
 
-- Brasil está bloqueado para trading pela Polymarket:
-  https://help.polymarket.com/en/articles/13364163-geographic-restrictions
-- Não implementar CLOB auth L1/L2, wallet, signer, bridge, relayer, depósito, approvals ou chamadas reais de ordem.
-- Não implementar proxy/VPN/evasão.
-- `execution_mode` do módulo aceita somente `paper`.
-- Não esconder código real atrás de feature flag.
-- UI exibe “SIMULAÇÃO — SEM EXECUÇÃO REAL”.
+- Nesta RFC não implementar autenticação CLOB L1/L2 de trading, burn wallet,
+  signer, bridge, relayer, depósito, approvals ou chamadas reais de ordem —
+  isso é escopo da RFC-009.
+- Não implementar proxy/VPN/spoofing/evasão de geoblock em nenhuma RFC. O acesso
+  parte de infraestrutura real (servidor na Alemanha); presença física e
+  elegibilidade legal do operador são responsabilidade do proprietário
+  (risco jurisdicional aceito na emenda de PRD de 2026-08-15).
+- `execution_mode` do módulo aceita somente `paper` nesta RFC.
+- Não esconder código real de execução atrás de feature flag.
+- UI exibe “SIMULAÇÃO — SEM EXECUÇÃO REAL” nesta fase.
+
+### Regime de plataforma (Polymarket 2026 — verificar na doc oficial)
+
+- CLOB V2 (cutover 28/abr/2026): contratos `ctf-exchange-v2`; SDKs atuais
+  `py-sdk`/`ts-sdk` e `py-clob-client-v2`/`clob-client-v2`; os clientes V1 estão
+  arquivados. Usar `polymarket-cli` (Rust) como referência de assinatura V2.
+- Colateral é pUSD (ERC-20 na Polygon), não USDC.e.
+- Taxas taker dinâmicas por categoria (pico perto de preço 0,50), makers a custo
+  zero com rebates; geopolítica grátis. Versione o schedule como dado.
+- negRisk usa verifyingContract próprio; ler o flag `neg_risk` antes de qualquer
+  cálculo dependente de contrato.
+- Tratar 28/abr/2026 como fronteira dura de regime em qualquer histórico.
 
 ### Orçamento
 
@@ -45,13 +67,25 @@ Verifique documentação oficial atual antes de fixar endpoints/schemas.
 
 ### Universo inicial
 
-- Uma ou duas categorias: crypto e macro agendado.
-- Excluir live sports, augmented neg-risk/Other, regras vazias/ambíguas e livros insuficientes.
+- Categorias-alvo: crypto up/down, macro agendado e clima/temperatura (dados
+  abertos ECMWF/Open-Meteo/NWS, baixa competição de latência).
+- Excluir mercados de eleição, live sports, augmented neg-risk/Other, regras
+  vazias/ambíguas e livros insuficientes.
 - Gamma a cada 10 minutos.
 - Snapshot REST no subscribe/reconnect.
 - WebSocket somente do universo selecionado.
 - Reconciliação periódica.
 - Top-10 do livro persistido a cada 2–5 segundos, não cada delta de todo o mercado.
+
+### Recorder primeiro (o gravador vem antes da estratégia)
+
+- Não existe histórico L2 profundo barato e o `/prices-history` oficial degrada
+  para ~12h em mercados resolvidos; portanto grave o firehose próprio (livro
+  top-10, trades, status) desde o primeiro deploy do módulo.
+- Backfill de metadados/resolução via Gamma + Dune (free tier); para calibrar o
+  modelo de slippage, considerar um mês de um arquivo L2 de terceiros
+  (ex.: DepthFeed) contra ladders reais.
+- Persistir o schedule de fees vigente junto de cada decisão, para replay fiel.
 
 ### Tarefas
 
@@ -61,9 +95,15 @@ Verifique documentação oficial atual antes de fixar endpoints/schemas.
 4. Reconstruir livro após reconnect.
 5. Criar baseline:
    - probabilidade do mercado usando bid/ask/microprice executável;
-   - regressão logística regularizada opcional;
-   - calibração temporal;
-   - fallback para mercado.
+   - regressão logística regularizada opcional (walk-forward, nunca k-fold);
+   - calibração temporal com Brier e log loss;
+   - fallback para mercado;
+   - o mercado é bem calibrado na média, então o modelo só é promovido se não
+     piorar Brier/log loss no holdout; enquanto não houver track record
+     (Brier < ~0,20 em 100+ mercados resolvidos), sinais dependentes de modelo
+     ficam desabilitados e vale o baseline de mercado.
+   - modelo de domínio para clima: probabilidade por bucket a partir de ensemble
+     (GFS/ECMWF) vs preço de mercado.
 6. Features:
    - spread/profundidade;
    - imbalance;
@@ -77,6 +117,13 @@ Verifique documentação oficial atual antes de fixar endpoints/schemas.
    - `EV_yes = q - ask_yes - custos - resolution_buffer`;
    - `EV_no = (1-q) - ask_no - custos - resolution_buffer`.
 8. Sinal somente quando limite inferior ainda tiver edge após custos e vetos.
+   - viés estrutural anti-longshot: rejeitar/penalizar compras de contratos
+     muito baratos (ex.: < 10¢), que perdem em média; preferir favoritos/NO;
+   - preferência maker: modelar o sinal como quote passiva (fee zero + rebates),
+     não como taker, sempre que a estratégia permitir;
+   - agrupar mercados correlacionados (mesmo evento/resolução) e limitar a
+     exposição combinada do grupo (ex.: 20–25% da banca), dimensionando o grupo
+     como uma aposta só (Kelly fracionário como teto).
 9. Criar simulador:
    - book walk;
    - partial fills;
@@ -145,9 +192,10 @@ Nenhum endpoint de trading/wallet/deposit.
 
 Pare se:
 
-- a tarefa pedir execução real/geoblock bypass;
-- API/schema oficial não puder ser verificado;
+- a tarefa pedir execução real nesta RFC (é escopo da RFC-009) ou qualquer
+  contorno técnico de geoblock (VPN/proxy/spoofing);
+- API/schema oficial V2 não puder ser verificado;
 - o simulador precisar presumir fill otimista;
 - modelo usar dado posterior à decisão;
 - retenção ultrapassar quota local;
-- algum componente solicitar private key ou trading credential.
+- algum componente solicitar private key ou trading credential nesta fase.

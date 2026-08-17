@@ -141,3 +141,66 @@ h1 {
   outline: 2px solid #66d697;
   outline-offset: 3px;
 }
+
+.login {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 22rem;
+}
+
+.login label {
+  color: #8eaa98;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.login input {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #35483c;
+  border-radius: 0.5rem;
+  color: #eef4f0;
+  background: #101914;
+  font: inherit;
+}
+
+.login input:focus-visible {
+  outline: 2px solid #66d697;
+  outline-offset: 2px;
+}
+
+.login button {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #35483c;
+  border-radius: 0.65rem;
+  color: #dfe8e2;
+  background: #17231c;
+  cursor: pointer;
+}
+
+.login button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-error {
+  margin: 0.25rem 0 0;
+  color: #e2776a;
+  font-size: 0.85rem;
+}
+
+.session {
+  margin-top: 1rem;
+  color: #aab8af;
+  font-size: 0.9rem;
+}
+
+.logout {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #35483c;
+  border-radius: 0.5rem;
+  color: #dfe8e2;
+  background: #17231c;
+  cursor: pointer;
+}

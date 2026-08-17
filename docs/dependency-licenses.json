@@ -64,6 +64,12 @@
       "ecosystem": "cargo",
       "license": "MIT OR Apache-2.0",
       "name": "block-buffer",
+      "version": "0.10.4"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0",
+      "name": "block-buffer",
       "version": "0.12.1"
     },
     {
@@ -77,6 +83,12 @@
       "license": "Apache-2.0",
       "name": "borsh-derive",
       "version": "1.8.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT/Apache-2.0",
+      "name": "bs58",
+      "version": "0.5.1"
     },
     {
       "ecosystem": "cargo",
@@ -148,6 +160,12 @@
       "ecosystem": "cargo",
       "license": "MIT OR Apache-2.0",
       "name": "cpufeatures",
+      "version": "0.2.17"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0",
+      "name": "cpufeatures",
       "version": "0.3.0"
     },
     {
@@ -155,6 +173,12 @@
       "license": "MIT OR Apache-2.0",
       "name": "crc32fast",
       "version": "1.5.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0",
+      "name": "crypto-common",
+      "version": "0.1.7"
     },
     {
       "ecosystem": "cargo",
@@ -191,6 +215,12 @@
       "license": "MIT OR Apache-2.0",
       "name": "deranged",
       "version": "0.5.8"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0",
+      "name": "digest",
+      "version": "0.10.7"
     },
     {
       "ecosystem": "cargo",
@@ -332,9 +362,21 @@
     },
     {
       "ecosystem": "cargo",
+      "license": "MIT",
+      "name": "generic-array",
+      "version": "0.14.7"
+    },
+    {
+      "ecosystem": "cargo",
       "license": "MIT OR Apache-2.0",
       "name": "getrandom",
       "version": "0.2.17"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0",
+      "name": "getrandom",
+      "version": "0.3.4"
     },
     {
       "ecosystem": "cargo",
@@ -778,6 +820,12 @@
       "ecosystem": "cargo",
       "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
       "name": "r-efi",
+      "version": "5.3.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "name": "r-efi",
       "version": "6.0.0"
     },
     {
@@ -916,6 +964,12 @@
       "ecosystem": "cargo",
       "license": "MIT OR Apache-2.0",
       "name": "sha2",
+      "version": "0.10.9"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT OR Apache-2.0",
+      "name": "sha2",
       "version": "0.11.0"
     },
     {
@@ -1042,7 +1096,7 @@
       "ecosystem": "cargo",
       "license": "MIT OR Apache-2.0",
       "name": "tempfile",
-      "version": "3.27.0"
+      "version": "3.24.0"
     },
     {
       "ecosystem": "cargo",
@@ -1289,6 +1343,12 @@
       "license": "MIT",
       "name": "valuable",
       "version": "0.1.1"
+    },
+    {
+      "ecosystem": "cargo",
+      "license": "MIT/Apache-2.0",
+      "name": "version_check",
+      "version": "0.9.5"
     },
     {
       "ecosystem": "cargo",
@@ -1688,6 +1748,12 @@
     },
     {
       "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@types/ws",
+      "version": "8.18.1"
+    },
+    {
+      "ecosystem": "npm",
       "license": "Apache-2.0",
       "name": "@typescript/typescript-aix-ppc64",
       "version": "7.0.2"
@@ -2015,6 +2081,12 @@
       "license": "MIT",
       "name": "fsevents",
       "version": "2.3.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "hash-wasm",
+      "version": "4.12.0"
     },
     {
       "ecosystem": "npm",
@@ -2465,6 +2537,12 @@
       "license": "MIT",
       "name": "why-is-node-running",
       "version": "2.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "ws",
+      "version": "8.21.3"
     },
     {
       "ecosystem": "npm",

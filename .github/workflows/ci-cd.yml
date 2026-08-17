@@ -89,7 +89,6 @@ jobs:
     env:
       DEPLOY_HOST: 178.105.65.251
       DEPLOY_USER: root
-      DEPLOY_BASE_URL: http://178.105.65.251
 
     steps:
       - name: Check out the verified revision
@@ -140,18 +139,14 @@ jobs:
             "deploy $GITHUB_SHA" \
             < "$RUNNER_TEMP/ganso-market-release.tar.gz"
 
-      - name: Verify the public gateway
+      - name: Note on health verification
         run: |
           set -eu
-          curl --noproxy '*' --fail --silent --show-error \
-            --connect-timeout 5 --max-time 15 \
-            --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
-            "$DEPLOY_BASE_URL/" >/dev/null
-          curl --noproxy '*' --fail --silent --show-error \
-            --connect-timeout 5 --max-time 15 \
-            --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
-            "$DEPLOY_BASE_URL/api/health/live" >/dev/null
-          curl --noproxy '*' --fail --silent --show-error \
-            --connect-timeout 5 --max-time 15 \
-            --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
-            "$DEPLOY_BASE_URL/api/health/ready" >/dev/null
+          # Health is gated on the server: remote-deploy.sh runs
+          # deploy/healthcheck.sh (localhost /, /api/health/live, /api/health/ready
+          # and the engine) during the deploy step above, and a failure there
+          # fails the SSH command and this job. The public gateway (port 80) is
+          # firewalled to the operator IP, so it is intentionally NOT reachable
+          # from the CI runner and is no longer curled here (see
+          # docs/runbooks/auth-perimeter.md).
+          echo "Deploy health verified on server via localhost healthcheck; public port 80 restricted to operator IP by the Hetzner firewall."

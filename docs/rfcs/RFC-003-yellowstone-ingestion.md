@@ -1,8 +1,14 @@
 # RFC-003 — Ingestão Yellowstone filtrada
 
-**Status:** draft  
+**Status:** core implementado e testado offline (2026-08-15); execução ao vivo bloqueada por credencial
 **Dependências:** RFC-001 e RFC-001A
-**Bloqueia:** RFC-004 e RFC-006  
+**Bloqueia:** RFC-004 e RFC-006
+
+> Componentes determinísticos (allowlist, envelope/idempotência, prioridade,
+> backpressure, fila, WAL, métricas, assinaturas, mapeamento do receiver)
+> implementados em `services/market-engine/src/ingestion/` e verificados por
+> testes. O loop ao vivo e o soak de 24–72 h dependem de uma credencial
+> Yellowstone válida — ver [`docs/test-results/RFC-003.md`](../test-results/RFC-003.md).
 
 ## Prompt a executar
 

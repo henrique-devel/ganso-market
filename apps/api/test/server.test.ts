@@ -128,7 +128,7 @@ describe("API operational endpoints", () => {
     await app.close();
   });
 
-  it("keeps auth unavailable and does not register a login endpoint", async () => {
+  it("does not register auth routes when no auth service is provided", async () => {
     const app = buildApi({
       config: testConfig(),
       readinessProbe: { check: vi.fn() },
@@ -145,7 +145,7 @@ describe("API operational endpoints", () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({
-      reason_code: "AUTH_UNAVAILABLE_IN_RFC_001",
+      reason_code: "ROUTE_NOT_FOUND",
     });
     await app.close();
   });

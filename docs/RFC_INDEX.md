@@ -21,9 +21,10 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 | [RFC-003](rfcs/RFC-003-yellowstone-ingestion.md) | Ingestão Yellowstone | RFC-001 | stream filtrado, filas e backpressure |
 | [RFC-004](rfcs/RFC-004-events-storage.md) | Eventos e persistência | RFC-003 | decoders, estado, PostgreSQL e TTL |
 | [RFC-005](rfcs/RFC-005-wallet-risk-signer.md) | Wallet, risco e signer | RFC-001 e RFC-004 | fronteira de assinatura local e políticas |
-| [RFC-006](rfcs/RFC-006-paper-model-gates.md) | Paper e gates do modelo | RFC-003 a RFC-005 | simulador, estratégias e readiness |
-| [RFC-007](rfcs/RFC-007-polymarket-paper.md) | Polymarket analytics/paper | RFC-001, RFC-002 e RFC-004 | coleta, sinais e paper sem execução |
-| [RFC-008](rfcs/RFC-008-solana-beta-execution.md) | Execução beta Solana | RFC-001 a RFC-006 + aprovação | canário e micro-live Pump/PumpSwap |
+| [RFC-006](rfcs/RFC-006-paper-model-gates.md) | Paper e gates do modelo | RFC-003 a RFC-005 | simulador, estratégias, bundle/insider e readiness |
+| [RFC-007](rfcs/RFC-007-polymarket-paper.md) | Polymarket analytics/paper (V2) | RFC-001, RFC-002 e RFC-004 | coleta V2/pUSD, recorder, sinais e paper sem execução |
+| [RFC-008](rfcs/RFC-008-solana-beta-execution.md) | Execução beta Solana | RFC-001 a RFC-006 + aprovação | canário e micro-live Pump/PumpSwap com envio privado |
+| [RFC-009](rfcs/RFC-009-polymarket-live-execution.md) | Execução Polymarket maker-side | RFC-002, RFC-004 e RFC-007 + aprovação | live V2 maker-first com burn wallet na Polygon |
 
 ## Convenção de status
 
