@@ -1,3 +1,5 @@
+import { WebSocket } from "ws";
+
 import type { DatabasePool } from "../database.js";
 import { OrderBook } from "./book.js";
 import { isInUniverse, parseMarket } from "./gamma.js";
@@ -12,6 +14,11 @@ export const DEFAULT_SNAPSHOT_INTERVAL_MS = 3_000;
 export const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
 export const MARKET_WS_URL =
   "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+
+// Polymarket sits behind Cloudflare, which rejects non-browser-like clients;
+// send a User-Agent (and Origin for the socket) so requests are accepted.
+const USER_AGENT = "GansoMarketRecorder/1.0 (+public-data-recorder)";
+const WEB_ORIGIN = "https://polymarket.com";
 
 export interface BookSnapshot {
   readonly tokenId: string;
@@ -122,8 +129,13 @@ export async function fetchTrackedMarkets(
   fetcher: JsonFetcher = fetch,
   baseUrl: string = GAMMA_BASE_URL,
 ): Promise<MarketRegistryEntry[]> {
-  const response = await fetcher(`${baseUrl}/markets?closed=false&limit=100`, {
-    headers: { accept: "application/json" },
+  // Order by 24h volume and include tags so the tracked-category filter has real
+  // tags to work with (Gamma's default ordering returns mostly election markets).
+  const url =
+    `${baseUrl}/markets?closed=false&active=true` +
+    `&order=volume24hr&ascending=false&limit=200&include_tag=true&related_tags=true`;
+  const response = await fetcher(url, {
+    headers: { accept: "application/json", "user-agent": USER_AGENT },
   });
   if (!response.ok) {
     return [];
@@ -141,6 +153,7 @@ export async function fetchTrackedMarkets(
 }
 
 export interface MarketSocket {
+  onOpen(handler: () => void): void;
   onMessage(handler: (raw: string) => void): void;
   onClose(handler: () => void): void;
   send(data: string): void;
@@ -149,33 +162,25 @@ export interface MarketSocket {
 
 export type MarketSocketFactory = (url: string) => MarketSocket;
 
-interface RawSocket {
-  addEventListener(
-    type: string,
-    listener: (event: { data?: unknown }) => void,
-  ): void;
-  send(data: string): void;
-  close(): void;
-}
-
-/** Adapter over the Node global WebSocket (available in Node 22+). */
+/** Adapter over the `ws` client, which (unlike the global WebSocket) can send
+ * the browser-like headers Polymarket's Cloudflare edge requires. */
 export function nodeMarketSocketFactory(url: string): MarketSocket {
-  const ctor = (globalThis as { WebSocket?: new (url: string) => RawSocket })
-    .WebSocket;
-  if (ctor === undefined) {
-    throw new Error("WEBSOCKET_UNAVAILABLE");
-  }
-  const socket = new ctor(url);
+  const socket = new WebSocket(url, {
+    headers: { "User-Agent": USER_AGENT, Origin: WEB_ORIGIN },
+  });
   return {
+    onOpen(handler): void {
+      socket.on("open", () => {
+        handler();
+      });
+    },
     onMessage(handler): void {
-      socket.addEventListener("message", (event) => {
-        handler(
-          typeof event.data === "string" ? event.data : String(event.data),
-        );
+      socket.on("message", (data: Buffer | ArrayBuffer | Buffer[]) => {
+        handler(data.toString());
       });
     },
     onClose(handler): void {
-      socket.addEventListener("close", () => {
+      socket.on("close", () => {
         handler();
       });
     },
@@ -284,6 +289,15 @@ export async function runRecorder(config: RecorderConfig): Promise<void> {
 
   await new Promise<void>((resolve) => {
     const socket = socketFactory(MARKET_WS_URL);
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    socket.onOpen(() => {
+      // Subscribe only once the socket is open, then keep it alive with a
+      // client heartbeat every 10s.
+      socket.send(subscribeMessage(tokenIds));
+      heartbeat = setInterval(() => {
+        socket.send("PING");
+      }, 10_000);
+    });
     socket.onMessage((raw) => {
       if (raw === "PONG") {
         return;
@@ -293,15 +307,10 @@ export async function runRecorder(config: RecorderConfig): Promise<void> {
       }
     });
     socket.onClose(() => {
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+      }
       resolve();
-    });
-    socket.send(subscribeMessage(tokenIds));
-    // Client heartbeat every 10s keeps the connection open.
-    const heartbeat = setInterval(() => {
-      socket.send("PING");
-    }, 10_000);
-    socket.onClose(() => {
-      clearInterval(heartbeat);
     });
   });
 }

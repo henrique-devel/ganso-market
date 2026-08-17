@@ -23,6 +23,7 @@ export interface MarketRegistryEntry {
   readonly endDateIso: string | null;
   readonly active: boolean;
   readonly closed: boolean;
+  readonly enableOrderBook: boolean;
 }
 
 // WebSocket market-channel message shapes (verified against the live feed).

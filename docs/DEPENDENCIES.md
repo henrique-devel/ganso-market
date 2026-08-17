@@ -11,6 +11,7 @@ nos manifests/lockfiles ou tags completas de imagem. O projeto é pessoal e
 | Fastify | 5.11.3 | MIT |
 | pg | 8.23.0 | MIT |
 | hash-wasm (Argon2id, RFC-002) | 4.12.0 | MIT |
+| ws (recorder Polymarket, RFC-007) | 8.21.3 | MIT |
 | React / React DOM | 19.2.8 | MIT |
 | Ajv | 8.20.0 | MIT |
 | ajv-formats | 3.0.1 | MIT |

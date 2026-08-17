@@ -41,12 +41,21 @@ frames WS (array/objeto/malformado) e o tracker (snapshot a partir do book,
 throttle e novo snapshot após o intervalo). Typecheck, prettier, build (tsc +
 vite), secret-scan e compose policy: verdes.
 
-## Não coberto / bloqueios
+## Serviço Compose (2026-08-16)
 
-- **Coleta ao vivo** (fetch da Gamma, WebSocket real, persistência) não é
-  executada em teste nem iniciada por container ainda; o transporte é injetável e
-  o núcleo é testado com fakes. Rodar continuamente pede um serviço/So novo no
-  Compose (fora do orçamento atual sem revisão) — decisão de deploy.
+- Serviço `polymarket-recorder` adicionado ao `docker-compose.yml`, atrás do
+  profile `polymarket` (reusa a imagem da API; roda
+  `node apps/api/dist/polymarket-recorder.js`). Fica nas redes `backend`
+  (PostgreSQL) e `edge` (egress à Polymarket), sem publicar porta; envia
+  `User-Agent`/`Origin` de navegador via cliente `ws`. Alvos `make recorder-up`,
+  `recorder-logs`, `recorder-down`. `check_compose_policy.py` passou a contar o
+  profile: agregado 2.944 MiB < 4 GiB. Runbook:
+  [`docs/runbooks/polymarket-recorder.md`](../runbooks/polymarket-recorder.md).
+- A coleta real de dados (fetch da Gamma + WebSocket + persistência) roda quando
+  o serviço é iniciado; não é exercida no smoke de CI (o profile não sobe lá,
+  evitando dependência externa).
+
+## Não coberto / bloqueios
 - **Simulador, baseline/calibração, EV com custos V2, sinais e paper broker** são
   o corpo principal da RFC-007 e permanecem pendentes; este recorder é a fundação
   de dados ("recorder primeiro").

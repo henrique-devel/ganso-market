@@ -64,6 +64,7 @@ o servidor automaticamente e confirma os três endpoints públicos de health.
 - [Arquitetura da fundação](docs/architecture/foundation.md)
 - [Runbook de desenvolvimento](docs/runbooks/development.md)
 - [Runbook do servidor único](docs/runbooks/single-server.md)
+- [Runbook do recorder Polymarket](docs/runbooks/polymarket-recorder.md)
 - [Histórico: limpeza do Ganso-bot, não executar após rebuild](docs/runbooks/server-cleanup-ganso-bot.md)
 - [Dependências e licenças](docs/DEPENDENCIES.md)
 - [Evidência de verificação da RFC-001](docs/test-results/RFC-001.md)

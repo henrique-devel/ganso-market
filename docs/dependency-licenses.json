@@ -1748,6 +1748,12 @@
     },
     {
       "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@types/ws",
+      "version": "8.18.1"
+    },
+    {
+      "ecosystem": "npm",
       "license": "Apache-2.0",
       "name": "@typescript/typescript-aix-ppc64",
       "version": "7.0.2"
@@ -2531,6 +2537,12 @@
       "license": "MIT",
       "name": "why-is-node-running",
       "version": "2.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "ws",
+      "version": "8.21.3"
     },
     {
       "ecosystem": "npm",

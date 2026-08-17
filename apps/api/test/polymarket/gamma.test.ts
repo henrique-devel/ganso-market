@@ -20,6 +20,7 @@ function cryptoMarket(): MarketRegistryEntry {
     endDateIso: "2026-08-16",
     active: true,
     closed: false,
+    enableOrderBook: true,
   });
   if (entry === null) {
     throw new Error("expected a parsed market");
@@ -72,5 +73,40 @@ describe("universe selection", () => {
 
   it("excludes categories outside the tracked set", () => {
     expect(isInUniverse({ ...cryptoMarket(), category: "sports" })).toBe(false);
+  });
+});
+
+describe("keyword classification (Gamma rows have no category)", () => {
+  function classifyFrom(question: string): string | null {
+    const entry = parseMarket({
+      conditionId: "0xc",
+      question,
+      slug: "",
+      clobTokenIds: '["1","2"]',
+      description: "Some resolution rules text here.",
+      active: true,
+      closed: false,
+      enableOrderBook: true,
+    });
+    return entry?.category ?? null;
+  }
+
+  it("classifies by keyword when no explicit category is present", () => {
+    expect(classifyFrom("Will BTC be above $70k on Friday?")).toBe("crypto");
+    expect(
+      classifyFrom("Will the Fed cut the interest rate in September?"),
+    ).toBe("macro");
+    expect(classifyFrom("Highest temperature in NYC on Aug 20?")).toBe(
+      "weather",
+    );
+  });
+
+  it("returns null for elections and unmatched markets", () => {
+    expect(
+      classifyFrom("Who will win the 2028 presidential election?"),
+    ).toBeNull();
+    expect(
+      classifyFrom("Will the Lakers beat the Celtics tonight?"),
+    ).toBeNull();
   });
 });
