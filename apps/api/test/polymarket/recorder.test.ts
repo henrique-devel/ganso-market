@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import type { DatabasePool, QueryResult } from "../../src/database.js";
 import {
+  createPostgresRecorderStore,
   MarketBookTracker,
   SnapshotThrottle,
+  sourceTsToDate,
   type BookSnapshot,
   type RecorderStore,
 } from "../../src/polymarket/recorder.js";
@@ -31,6 +34,54 @@ describe("snapshot throttle", () => {
     expect(throttle.shouldPersist("t", 3_000)).toBe(true);
     // A different token has an independent budget.
     expect(throttle.shouldPersist("u", 1_000)).toBe(true);
+  });
+});
+
+describe("source timestamp conversion", () => {
+  it("converts an epoch-milliseconds string to a Date", () => {
+    const converted = sourceTsToDate("1787098643398");
+    expect(converted?.getTime()).toBe(1_787_098_643_398);
+  });
+
+  it("returns null for null and non-numeric values", () => {
+    expect(sourceTsToDate(null)).toBeNull();
+    expect(sourceTsToDate("")).toBeNull();
+    expect(sourceTsToDate("2026-08-18T00:00:00Z")).toBeNull();
+    expect(sourceTsToDate("12abc")).toBeNull();
+  });
+});
+
+describe("postgres recorder store", () => {
+  it("inserts snapshots with source_ts as a Date, not the raw string", async () => {
+    const captured: unknown[][] = [];
+    const pool: DatabasePool = {
+      query<R extends Record<string, unknown>>(
+        _text: string,
+        params?: readonly unknown[],
+      ): Promise<QueryResult<R>> {
+        captured.push([...(params ?? [])]);
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+      transaction() {
+        return Promise.reject(new Error("unused"));
+      },
+      end() {
+        return Promise.resolve();
+      },
+    };
+
+    const store = createPostgresRecorderStore(pool);
+    await store.insertSnapshot({
+      tokenId: "111",
+      conditionId: "0xcond",
+      sourceTs: "1787098643398",
+      bids: [{ price: "0.361", size: "992.4" }],
+      asks: [{ price: "0.991", size: "3" }],
+    });
+
+    const params = captured[0];
+    expect(params?.[2]).toBeInstanceOf(Date);
+    expect((params?.[2] as Date).getTime()).toBe(1_787_098_643_398);
   });
 });
 
