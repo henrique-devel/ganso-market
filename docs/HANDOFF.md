@@ -22,9 +22,10 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
   recorder Polymarket (antecipa a RFC-007). `make verify` verde
   (143 testes TypeScript, 74 Rust — 66 engine + 8 probe —, worker e scripts).
 - **FATO VERIFICADO:** ainda NÃO existem: modelos/estratégias, paper broker,
-  wallet, signer, ordens e execução ao vivo. A ingestão/decoders/recorder têm o
-  loop ao vivo desligado (não iniciados por container) — bloqueios de credencial
-  Yellowstone e de decisão de deploy documentados por RFC.
+  wallet, signer, ordens e execução ao vivo. A ingestão/decoders Yellowstone têm
+  o loop ao vivo desligado (não iniciados por container) — bloqueio de
+  credencial documentado por RFC. O recorder Polymarket está ativo no servidor
+  desde 2026-08-18 (ver fatos abaixo).
 - **FATO VERIFICADO:** nenhum container está ativo na máquina local; o volume local
   `ganso-market_postgres_data` está preservado.
 - **FATO INFORMADO:** o proprietário reconstruiu o servidor em 2026-08-14. A
@@ -51,28 +52,42 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
   milissegundos e o recorder passava a string crua para a coluna
   `TIMESTAMPTZ source_ts`. A rejeição não tratada derrubava o processo e o
   container ficou em crash-loop com `polymarket_book_snapshots` vazia.
-- **FATO VERIFICADO:** correção implementada e testada na branch
-  `claude/proximas-etapas-apos-ssh-6344a1`: `sourceTsToDate()` converte
-  epoch-ms para `Date` (valor inválido vira `NULL`) e falha de persistência
-  agora fecha o socket com log JSON em vez de matar o processo. Suíte da API
-  com 63 testes verde. Pendente: merge/deploy e reinício do serviço com o
-  profile no servidor.
+- **FATO VERIFICADO:** correção mergeada na `main` via PR #2 (2026-08-18):
+  `sourceTsToDate()` converte epoch-ms para `Date` (valor inválido vira
+  `NULL`) e falha de persistência agora fecha o socket com log JSON em vez de
+  matar o processo. Suíte da API com 63 testes verde.
+- **FATO VERIFICADO:** o CD falhou duas vezes antes de entregar o PR #2:
+  no merge do PR #1 com `Permission denied (publickey)` (resolvido quando o
+  proprietário reinstalou o SSH do servidor em 2026-08-18) e no merge do
+  PR #2 com `diretório do projeto não pertence ao root` — uma cópia manual do
+  código feita do Mac em 2026-08-17 tinha deixado `/opt/ganso-market` com
+  UID 501/staff. O proprietário restaurou com `chown -R root:root` e o rerun
+  da execução 32202869340 concluiu o deploy com sucesso em 2026-08-18.
+  Lição operacional: nunca copiar código manualmente para o servidor; o
+  caminho é merge na `main` → CD.
+- **FATO VERIFICADO:** recorder reconstruído e validado ao vivo em
+  2026-08-18 após o deploy: container `Up` estável, sem erros nos logs,
+  216 snapshots em ~1 minuto em 24 tokens, todos com `source_ts` preenchido
+  (defasagem média de ~3,2 s vs. `received_at`, consistente com o throttle).
+  Verificado também que `make server-update` (deploy) não remove o container
+  do profile `polymarket`, mas não troca a imagem dele: após deploy que toque
+  o recorder, é preciso `--profile polymarket up --build` manualmente.
 
 ## Sequência de RFCs
 
-| RFC | Estado de acompanhamento | Evidência/condição |
-| --- | --- | --- |
-| RFC-001 — Fundação e runtime | Implementada localmente | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md) |
-| RFC-001A — Limpeza e preservação Yellowstone | Substituída pelo rebuild | Não executar no host novo |
-| RFC-002 — Auth e HTTP | Implementada no código (2026-08-15) | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md); publicação pública gated pelo runbook de perímetro |
-| RFC-003 — Yellowstone | Core implementado e testado offline (2026-08-15) | [`docs/test-results/RFC-003.md`](test-results/RFC-003.md); loop ao vivo bloqueado por credencial |
-| RFC-004 — Eventos e persistência | Core implementado e testado offline (2026-08-15) | [`docs/test-results/RFC-004.md`](test-results/RFC-004.md); escrita ao vivo depende do feed |
-| Recorder Polymarket (antecipa RFC-007) | Core implementado e testado offline (2026-08-15) | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); coleta ao vivo é decisão de deploy |
-| RFC-005 — Wallet, risco e signer | Não iniciada | Live continua proibido; depende das gates anteriores |
-| RFC-006 — Paper e modelos | Não iniciada; emendada 2026-08-15 (bundle/insider, regime, gates numéricos) | Não existe simulador/modelo nesta fundação |
-| RFC-007 — Polymarket paper (V2) | Não iniciada; emendada 2026-08-15 (V2/pUSD, recorder, clima/macro, anti-longshot) | Analytics/paper; habilita RFC-009 após gates |
-| RFC-008 — Execução beta Solana | Não iniciada; emendada 2026-08-15 (envio privado/swQoS) | Proibida antes de todas as gates e aprovação explícita |
-| RFC-009 — Execução Polymarket maker-side | Nova (2026-08-15) | Live V2 com burn wallet Polygon; risco jurisdicional aceito; só após gates da RFC-007 e aprovação |
+| RFC                                          | Estado de acompanhamento                                                          | Evidência/condição                                                                                               |
+| -------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| RFC-001 — Fundação e runtime                 | Implementada localmente                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                        |
+| RFC-001A — Limpeza e preservação Yellowstone | Substituída pelo rebuild                                                          | Não executar no host novo                                                                                        |
+| RFC-002 — Auth e HTTP                        | Implementada no código (2026-08-15)                                               | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md); publicação pública gated pelo runbook de perímetro    |
+| RFC-003 — Yellowstone                        | Core implementado e testado offline (2026-08-15)                                  | [`docs/test-results/RFC-003.md`](test-results/RFC-003.md); loop ao vivo bloqueado por credencial                 |
+| RFC-004 — Eventos e persistência             | Core implementado e testado offline (2026-08-15)                                  | [`docs/test-results/RFC-004.md`](test-results/RFC-004.md); escrita ao vivo depende do feed                       |
+| Recorder Polymarket (antecipa RFC-007)       | Ativo em produção desde 2026-08-18                                                | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); coleta ao vivo validada no servidor |
+| RFC-005 — Wallet, risco e signer             | Não iniciada                                                                      | Live continua proibido; depende das gates anteriores                                                             |
+| RFC-006 — Paper e modelos                    | Não iniciada; emendada 2026-08-15 (bundle/insider, regime, gates numéricos)       | Não existe simulador/modelo nesta fundação                                                                       |
+| RFC-007 — Polymarket paper (V2)              | Não iniciada; emendada 2026-08-15 (V2/pUSD, recorder, clima/macro, anti-longshot) | Analytics/paper; habilita RFC-009 após gates                                                                     |
+| RFC-008 — Execução beta Solana               | Não iniciada; emendada 2026-08-15 (envio privado/swQoS)                           | Proibida antes de todas as gates e aprovação explícita                                                           |
+| RFC-009 — Execução Polymarket maker-side     | Nova (2026-08-15)                                                                 | Live V2 com burn wallet Polygon; risco jurisdicional aceito; só após gates da RFC-007 e aprovação                |
 
 ## Evidência mais recente
 
@@ -148,8 +163,7 @@ Os comandos e resultados completos estão em
 ## Decisões pendentes e riscos residuais
 
 - **DECISÃO — exposição:** o bootstrap standalone usa HTTP direto em
-  `0.0.0.0:80`, sem firewall gerenciado pelo projeto, domínio, TLS, Certbot ou
-  443. Essa autorização cobre somente a fundação sem auth/wallet/execução.
+  `0.0.0.0:80`, sem firewall gerenciado pelo projeto, domínio, TLS, Certbot ou 443. Essa autorização cobre somente a fundação sem auth/wallet/execução.
 - **BLOQUEIO/TODO — Yellowstone:** uma credencial nova e slots avançando ainda
   precisam ser confirmados antes de iniciar ingestão.
 - **BLOQUEIO/TODO — wallet:** a recuperação offline da hot wallet deve ser
@@ -183,14 +197,12 @@ está bloqueado:
 2. **Auth em produção:** antes de publicar login/tokens no IP público, aplicar a
    regra de firewall (ou TLS) de [`docs/runbooks/auth-perimeter.md`](runbooks/auth-perimeter.md)
    e criar a conta única via `node dist/account-cli.js create <user>`.
-3. **Recorder Polymarket:** serviço iniciado no servidor em 2026-08-18, mas em
-   crash-loop pelo bug de `source_ts` (corrigido nesta branch). Após o merge e
-   o deploy, reiniciar o serviço com
-   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder`
-   e confirmar `polymarket_book_snapshots` crescendo. Atenção: os alvos de
-   deploy (`server-up`/`server-update`) rodam sem o profile `polymarket`;
-   verificar após o próximo deploy se o recorder continua ativo e com a imagem
-   nova.
+3. **Recorder Polymarket: ATIVO e gravando desde 2026-08-18.** Pendências que
+   ficam para o restante da RFC-007: TTL/retenção das tabelas Polymarket
+   (acompanhar o crescimento de `polymarket_book_snapshots` até lá) e
+   baseline/calibração/paper. Operação: após deploy que altere o código do
+   recorder, rodar
+   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder`.
 4. **Depois das Fases 1–2:** RFC-005 (wallet/risk/signer) — pré-condição é a
    comprovação de recuperação offline da hot wallet — seguida da RFC-006 (paper
    e gates) e do restante da RFC-007 (baseline/calibração/paper broker).
