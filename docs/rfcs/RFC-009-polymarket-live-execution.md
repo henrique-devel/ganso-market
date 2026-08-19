@@ -1,7 +1,7 @@
 # RFC-009 — Execução Polymarket maker-side (CLOB V2)
 
 **Status:** draft, não autorizado para implementação antecipada
-**Dependências:** RFC-002 e RFC-007 implementadas + aprovação explícita
+**Dependências:** RFC-002, RFC-007 e RFC-010–013 implementadas + gates da RFC-013 + aprovação explícita
 **Define:** contratos próprios de risco/intent e disciplina de signer (caminho único Polymarket desde 2026-08-18)
 **Habilitada por:** emenda de PRD de 2026-08-15 (risco jurisdicional aceito)
 
@@ -28,9 +28,12 @@ acesso parte de infraestrutura real.
 
 Antes de editar:
 
-1. Confirme os gates da RFC-007: recorder ativo, calibração com Brier/log loss em
-   100+ mercados resolvidos, P&L simulado positivo **líquido de custos V2** por
-   estratégia e por categoria, 14 dias de paper contínuo e reconciliação exata.
+1. Confirme os gates da RFC-013: recorder ativo (RFC-007), calibração da
+   RFC-010 com Brier/log loss em 100+ mercados resolvidos sem piorar o baseline
+   de mercado, P&L simulado positivo **líquido de custos V2** por estratégia e
+   por categoria (RFC-011), grafo lógico e vetos de resolução ativos (RFC-012),
+   gates G1–G6 da RFC-013 completos (inclui ≥ 60 dias de paper contínuo) e
+   reconciliação exata.
 2. Confirme a decisão de jurisdição registrada e o parecer jurídico/tributário
    obtido pelo proprietário.
 3. Confirme que a burn wallet existe na Polygon, com capital limitado e cópia de
@@ -41,7 +44,7 @@ Se qualquer evidência faltar, pare. Não crie bypass, mock ou flag temporária.
 
 ## Objetivo
 
-Converter sinais maker aprovados pela RFC-007 em ordens reais na Polymarket CLOB
+Converter sinais maker aprovados pelo motor de portfólio (RFC-013) em ordens reais na Polymarket CLOB
 V2, assinar off-chain (EIP-712 V2), enviar, acompanhar fills pelo WebSocket de
 usuário, reconciliar posições e P&L, e encerrar de forma ordenada quando um
 circuit breaker disparar — priorizando o lado maker (fee zero + rebates).
@@ -215,7 +218,7 @@ Nenhum endpoint de saque/transferência livre ou de assinatura por HTTP.
 
 Não ative live se:
 
-- os gates da RFC-007 estiverem incompletos;
+- os gates G1–G6 da RFC-013 estiverem incompletos;
 - faltar aprovação explícita do proprietário;
 - segredo da burn wallet estiver exposto;
 - a ordem não puder ser totalmente decodificada/revalidada;
