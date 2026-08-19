@@ -1,6 +1,6 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-18
+- Última atualização: 2026-08-19
 - Branch principal: `main`
 - Modo permitido no runtime atual: `paper`
 
@@ -31,6 +31,35 @@ caminho Solana exigiria novas RFCs.
 - A hot wallet Solana e sua prova de recuperação offline deixaram de ser
   bloqueios do projeto. A única wallet prevista é a burn wallet Polygon da
   RFC-009.
+
+## DECISÃO DE PRODUTO — motor de quatro modelos e novas RFCs (2026-08-19)
+
+**FATO INFORMADO:** o proprietário definiu o desenho do motor Polymarket
+(oportunidade respondida por 8 perguntas; modelos fundamental, microestrutura,
+risco de resolução e portfólio; critérios de entrada/saída; grafo lógico entre
+mercados; campos do painel). Registro verbatim em
+[`docs/research/plano-owner-polymarket-2026-08-18.md`](research/plano-owner-polymarket-2026-08-18.md).
+
+**FATO VERIFICADO:** pesquisa profunda executada em 2026-08-19 (docs oficiais
+V2, GitHub, Reddit, X/Truth Social, literatura quant, incidentes UMA; 8 agentes
+de pesquisa, ~1M tokens) e consolidada em
+[`docs/research/polymarket-deep-dive-2026-08.md`](research/polymarket-deep-dive-2026-08.md).
+Destaques que moldaram as RFCs: fees V2 por categoria (fórmula
+`C × feeRate × p × (1−p)`, taker only, crypto 0.07 — maker/post-only é
+estruturalmente preferível), delay de 250ms para ordens marketáveis em
+crypto/finance, não existe histórico oficial de book L2 (o recorder próprio é a
+única fonte de microestrutura), UMA: bond ~US$ 750, liveness 2h, máx. 2
+requests e resultado 50/50 possível, RTDS/Chainlink TWAP é o mesmo dado que
+resolve mercados crypto (insumo direto do modelo fundamental).
+
+**FATO VERIFICADO:** RFCs reestruturadas em 2026-08-19: a RFC-007 virou
+fundação de dados/recorder V2; foram criadas RFC-010 (modelo fundamental),
+RFC-011 (microestrutura e paper broker), RFC-012 (risco de resolução e grafo
+lógico) e RFC-013 (motor de portfólio, entrada/saída e gates). PRD emendado
+para v0.3 (POLY-09..16). RFC-009 agora depende dos gates G1–G6 da RFC-013.
+Revisão adversarial de consistência aplicada (numeração cruzada, orçamento de
+40 GB com reserva explícita, fontes macro na coleta, replay independente de
+TTL).
 
 ## Estado atual
 
@@ -66,12 +95,16 @@ caminho Solana exigiria novas RFCs.
 
 ## Sequência de RFCs
 
-| RFC                                      | Estado de acompanhamento                                                                          | Evidência/condição                                                          |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| RFC-001 — Fundação e runtime             | Implementada                                                                                      | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                   |
-| RFC-002 — Auth e HTTP                    | Implementada e publicada com perímetro (2026-08-18)                                               | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                   |
-| RFC-007 — Polymarket paper (V2)          | Em andamento: recorder ativo em produção; faltam TTL/retenção, baseline/calibração e paper broker | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md) |
-| RFC-009 — Execução Polymarket maker-side | Não iniciada; exige gates da RFC-007 + aprovação explícita                                        | Burn wallet Polygon; risco jurisdicional aceito                             |
+| RFC                                                   | Estado de acompanhamento                                                         | Evidência/condição                                                                                                |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| RFC-001 — Fundação e runtime                          | Implementada                                                                     | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
+| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                              | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
+| RFC-007 — Polymarket: fundação de dados e recorder V2 | Reescrita 2026-08-19 (draft); recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Não iniciada (draft 2026-08-19)                                                  | Depende da RFC-007                                                                                                |
+| RFC-011 — Microestrutura e paper broker               | Não iniciada (draft 2026-08-19)                                                  | Depende de RFC-007 e RFC-010                                                                                      |
+| RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                  | Depende da RFC-007                                                                                                |
+| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                  | Gates G1–G6 habilitam a RFC-009                                                                                   |
+| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                 | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
@@ -95,7 +128,7 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 ## Decisões pendentes e riscos residuais
 
 - **RISCO:** não há TTL/retenção nas tabelas Polymarket; `polymarket_book_snapshots`
-  cresce ~200 mil linhas/dia. Primeiro item do restante da RFC-007.
+  cresce ~200 mil linhas/dia. Coberto pela RFC-007 reescrita (implementar).
 - **RISCO:** não há backup externo automático, HA ou recuperação garantida do
   PostgreSQL, por decisão de escopo atual.
 - **RISCO:** `ServiceHealth` é reproduzido manualmente entre linguagens; os
@@ -111,11 +144,12 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
 ## Próximo passo mínimo
 
-Continuar o restante da RFC-007, nesta ordem:
-
-1. **TTL/retenção** das tabelas Polymarket (snapshots 30 dias; guard de disco).
-2. **Baseline e calibração** dos sinais sobre os dados coletados.
-3. **Paper broker** com custos V2 (categoria, book-walk, resolução/UMA).
+Implementar a RFC-007 reescrita (fundação de dados e recorder V2): expandir o
+recorder em produção para regras versionadas + timeline UMA, livro completo com
+deltas do universo, trades, OI/holders, fees/tick/min size versionados,
+calendário macro, TTL/retenção dentro das quotas (30 GB de dados + 4 GB
+headroom + 6 GB reservados às RFCs 010–013) e API de leitura. Depois, em
+ordem: RFC-010 → RFC-011 → RFC-012 → RFC-013 → gates → RFC-009.
 
 Operação do servidor: `cd /opt/ganso-market` seguido de `make server-status`,
 `make server-health` ou `make server-logs`. Todo push em `main` executa os

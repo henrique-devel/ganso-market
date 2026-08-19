@@ -82,11 +82,15 @@ servidor automaticamente e valida a saúde do gateway do lado do servidor.
 1. RFC-001 — Fundação e runtime (implementada).
 2. Bootstrap standalone — implementado neste rebuild.
 3. RFC-002 — Autenticação e perímetro (implementada; publicada com firewall).
-4. RFC-007 — Polymarket analytics/paper (CLOB V2): recorder ativo; faltam
-   TTL/retenção, baseline, calibração e paper broker.
-5. RFC-009 — Execução Polymarket maker-side, somente depois dos gates da
-   RFC-007 e de aprovação explícita.
+4. RFC-007 — Polymarket: fundação de dados e recorder V2 (recorder básico em
+   produção; expansão de coleta e TTL nesta RFC).
+5. RFC-010 — Modelo fundamental (`q` + incerteza; crypto e macro agendado).
+6. RFC-011 — Microestrutura e paper broker realista.
+7. RFC-012 — Risco de resolução (UMA) e grafo lógico entre mercados.
+8. RFC-013 — Motor de portfólio, critérios de entrada/saída e gates.
+9. RFC-009 — Execução Polymarket maker-side, somente depois dos gates da
+   RFC-013 e de aprovação explícita.
 
 Execução live não é consequência automática de terminar código. Ela exige os
-critérios objetivos dos gates da RFC-007 e a ativação manual prevista na
+critérios objetivos dos gates da RFC-013 e a ativação manual prevista na
 RFC-009.

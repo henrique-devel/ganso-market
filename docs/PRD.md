@@ -1,7 +1,7 @@
-# PRD v0.2 — Ganso Market
+# PRD v0.3 — Ganso Market
 
 **Status:** escopo-base aprovado para desenvolvimento  
-**Data:** 2026-08-10 (v0.1); caminho único Polymarket em 2026-08-18 (v0.2)  
+**Data:** 2026-08-10 (v0.1); caminho único Polymarket (v0.2) e motor de quatro modelos (v0.3) em 2026-08-18  
 **Tipo:** ferramenta pessoal, single-user  
 **Infraestrutura-alvo:** Hetzner CPX42 — `178.105.65.251`
 
@@ -60,7 +60,7 @@ estrutural anti-longshot; latency-taking é não-objetivo.
 
 **Governança preservada.** A disciplina paper-first com gates objetivos
 permanece obrigatória. A execução real na Polymarket é implementada pela
-RFC-009 e só é liberada após os gates da RFC-007, com canário de capital
+RFC-009 e só é liberada após os gates da RFC-013, com canário de capital
 pequeno. Assumir o risco de jurisdição não autoriza pular gates de segurança,
 contabilidade ou calibração.
 
@@ -85,6 +85,54 @@ Consequências práticas:
 - O perímetro de autenticação foi aplicado: firewall Hetzner restringindo a
   porta 80 ao IP do operador (modelo 1 do runbook), conta única `owner` criada
   por CLI e login validado em 2026-08-18.
+
+## Emenda de produto — motor de quatro modelos (2026-08-18)
+
+O proprietário definiu o desenho do motor Polymarket em
+[`docs/research/plano-owner-polymarket-2026-08-18.md`](research/plano-owner-polymarket-2026-08-18.md)
+(documento normativo desta emenda, junto com as RFCs 007 e 010–013).
+
+**Como a oportunidade é entendida.** O sistema não prevê apenas "YES ou NO".
+Toda oportunidade precisa responder: (1) qual é a probabilidade estimada `q`;
+(2) qual é a incerteza dessa estimativa; (3) qual é o preço realmente
+executável; (4) quanto custa entrar e sair; (5) existe liquidez suficiente;
+(6) a regra de resolução é objetiva; (7) mercados relacionados contradizem o
+preço; (8) a posição concentra risco já existente no portfólio.
+
+**Quatro modelos separados e versionados:**
+
+1. **Fundamental** — estima `q` com intervalo de incerteza, usando o próprio
+   mercado como prior, fontes oficiais externas, modelos estatísticos por
+   categoria, histórico comparável e relações entre mercados. Nunca um modelo
+   universal: o protótipo cobre **crypto e macro agendado**; esportes ao vivo,
+   política e geopolítica ficam fora do universo inicial por latência,
+   ambiguidade e risco regulatório.
+2. **Microestrutura** — decide quando e como entrar: spread, profundidade por
+   nível, imbalance, fluxo agressor, velocidade de cancelamento/reposição,
+   volatilidade recente, idade do último trade, tempo até catalisador e
+   resolução, chance de fill e adverse selection pós-fill. Post-only/GTD sem
+   urgência; FAK/FOK com pior preço explícito quando a informação evapora;
+   nenhuma ordem sem limite máximo de preço/slippage.
+3. **Risco de resolução** — a resolução usa o UMA Optimistic Oracle; regras,
+   fonte, exceções e clarificações determinam o payoff. O modelo produz score
+   por mercado (ambiguidade textual, confiabilidade da fonte, exceções,
+   interpretação humana, mudanças de regra, histórico de disputas, resolução
+   tardia, inconsistência título/regra) que vira veto ou buffer no EV.
+4. **Portfólio** — controla exposição por evento/categoria/fonte de resolução,
+   correlação, concentração temporal em catalisador, liquidez agregada, perda
+   diária/semanal, drawdown e capital bloqueado até resolução.
+
+**A armadilha das previsões "óbvias".** Comprar YES a US$ 0,99 arrisca 0,99
+para ganhar 0,01 — um erro apaga ~99 acertos; comprar a US$ 0,005 busca 200x
+com probabilidade de mercado ~0,5% — a perda total é o resultado dominante. O
+objetivo não é taxa de acerto, e sim **vantagem probabilística calibrada,
+líquida de custos, com sobrevivência do capital**.
+
+**Grafo lógico entre mercados.** Mutuamente exclusivos somam ~100%; se A
+implica B então `P(A) ≤ P(B)`; equivalentes convergem; escadas temporais são
+monotônicas; negRisk tem relações econômicas próprias. Violações geram sinal
+de inconsistência e veto de sanidade — camada mais defensável que NLP de
+notícias.
 
 ## 1. Visão do produto
 
@@ -149,7 +197,7 @@ até aprovação manual dos gates.
 ### O-06 — Polymarket research, paper e execução maker-side
 
 Coletar dados públicos, estimar edge com calibração comprovada, simular ordens
-realistas (custos V2, book-walk, resolução/UMA) e — após os gates da RFC-007 —
+realistas (custos V2, book-walk, resolução/UMA) e — após os gates da RFC-013 —
 executar ordens reais maker-first com uma burn wallet dedicada na Polygon,
 conforme a RFC-009. Estratégias-alvo: market making para rewards/rebates e
 modelos de domínio (clima, macro agendado), com viés anti-longshot.
@@ -278,6 +326,14 @@ local, registro de auditoria e restart desarmado.
 **POLY-06** A UI distingue claramente posições paper de live e exibe o modo e o kill switch.
 **POLY-07** Proibido contorno técnico de geoblock (VPN, proxy, spoofing); o acesso parte do servidor real na Alemanha.
 **POLY-08** Custos são modelados por categoria e versão (taker fee dinâmica, spread, gas Polygon, buffer de resolução/UMA); sinal só existe com edge após custos.
+**POLY-09** Decisões usam bid/ask e profundidade executáveis; midpoint ou último trade nunca decidem entrada/saída.
+**POLY-10** Toda oportunidade publica as oito respostas da emenda de 2026-08-18 (probabilidade, incerteza, preço executável, custo de ida e volta, liquidez, objetividade da regra, consistência com relacionados, impacto no portfólio).
+**POLY-11** Os quatro modelos (fundamental, microestrutura, resolução, portfólio) são componentes separados, versionados e auditáveis; nenhum sinal existe sem os quatro avaliados.
+**POLY-12** Entrada somente quando o limite inferior da estimativa de probabilidade menos o preço executável superar taxas + slippage + custo de capital + margem de segurança; taxas consultadas em tempo real e versionadas.
+**POLY-13** Tamanho parte de fração conservadora de Kelly como teto, limitado por profundidade, incerteza do modelo, correlação, ambiguidade de resolução, perda máxima do portfólio e slippage como proporção do edge.
+**POLY-14** Saída pelos critérios do plano do proprietário; o produto não promete stop-loss — um livro binário pode saltar de preço alto para perto de zero.
+**POLY-15** O grafo lógico entre mercados é mantido continuamente; violações geram sinal de inconsistência e veto de sanidade.
+**POLY-16** A interface exibe, por oportunidade, os campos definidos no plano do proprietário (probabilidade do mercado, `q` e intervalo, lado sugerido, bid/ask/spread/profundidade, edge bruto e líquido, taxas/slippage esperados, tamanho máximo executável, risco de resolução, fonte oficial e trecho da regra, correlacionados/contraditórios, motivo de entrada, condição de invalidação, atualidade dos dados e cenários provável/melhor/pior).
 
 ## 7. Fluxos principais
 
@@ -290,12 +346,14 @@ local, registro de auditoria e restart desarmado.
 
 ### Paper
 
-1. O recorder grava mercados e snapshots de livro.
-2. Vetos eliminam mercados fora do universo (eleições, longshots estruturais).
-3. Estratégia/modelo gera um intent de ordem.
-4. Risk guard aprova ou rejeita.
-5. Paper broker simula execução com custos V2.
-6. Painel exibe decisão, fill simulado e P&L.
+1. O recorder grava regras versionadas, livro, trades, OI e status (RFC-007).
+2. Vetos de universo e de resolução eliminam mercados inválidos (RFC-012).
+3. O modelo fundamental produz `q` com intervalo de incerteza (RFC-010).
+4. O grafo lógico valida consistência com mercados relacionados (RFC-012).
+5. A microestrutura decide timing, lado, tipo de ordem e preço-limite (RFC-011).
+6. O motor de portfólio aplica EV mínimo, Kelly fracionário e limites (RFC-013).
+7. Paper broker simula execução com custos V2 reais (RFC-011).
+8. Painel exibe a oportunidade completa (POLY-16), fill simulado e P&L.
 
 ### Ativação live (RFC-009)
 
@@ -326,7 +384,8 @@ Orçamento local:
 - logs, modelos e temporários: até 20 GB;
 - reserva livre: mínimo de 75 GB.
 
-TTL inicial (implementado pelo restante da RFC-007):
+TTL inicial (os valores vigentes são os das RFCs 007 e 011, que detalham
+retenção por tipo de dado dentro da quota de 40 GB):
 
 - snapshots de livro brutos: 30 dias;
 - registry de mercados: sem TTL (upsert versionado);
@@ -360,7 +419,7 @@ software.
 - Dashboard apresenta feeds, oportunidades, risco, posições e decisões.
 - O recorder coleta continuamente com TTL aplicado.
 - Toda rejeição possui reason code.
-- Polymarket opera apenas em paper até os gates da RFC-007 e a RFC-009.
+- Polymarket opera apenas em paper até os gates da RFC-013 e a RFC-009.
 
 ### Segurança
 
