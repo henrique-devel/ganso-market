@@ -197,6 +197,16 @@ export function subscribeMessage(tokenIds: readonly string[]): string {
   return JSON.stringify({ assets_ids: tokenIds, type: "market" });
 }
 
+// Polymarket sends timestamps as epoch milliseconds in a string; TIMESTAMPTZ
+// rejects that literal, so convert before persisting. Anything else becomes
+// null (the row still gets received_at locally).
+export function sourceTsToDate(sourceTs: string | null): Date | null {
+  if (sourceTs === null || !/^\d{1,15}$/.test(sourceTs)) {
+    return null;
+  }
+  return new Date(Number(sourceTs));
+}
+
 /** PostgreSQL persistence for the recorder (public data only). */
 export function createPostgresRecorderStore(pool: DatabasePool): RecorderStore {
   return {
@@ -252,7 +262,7 @@ export function createPostgresRecorderStore(pool: DatabasePool): RecorderStore {
         [
           snapshot.tokenId,
           snapshot.conditionId,
-          snapshot.sourceTs,
+          sourceTsToDate(snapshot.sourceTs),
           JSON.stringify(snapshot.bids),
           JSON.stringify(snapshot.asks),
         ],
@@ -303,7 +313,22 @@ export async function runRecorder(config: RecorderConfig): Promise<void> {
         return;
       }
       for (const message of parseMarketFrame(raw)) {
-        void tracker.handle(message);
+        // A persistence failure must not become an unhandled rejection that
+        // kills the process: log it and close the socket so the caller's
+        // reconnect loop retries with a fresh book.
+        tracker.handle(message).catch((error: unknown) => {
+          process.stderr.write(
+            `${JSON.stringify({
+              level: "error",
+              service: "polymarket-recorder",
+              timestamp: new Date().toISOString(),
+              reason_code: "SNAPSHOT_PERSIST_FAILED",
+              error_name: error instanceof Error ? error.name : "UnknownError",
+              message: "polymarket_recorder_persist_failed",
+            })}\n`,
+          );
+          socket.close();
+        });
       }
     });
     socket.onClose(() => {
