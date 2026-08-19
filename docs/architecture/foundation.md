@@ -3,23 +3,22 @@
 ## Escopo
 
 Esta arquitetura implementa somente bootstrap, contratos, configuração,
-persistência fundacional e observabilidade. Auth, Yellowstone, eventos de
-domínio, modelos, paper broker, wallet, signer e qualquer execução pertencem a
-RFCs posteriores e não têm caminho oculto nesta base.
+persistência fundacional e observabilidade. Auth, coleta de dados de mercado, modelos,
+paper broker, wallet, signer e qualquer execução pertencem a RFCs posteriores e não têm caminho oculto nesta base.
 
 O runtime continua single-user e o único valor válido de `execution_mode` é
 `paper`.
 
 ## Processos
 
-| Processo | Runtime | Responsabilidade nesta RFC | Dependência obrigatória |
-|---|---|---|---|
-| `market-engine` | Rust | bootstrap, contracts internos e health | PostgreSQL |
-| `api` | Node.js/Fastify | health interno; auth retorna 404 | PostgreSQL |
-| `web` | React estático | renderizar health real da API | API |
-| `model-worker` | Python, profile `model` | health; nenhum modelo | nenhuma |
-| `migrate` | cliente PostgreSQL one-shot | aplicar migrations versionadas | PostgreSQL |
-| `nginx` | Nginx | gateway local para web e health da API | API e web |
+| Processo        | Runtime                     | Responsabilidade nesta RFC             | Dependência obrigatória |
+| --------------- | --------------------------- | -------------------------------------- | ----------------------- |
+| `market-engine` | Rust                        | bootstrap, contracts internos e health | PostgreSQL              |
+| `api`           | Node.js/Fastify             | health interno; auth retorna 404       | PostgreSQL              |
+| `web`           | React estático              | renderizar health real da API          | API                     |
+| `model-worker`  | Python, profile `model`     | health; nenhum modelo                  | nenhuma                 |
+| `migrate`       | cliente PostgreSQL one-shot | aplicar migrations versionadas         | PostgreSQL              |
+| `nginx`         | Nginx                       | gateway local para web e health da API | API e web               |
 
 Ordem de boot: `postgres (healthy) -> migrate (sucesso) -> api/market-engine`;
 Nginx aguarda API e web saudáveis. O worker é opcional e não participa do

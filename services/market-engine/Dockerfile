@@ -3,8 +3,6 @@ FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY services/market-engine services/market-engine
-# Cargo carrega todos os manifests do workspace antes de compilar um pacote.
-COPY tools/rfc001a-yellowstone-probe tools/rfc001a-yellowstone-probe
 RUN cargo build --locked --release --package ganso-market-engine
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241

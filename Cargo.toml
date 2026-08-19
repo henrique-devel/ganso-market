@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/market-engine", "tools/rfc001a-yellowstone-probe"]
+members = ["services/market-engine"]
 resolver = "3"
 
 [workspace.package]

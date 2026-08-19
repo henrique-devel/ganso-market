@@ -11,10 +11,10 @@ ou ferramenta de observabilidade. O único bind no host é o gateway Nginx em
 ## Estado funcional atual
 
 A implementação existente é a fundação do projeto: frontend, healthchecks,
-PostgreSQL, API e engine. Ainda não existem autenticação, ingestão Yellowstone,
-estratégia, wallet, ordens ou execução. Portanto a porta 80 entrega apenas esse
-painel inicial. Não adicione material de wallet ou habilite execução live antes
-de existir autenticação na aplicação.
+PostgreSQL, API e engine, mais a autenticação single-user (RFC-002) e o
+recorder Polymarket (RFC-007). Não existem estratégia, wallet, ordens ou
+execução. O perímetro do painel autenticado (firewall Hetzner ou TLS) é
+responsabilidade do operador — ver o runbook de perímetro.
 
 ## 1. Preparar um Ubuntu novo
 

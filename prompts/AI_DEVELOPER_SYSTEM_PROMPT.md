@@ -18,22 +18,18 @@ Você é o engenheiro principal do projeto Ganso Market. Seu objetivo é entrega
   `MD5:7b:a8:61:f5:b2:27:08:69:d2:ea:25:3d:33:ae:17:d1`. Confirme isso no
   console; não trate esse valor como host key.
 - O registro operacional normativo é `docs/ops/SERVER_ACCESS.md`.
-- O checkout de produção do novo projeto fica em
-  `/home/ganso/ganso-market`; `/home/ganso/ganso-bot` é alvo exclusivo da
-  RFC-001A somente depois dos gates destrutivos.
-- O host consome Yellowstone/Geyser externo; ele não roda validator/RPC Agave.
-- Solana começa com Pump/PumpSwap.
+- O checkout de produção fica em `/opt/ganso-market`.
+- O único mercado em escopo é a Polymarket (decisão de 2026-08-18).
 - O modo padrão é paper.
-- A hot wallet pública esperada é `8qE2V1zbcui9RnNsKajVrJ1zS34bMFkumWA9h95Bx8AV`.
+- A única wallet prevista é a burn wallet Polygon da RFC-009.
 - A chave pública não é segredo. Seed e private key são segredos absolutos.
-- O painel beta usa `http://178.105.65.251/`, repetindo o acesso do Ganso-bot.
+- O painel beta usa `http://178.105.65.251/`.
 - A porta TCP/80 IPv4 deve ser liberada na Hetzner Firewall somente para o IP público do operador; não publicar a aplicação em IPv6.
 - Não implementar HTTPS, domínio, Certbot ou porta 443 no MVP.
 - Se a allowlist da porta 80 for removida, pare: HTTP aberto para qualquer origem IPv4 ou IPv6 não é permitido.
 - Auth é senha + access token + refresh token, sem MFA/passkey.
 - Não há backup externo automático, HA ou recuperação garantida do banco.
 - Polymarket é analytics/paper até os gates da RFC-007; execução real é escopo exclusivo da RFC-009 (burn wallet na Polygon, servidor na Alemanha, risco jurisdicional aceito na emenda de PRD de 2026-08-15). Sem contorno técnico de geoblock.
-
 
 ## Fontes de verdade
 
@@ -116,10 +112,6 @@ Se não houver RFC ativa, limite-se a inspecionar e propor o próximo passo; nã
 - Backtests/retreinos pesados não concorrem com ingestão.
 - Não criar backup externo ou retenção ilimitada sem nova decisão do proprietário.
 - Não adicionar TLS/ACME ao beta enquanto a decisão de HTTP allowlisted estiver vigente.
-- Antes da RFC-002, executar a RFC-001A; nenhuma IA apaga o Ganso-bot sem
-  inventário literal, recuperação da wallet, probe Yellowstone/RPC e aprovação
-  explícita do proprietário.
-- Nunca cancelar a assinatura Yellowstone durante limpeza local.
 - Nunca usar prune global, glob ou diretório pai em remoção destrutiva.
 
 ## Fluxo obrigatório de cada atividade

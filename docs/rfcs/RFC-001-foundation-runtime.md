@@ -3,7 +3,7 @@
 **Status:** implemented
 
 **Dependências:** nenhuma  
-**Bloqueia:** todas as demais RFCs  
+**Bloqueia:** todas as demais RFCs
 
 ## Prompt a executar
 
@@ -11,7 +11,7 @@ Você deve implementar a RFC-001 do Ganso Market: fundação do repositório e r
 
 ### Objetivo
 
-Criar uma base pequena e executável para o projeto greenfield, pronta para receber autenticação, Yellowstone, modelos e paper trading sem antecipar a lógica dessas RFCs.
+Criar uma base pequena e executável para o projeto greenfield, pronta para receber autenticação, coleta de dados de mercado, modelos e paper trading sem antecipar a lógica dessas RFCs.
 
 ### Contexto obrigatório
 
@@ -38,7 +38,7 @@ Se o ambiente encontrado justificar stack diferente, pare antes de mudar a decis
 
 ### Restrições
 
-- Não implementar login, Yellowstone, estratégias, signer ou execução.
+- Não implementar login, coleta de mercado, estratégias, signer ou execução.
 - Não adicionar Redis/NATS sem demonstrar necessidade.
 - Não usar secrets reais ou criar exemplo parecido com private key.
 - Não expor PostgreSQL ou métricas internas à internet.
