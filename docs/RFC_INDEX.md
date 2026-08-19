@@ -13,18 +13,19 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 
 ## Sequência
 
-| RFC | Título | Dependências | Resultado |
-|---|---|---|---|
-| [RFC-001](rfcs/RFC-001-foundation-runtime.md) | Fundação e runtime | nenhuma | monorepo, Compose, configuração e observabilidade mínima |
-| [RFC-001A](rfcs/RFC-001A-server-cleanup-yellowstone.md) | Histórico: limpeza do Ganso-bot | superseded pelo rebuild | não executar no host novo |
-| [RFC-002](rfcs/RFC-002-auth-ip-http.md) | Auth e perímetro a revisar | RFC-001 | draft deve ser reescrito antes da implementação |
-| [RFC-003](rfcs/RFC-003-yellowstone-ingestion.md) | Ingestão Yellowstone | RFC-001 | stream filtrado, filas e backpressure |
-| [RFC-004](rfcs/RFC-004-events-storage.md) | Eventos e persistência | RFC-003 | decoders, estado, PostgreSQL e TTL |
-| [RFC-005](rfcs/RFC-005-wallet-risk-signer.md) | Wallet, risco e signer | RFC-001 e RFC-004 | fronteira de assinatura local e políticas |
-| [RFC-006](rfcs/RFC-006-paper-model-gates.md) | Paper e gates do modelo | RFC-003 a RFC-005 | simulador, estratégias, bundle/insider e readiness |
-| [RFC-007](rfcs/RFC-007-polymarket-paper.md) | Polymarket analytics/paper (V2) | RFC-001, RFC-002 e RFC-004 | coleta V2/pUSD, recorder, sinais e paper sem execução |
-| [RFC-008](rfcs/RFC-008-solana-beta-execution.md) | Execução beta Solana | RFC-001 a RFC-006 + aprovação | canário e micro-live Pump/PumpSwap com envio privado |
-| [RFC-009](rfcs/RFC-009-polymarket-live-execution.md) | Execução Polymarket maker-side | RFC-002, RFC-004 e RFC-007 + aprovação | live V2 maker-first com burn wallet na Polygon |
+| RFC                                                  | Título                          | Dependências                  | Resultado                                                |
+| ---------------------------------------------------- | ------------------------------- | ----------------------------- | -------------------------------------------------------- |
+| [RFC-001](rfcs/RFC-001-foundation-runtime.md)        | Fundação e runtime              | nenhuma                       | monorepo, Compose, configuração e observabilidade mínima |
+| [RFC-002](rfcs/RFC-002-auth-ip-http.md)              | Auth e perímetro                | RFC-001                       | autenticação single-user e gateway endurecido            |
+| [RFC-007](rfcs/RFC-007-polymarket-paper.md)          | Polymarket analytics/paper (V2) | RFC-001 e RFC-002             | coleta V2/pUSD, recorder, sinais e paper sem execução    |
+| [RFC-009](rfcs/RFC-009-polymarket-live-execution.md) | Execução Polymarket maker-side  | RFC-002 e RFC-007 + aprovação | live V2 maker-first com burn wallet na Polygon           |
+
+## Descopo — 2026-08-18
+
+Por decisão do proprietário, o projeto segue um único caminho: a Polymarket.
+As RFCs do caminho Solana (RFC-001A, RFC-003, RFC-004, RFC-005, RFC-006 e
+RFC-008) foram removidas do repositório junto com o código correspondente; os
+textos permanecem no histórico do git. Uma retomada futura exigiria novas RFCs.
 
 ## Convenção de status
 

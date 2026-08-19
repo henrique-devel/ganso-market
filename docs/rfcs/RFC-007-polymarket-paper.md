@@ -1,8 +1,7 @@
 # RFC-007 — Polymarket analytics e paper trading (CLOB V2)
 
 **Status:** draft (atualizada pela emenda de PRD de 2026-08-15)
-**Dependências:** RFC-001, RFC-002 e RFC-004  
-**Pode avançar em paralelo com:** RFC-005/RFC-006 após os contratos comuns
+**Dependências:** RFC-001 e RFC-002  
 **Habilita:** RFC-009 (execução live) somente após os gates desta RFC
 
 ## Prompt a executar
@@ -135,10 +134,11 @@ Verifique documentação oficial atual antes de fixar endpoints/schemas.
 10. Criar ledger paper e posições marcadas pelo bid de liquidação.
 11. Criar API/dashboard de mercados, sinais, posições, P&L e kill.
 12. Implementar TTL local:
-   - L2/raw selecionado 7 dias;
-   - snapshots top-10 30 dias;
-   - agregados 1 min/regras/decisões até limite local;
-   - pruning quando atingir quota.
+
+- L2/raw selecionado 7 dias;
+- snapshots top-10 30 dias;
+- agregados 1 min/regras/decisões até limite local;
+- pruning quando atingir quota.
 
 ### API mínima
 

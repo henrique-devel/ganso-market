@@ -1,14 +1,14 @@
 # RFC-009 — Execução Polymarket maker-side (CLOB V2)
 
 **Status:** draft, não autorizado para implementação antecipada
-**Dependências:** RFC-002, RFC-004 e RFC-007 implementadas + aprovação explícita
-**Reaproveita:** contratos de risco/intent e disciplina de signer da RFC-005
+**Dependências:** RFC-002 e RFC-007 implementadas + aprovação explícita
+**Define:** contratos próprios de risco/intent e disciplina de signer (caminho único Polymarket desde 2026-08-18)
 **Habilitada por:** emenda de PRD de 2026-08-15 (risco jurisdicional aceito)
 
 ## Contexto e risco aceito
 
 O proprietário decidiu operar execução real na Polymarket a partir de um servidor
-dedicado na Alemanha, com uma *burn wallet* na Polygon (capital limitado, perda
+dedicado na Alemanha, com uma _burn wallet_ na Polygon (capital limitado, perda
 máxima aceita). O risco jurisdicional e tributário é assumido pelo proprietário e
 está registrado na emenda de PRD de 2026-08-15.
 
@@ -20,7 +20,7 @@ servidor (a validar com assessoria, não com código):
 - o Brasil está bloqueado pela Polymarket e pela regulação brasileira;
 - residência fiscal brasileira tributa renda mundial e exige reporte (DeCripto).
 
-A *burn wallet* limita a perda; não é mecanismo de conformidade. Esta RFC não
+A _burn wallet_ limita a perda; não é mecanismo de conformidade. Esta RFC não
 implementa VPN, proxy, spoofing ou qualquer contorno técnico de geoblock: o
 acesso parte de infraestrutura real.
 
@@ -107,7 +107,7 @@ circuit breaker disparar — priorizando o lado maker (fee zero + rebates).
 - `failed`
 - `expired`
 
-## Risk guard (reaproveita contratos da RFC-005)
+## Risk guard
 
 Aplicar antes de assinar, de forma determinística:
 
@@ -176,7 +176,7 @@ Nenhum endpoint de saque/transferência livre ou de assinatura por HTTP.
 
 - Cliente CLOB V2 e assinatura EIP-712 V2.
 - Burn wallet/signer isolado e runbook de unlock/lock/rotação/perda.
-- Risk guard integrado (contratos RFC-005).
+- Risk guard integrado.
 - Order state machine persistida.
 - Gestor de fills/cancel/redeem/reconciliação.
 - Circuit breakers e wind-down.
