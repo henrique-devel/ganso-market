@@ -1,6 +1,6 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-16
+- Última atualização: 2026-08-18
 - Branch principal: `main`
 - Modo permitido no runtime atual: `paper`
 
@@ -44,6 +44,19 @@ substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 - **FATO VERIFICADO:** a primeira execução de produção do CD, no commit
   `e11aaa6`, passou pelos gates de fonte e Compose, atualizou o servidor e
   validou o gateway público com sucesso em 2026-08-15.
+- **FATO VERIFICADO:** o proprietário iniciou o `polymarket-recorder` no
+  servidor em 2026-08-18 (profile `polymarket`). O ciclo Gamma gravou 12
+  mercados em `polymarket_markets`, mas todo insert de snapshot falhou com
+  erro 22008 do PostgreSQL: o WebSocket envia `timestamp` como epoch em
+  milissegundos e o recorder passava a string crua para a coluna
+  `TIMESTAMPTZ source_ts`. A rejeição não tratada derrubava o processo e o
+  container ficou em crash-loop com `polymarket_book_snapshots` vazia.
+- **FATO VERIFICADO:** correção implementada e testada na branch
+  `claude/proximas-etapas-apos-ssh-6344a1`: `sourceTsToDate()` converte
+  epoch-ms para `Date` (valor inválido vira `NULL`) e falha de persistência
+  agora fecha o socket com log JSON em vez de matar o processo. Suíte da API
+  com 63 testes verde. Pendente: merge/deploy e reinício do serviço com o
+  profile no servidor.
 
 ## Sequência de RFCs
 
@@ -170,9 +183,14 @@ está bloqueado:
 2. **Auth em produção:** antes de publicar login/tokens no IP público, aplicar a
    regra de firewall (ou TLS) de [`docs/runbooks/auth-perimeter.md`](runbooks/auth-perimeter.md)
    e criar a conta única via `node dist/account-cli.js create <user>`.
-3. **Recorder Polymarket:** decisão de deploy para rodar o processo
-   `polymarket-recorder` continuamente (novo serviço no Compose, dentro do
-   orçamento) e começar a gravar dados públicos desde já.
+3. **Recorder Polymarket:** serviço iniciado no servidor em 2026-08-18, mas em
+   crash-loop pelo bug de `source_ts` (corrigido nesta branch). Após o merge e
+   o deploy, reiniciar o serviço com
+   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder`
+   e confirmar `polymarket_book_snapshots` crescendo. Atenção: os alvos de
+   deploy (`server-up`/`server-update`) rodam sem o profile `polymarket`;
+   verificar após o próximo deploy se o recorder continua ativo e com a imagem
+   nova.
 4. **Depois das Fases 1–2:** RFC-005 (wallet/risk/signer) — pré-condição é a
    comprovação de recuperação offline da hot wallet — seguida da RFC-006 (paper
    e gates) e do restante da RFC-007 (baseline/calibração/paper broker).
