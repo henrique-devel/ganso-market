@@ -91,6 +91,34 @@ TTL).
   Isso já valia para os endpoints de leitura da RFC-007. Publicar essa
   superfície é **decisão de perímetro do proprietário** e não foi alterada.
 
+## BLOQUEIO ATUAL DA RFC-010 — o gate ainda não tem como acumular evidência
+
+- **FATO VERIFICADO (2026-08-20 10:2xZ):** 52.246 estimativas gravadas (6.828
+  em shadow), mas **0 linhas em `fundamental_labels`**. A causa é a montante:
+  `polymarket_resolution_events` tem **5 eventos `proposed` e nenhum
+  `resolved`/`market_resolved`**, então não existe desfecho para rotular.
+- **FATO VERIFICADO — furo operacional encontrado e corrigido:** o deploy do CD
+  **não troca a imagem dos containers de profile**. Depois de mergear a RFC-010
+  eu reconstruí só o `polymarket-estimator`; o `polymarket-recorder` continuou
+  rodando a imagem antiga, **sem a captura de desfecho**
+  (`grep -c outcomePrices` = 0 na imagem antiga, 2 na nova). Reconstruído em
+  2026-08-20 com `--profile polymarket up --build polymarket-recorder`.
+  **Lição: toda mudança em código do recorder exige rebuild explícito dele,
+  mesmo que o CD tenha rodado verde.**
+- **FATO VERIFICADO:** após o restart do recorder, `BOOK_DIVERGENCE` decaiu de
+  42/min para 4, 12 e 0/min em três janelas de 1 min — é a rajada de
+  re-subscribe (o livro recebido É o resync, comportamento da RFC-007), não uma
+  regressão. Zero erros no recorder.
+- **HIPÓTESE A VERIFICAR (não confirmada):** o poller UMA só consulta mercados
+  **atualmente no universo**, e um mercado resolvido sai do universo por
+  `inactive_or_closed` no ciclo Gamma de 10 min. Se a saída acontecer antes da
+  varredura de 2 min, a transição `resolved` nunca é gravada e o label store
+  nunca enche. Os 5 `proposed` sem nenhum `resolved` são indício fraco disso,
+  mas a coleta expandida é recente demais para concluir. **É a primeira coisa a
+  checar nas próximas 24–48 h.** Se confirmar, a correção é da RFC-007: manter
+  na varredura os `condition_id` que saíram do universo há pouco, ou hidratar o
+  desfecho pelo Gamma no momento da saída.
+
 ## RFC-010 — implementação (2026-08-20)
 
 - **FATO VERIFICADO:** RFC-010 (modelo fundamental) implementada na branch
@@ -266,13 +294,16 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
 ## Próximo passo mínimo
 
-O estimador já está ativo e verificado. O que falta é **evidência**, que só o
-tempo produz:
+O estimador já está ativo e verificado. O que falta é **evidência**, e hoje ela
+está bloqueada a montante:
 
-1. deixar o label store encher (`fundamental_labels`) conforme mercados do
-   universo resolvem, e conferir no primeiro relatório de calibração diário
-   que `data_window.observed_from/observed_to` e a contagem de mercados
-   cobertos batem com o que existe no banco;
+1. **Provar que o label store enche.** Nas próximas 24–48 h, conferir se
+   aparecem eventos `resolved`/`market_resolved` **com `outcomePrices`** e se
+   `fundamental_labels` sai de zero. Se continuar em zero, investigar a
+   hipótese da janela de saída do universo registrada acima — sem label não
+   existe gate, e sem gate nenhum modelo sai de `shadow`. Consulta:
+   `SELECT event_type, count(*) FROM polymarket_resolution_events GROUP BY 1;`
+   e `SELECT count(*) FROM fundamental_labels;`
 2. decidir a janela de retenção das estimativas (decisão pendente acima) —
    ela é o teto do que o gate consegue enxergar;
 3. alimentar `consensus`/`nowcast` no `config/macro-calendar.json`, sem os
