@@ -61,7 +61,28 @@ Revisão adversarial de consistência aplicada (numeração cruzada, orçamento 
 40 GB com reserva explícita, fontes macro na coleta, replay independente de
 TTL).
 
-## RFC-010 IMPLEMENTADA (2026-08-20)
+## RFC-010 IMPLEMENTADA E ATIVA EM PRODUÇÃO (2026-08-20)
+
+- **FATO VERIFICADO (produção, 2026-08-20):** PR #6 mergeado, CI/CD verde nos
+  três jobs, revisão `c055da33` no servidor, migration 0006 aplicada (versões
+  1–6, 6 tabelas `fundamental_*`) e `polymarket-estimator` ativado com
+  `--profile polymarket up --build`. Quatro ciclos observados no universo cheio
+  (100 mercados, 200 tokens): 130–158 linhas de consumidor e 25–26 shadow por
+  ciclo, `token_failures: 0`, **zero erros e zero warnings** nos logs. No
+  banco: 571 linhas `MARKET_BASELINE/active` todas com
+  `fallback_reason = MODEL_IN_SHADOW`, 103 linhas `MODEL/shadow` todas com
+  proveniência completa, e um único `git_sha` — `c055da33`, a revisão
+  implantada. Estimador em 39 MiB de 384 MiB.
+- **FATO VERIFICADO:** as ausências de estimativa em produção têm sempre motivo
+  explícito (`BOOK_STALE`, `NO_BOOK`, `DEPTH_BELOW_SREF`, `SPREAD_TOO_WIDE`) —
+  livro inválido produz ausência, nunca valor default.
+- **FATO VERIFICADO:** os seis endpoints da RFC-010 respondem 401 sem token no
+  container da API, mas **não estão publicados pelo Nginx**: o perímetro da
+  RFC-002 (`location ^~ /api/ { return 404; }`) libera apenas health e auth.
+  Isso já valia para os endpoints de leitura da RFC-007. Publicar essa
+  superfície é **decisão de perímetro do proprietário** e não foi alterada.
+
+## RFC-010 — implementação (2026-08-20)
 
 - **FATO VERIFICADO:** RFC-010 (modelo fundamental) implementada na branch
   `claude/rfc-010-estruturacao-producao-3b21cf`: migration 0006 (6 tabelas,
@@ -192,7 +213,7 @@ TTL).
 | RFC-001 — Fundação e runtime                          | Implementada                                                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
 | RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
 | RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
-| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada (2026-08-20); modelos em `shadow`, nenhum promovido                                       | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                      |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                      |
 | RFC-011 — Microestrutura e paper broker               | Não iniciada (draft 2026-08-19)                                                                        | Depende de RFC-007 e RFC-010                                                                                      |
 | RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
 | RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
@@ -236,13 +257,21 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
 ## Próximo passo mínimo
 
-Observar o `polymarket-estimator` em produção: `ESTIMATOR_CYCLE` a cada minuto
-com `consumer_rows` cobrindo o universo, `absent_reasons` só com causas
-esperadas, `fundamental_estimates` enchendo e nenhum erro nos logs. Em
-paralelo, decidir a janela de retenção das estimativas (decisão pendente
-acima) e alimentar nowcasts macro no calendário, sem os quais a categoria
-`macro_scheduled` nunca acumula evidência. Só depois: RFC-011
-(microestrutura e paper broker), que consome `q` e `q_lo` desta RFC.
+O estimador já está ativo e verificado. O que falta é **evidência**, que só o
+tempo produz:
+
+1. deixar o label store encher (`fundamental_labels`) conforme mercados do
+   universo resolvem, e conferir no primeiro relatório de calibração diário
+   que `data_window.observed_from/observed_to` e a contagem de mercados
+   cobertos batem com o que existe no banco;
+2. decidir a janela de retenção das estimativas (decisão pendente acima) —
+   ela é o teto do que o gate consegue enxergar;
+3. alimentar `consensus`/`nowcast` no `config/macro-calendar.json`, sem os
+   quais a categoria `macro_scheduled` nunca acumula evidência.
+
+Nenhum modelo deve ser promovido antes de um gate PASS com os 100 mercados
+resolvidos. Só depois disso: RFC-011 (microestrutura e paper broker), que
+consome `q` e `q_lo` desta RFC.
 
 Operação do servidor: `cd /opt/ganso-market` seguido de `make server-status`,
 `make server-health` ou `make server-logs`.
