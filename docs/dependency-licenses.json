@@ -1789,9 +1789,6 @@
       "version": "4.0.2"
     }
   ],
-  "generated_from": [
-    "package-lock.json",
-    "Cargo.lock"
-  ],
+  "generated_from": ["package-lock.json", "Cargo.lock"],
   "schema_version": 1
 }

@@ -1,6 +1,6 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-19
+- Última atualização: 2026-08-20
 - Branch principal: `main`
 - Modo permitido no runtime atual: `paper`
 
@@ -93,18 +93,47 @@ TTL).
 - **FATO VERIFICADO:** ainda NÃO existem: modelos/estratégias, paper broker,
   wallet, signer, ordens e execução ao vivo.
 
+## RFC-007 IMPLEMENTADA — aguardando merge/deploy (2026-08-20)
+
+- **FATO VERIFICADO:** RFC-007 (fundação de dados) implementada na branch
+  `claude/rfc-007-data-foundation`: migration 0005 (17 tabelas), registry
+  Gamma com universo crypto+macro e log de transições, regras/parâmetros
+  versionados por hash com vigência, livro L2 completo (WS duplo com dedupe,
+  deltas em lote, âncoras), trades (WS + backfill janelado), OI/holders, UMA
+  status → eventos imutáveis, RTDS (TWAP Chainlink + Binance, frames oficiais,
+  valores E18), calendário macro versionado + releases BLS, qualidade
+  (gaps/reconciliação/replay determinístico), retenção (TTL+quotas, tabelas
+  protegidas), API de leitura autenticada (11 endpoints) e orquestrador
+  supervisionado. Revisão adversarial de 6 lentes: 24 achados confirmados,
+  todos corrigidos com teste. `make verify` verde; 213 testes vitest.
+  Evidência: [`docs/test-results/RFC-007-data-foundation.md`](test-results/RFC-007-data-foundation.md).
+- **FATO VERIFICADO:** smoke ao vivo isolado no Mac contra as APIs reais:
+  janela final de ~7 min sob carga plena com zero erros e zero gaps não
+  registrados (95 mercados, 748k deltas L2, 264k trades, RTDS ativo).
+- **DECISÃO PENDENTE (proprietário):** no ritmo medido, deltas L2 ≈ 29 GB/dia;
+  a quota de 12 GB governa → janela efetiva de L2 ≈ meio dia. Reduzir séries
+  curtas do universo ou rebalancear quotas fica para depois da observação em
+  produção.
+- **FATO VERIFICADO (2026-08-20):** a rede do macOS caiu após sleep (errno 49
+  até em loopback) e o reboot que a restaurou limpou o `/private/tmp`, levando
+  o clone de trabalho com os commits locais. O código foi reconstruído por
+  replay determinístico dos transcripts dos agentes (`~/.claude`, que sobrevive
+  a reboot) num worktree durável, e revalidado pela própria suíte antes do
+  push. Lição operacional: workspace de implementação nunca em diretório
+  temporário; commit cedo, push cedo.
+
 ## Sequência de RFCs
 
-| RFC                                                   | Estado de acompanhamento                                                         | Evidência/condição                                                                                                |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| RFC-001 — Fundação e runtime                          | Implementada                                                                     | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
-| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                              | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
-| RFC-007 — Polymarket: fundação de dados e recorder V2 | Reescrita 2026-08-19 (draft); recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
-| RFC-010 — Modelo fundamental (`q` + incerteza)        | Não iniciada (draft 2026-08-19)                                                  | Depende da RFC-007                                                                                                |
-| RFC-011 — Microestrutura e paper broker               | Não iniciada (draft 2026-08-19)                                                  | Depende de RFC-007 e RFC-010                                                                                      |
-| RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                  | Depende da RFC-007                                                                                                |
-| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                  | Gates G1–G6 habilitam a RFC-009                                                                                   |
-| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                 | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
+| RFC                                                   | Estado de acompanhamento                                                                               | Evidência/condição                                                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| RFC-001 — Fundação e runtime                          | Implementada                                                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
+| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
+| RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
+| RFC-011 — Microestrutura e paper broker               | Não iniciada (draft 2026-08-19)                                                                        | Depende de RFC-007 e RFC-010                                                                                      |
+| RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
+| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
+| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
@@ -144,16 +173,15 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
 ## Próximo passo mínimo
 
-Implementar a RFC-007 reescrita (fundação de dados e recorder V2): expandir o
-recorder em produção para regras versionadas + timeline UMA, livro completo com
-deltas do universo, trades, OI/holders, fees/tick/min size versionados,
-calendário macro, TTL/retenção dentro das quotas (30 GB de dados + 4 GB
-headroom + 6 GB reservados às RFCs 010–013) e API de leitura. Depois, em
-ordem: RFC-010 → RFC-011 → RFC-012 → RFC-013 → gates → RFC-009.
+Com a rede local restaurada: push da branch `claude/rfc-007-data-foundation`,
+PR, CI verde, merge, deploy via CD e ativação do recorder novo no servidor
+(`--profile polymarket up --build`). Validar em produção: tabelas novas
+enchendo, `GET /polymarket/data-quality`, zero erros nos logs, e iniciar a
+janela de 7 dias de gravação contínua (critério de aceite da RFC-007). Depois:
+RFC-010 (modelo fundamental).
 
 Operação do servidor: `cd /opt/ganso-market` seguido de `make server-status`,
-`make server-health` ou `make server-logs`. Todo push em `main` executa os
-gates e, se aprovados, atualiza produção.
+`make server-health` ou `make server-logs`.
 
 ## Como atualizar este handoff
 

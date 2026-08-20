@@ -1,0 +1,149 @@
+{
+  "_comment": "Curated official macro calendar, H2-2026, all times UTC. Entries with \"estimated\": true follow the usual publication pattern (CPI mid-month ~08:30 ET, Employment Situation first Friday ~08:30 ET, BEA GDP ~08:30 ET) and MUST be reviewed by the owner against the official schedules in each entry's _source before relying on them (see runbook). Never put release values here; values are collected from the official APIs or entered manually for BEA/FOMC.",
+  "entries": [
+    {
+      "source": "bls",
+      "event_key": "cpi-2026-09",
+      "event_name": "CPI (August 2026 data)",
+      "scheduled_at": "2026-09-11T12:30:00Z",
+      "series_id": "CUSR0000SA0",
+      "year": "2026",
+      "period": "M08",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/cpi.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "cpi-2026-10",
+      "event_name": "CPI (September 2026 data)",
+      "scheduled_at": "2026-10-13T12:30:00Z",
+      "series_id": "CUSR0000SA0",
+      "year": "2026",
+      "period": "M09",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/cpi.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "cpi-2026-11",
+      "event_name": "CPI (October 2026 data)",
+      "scheduled_at": "2026-11-12T13:30:00Z",
+      "series_id": "CUSR0000SA0",
+      "year": "2026",
+      "period": "M10",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/cpi.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "cpi-2026-12",
+      "event_name": "CPI (November 2026 data)",
+      "scheduled_at": "2026-12-10T13:30:00Z",
+      "series_id": "CUSR0000SA0",
+      "year": "2026",
+      "period": "M11",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/cpi.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "nfp-2026-09",
+      "event_name": "Employment Situation / Nonfarm Payrolls (August 2026 data)",
+      "scheduled_at": "2026-09-04T12:30:00Z",
+      "series_id": "CES0000000001",
+      "year": "2026",
+      "period": "M08",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "nfp-2026-10",
+      "event_name": "Employment Situation / Nonfarm Payrolls (September 2026 data)",
+      "scheduled_at": "2026-10-02T12:30:00Z",
+      "series_id": "CES0000000001",
+      "year": "2026",
+      "period": "M09",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "nfp-2026-11",
+      "event_name": "Employment Situation / Nonfarm Payrolls (October 2026 data)",
+      "scheduled_at": "2026-11-06T13:30:00Z",
+      "series_id": "CES0000000001",
+      "year": "2026",
+      "period": "M10",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+    },
+    {
+      "source": "bls",
+      "event_key": "nfp-2026-12",
+      "event_name": "Employment Situation / Nonfarm Payrolls (November 2026 data)",
+      "scheduled_at": "2026-12-04T13:30:00Z",
+      "series_id": "CES0000000001",
+      "year": "2026",
+      "period": "M11",
+      "estimated": true,
+      "_source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+    },
+    {
+      "source": "fomc",
+      "event_key": "fomc-2026-09",
+      "event_name": "FOMC statement (meeting Sep 15-16, 2026)",
+      "scheduled_at": "2026-09-16T18:00:00Z",
+      "estimated": false,
+      "_source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+    },
+    {
+      "source": "fomc",
+      "event_key": "fomc-2026-10",
+      "event_name": "FOMC statement (meeting Oct 27-28, 2026)",
+      "scheduled_at": "2026-10-28T18:00:00Z",
+      "estimated": false,
+      "_source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+    },
+    {
+      "source": "fomc",
+      "event_key": "fomc-2026-12",
+      "event_name": "FOMC statement (meeting Dec 8-9, 2026)",
+      "scheduled_at": "2026-12-09T19:00:00Z",
+      "estimated": false,
+      "_source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+    },
+    {
+      "source": "bea",
+      "event_key": "gdp-2026-q2-third",
+      "event_name": "GDP Q2 2026 (third estimate)",
+      "scheduled_at": "2026-09-25T12:30:00Z",
+      "estimated": true,
+      "_source": "https://www.bea.gov/news/schedule"
+    },
+    {
+      "source": "bea",
+      "event_key": "gdp-2026-q3-advance",
+      "event_name": "GDP Q3 2026 (advance estimate)",
+      "scheduled_at": "2026-10-29T12:30:00Z",
+      "estimated": true,
+      "_source": "https://www.bea.gov/news/schedule"
+    },
+    {
+      "source": "bea",
+      "event_key": "gdp-2026-q3-second",
+      "event_name": "GDP Q3 2026 (second estimate)",
+      "scheduled_at": "2026-11-25T13:30:00Z",
+      "estimated": true,
+      "_source": "https://www.bea.gov/news/schedule"
+    },
+    {
+      "source": "bea",
+      "event_key": "gdp-2026-q3-third",
+      "event_name": "GDP Q3 2026 (third estimate)",
+      "scheduled_at": "2026-12-22T13:30:00Z",
+      "estimated": true,
+      "_source": "https://www.bea.gov/news/schedule"
+    }
+  ]
+}

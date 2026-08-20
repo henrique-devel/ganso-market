@@ -96,17 +96,21 @@ describe("keyword classification (Gamma rows have no category)", () => {
     expect(
       classifyFrom("Will the Fed cut the interest rate in September?"),
     ).toBe("macro");
-    expect(classifyFrom("Highest temperature in NYC on Aug 20?")).toBe(
-      "weather",
-    );
   });
 
-  it("returns null for elections and unmatched markets", () => {
+  it("returns null for elections, weather and unmatched markets", () => {
     expect(
       classifyFrom("Who will win the 2028 presidential election?"),
     ).toBeNull();
     expect(
       classifyFrom("Will the Lakers beat the Celtics tonight?"),
     ).toBeNull();
+    // Weather left the tracked set in RFC-007 (crypto and macro only).
+    expect(classifyFrom("Highest temperature in NYC on Aug 20?")).toBeNull();
+  });
+
+  it("excludes mentions and geopolitics keywords", () => {
+    expect(classifyFrom("Will the CEO mention AI on the call?")).toBeNull();
+    expect(classifyFrom("Will there be a ceasefire by March?")).toBeNull();
   });
 });

@@ -1,0 +1,418 @@
+import { describe, expect, it } from "vitest";
+
+import type { QueryResultRow } from "pg";
+
+import type { QueryResult, SqlExecutor } from "../../src/database.js";
+import {
+  computeConcentration,
+  createOiHoldersSampler,
+  createUmaStatusPoller,
+  normalizeUmaStatus,
+  recordMarketResolved,
+} from "../../src/polymarket/samplers.js";
+
+interface CapturedQuery {
+  readonly text: string;
+  readonly params: unknown[];
+}
+
+type Responder = (
+  text: string,
+  params: readonly unknown[],
+) => { rows: Record<string, unknown>[] } | undefined;
+
+function createFakeExecutor(responder?: Responder): {
+  calls: CapturedQuery[];
+  executor: SqlExecutor;
+} {
+  const calls: CapturedQuery[] = [];
+  const executor: SqlExecutor = {
+    query<R extends Record<string, unknown>>(
+      text: string,
+      params?: readonly unknown[],
+    ): Promise<QueryResult<R>> {
+      calls.push({ text, params: [...(params ?? [])] });
+      const canned = responder?.(text, params ?? []);
+      return Promise.resolve({
+        rows: (canned?.rows ?? []) as R[],
+        rowCount: canned?.rows.length ?? 0,
+      });
+    },
+  };
+  return { calls, executor };
+}
+
+function jsonResponse(
+  body: unknown,
+  ok = true,
+  status = 200,
+): { ok: boolean; status: number; json: () => Promise<unknown> } {
+  return { ok, status, json: () => Promise.resolve(body) };
+}
+
+describe("computeConcentration (bigint shares)", () => {
+  it("computes top1/top5 as 6-place decimal ratios", () => {
+    const { top1Share, top5Share } = computeConcentration([
+      "30",
+      "50",
+      "10",
+      "5",
+      "3",
+      "2",
+    ]);
+    expect(top1Share).toBe("0.500000");
+    expect(top5Share).toBe("0.980000");
+  });
+
+  it("handles fractional amounts exactly, without floats", () => {
+    // total = 0.3; top1 = 0.1/0.3 = 1/3 -> 0.333333 (half-up on bigints).
+    const { top1Share, top5Share } = computeConcentration([
+      "0.1",
+      "0.1",
+      "0.1",
+    ]);
+    expect(top1Share).toBe("0.333333");
+    expect(top5Share).toBe("1.000000");
+  });
+
+  it("returns nulls when there are no usable amounts", () => {
+    expect(computeConcentration([])).toEqual({
+      top1Share: null,
+      top5Share: null,
+    });
+    expect(computeConcentration(["0", "0"])).toEqual({
+      top1Share: null,
+      top5Share: null,
+    });
+    expect(computeConcentration(["1e5", "abc"])).toEqual({
+      top1Share: null,
+      top5Share: null,
+    });
+  });
+});
+
+describe("oi/holders sampler", () => {
+  const universe = [{ conditionId: "0xcond", tokenIds: ["111", "222"] }];
+
+  function makeFetcher(
+    overrides?: Partial<Record<"oi" | "volume" | "holders", unknown>>,
+  ): (url: string) => Promise<ReturnType<typeof jsonResponse>> {
+    return (url: string) => {
+      if (url.includes("/oi?")) {
+        return Promise.resolve(
+          jsonResponse(overrides?.oi ?? { value: 1234.5 }),
+        );
+      }
+      if (url.includes("/live-volume?")) {
+        return Promise.resolve(
+          jsonResponse(overrides?.volume ?? { total: "999" }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(
+          overrides?.holders ?? [
+            {
+              token: "111",
+              holders: [
+                { proxyWallet: "a", amount: 50 },
+                { proxyWallet: "b", amount: 30 },
+                { proxyWallet: "c", amount: 10 },
+                { proxyWallet: "d", amount: 5 },
+                { proxyWallet: "e", amount: 3 },
+                { proxyWallet: "f", amount: 2 },
+              ],
+            },
+          ],
+        ),
+      );
+    };
+  }
+
+  it("persists one row per holder group with derived concentration", async () => {
+    const { calls, executor } = createFakeExecutor();
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher: makeFetcher(),
+      clock: () => 1_000_000,
+    });
+    await sampler.sampleOnce(universe);
+
+    const inserts = calls.filter((call) =>
+      call.text.includes("INSERT INTO polymarket_oi_holders"),
+    );
+    expect(inserts).toHaveLength(1);
+    const params = inserts[0]?.params;
+    expect(params?.[0]).toBe("0xcond");
+    expect(params?.[1]).toBe("111");
+    expect(params?.[2]).toBe("1234.5"); // open_interest as decimal string
+    expect(params?.[3]).toBe("999"); // live_volume
+    expect(params?.[4]).toBe(6); // holders_count
+    expect(params?.[5]).toBe("0.500000"); // top1_share
+    expect(params?.[6]).toBe("0.980000"); // top5_share
+    expect(params?.[8]).toBeInstanceOf(Date);
+    expect((params?.[8] as Date).getTime()).toBe(1_000_000);
+  });
+
+  it("logs and continues when one market fails, without a gap row", async () => {
+    const twoMarkets = [
+      { conditionId: "0xbad", tokenIds: ["1"] },
+      { conditionId: "0xgood", tokenIds: ["2"] },
+    ];
+    const fetcher = (url: string): Promise<ReturnType<typeof jsonResponse>> => {
+      if (url.includes("0xbad")) {
+        return Promise.reject(new Error("boom"));
+      }
+      return makeFetcher()(url);
+    };
+    const { calls, executor } = createFakeExecutor();
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher,
+      clock: () => 0,
+    });
+    await sampler.sampleOnce(twoMarkets);
+
+    const inserts = calls.filter((call) =>
+      call.text.includes("polymarket_oi_holders"),
+    );
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.params[0]).toBe("0xgood");
+    expect(
+      calls.some((call) => call.text.includes("polymarket_data_gaps")),
+    ).toBe(false);
+  });
+
+  it("records a data_api gap covering the cycle when every market fails", async () => {
+    let now = 500;
+    const { calls, executor } = createFakeExecutor();
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher: () => Promise.reject(new Error("network down")),
+      clock: () => {
+        now += 100;
+        return now;
+      },
+    });
+    await sampler.sampleOnce(universe);
+
+    const gap = calls.find((call) =>
+      call.text.includes("INSERT INTO polymarket_data_gaps"),
+    );
+    expect(gap).toBeDefined();
+    expect(gap?.text).toContain("'data_api'");
+    expect(gap?.params[0]).toBeInstanceOf(Date);
+    expect(gap?.params[2]).toBe("oi_holders_sample_failed_all");
+  });
+});
+
+describe("uma status poller", () => {
+  function gammaFetcher(
+    statuses: () => {
+      umaResolutionStatus?: string;
+      closed?: boolean;
+      resolved?: boolean;
+    },
+  ): (url: string) => Promise<ReturnType<typeof jsonResponse>> {
+    return () =>
+      Promise.resolve(jsonResponse([{ conditionId: "0xcond", ...statuses() }]));
+  }
+
+  it("emits exactly one event per transition and nothing in steady state", async () => {
+    const sequence = [
+      { umaResolutionStatus: "proposed", closed: false },
+      { umaResolutionStatus: "proposed", closed: false }, // steady state
+      { umaResolutionStatus: "disputed", closed: false },
+      { umaResolutionStatus: "resolved", closed: true },
+      { umaResolutionStatus: "resolved", closed: true }, // steady state
+    ];
+    let index = 0;
+    const { calls, executor } = createFakeExecutor((text) => {
+      if (text.includes("DISTINCT ON")) {
+        return { rows: [] };
+      }
+      return undefined;
+    });
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      fetcher: gammaFetcher(() => sequence[Math.min(index, 4)] ?? {}),
+      clock: () => 0,
+    });
+    for (index = 0; index < sequence.length; index += 1) {
+      await poller.pollOnce(["0xcond"]);
+    }
+
+    const inserts = calls.filter((call) =>
+      call.text.includes("INSERT INTO polymarket_resolution_events"),
+    );
+    expect(inserts.map((call) => call.params[1])).toEqual([
+      "proposed",
+      "disputed",
+      "resolved",
+    ]);
+    const payloads = inserts.map(
+      (call) =>
+        JSON.parse(String(call.params[2])) as { from: unknown; to: unknown },
+    );
+    expect(payloads[0]).toMatchObject({ from: null, to: "proposed" });
+    expect(payloads[1]).toMatchObject({ from: "proposed", to: "disputed" });
+    expect(payloads[2]).toMatchObject({ from: "disputed", to: "resolved" });
+  });
+
+  it("re-hydrates the last known status from the database on boot", async () => {
+    const { calls, executor } = createFakeExecutor((text) => {
+      if (text.includes("DISTINCT ON")) {
+        return {
+          rows: [
+            {
+              condition_id: "0xcond",
+              event_type: "proposed",
+              payload_json: { from: null, to: "proposed" },
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      fetcher: gammaFetcher(() => ({
+        umaResolutionStatus: "proposed",
+        closed: false,
+      })),
+      clock: () => 0,
+    });
+    await poller.pollOnce(["0xcond"]);
+
+    expect(
+      calls.some((call) =>
+        call.text.includes("INSERT INTO polymarket_resolution_events"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not re-emit the current status after restart when a rule_change follows it", async () => {
+    // Database timeline: 'proposed' (status) then a 'rule_change'
+    // clarification (no status). Hydration must skip the rule_change row and
+    // still see 'proposed' as the current status.
+    const statusTypes = new Set([
+      "proposed",
+      "disputed",
+      "resolved",
+      "closed",
+      "market_resolved",
+    ]);
+    const storedEvents = [
+      {
+        condition_id: "0xcond",
+        event_type: "proposed",
+        payload_json: { from: null, to: "proposed" },
+        received_at: 1,
+      },
+      {
+        condition_id: "0xcond",
+        event_type: "rule_change",
+        payload_json: { reason: "clarification" },
+        received_at: 2,
+      },
+    ];
+    const { calls, executor } = createFakeExecutor((text) => {
+      if (text.includes("DISTINCT ON")) {
+        // Emulate the hydration SQL: honor the event_type filter when the
+        // query carries one, then DISTINCT ON keeps the latest received_at.
+        const candidates = text.includes("event_type IN")
+          ? storedEvents.filter((event) => statusTypes.has(event.event_type))
+          : storedEvents;
+        const latest = [...candidates].sort(
+          (a, b) => b.received_at - a.received_at,
+        )[0];
+        return { rows: latest === undefined ? [] : [latest] };
+      }
+      return undefined;
+    });
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      fetcher: gammaFetcher(() => ({
+        umaResolutionStatus: "proposed",
+        closed: false,
+      })),
+      clock: () => 0,
+    });
+    await poller.pollOnce(["0xcond"]);
+
+    const hydrateQuery = calls.find((call) =>
+      call.text.includes("DISTINCT ON"),
+    );
+    expect(hydrateQuery?.text).toContain("event_type IN");
+    expect(hydrateQuery?.text).not.toContain("'rule_change'");
+    // Steady state: the current status is 'proposed' both in the database and
+    // at Gamma, so nothing is re-emitted.
+    expect(
+      calls.some((call) =>
+        call.text.includes("INSERT INTO polymarket_resolution_events"),
+      ),
+    ).toBe(false);
+  });
+
+  it("records a gamma gap when the status poll fails outright", async () => {
+    const { calls, executor } = createFakeExecutor((text) => {
+      if (text.includes("DISTINCT ON")) {
+        return { rows: [] };
+      }
+      return undefined;
+    });
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      fetcher: () => Promise.resolve(jsonResponse(null, false, 500)),
+      clock: () => 42,
+    });
+    await poller.pollOnce(["0xcond"]);
+
+    const gap = calls.find((call) =>
+      call.text.includes("INSERT INTO polymarket_data_gaps"),
+    );
+    expect(gap).toBeDefined();
+    expect(gap?.text).toContain("'gamma'");
+    expect(gap?.params[2]).toBe("uma_status_poll_failed");
+  });
+
+  it("maps status text tolerantly", () => {
+    expect(normalizeUmaStatus("proposed", false)).toBe("proposed");
+    expect(normalizeUmaStatus("disputed", false)).toBe("disputed");
+    expect(normalizeUmaStatus("challenged", false)).toBe("disputed");
+    expect(normalizeUmaStatus("resolved", true)).toBe("resolved");
+    expect(normalizeUmaStatus(null, true)).toBe("closed");
+    expect(normalizeUmaStatus(null, false)).toBeNull();
+  });
+});
+
+describe("recordMarketResolved", () => {
+  it("inserts an immutable market_resolved event with source_ts from payload", async () => {
+    const { calls, executor } = createFakeExecutor();
+    await recordMarketResolved(
+      executor,
+      "0xcond",
+      { winning_asset_id: "111", timestamp: "1787098643398" },
+      () => 1_787_098_650_000,
+    );
+
+    const insert = calls[0];
+    expect(insert?.text).toContain("polymarket_resolution_events");
+    expect(insert?.text).toContain("'market_resolved'");
+    expect(insert?.params[0]).toBe("0xcond");
+    expect(String(insert?.params[1])).toContain("winning_asset_id");
+    expect(insert?.params[2]).toBeInstanceOf(Date);
+    expect((insert?.params[2] as Date).getTime()).toBe(1_787_098_643_398);
+    expect((insert?.params[3] as Date).getTime()).toBe(1_787_098_650_000);
+  });
+
+  it("never throws when persistence fails", async () => {
+    const failing: SqlExecutor = {
+      query<R extends QueryResultRow>(): Promise<QueryResult<R>> {
+        return Promise.reject(new Error("db down"));
+      },
+    };
+    await expect(
+      recordMarketResolved(failing, "0xcond", {}, () => 0),
+    ).resolves.toBeUndefined();
+  });
+});

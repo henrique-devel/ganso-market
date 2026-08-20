@@ -185,10 +185,12 @@ services:
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      GANSO_MACRO_CALENDAR_FILE: /etc/ganso/macro-calendar.json
     secrets:
       - postgres_password
     volumes:
       - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      - ./config/macro-calendar.json:/etc/ganso/macro-calendar.json:ro
     networks:
       # backend reaches PostgreSQL; edge provides outbound internet to the public
       # Polymarket APIs. No host port is published.
@@ -199,7 +201,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 10s
-    mem_limit: 384m
+    mem_limit: 1024m
     cpus: 0.5
     pids_limit: 128
     logging: *default-logging
