@@ -444,6 +444,14 @@ mudança de regra/param ignora o histórico.
   ciclo. Rodar N modelos shadow multiplica a volumetria por (1 + N); observe
   `shadow_rows` no `ESTIMATOR_CYCLE` e o crescimento da tabela antes de deixar
   vários modelos em shadow ao mesmo tempo.
+- **Janela real, medida:** 1.020 B por linha em PostgreSQL 18 (200 k linhas,
+  após `VACUUM ANALYZE`). No universo cheio, a 60 s e com um modelo em shadow
+  por categoria, são 576 k linhas/dia ≈ 588 MB/dia, e a quota de 3 GB guarda
+  **~5,5 dias** (≈11 dias enquanto não houver modelo registrado). Quota vence
+  TTL: o TTL de 90 dias só é alcançável reduzindo a cadência (~20 min) ou
+  aumentando a quota. Isso limita o gate — 100 mercados resolvidos só se
+  acumulam se eles resolverem dentro da janela guardada. Decisão do
+  proprietário, registrada no handoff.
 - Memória: `mem_limit` 384 MiB com `--max-old-space-size=320`. O orçamento do
   módulo (RFC-007) é de 40 GB de PostgreSQL e 3 GB de RAM para as aplicações.
 

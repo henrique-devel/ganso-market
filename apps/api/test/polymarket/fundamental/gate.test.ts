@@ -523,3 +523,40 @@ describe("runGate", () => {
     expect(db.gateReports[0]?.observations).toBe(0);
   });
 });
+
+describe("runGate against a concurrent promotion", () => {
+  it("demotes a model promoted after the job snapshotted it as shadow", async () => {
+    const db = newDb();
+    const pool = fakePool(db);
+
+    // The daily job snapshotted this model as `shadow`...
+    const snapshot = modelRecord({ status: "shadow" });
+    seedModel(db, snapshot);
+    // ...but the operator promoted it through the API while the job was still
+    // computing metrics. The stored row is `active` even though the snapshot
+    // the job carries says otherwise.
+    const row = db.models.get(snapshot.modelId);
+    if (row === undefined) {
+      throw new Error("model row missing");
+    }
+    row.status = "active";
+
+    const { result } = await runGate({
+      pool,
+      model: snapshot,
+      metrics: metrics({ marketsCovered: 3 }),
+      marketsCovered: 3,
+      observations: 10,
+      windowFrom: WINDOW_FROM,
+      windowTo: WINDOW_TO,
+      thresholds: THRESHOLDS,
+      gitSha: GIT_SHA,
+      at: NOW,
+    });
+
+    expect(result.verdict).toBe("NO_EVIDENCE_OF_ALPHA");
+    // Trusting the snapshot would have left it active with a failing verdict
+    // as its latest report — the exact state the gate exists to prevent.
+    expect(db.models.get(snapshot.modelId)?.status).toBe("shadow");
+  });
+});

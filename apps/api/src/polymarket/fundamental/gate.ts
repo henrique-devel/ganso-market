@@ -16,7 +16,7 @@
 // threshold gets the RFC value instead: the gate can be made stricter from
 // configuration, never softer.
 
-import { demoteModel, recordModelEvent } from "./registry.js";
+import { demoteModel, getModel, recordModelEvent } from "./registry.js";
 import type { QueryPool } from "./features.js";
 import type {
   CalibrationMetrics,
@@ -266,7 +266,15 @@ export async function runGate(
         failures: result.failures,
       },
     );
-    if (deps.model.status === "active") {
+    // The status is re-read from the database, NOT taken from deps.model. The
+    // daily job snapshots every model before it starts computing metrics, and
+    // the operator can promote one through the API while the job is still
+    // running: trusting the snapshot would leave that model active with a
+    // NO_EVIDENCE_OF_ALPHA verdict as its latest report — precisely the state
+    // the gate exists to make impossible. demoteModel is a no-op on a model
+    // that is already in shadow.
+    const current = await getModel(deps.pool, deps.model.modelId);
+    if (current !== null && current.status === "active") {
       // A promoted model that stops clearing the gate goes back to shadow at
       // once; the category serves the market baseline again.
       await demoteModel(

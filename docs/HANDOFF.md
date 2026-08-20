@@ -90,13 +90,16 @@ TTL).
   label store não teria o que pontuar e nenhum gate poderia ter evidência.
 - **DECISÃO PENDENTE (proprietário) — janela de retenção das estimativas:**
   volumetria medida em PostgreSQL real: **1.020 B por linha** (200 k linhas,
-  após `VACUUM ANALYZE`). No teto da RFC (200 tokens × 1 linha/minuto =
-  288 k linhas/dia ≈ 294 MB/dia), a quota de 3 GB sustenta **~11 dias**, não os
-  90 dias do TTL — quota vence TTL na retenção, então o orçamento local é
-  respeitado e o que encolhe é a janela. Para 90 dias reais dentro de 3 GB
-  seria preciso `min_estimate_gap_ms ≥ ~490 s` (a 600 s dá ~110 dias) ou
-  ~26 GB de quota. O código entrega o default da RFC (60 s); o botão está em
-  `config/fundamental.json`.
+  após `VACUUM ANALYZE`). No teto da RFC (200 tokens × 1 linha/minuto), a
+  superfície do consumidor são 288 k linhas/dia — **mais as linhas `shadow`**,
+  uma por token por ciclo enquanto houver modelo em shadow, ou seja 576 k
+  linhas/dia ≈ 588 MB/dia. A quota de 3 GB sustenta **~5,5 dias** (≈11 dias
+  antes de qualquer modelo ser registrado), não os 90 dias do TTL — quota vence
+  TTL na retenção, então o orçamento local é respeitado e o que encolhe é a
+  janela. Para 90 dias reais dentro de 3 GB seria preciso cadência de ~20 min
+  ou ~52 GB de quota. **Isso limita o gate**: acumular 100 mercados resolvidos
+  exige que eles resolvam dentro da janela guardada. O código entrega o default
+  da RFC (60 s); o botão está em `config/fundamental.json`.
 - **RISCO ABERTO — cobertura macro é zero hoje:** `config/macro-calendar.json`
   não traz `consensus`/`nowcast` em nenhuma entrada, então o modelo
   `macro_scheduled` **abstém em todo mercado macro** e tudo fica no baseline.

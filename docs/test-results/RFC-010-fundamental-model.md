@@ -50,9 +50,9 @@ PostgreSQL, então lá ela aparece como `skipped`, e localmente ela roda de
 verdade.
 
 ```text
-GANSO_TEST_DATABASE_URL=postgres://…  npx vitest run test/polymarket/fundamental/
- Test Files  17 passed (17)
-      Tests  280 passed (280)
+GANSO_TEST_DATABASE_URL=postgres://…  npx vitest run
+ Test Files  43 passed (43)
+      Tests  512 passed (512)
 ```
 
 O que a suíte de integração prova, com dados semeados nas tabelas da RFC-007
@@ -86,7 +86,7 @@ make verify   # format-check, lint, test, build, secret-scan, compose-config
 
 | Suíte                                       | Resultado real                    |
 | ------------------------------------------- | --------------------------------- |
-| vitest `@ganso-market/api`                  | 491 passed, 6 skipped (497)       |
+| vitest `@ganso-market/api`                  | 506 passed, 6 skipped (512)       |
 | vitest `@ganso-market/web`                  | 15 passed                         |
 | vitest `@ganso-market/contracts`            | 70 passed                         |
 | `cargo test --workspace`                    | 14 passed, 0 failed               |
@@ -134,17 +134,30 @@ PostgreSQL real, com os índices desta migration, seguidas de
 
 Consequência aritmética, asseverada em `budget.test.ts`:
 
-- teto de 288.000 linhas/dia (200 tokens × 1 linha/token/minuto), dentro da
-  faixa de 150–300 k/dia que a própria RFC projeta;
-- a 1.020 B/linha isso é ~294 MB/dia;
+- superfície do consumidor: 288.000 linhas/dia (200 tokens × 1 linha/token/
+  minuto), dentro da faixa de 150–300 k/dia que a própria RFC projeta;
+- **mais as linhas `shadow`**: um token pertence a exatamente uma categoria e
+  cada categoria tem uma família de modelo, então cada token grava no máximo
+  uma linha shadow por ciclo além da linha do consumidor ⇒ **576.000
+  linhas/dia** com os dois modelos do catálogo em shadow;
+- a 1.020 B/linha isso é ~588 MB/dia (~294 MB/dia enquanto não houver modelo
+  registrado);
 - **a quota de 3 GB (metade da reserva de 6 GB das RFCs 010–013) sustenta
-  ~11 dias, não os 90 dias do TTL.** Na retenção, quota vence TTL: os dados
-  ficam dentro do orçamento local e o que encolhe é a janela.
-- Para uma janela real de 90 dias dentro de 3 GB seria preciso
-  `min_estimate_gap_ms ≥ ~490 s` (a 600 s a janela passa de 110 dias) ou
-  ~26 GB de quota. **É decisão do proprietário**, registrada no handoff; o
-  código entrega o default da RFC (60 s) e o botão está em
-  `config/fundamental.json`.
+  ~5,5 dias com shadow (≈11 dias só com baseline), não os 90 dias do TTL.** Na
+  retenção, quota vence TTL: os dados ficam dentro do orçamento local e o que
+  encolhe é a janela.
+- Para uma janela real de 90 dias dentro de 3 GB, com shadow, seria preciso
+  cadência de ~20 min (`min_estimate_gap_ms = 1_200_000`) ou ~52 GB de quota.
+  **É decisão do proprietário**, registrada no handoff; o código entrega o
+  default da RFC (60 s) e o botão está em `config/fundamental.json`.
+
+Isso importa diretamente para o gate: a janela de retenção é o teto do que o
+walk-forward pode enxergar. Com 5,5 dias de estimativas guardadas, acumular
+100 mercados resolvidos numa categoria depende de os mercados resolverem
+dentro dessa janela — mercados crypto de curta duração resolvem, macro
+mensais não. O relatório de calibração passou a registrar a janela que os
+dados realmente cobrem (`data_window.observed_from/observed_to`) exatamente
+para que essa limitação apareça no relatório em vez de ficar implícita.
 
 ## 6. Proveniência (`git_sha`) verificada
 
@@ -176,7 +189,44 @@ registradas juntas, sem colisão:
     └── /latest (GET, HEAD)
 ```
 
-## 8. Correção adjacente na RFC-007 (necessária para a RFC-010)
+## 8. Revisão adversarial
+
+Workflow de revisão com 6 lentes (leakage/as-of, SQL×schema, numérica,
+fallback/crash, gate/registry, API/escopo) sobre o diff completo, com
+refutação por achado. **A fase de refutação foi interrompida pelo limite de
+uso da sessão** (28 de 120 agentes concluíram; 92 falharam com
+`session limit`), então a separação automática entre "confirmado" e
+"descartado" **não é confiável** e não foi usada como tal.
+
+Os 32 achados brutos foram triados manualmente, um a um, contra o código. O
+resultado está no commit `6d526e6` e no seguinte: 20 achados corrigidos
+(microprice ponderado por notional limitado em vez de contagem de ações;
+retornos só entre minutos contíguos; idade do feed alcançando o intervalo;
+sigma envenenado recusado; cobertura do intervalo reimplementada como
+frequência realizada; veto de disputa com precedência; instante conhecível
+caindo para o `received_at` da proposta; falha de um token não descartando o
+ciclo; INSERT fatiado; mercado não-binário no baseline; exceção de modelo
+logada; teto explícito de observações; janela do relatório = janela dos dados;
+taxa de fallback nula em janela vazia; promoção recusada sobre PASS anterior à
+revalidação; UPDATE de promoção guardado pelo relatório lido; `runGate`
+relendo o status vivo; `/estimates/latest` limitado por recência; 409
+`NO_EVIDENCE_OF_ALPHA` para modelo nunca avaliado; SHA da release assado na
+imagem). Cada correção tem teste.
+
+Achados **não** corrigidos, com motivo:
+
+- *"`macro_scheduled` nunca emite estimativa"* — verdadeiro e **intencional**:
+  sem consenso/nowcast no calendário o modelo se abstém em vez de inventar
+  insumo. É lacuna de dado, registrada como risco aberto no handoff.
+- *"`MODEL_TIMEOUT` e `GATE_FAILED` sem emissor"* — declarados no contrato,
+  documentados como sem emissor em
+  `docs/architecture/fundamental-model-scope.md`. Não são bug.
+- *"não existe caminho para `status='retired'`"* — correto; a coluna existe
+  para o ciclo de vida futuro e o runbook não promete o contrário.
+- *"label store não retrata `is_final` se uma disputa chegar depois da
+  resolução"* — **risco residual aceito nesta RFC**, registrado abaixo.
+
+## 9. Correção adjacente na RFC-007 (necessária para a RFC-010)
 
 `createUmaStatusPoller` gravava a transição de status mas **não o desfecho**.
 Sem `outcomePrices`/`outcomes` na linha imutável de resolução, o label store da
@@ -184,3 +234,20 @@ tarefa 7 não teria o que pontuar e nenhum gate poderia jamais ter evidência. O
 poller já buscava o objeto completo do Gamma; passou a extrair e gravar os dois
 campos (`samplers.test.ts` cobre). Nenhuma outra alteração de comportamento na
 RFC-007.
+
+
+## 10. Riscos residuais
+
+- **Disputa após resolução:** o label store marca `is_final` na resolução e não
+  o retrata se uma disputa UMA chegar depois. Na prática a disputa precede a
+  resolução final (liveness de 2 h), mas o caso invertido não é tratado; o
+  mercado ficaria no headline com o desfecho contestado. Mitigação parcial: o
+  flag `disputed` já exclui do headline todo mercado com evento de disputa em
+  qualquer instante do timeline.
+- **Cobertura macro zero** enquanto o calendário não tiver consenso/nowcast.
+- **Janela de retenção** de ~5,5 dias no teto, contra TTL de 90 dias — decisão
+  do proprietário.
+- **Sem caminho de registro de modelo** além do catálogo no boot: treinar uma
+  versão calibrada exigirá CLI ou endpoint novo.
+- O soak de 24 h com universo cheio previsto na RFC **não foi executado**; o
+  que existe é o smoke em container e a projeção de volumetria medida.

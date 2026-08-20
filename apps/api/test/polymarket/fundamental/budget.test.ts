@@ -17,8 +17,22 @@ const DAY_MS = 24 * 3_600_000;
 /** RFC-007 caps: 100 markets, 200 outcome tokens. */
 const MAX_TOKENS = 200;
 
-function rowsPerDay(minGapMs: number): number {
+/**
+ * Consumer rows only: one per token per cycle. Every token of the universe with
+ * a valid book gets exactly one row a consumer can read.
+ */
+function consumerRowsPerDay(minGapMs: number): number {
   return Math.floor((MAX_TOKENS * DAY_MS) / minGapMs);
+}
+
+/**
+ * Total rows written per day, including the shadow rows. A token belongs to
+ * exactly one category and each category has exactly one model family, so at
+ * most ONE shadow row per token per cycle is added on top of the consumer row.
+ * Ignoring them would understate the storage by a factor of two.
+ */
+function totalRowsPerDay(minGapMs: number, shadowModelsPerToken = 1): number {
+  return consumerRowsPerDay(minGapMs) * (1 + shadowModelsPerToken);
 }
 
 describe("estimate volumetry", () => {
@@ -28,8 +42,12 @@ describe("estimate volumetry", () => {
     // The RFC's stated ceiling for a 50-100 market universe is ~150-300k
     // consumer rows per day; at 200 tokens and one row per token per minute
     // the loop lands at the top of that range and cannot exceed it.
-    expect(rowsPerDay(config.minEstimateGapMs)).toBe(288_000);
-    expect(rowsPerDay(config.minEstimateGapMs)).toBeLessThanOrEqual(300_000);
+    expect(consumerRowsPerDay(config.minEstimateGapMs)).toBe(288_000);
+    expect(consumerRowsPerDay(config.minEstimateGapMs)).toBeLessThanOrEqual(
+      300_000,
+    );
+    // With the catalog's model in shadow, each token also writes one gate row.
+    expect(totalRowsPerDay(config.minEstimateGapMs)).toBe(576_000);
   });
 
   it("keeps the estimates quota inside the module's shared reserve", () => {
@@ -50,22 +68,31 @@ describe("estimate volumetry", () => {
     );
     const quotaBytes = estimates?.quotaBytes ?? 0;
     const bytesPerDay =
-      rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.minEstimateGapMs) *
+      totalRowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.minEstimateGapMs) *
       MEASURED_BYTES_PER_ROW;
     const daysWithinQuota = quotaBytes / bytesPerDay;
 
     // This is the honest number, and it is deliberately asserted rather than
-    // hidden: at the full 200-token universe and the RFC's maximum cadence,
-    // the 3 GB quota holds about eleven days, NOT the 90-day TTL. Quota beats
-    // TTL in the retention job, so the data stays inside the local budget and
-    // the window is what shrinks. Reaching a true 90 days needs either a
-    // slower cadence (min_estimate_gap_ms >= ~490 s) or ~26 GB of quota; that
-    // is an owner decision, recorded in the handoff.
-    expect(daysWithinQuota).toBeGreaterThan(10);
-    expect(daysWithinQuota).toBeLessThan(12);
+    // hidden: at the full 200-token universe, the RFC's maximum cadence and one
+    // model per category in shadow, the 3 GB quota holds about five and a half
+    // days, NOT the 90-day TTL. Quota beats TTL in the retention job, so the
+    // data stays inside the local budget and the window is what shrinks.
+    // Reaching a true 90 days needs either a much slower cadence or ~52 GB of
+    // quota; that is an owner decision, recorded in the handoff.
+    expect(daysWithinQuota).toBeGreaterThan(5);
+    expect(daysWithinQuota).toBeLessThan(6);
 
-    // The documented knob really does buy the 90-day window.
-    const slowerBytesPerDay = rowsPerDay(600_000) * MEASURED_BYTES_PER_ROW;
+    // A baseline-only deployment (no model registered yet) writes half as much
+    // and therefore keeps twice the window.
+    const baselineOnlyBytesPerDay =
+      consumerRowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.minEstimateGapMs) *
+      MEASURED_BYTES_PER_ROW;
+    expect(quotaBytes / baselineOnlyBytesPerDay).toBeGreaterThan(10);
+
+    // The documented knob really does buy the 90-day window, shadow rows
+    // included: at a 20-minute cadence the same quota holds over 90 days.
+    const slowerBytesPerDay =
+      totalRowsPerDay(1_200_000) * MEASURED_BYTES_PER_ROW;
     expect(quotaBytes / slowerBytesPerDay).toBeGreaterThan(90);
   });
 
