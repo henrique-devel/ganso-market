@@ -117,9 +117,11 @@ TTL).
   (fundação), API Fastify (auth + recorder Polymarket), web React/Vite, worker
   Python opcional e Nginx. Somente Nginx publica porta; desenvolvimento usa
   `127.0.0.1:8080`, standalone usa `0.0.0.0:80`.
-- **FATO VERIFICADO:** o host de produção usa Ubuntu 22.04 x86_64, usuário
-  `root`, checkout em `/opt/ganso-market`, Docker 29.7.2/Compose 5.4.0.
-  Somente SSH e Nginx publicados; UFW inativo.
+- **FATO VERIFICADO (2026-08-20, por SSH):** o host de produção usa Ubuntu
+  22.04 x86_64, usuário `root`, checkout em `/opt/ganso-market`, **Docker
+  27.5.1 e Compose v2.32.4** — correção de um registro anterior deste handoff,
+  que dizia 29.7.2/5.4.0 (esses são os números da máquina do proprietário, não
+  os do servidor). Somente SSH e Nginx publicados; UFW inativo.
 - **FATO VERIFICADO:** CI/CD ativo: todo push na `main` roda os gates e, se
   aprovados, atualiza o servidor pelo comando SSH forçado com validação de
   release e rollback. Incidentes de 2026-08-17/18 resolvidos: a reinstalação de
