@@ -681,14 +681,20 @@ export async function syncLabels(
     // markets are excluded from the headline and analysed on their own.
     let proposedAt: Date | null = null;
     for (const event of timeline) {
-      if (event.eventType !== "proposed" || event.sourceTs === null) {
+      if (event.eventType !== "proposed") {
         continue;
       }
-      if (
-        proposedAt === null ||
-        event.sourceTs.getTime() < proposedAt.getTime()
-      ) {
-        proposedAt = event.sourceTs;
+      // RFC-007's UMA poller has no emitter clock to copy, so it stores the
+      // transition with a NULL source_ts. Falling back to `received_at` keeps
+      // the proposal instant usable: it is later than the true one, so it
+      // remains a valid UPPER bound on when the outcome became knowable, and
+      // it is usually far earlier than the market's end date.
+      const proposalTs = event.effectiveTs;
+      if (proposalTs === null) {
+        continue;
+      }
+      if (proposedAt === null || proposalTs.getTime() < proposedAt.getTime()) {
+        proposedAt = proposalTs;
       }
     }
     const onchainResolutionTs = finalEvent.effectiveTs;

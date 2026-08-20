@@ -29,12 +29,7 @@
 // the RFC and are deliberately not implemented here.
 
 import type { WalkForwardConfig } from "./config.js";
-import {
-  HORIZON_BUCKETS,
-  MAX_PROBABILITY,
-  MIN_PROBABILITY,
-  horizonBucket,
-} from "./interval.js";
+import { HORIZON_BUCKETS, horizonBucket } from "./interval.js";
 import { createSeededRandom, hashSeed, quantile } from "./stats.js";
 import type {
   CalibrationMetrics,
@@ -328,41 +323,89 @@ export function reliabilityBins(
   return result;
 }
 
+/** Buckets used by the coverage metric; ten equal-width bins over [0, 1]. */
+export const COVERAGE_BUCKETS = 10;
+
 /**
- * Empirical coverage of the 90% interval: the share of outcomes that fall
- * inside [q_lo, q_hi]. A 0.5 resolution is covered when 0.5 itself is inside.
+ * Empirical coverage of the 90% interval, for a BINARY outcome.
  *
- * Bounds sitting on the truncation limits count as reaching certainty:
- * buildInterval truncates every bound into [0.001, 0.999], so a literal
- * comparison against a label of 1 could never succeed and the metric would be
- * a constant zero — worse than useless. A bound at 0.999 therefore covers the
- * outcome 1, and a bound at 0.001 covers the outcome 0.
+ * "The 90% interval should contain the outcome ~90% of the time" cannot be
+ * read literally here: [q_lo, q_hi] is an interval for the PROBABILITY, the
+ * outcome is 0 or 1, and every bound is truncated into [0.001, 0.999]. Testing
+ * `label in [q_lo, q_hi]` therefore returns ~0 by construction, no matter how
+ * well calibrated the model is — a metric that cannot move is not a metric.
  *
- * An empty set reports NaN rather than a coverage of zero or one.
+ * What the interval actually claims is checkable: group the observations that
+ * share a predicted level, and ask whether the REALIZED FREQUENCY of the
+ * outcome in that group falls inside the group's average interval. A
+ * well-calibrated 90% interval contains the realized frequency for about 90%
+ * of the groups.
+ *
+ * A 0.5 resolution contributes 0.5 to the realized frequency, which is exactly
+ * what an outcome worth half a unit is worth.
+ *
+ * Groups smaller than `minGroup` carry too little evidence for a frequency to
+ * mean anything and are skipped. An empty result reports NaN, never a
+ * flattering zero or one.
  */
 export function intervalCoverage(
   observations: readonly ScoredObservation[],
+  minGroup = 20,
 ): number {
-  let covered = 0;
-  let count = 0;
+  const buckets = new Map<
+    number,
+    { labels: number; lower: number; upper: number; count: number }
+  >();
   for (const observation of observations) {
     if (
       !Number.isFinite(observation.modelLo) ||
       !Number.isFinite(observation.modelHi) ||
-      !Number.isFinite(observation.label)
+      !Number.isFinite(observation.label) ||
+      !Number.isFinite(observation.modelQ)
     ) {
       continue;
     }
-    const lower =
-      observation.modelLo <= MIN_PROBABILITY ? 0 : observation.modelLo;
-    const upper =
-      observation.modelHi >= MAX_PROBABILITY ? 1 : observation.modelHi;
-    if (observation.label >= lower && observation.label <= upper) {
+    const index = Math.min(
+      COVERAGE_BUCKETS - 1,
+      Math.max(0, Math.floor(clamp01(observation.modelQ) * COVERAGE_BUCKETS)),
+    );
+    const bucket = buckets.get(index) ?? {
+      labels: 0,
+      lower: 0,
+      upper: 0,
+      count: 0,
+    };
+    bucket.labels += observation.label;
+    bucket.lower += observation.modelLo;
+    bucket.upper += observation.modelHi;
+    bucket.count += 1;
+    buckets.set(index, bucket);
+  }
+
+  let covered = 0;
+  let groups = 0;
+  for (const bucket of buckets.values()) {
+    if (bucket.count < minGroup) {
+      continue;
+    }
+    const frequency = bucket.labels / bucket.count;
+    const lower = bucket.lower / bucket.count;
+    const upper = bucket.upper / bucket.count;
+    if (frequency >= lower && frequency <= upper) {
       covered += 1;
     }
-    count += 1;
+    groups += 1;
   }
-  return count === 0 ? Number.NaN : covered / count;
+  if (groups === 0) {
+    log(
+      "warn",
+      "WALKFORWARD_COVERAGE_UNAVAILABLE",
+      "walkforward_coverage_unavailable",
+      { observations: observations.length, min_group: minGroup },
+    );
+    return Number.NaN;
+  }
+  return covered / groups;
 }
 
 // ---------------------------------------------------------------------------

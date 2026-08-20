@@ -47,6 +47,9 @@ const SERVICE = "polymarket-fundamental";
 /** Minutes of one-minute feed history pulled per symbol per cycle. */
 const FEED_SERIES_MINUTES = 1_440;
 
+/** Rows per INSERT statement; 23 bind parameters each, well under 65535. */
+const INSERT_CHUNK_ROWS = 1_000;
+
 export interface EstimatorDeps {
   readonly pool: DatabasePool;
   readonly config: FundamentalConfig;
@@ -65,6 +68,8 @@ export interface EstimatorCycleReport {
   readonly absent: number;
   readonly absentReasons: Record<string, number>;
   readonly fallbackReasons: Record<string, number>;
+  /** Tokens whose own read or decision failed; the cycle continued without them. */
+  readonly tokenFailures: number;
 }
 
 export interface Estimator {
@@ -178,6 +183,19 @@ export async function insertEstimates(
 ): Promise<number> {
   if (estimates.length === 0) {
     return 0;
+  }
+  // PostgreSQL accepts at most 65535 bind parameters per statement. At 23
+  // parameters per row that is 2849 rows, and a single oversized statement
+  // would fail and lose the WHOLE cycle rather than the overflow. Chunk.
+  if (estimates.length > INSERT_CHUNK_ROWS) {
+    let written = 0;
+    for (let start = 0; start < estimates.length; start += INSERT_CHUNK_ROWS) {
+      written += await insertEstimates(
+        pool,
+        estimates.slice(start, start + INSERT_CHUNK_ROWS),
+      );
+    }
+    return written;
   }
   const columns = 23;
   const values: unknown[] = [];
@@ -368,6 +386,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
       let tokensConsidered = 0;
       let shadowRows = 0;
       let absent = 0;
+      let tokenFailures = 0;
 
       for (const market of universe) {
         const context = contexts.get(market.conditionId);
@@ -378,7 +397,12 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         // for every one of its tokens: the acceptance criterion is coverage of
         // the WHOLE universe, and silently skipping a category would look like
         // "no opportunity" instead of "no model".
-        const categoryModelled = market.category !== null;
+        // The models estimate P(YES) for a binary market and the second token
+        // is priced as the complement. A market with any other number of
+        // outcome tokens has no such complement, so no model may serve it: it
+        // gets the baseline for every token instead of two contradictory rows.
+        const categoryModelled =
+          market.category !== null && market.tokenIds.length === 2;
         const recordedCategory =
           market.category ?? market.gammaCategory ?? "unmodelled";
         const plan = plans.get(market.conditionId);
@@ -396,74 +420,88 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
             continue;
           }
           tokensConsidered += 1;
-          const book = await loadBookView(pool, tokenId, decisionTs);
-          // The macro model must know whether the book is thin, and thinness
-          // comes from the microprice. It is computed here from the same book
-          // decideEstimate will use; the function is deterministic, so the two
-          // computations always agree.
-          const priced =
-            book === null
-              ? null
-              : computeMicroprice(book, decisionTs, {
-                  sRefUsd: deps.config.sRefUsd,
-                  maxBookAgeMs: deps.config.maxBookAgeMs,
-                  maxExecSpread: deps.config.maxExecSpread,
-                });
-          const thinBook =
-            priced !== null && priced.ok
-              ? isThinBook(priced.value, deps.config.thinBookMultiple)
-              : false;
-
-          const evaluate = (model: ModelRecord | null): ModelAttempt | null => {
-            if (model === null || plan === undefined || !categoryModelled) {
-              return null;
-            }
-            const guard = new AsOfGuard(decisionTs);
-            const result = runCategoryModel({
-              plan,
-              decisionTs,
-              cycle,
-              config: deps.config,
-              hyperparams: model.hyperparams,
-              thinBook,
-              guard,
-            });
-            return attemptFor(model, result, outcomeIndex);
-          };
-
-          const decision = decideEstimate({
-            marketId: market.conditionId,
-            tokenId,
-            category: recordedCategory,
-            categoryModelled,
-            decisionTs,
-            book,
-            activeModel: evaluate(models.active),
-            shadowModels: models.shadow
-              .map((model) => evaluate(model))
-              .filter((attempt): attempt is ModelAttempt => attempt !== null),
-            gitSha: deps.gitSha,
-            umaDisputeActive: context.umaDisputeActive,
-            ruleChangedRecently: context.ruleChangedRecently,
-            timeToResolutionMs:
-              deadline === null
+          try {
+            const book = await loadBookView(pool, tokenId, decisionTs);
+            // The macro model must know whether the book is thin, and thinness
+            // comes from the microprice. It is computed here from the same book
+            // decideEstimate will use; the function is deterministic, so the two
+            // computations always agree.
+            const priced =
+              book === null
                 ? null
-                : deadline.getTime() - decisionTs.getTime(),
-            config: deps.config,
-          });
+                : computeMicroprice(book, decisionTs, {
+                    sRefUsd: deps.config.sRefUsd,
+                    maxBookAgeMs: deps.config.maxBookAgeMs,
+                    maxExecSpread: deps.config.maxExecSpread,
+                  });
+            const thinBook =
+              priced !== null && priced.ok
+                ? isThinBook(priced.value, deps.config.thinBookMultiple)
+                : false;
 
-          if (decision.kind === "absent") {
-            absent += 1;
-            increment(absentReasons, decision.reason);
-            continue;
-          }
-          pending.push(decision.consumer);
-          if (decision.consumer.fallbackReason !== null) {
-            increment(fallbackReasons, decision.consumer.fallbackReason);
-          }
-          for (const row of decision.shadow) {
-            pending.push(row);
-            shadowRows += 1;
+            const evaluate = (
+              model: ModelRecord | null,
+            ): ModelAttempt | null => {
+              if (model === null || plan === undefined || !categoryModelled) {
+                return null;
+              }
+              const guard = new AsOfGuard(decisionTs);
+              const result = runCategoryModel({
+                plan,
+                decisionTs,
+                cycle,
+                config: deps.config,
+                hyperparams: model.hyperparams,
+                thinBook,
+                guard,
+              });
+              return attemptFor(model, result, outcomeIndex);
+            };
+
+            const decision = decideEstimate({
+              marketId: market.conditionId,
+              tokenId,
+              category: recordedCategory,
+              categoryModelled,
+              decisionTs,
+              book,
+              activeModel: evaluate(models.active),
+              shadowModels: models.shadow
+                .map((model) => evaluate(model))
+                .filter((attempt): attempt is ModelAttempt => attempt !== null),
+              gitSha: deps.gitSha,
+              umaDisputeActive: context.umaDisputeActive,
+              ruleChangedRecently: context.ruleChangedRecently,
+              timeToResolutionMs:
+                deadline === null
+                  ? null
+                  : deadline.getTime() - decisionTs.getTime(),
+              config: deps.config,
+            });
+
+            if (decision.kind === "absent") {
+              absent += 1;
+              increment(absentReasons, decision.reason);
+              continue;
+            }
+            pending.push(decision.consumer);
+            if (decision.consumer.fallbackReason !== null) {
+              increment(fallbackReasons, decision.consumer.fallbackReason);
+            }
+            for (const row of decision.shadow) {
+              pending.push(row);
+              shadowRows += 1;
+            }
+          } catch (error: unknown) {
+            // One token failing (a transient read error, a malformed recorded
+            // book) must cost exactly that token. Letting it escape would
+            // discard every estimate the cycle had already computed.
+            tokenFailures += 1;
+            logJson("error", "TOKEN_CYCLE_FAILED", {
+              token_id: tokenId,
+              market_id: market.conditionId,
+              error_name: error instanceof Error ? error.name : "UnknownError",
+            });
           }
         }
       }
@@ -479,6 +517,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         absent,
         absentReasons,
         fallbackReasons,
+        tokenFailures,
       };
       logJson("info", "ESTIMATOR_CYCLE", {
         decision_ts: decisionTs.toISOString(),
@@ -492,6 +531,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         absent: report.absent,
         absent_reasons: report.absentReasons,
         fallback_reasons: report.fallbackReasons,
+        token_failures: report.tokenFailures,
       });
       return report;
     },

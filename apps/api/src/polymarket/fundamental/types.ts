@@ -167,6 +167,12 @@ export interface ModelOutput {
   readonly featureSetVersion: string;
   readonly dataRefs: DataRefs;
   readonly feedStale: boolean;
+  /**
+   * Age of the external feed sample the model used, in milliseconds, or null
+   * when the model reads no external feed. The interval widens with it, so a
+   * model that hides its feed age would be claiming freshness it does not have.
+   */
+  readonly feedAgeMs?: number | null;
   readonly thinBook: boolean;
 }
 

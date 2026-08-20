@@ -192,6 +192,8 @@ export function standardDeviation(values: readonly number[]): number {
  * (1 - lambda) * r_t^2, seeded with the sample variance of the first
  * observations. Returns the per-step volatility (same period as the returns).
  */
+export const EWMA_SEED_WINDOW = 30;
+
 export function ewmaVolatility(
   returns: readonly number[],
   lambda: number,
@@ -199,9 +201,17 @@ export function ewmaVolatility(
   if (returns.length === 0) {
     return 0;
   }
-  const first = returns[0] ?? 0;
-  let variance = first * first;
-  for (let index = 1; index < returns.length; index += 1) {
+  // Seed with the mean square of the first EWMA_SEED_WINDOW returns rather
+  // than with a single squared return: one outlier in position zero would
+  // otherwise dominate the estimate for dozens of steps at lambda = 0.94.
+  const seedCount = Math.min(returns.length, EWMA_SEED_WINDOW);
+  let seed = 0;
+  for (let index = 0; index < seedCount; index += 1) {
+    const value = returns[index] ?? 0;
+    seed += value * value;
+  }
+  let variance = seed / seedCount;
+  for (let index = seedCount; index < returns.length; index += 1) {
     const value = returns[index] ?? 0;
     variance = lambda * variance + (1 - lambda) * value * value;
   }

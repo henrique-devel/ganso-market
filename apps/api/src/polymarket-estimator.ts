@@ -1,6 +1,9 @@
 import { ConfigError, loadConfig } from "./config.js";
 import { createDatabasePool } from "./database.js";
-import { loadFundamentalConfig } from "./polymarket/fundamental/config.js";
+import {
+  FundamentalConfigError,
+  loadFundamentalConfig,
+} from "./polymarket/fundamental/config.js";
 import { resolveGitSha } from "./polymarket/fundamental/provenance.js";
 import { createRunner } from "./polymarket/fundamental/runner.js";
 
@@ -56,8 +59,15 @@ async function run(): Promise<void> {
 }
 
 void run().catch((error: unknown) => {
+  // A config failure has to say WHICH field it refused, or the operator is left
+  // guessing. The fundamental config's reason codes name the field and carry no
+  // secret material; the runtime config keeps its own established codes.
   const reasonCode =
-    error instanceof ConfigError ? error.reasonCode : "ESTIMATOR_FAILED";
+    error instanceof ConfigError || error instanceof FundamentalConfigError
+      ? error.reasonCode
+      : "ESTIMATOR_FAILED";
+  const detail =
+    error instanceof FundamentalConfigError ? { detail: error.message } : {};
   process.stderr.write(
     `${JSON.stringify({
       level: "fatal",
@@ -65,6 +75,7 @@ void run().catch((error: unknown) => {
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
       error_name: error instanceof Error ? error.name : "UnknownError",
+      ...detail,
       message: "polymarket_estimator_failed",
     })}\n`,
   );

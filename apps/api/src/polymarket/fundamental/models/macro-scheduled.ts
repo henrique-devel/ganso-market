@@ -1322,6 +1322,11 @@ export function estimateMacroScheduled(input: MacroModelInput): ModelResult {
       featureSetVersion: MACRO_FEATURE_SET_VERSION,
       dataRefs: toModelDataRefs(evaluated.refs),
       feedStale,
+      // Age of this model's own input clock, so the interval widens with it.
+      feedAgeMs:
+        calendarSourceTs === null
+          ? null
+          : input.decisionTs.getTime() - calendarSourceTs.getTime(),
       // The caller's microprice view is OR-ed with ours so the flag can only
       // ever be strengthened downstream, never weakened.
       thinBook: input.thinBook || MACRO_BOOK_IS_THIN,

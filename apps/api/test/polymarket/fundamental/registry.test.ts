@@ -863,3 +863,46 @@ describe("enforceRevalidation", () => {
     expect(db.models.get(model.modelId)?.status).toBe("active");
   });
 });
+
+describe("re-validation cannot be undone by a stale PASS", () => {
+  it("refuses promotion on a gate report older than the demotion", async () => {
+    const db = newDb();
+    const pool = fakePool(db);
+    const at = new Date("2026-08-20T12:00:00.000Z");
+    const model = await registerModel(pool, registerInput(), at);
+
+    // A PASS, then a promotion, then a forced re-validation: a fee-schedule or
+    // rule change sent the model back to shadow.
+    const gateReportId = seedGateReport(db, model.modelId, "PASS", {
+      evaluatedAt: new Date("2026-08-18T00:00:00.000Z"),
+    });
+    const row = db.models.get(model.modelId);
+    if (row === undefined) {
+      throw new Error("model row missing");
+    }
+    row.last_gate_report_id = String(gateReportId);
+    row.status = "shadow";
+    row.demoted_at = new Date("2026-08-19T12:00:00.000Z");
+
+    const outcome = await promoteModel(pool, model.modelId, at);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      // The stale PASS predates the change that forced the demotion, so it is
+      // not evidence about the current regime.
+      expect(outcome.reasonCode).toBe("REVALIDATION_REQUIRED");
+    }
+    expect(db.models.get(model.modelId)?.status).toBe("shadow");
+
+    // A fresh PASS, evaluated after the demotion, unblocks it.
+    const freshId = seedGateReport(db, model.modelId, "PASS", {
+      evaluatedAt: new Date("2026-08-20T00:00:00.000Z"),
+    });
+    const fresh = db.models.get(model.modelId);
+    if (fresh !== undefined) {
+      fresh.last_gate_report_id = String(freshId);
+    }
+    const promoted = await promoteModel(pool, model.modelId, at);
+    expect(promoted.ok).toBe(true);
+    expect(db.models.get(model.modelId)?.status).toBe("active");
+  });
+});

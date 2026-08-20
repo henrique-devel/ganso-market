@@ -161,11 +161,14 @@ function resolveAttempt(
   gitSha: string | null,
   umaDisputeActive: boolean,
 ): ResolvedAttempt {
-  if (attempt === null) {
-    return { ok: false, reason: "NO_ACTIVE_MODEL" };
-  }
+  // The dispute veto is a property of the MARKET, not of any model, so it is
+  // reported first. Otherwise a disputed market with no promoted model would
+  // be recorded as "no model registered" and the veto would be invisible.
   if (umaDisputeActive) {
     return { ok: false, reason: "UMA_DISPUTE_ACTIVE" };
+  }
+  if (attempt === null) {
+    return { ok: false, reason: "NO_ACTIVE_MODEL" };
   }
   if (gitSha === null) {
     // Provenance is not optional: a MODEL row without a revision is a bug,
@@ -179,6 +182,13 @@ function resolveAttempt(
     return { ok: false, reason: "FEED_STALE" };
   }
   if (!Number.isFinite(attempt.result.value.q)) {
+    return { ok: false, reason: "MODEL_ERROR" };
+  }
+  // A NaN or negative sigma silently becomes "no dispersion", i.e. the
+  // narrowest interval the structural floor allows — a model claiming
+  // certainty it never expressed. Refuse it.
+  const sigma = attempt.result.value.sigma;
+  if (!Number.isFinite(sigma) || sigma < 0) {
     return { ok: false, reason: "MODEL_ERROR" };
   }
   return { ok: true, attempt, output: attempt.result.value };
@@ -213,7 +223,15 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
     execSpreadScaled: microprice.execSpreadScaled,
     bookAgeMs: microprice.bookAgeMs,
     maxBookAgeMs: inputs.config.maxBookAgeMs,
-    maxFeedAgeMs: inputs.config.crypto.maxFeedAgeMs,
+    // Each category's "feed" has its own natural freshness scale: the crypto
+    // model reads a TWAP sample that must be seconds old, the macro model
+    // reads a calendar entry that is legitimately days old. Measuring both
+    // against the crypto threshold would saturate every macro estimate at the
+    // maximum staleness widening and make the signal meaningless.
+    maxFeedAgeMs:
+      inputs.category === "macro_scheduled"
+        ? inputs.config.macro.maxCalendarAgeMs
+        : inputs.config.crypto.maxFeedAgeMs,
     timeToResolutionMs: inputs.timeToResolutionMs,
   };
 
@@ -233,7 +251,7 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
       ...intervalBase,
       qScaled: probabilityToScaled(output.q),
       sigma: output.sigma,
-      feedAgeMs: null,
+      feedAgeMs: output.feedAgeMs ?? null,
       widenFactor: 1,
     });
     consumer = toEstimate(inputs, microprice, interval, {
@@ -313,7 +331,7 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
       ...intervalBase,
       qScaled: probabilityToScaled(output.q),
       sigma: output.sigma,
-      feedAgeMs: null,
+      feedAgeMs: output.feedAgeMs ?? null,
       widenFactor: 1,
     });
     shadow.push(

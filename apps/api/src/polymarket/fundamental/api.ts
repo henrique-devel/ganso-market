@@ -133,6 +133,13 @@ const ESTIMATES_DEFAULT_LIMIT = 1_000;
 const ESTIMATES_MAX_LIMIT = 5_000;
 /** The universe is 50-100 markets (two tokens each); this is a safety net. */
 const LATEST_LIMIT = 5_000;
+
+/**
+ * How old the newest estimate of a token may be and still be served as its
+ * "latest". Five minutes is five estimation cycles at the default cadence: it
+ * absorbs a slow cycle without ever presenting a stale number as current.
+ */
+const LATEST_MAX_AGE_MS = 5 * 60_000;
 const MAX_DEMOTE_REASON_LENGTH = 500;
 /** The registry records a reason for every kill; an omitted one is not blank. */
 const DEFAULT_DEMOTE_REASON = "manual demote via API";
@@ -148,6 +155,11 @@ const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const GATE_REFUSAL_REASON_CODES: readonly string[] = [
   "GATE_NOT_PASSED",
   "NO_EVIDENCE_OF_ALPHA",
+  // A model that was never gated has no evidence either, and the RFC names
+  // that outcome NO_EVIDENCE_OF_ALPHA too. So does a model whose only PASS
+  // predates the change that forced it back to shadow.
+  "NO_GATE_REPORT",
+  "REVALIDATION_REQUIRED",
 ];
 
 function jsonError(
@@ -655,6 +667,9 @@ export function registerFundamentalRoutes(
       refusal.gateReport ?? (await latestGateReportFn(pool, modelId));
     return reply.code(409).send({
       reason_code: "NO_EVIDENCE_OF_ALPHA",
+      // The registry's own code says WHICH kind of missing evidence it is:
+      // never gated, gated and failed, or gated before a forced re-validation.
+      detail: reasonCode,
       correlation_id: reply.request.id,
       gate_report: gate === null ? null : serializeGateReport(gate),
     });
@@ -734,8 +749,13 @@ export function registerFundamentalRoutes(
       if (category !== null && !isFundamentalCategory(category)) {
         return jsonError(reply, 400, "INVALID_CATEGORY");
       }
-      const conditions = ["status = 'active'"];
-      const params: unknown[] = [];
+      // Freshness bound. "Latest" must not mean "whatever we last managed to
+      // write": an estimate older than the staleness horizon is an ABSENCE,
+      // and the consumer treats absence as a veto. Serving a day-old row here
+      // would turn a veto into a stale opinion.
+      const maxAgeMs = LATEST_MAX_AGE_MS;
+      const params: unknown[] = [new Date(clock().getTime() - maxAgeMs)];
+      const conditions = ["status = 'active'", "decision_ts >= $1"];
       if (category !== null) {
         params.push(category);
         conditions.push(`category = $${params.length}`);
@@ -751,6 +771,7 @@ export function registerFundamentalRoutes(
       return reply.code(200).send({
         as_of: clock().toISOString(),
         category,
+        max_age_ms: maxAgeMs,
         estimates: result.rows.map(serializeEstimate),
       });
     }),

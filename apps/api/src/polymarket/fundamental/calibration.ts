@@ -22,6 +22,13 @@ import { computeCalibrationMetrics } from "./walkforward.js";
 const SERVICE = "polymarket-fundamental";
 
 /** Below this the market price is degenerate and the observation is annex-only. */
+/**
+ * Upper bound on the observations one gate evaluation loads. At the RFC's
+ * volumetry a wide window holds millions of rows and the estimator runs in a
+ * 384 MiB container; the cap is a memory bound, and hitting it is logged.
+ */
+export const MAX_SCORED_OBSERVATIONS = 400_000;
+
 export const DEGENERATE_LOW = 0.01;
 export const DEGENERATE_HIGH = 0.99;
 
@@ -80,9 +87,21 @@ export async function loadScoredObservations(
         AND e.decision_ts < l.publicly_knowable_ts
         AND e.decision_ts >= $2
         AND e.decision_ts < $3
-      ORDER BY e.decision_ts ASC, e.token_id ASC`,
-    [modelId, from, to],
+      ORDER BY e.decision_ts ASC, e.token_id ASC
+      LIMIT $4`,
+    [modelId, from, to, MAX_SCORED_OBSERVATIONS + 1],
   );
+  if (result.rows.length > MAX_SCORED_OBSERVATIONS) {
+    // No silent caps: a truncated evidence set is reported, never quietly
+    // scored as if it were the whole window.
+    logJson("warn", "OBSERVATIONS_TRUNCATED", {
+      model_id: modelId,
+      limit: MAX_SCORED_OBSERVATIONS,
+      window_from: from.toISOString(),
+      window_to: to.toISOString(),
+    });
+    result.rows.length = MAX_SCORED_OBSERVATIONS;
+  }
 
   const observations: ScoredObservation[] = [];
   for (const row of result.rows) {
@@ -120,7 +139,8 @@ export async function loadScoredObservations(
 export interface FallbackRates {
   readonly total: number;
   readonly fallbacks: number;
-  readonly rate: number;
+  /** null for an empty window: "no data" is not the same as "0% fallback". */
+  readonly rate: number | null;
   readonly byReason: Record<string, number>;
 }
 
@@ -159,7 +179,7 @@ export async function loadFallbackRates(
   return {
     total,
     fallbacks,
-    rate: total === 0 ? 0 : fallbacks / total,
+    rate: total === 0 ? null : fallbacks / total,
     byReason,
   };
 }
@@ -327,6 +347,13 @@ export async function runCalibrationJob(
         blockDays: deps.config.gate.blockDays,
       });
       const covered = marketsCovered(observations);
+      // The requested window is 180 days, but the estimates table is pruned by
+      // TTL and quota long before that. Reporting the requested window as if it
+      // were backed by data would overstate the evidence, so the report also
+      // carries the window the observations actually span.
+      const observedFrom = observations[0]?.decisionTs ?? null;
+      const observedTo =
+        observations[observations.length - 1]?.decisionTs ?? null;
       const fallbacks = await loadFallbackRates(
         deps.pool,
         model.category,
@@ -340,8 +367,8 @@ export async function runCalibrationJob(
         metrics,
         marketsCovered: covered,
         observations: metrics.observations,
-        windowFrom,
-        windowTo: generatedAt,
+        windowFrom: observedFrom ?? windowFrom,
+        windowTo: observedTo ?? generatedAt,
         thresholds,
         gitSha: deps.gitSha ?? model.gitSha,
         at: generatedAt,
@@ -357,6 +384,13 @@ export async function runCalibrationJob(
         payload: {
           metrics: metrics as unknown as Record<string, unknown>,
           fallbacks,
+          data_window: {
+            requested_from: windowFrom.toISOString(),
+            requested_to: generatedAt.toISOString(),
+            observed_from:
+              observedFrom === null ? null : observedFrom.toISOString(),
+            observed_to: observedTo === null ? null : observedTo.toISOString(),
+          },
           gate: {
             verdict: gate.result.verdict,
             failures: gate.result.failures,

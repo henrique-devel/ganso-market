@@ -358,3 +358,54 @@ describe("categories without a model", () => {
     expect(decision.shadow).toHaveLength(0);
   });
 });
+
+describe("interval reacts to the model's own inputs", () => {
+  it("widens with the age of the external feed", () => {
+    const fresh = consumerOf(
+      decideEstimate(
+        inputs({
+          activeModel: attempt({
+            result: { ok: true, value: modelOutput({ feedAgeMs: 0 }) },
+          }),
+        }),
+      ),
+    );
+    const aged = consumerOf(
+      decideEstimate(
+        inputs({
+          activeModel: attempt({
+            result: { ok: true, value: modelOutput({ feedAgeMs: 110_000 }) },
+          }),
+        }),
+      ),
+    );
+    // A sample that is nearly at its staleness threshold is still served, but
+    // the estimate must not claim the same precision as an instant one.
+    expect(Number(aged.qHi) - Number(aged.qLo)).toBeGreaterThan(
+      Number(fresh.qHi) - Number(fresh.qLo),
+    );
+  });
+
+  it("refuses a poisoned dispersion instead of claiming certainty", () => {
+    for (const sigma of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      const consumer = consumerOf(
+        decideEstimate(
+          inputs({
+            activeModel: attempt({
+              result: { ok: true, value: modelOutput({ sigma }) },
+            }),
+          }),
+        ),
+      );
+      expect(consumer.source).toBe("MARKET_BASELINE");
+      expect(consumer.fallbackReason).toBe("MODEL_ERROR");
+    }
+  });
+
+  it("reports an open dispute as the veto it is, even with no promoted model", () => {
+    const consumer = consumerOf(
+      decideEstimate(inputs({ activeModel: null, umaDisputeActive: true })),
+    );
+    expect(consumer.fallbackReason).toBe("UMA_DISPUTE_ACTIVE");
+  });
+});

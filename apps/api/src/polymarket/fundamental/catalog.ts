@@ -195,7 +195,20 @@ export function runCategoryModel(input: RunModelInput): ModelResult {
       hyperparams: parseMacroHyperparams(input.hyperparams, input.config),
       guard: input.guard,
     });
-  } catch {
+  } catch (error: unknown) {
+    // The fallback reason is already recorded on the stored row, but the cause
+    // must not vanish: a model that starts throwing has to be diagnosable from
+    // the logs alone.
+    process.stderr.write(
+      `${JSON.stringify({
+        level: "error",
+        service: "polymarket-fundamental",
+        timestamp: new Date().toISOString(),
+        reason_code: "MODEL_THREW",
+        category: plan.category,
+        error_name: error instanceof Error ? error.name : "UnknownError",
+      })}\n`,
+    );
     return { ok: false, reason: "MODEL_ERROR" };
   }
 }

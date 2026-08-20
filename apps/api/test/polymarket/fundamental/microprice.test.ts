@@ -44,10 +44,12 @@ describe("computeMicroprice", () => {
     // => VWAP 100/190.566037736 = 0.524752475.
     expect(formatScaled(result.value.askExecScaled, 9)).toBe("0.524752475");
     expect(formatScaled(result.value.execSpreadScaled, 9)).toBe("0.029802980");
-    // Both sides rest 600 shares, so the imbalance weighting is symmetric and
-    // the microprice is the midpoint of the two executable VWAPs.
+    // Hand-checked imbalance: the bids rest $295 of notional and the asks
+    // $317, and each executable price is weighted by the OPPOSITE side's
+    // depth, so the estimate is
+    // (0.494949495 x 317 + 0.524752475 x 295) / 612 = 0.509315...
     expect(formatProbabilityScaled(result.value.micropriceScaled)).toBe(
-      "0.509851",
+      "0.509315",
     );
     expect(result.value.version).toBe(MICROPRICE_VERSION);
   });
@@ -198,3 +200,67 @@ describe("isThinBook", () => {
 function replacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
+
+describe("imbalance weighting", () => {
+  it("measures depth in notional, not in share counts", () => {
+    // 5 000 shares at $0.01 is $50 of depth, the same as 100 shares at $0.50.
+    // Weighting by share counts would let the penny level outweigh the real
+    // one by 50x and pin the estimate to the opposite side.
+    const pennyDepth = computeMicroprice(
+      book({
+        bids: [
+          { price: "0.50", size: "200" },
+          { price: "0.01", size: "500000" },
+        ],
+      }),
+      DECISION_TS,
+    );
+    const plainDepth = computeMicroprice(
+      book({ bids: [{ price: "0.50", size: "200" }] }),
+      DECISION_TS,
+    );
+    expect(pennyDepth.ok && plainDepth.ok).toBe(true);
+    if (!pennyDepth.ok || !plainDepth.ok) {
+      return;
+    }
+    // $5 000 of penny depth is real depth and does move the estimate, but it
+    // moves it by an amount proportional to its dollars, and the cap bounds it.
+    const capped = computeMicroprice(
+      book({
+        bids: [
+          { price: "0.50", size: "200" },
+          { price: "0.01", size: "5000000" },
+        ],
+      }),
+      DECISION_TS,
+    );
+    expect(capped.ok).toBe(true);
+    if (!capped.ok) {
+      return;
+    }
+    // Ten times more penny depth cannot move it any further: the cap holds.
+    expect(capped.value.micropriceScaled).toBe(
+      pennyDepth.value.micropriceScaled,
+    );
+    expect(pennyDepth.value.micropriceScaled).toBeGreaterThan(
+      plainDepth.value.micropriceScaled,
+    );
+    // And it never leaves the executable band.
+    expect(capped.value.micropriceScaled).toBeLessThanOrEqual(
+      capped.value.askExecScaled,
+    );
+  });
+
+  it("rejects a book stamped far in the future but tolerates clock skew", () => {
+    const skewed = computeMicroprice(
+      book({ sourceTs: new Date(DECISION_TS.getTime() + 2_000) }),
+      DECISION_TS,
+    );
+    expect(skewed.ok).toBe(true);
+    const absurd = computeMicroprice(
+      book({ sourceTs: new Date(DECISION_TS.getTime() + 60_000) }),
+      DECISION_TS,
+    );
+    expect(absurd).toEqual({ ok: false, reason: "BOOK_STALE" });
+  });
+});

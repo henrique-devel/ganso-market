@@ -45,6 +45,17 @@ export const DEFAULT_MAX_EXEC_SPREAD = 0.1;
 /** Depth (in multiples of S_ref) below which the book is flagged thin. */
 export const DEFAULT_THIN_BOOK_MULTIPLE = 3;
 
+/**
+ * Resting depth beyond this many multiples of S_ref stops adding weight to the
+ * imbalance. Without a cap, one large order far from the touch would decide the
+ * microprice of every subsequent estimate.
+ */
+export const DEPTH_CAP_MULTIPLE = 10n;
+
+function microCap(sRefScaled: bigint): bigint {
+  return sRefScaled * DEPTH_CAP_MULTIPLE;
+}
+
 export interface MicropriceOptions {
   /** Reference notional in USD (default 100). */
   readonly sRefUsd?: number;
@@ -153,7 +164,15 @@ export function computeMicroprice(
   // round: an absent source_ts must not make a stale book look fresh).
   const reference = book.sourceTs ?? book.observedAt;
   const bookAgeMs = decisionTs.getTime() - reference.getTime();
-  if (!Number.isFinite(bookAgeMs) || bookAgeMs > maxBookAgeMs) {
+  // A small negative age is venue/host clock skew and is tolerated (the
+  // staleness multiplier clamps it to zero). A book stamped further in the
+  // future than the whole staleness budget is not skew, it is a corrupt or
+  // mis-parsed timestamp, and it must not be priced.
+  if (
+    !Number.isFinite(bookAgeMs) ||
+    bookAgeMs > maxBookAgeMs ||
+    bookAgeMs < -maxBookAgeMs
+  ) {
     return { ok: false, reason: "BOOK_STALE" };
   }
 
@@ -182,14 +201,28 @@ export function computeMicroprice(
     return { ok: false, reason: "SPREAD_TOO_WIDE" };
   }
 
-  const totalShares = bidFill.sharesScaled + askFill.sharesScaled;
+  // Imbalance weights are resting NOTIONAL, bounded to DEPTH_CAP_MULTIPLE x
+  // S_ref, not raw share counts. Two failure modes are ruled out by that:
+  //   - share counting lets a cheap level far from the touch dominate (5 000
+  //     shares at $0.01 is $50 of real depth but would outweigh 100 shares at
+  //     $0.50, which is $50 too);
+  //   - weighting by the quantities that fill S_ref is degenerate: those
+  //     quantities are notional/price, so the weights cancel and the imbalance
+  //     signal disappears entirely.
+  // The cap keeps a whale resting far from the touch from pinning the estimate
+  // to one side while leaving the executable band's own imbalance intact.
+  const depthCap = microCap(sRefScaled);
+  const bidWeight = minScaled(bidFill.notionalScaled, depthCap);
+  const askWeight = minScaled(askFill.notionalScaled, depthCap);
+  const totalWeight = bidWeight + askWeight;
+  // A heavy resting bid queue pushes the estimate toward the ask, and the
+  // reverse: each executable price is weighted by the OPPOSITE side's depth.
   const weighted =
-    totalShares === 0n
+    totalWeight === 0n
       ? divRound(bidFill.vwapScaled + askFill.vwapScaled, 2n)
       : divRound(
-          bidFill.vwapScaled * askFill.sharesScaled +
-            askFill.vwapScaled * bidFill.sharesScaled,
-          totalShares,
+          bidFill.vwapScaled * askWeight + askFill.vwapScaled * bidWeight,
+          totalWeight,
         );
   const micropriceScaled = minScaled(
     maxScaled(weighted, bidFill.vwapScaled),

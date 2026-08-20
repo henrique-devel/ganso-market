@@ -573,11 +573,14 @@ describe("syncLabels", () => {
     ).toBe(true);
   });
 
-  it("stores a null knowable instant instead of falling back to the on-chain one", async () => {
+  it("uses when we OBSERVED the proposal when the venue gave no clock", async () => {
     const db = new FakeLabelDb();
     db.addMarket("cond-blind", "crypto", ["tok-b-0"], null);
-    // No end date, and the proposal carries no venue clock: nothing honest is
-    // available, so the row is stored unusable-for-metrics rather than wrong.
+    // No end date, and RFC-007's UMA poller stores the transition with a NULL
+    // source_ts (it has no emitter clock to copy). The instant we RECEIVED the
+    // proposal is still a valid upper bound on when the outcome became
+    // knowable — and it is far earlier than the on-chain resolution, which may
+    // never be used for this.
     db.addEvent(
       "cond-blind",
       "proposed",
@@ -595,10 +598,30 @@ describe("syncLabels", () => {
     const report = await syncLabels({ pool: db, clock: () => NOW });
 
     expect(report.inserted).toBe(1);
-    expect(db.labels.get("tok-b-0")?.publicly_knowable_ts).toBeNull();
+    expect(db.labels.get("tok-b-0")?.publicly_knowable_ts).toEqual(
+      new Date("2026-08-08T00:00:00Z"),
+    );
     expect(db.labels.get("tok-b-0")?.onchain_resolution_ts).toEqual(
       new Date("2026-08-09T00:00:00Z"),
     );
+  });
+
+  it("stores a null knowable instant when nothing honest is available", async () => {
+    const db = new FakeLabelDb();
+    db.addMarket("cond-dark", "crypto", ["tok-d-0"], null);
+    // No end date and no proposal at all: only the on-chain resolution exists,
+    // and that one may never index a metric.
+    db.addEvent(
+      "cond-dark",
+      "resolved",
+      { payouts: [1, 0] },
+      new Date("2026-08-09T00:00:00Z"),
+      new Date("2026-08-09T00:00:10Z"),
+    );
+    const report = await syncLabels({ pool: db, clock: () => NOW });
+
+    expect(report.inserted).toBe(1);
+    expect(db.labels.get("tok-d-0")?.publicly_knowable_ts).toBeNull();
     expect(
       stderrLines().some((line) => line.includes("LABEL_KNOWABLE_TS_UNKNOWN")),
     ).toBe(true);

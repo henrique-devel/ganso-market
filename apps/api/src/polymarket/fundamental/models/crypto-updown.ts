@@ -33,6 +33,7 @@ import {
   DEFAULT_FUNDAMENTAL_CONFIG,
   type FundamentalConfig,
 } from "../config.js";
+import { contiguousLogReturns } from "../features.js";
 import type {
   AsOfGuard,
   FeedSample,
@@ -44,7 +45,6 @@ import {
   ewmaVolatility,
   fitLogistic,
   logit,
-  logReturns,
   mean,
   normalCdf,
   standardDeviation,
@@ -528,7 +528,7 @@ export function estimateCryptoUpdown(input: CryptoModelInput): ModelResult {
     // volatility and the log distance.
     return { ok: false, reason: "MODEL_ABSTAINED" };
   }
-  if (history.closes.length < config.crypto.minHistoryMinutes) {
+  if (history.points.length < config.crypto.minHistoryMinutes) {
     return { ok: false, reason: "MODEL_ABSTAINED" };
   }
 
@@ -540,8 +540,15 @@ export function estimateCryptoUpdown(input: CryptoModelInput): ModelResult {
   const tauDays = tauMs / DAY_MS;
   const sqrtTau = Math.sqrt(tauDays);
 
-  const returns = logReturns(history.closes);
-  if (returns.length === 0) {
+  // Returns across CONSECUTIVE minutes only. An RTDS gap leaves a hole in the
+  // series, and pricing the jump across that hole as a one-minute move would
+  // inflate the realized volatility — and with it q — for every window that
+  // contains the gap.
+  const returns = contiguousLogReturns(history.points);
+  // A window made mostly of gaps is not a volatility estimate. Requiring the
+  // usable returns to reach the configured minimum keeps a shredded feed from
+  // producing a confident number out of a handful of points.
+  if (returns.length + 1 < config.crypto.minHistoryMinutes) {
     return { ok: false, reason: "MODEL_ABSTAINED" };
   }
 
@@ -618,7 +625,7 @@ export function estimateCryptoUpdown(input: CryptoModelInput): ModelResult {
       history.firstBucket === null ? null : history.firstBucket.toISOString(),
     windowTo:
       history.lastBucket === null ? null : history.lastBucket.toISOString(),
-    sampleCount: history.closes.length,
+    sampleCount: returns.length + 1,
     feedAgeMs: feed.ageMs,
     strike: spec.strike,
     direction: spec.direction,
@@ -637,8 +644,11 @@ export function estimateCryptoUpdown(input: CryptoModelInput): ModelResult {
       featureSetVersion: CRYPTO_FEATURE_SET_VERSION,
       dataRefs,
       // Staleness of the resolving feed is an abstention above, never a served
-      // estimate; the book is not an input to this model at all.
+      // estimate; the book is not an input to this model at all. The feed's
+      // age still travels with the output: the interval widens with it, so a
+      // fresh-but-not-instant sample must not be reported as instant.
       feedStale: false,
+      feedAgeMs: feed.ageMs,
       thinBook: false,
     },
   };

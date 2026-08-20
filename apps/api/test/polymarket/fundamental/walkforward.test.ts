@@ -279,65 +279,74 @@ describe("reliabilityBins", () => {
 });
 
 describe("intervalCoverage", () => {
-  it("measures a synthetic 90% set at ~0.9", () => {
-    const observations: ScoredObservation[] = [];
-    for (let index = 0; index < 100; index += 1) {
-      const covered = index < 90;
-      observations.push(
-        observation({
-          conditionId: `condition-${index}`,
-          label: 1,
-          modelQ: 0.8,
-          baselineQ: 0.8,
-          // A covered observation is one whose upper bound reached the
-          // truncation ceiling; an uncovered one stayed short of the outcome.
-          modelLo: covered ? 0.6 : 0.3,
-          modelHi: covered ? 0.999 : 0.5,
-        }),
-      );
-    }
+  /** `count` observations at predicted level `q`, of which `ones` resolved 1. */
+  function group(
+    q: number,
+    lo: number,
+    hi: number,
+    count: number,
+    ones: number,
+    tag: string,
+  ): ScoredObservation[] {
+    return Array.from({ length: count }, (_unused, index) =>
+      observation({
+        conditionId: `${tag}-${index}`,
+        label: index < ones ? 1 : 0,
+        modelQ: q,
+        baselineQ: q,
+        modelLo: lo,
+        modelHi: hi,
+      }),
+    );
+  }
 
-    expect(intervalCoverage(observations)).toBeCloseTo(0.9, 12);
+  it("checks the realized frequency against the interval, not the raw label", () => {
+    // A binary label can never sit inside an interval truncated into
+    // [0.001, 0.999]; what the interval claims is about the FREQUENCY.
+    // Here 80 of 100 observations at q = 0.8 resolved 1, and [0.7, 0.9]
+    // contains that frequency: covered.
+    const calibrated = group(0.8, 0.7, 0.9, 100, 80, "calibrated");
+    expect(intervalCoverage(calibrated)).toBe(1);
+
+    // Same interval, but only 30% resolved 1: the interval was wrong.
+    const overconfident = group(0.8, 0.7, 0.9, 100, 30, "overconfident");
+    expect(intervalCoverage(overconfident)).toBe(0);
   });
 
-  it("counts a 0.5 resolution as covered only when 0.5 is inside", () => {
-    const inside = observation({
-      label: 0.5,
-      modelQ: 0.5,
-      baselineQ: 0.5,
-      modelLo: 0.4,
-      modelHi: 0.6,
-    });
-    const outside = observation({
-      label: 0.5,
-      modelQ: 0.8,
-      baselineQ: 0.8,
+  it("reports the share of groups whose frequency the interval contains", () => {
+    const good = group(0.85, 0.75, 0.95, 40, 34, "good");
+    const bad = group(0.25, 0.2, 0.3, 40, 32, "bad");
+    expect(intervalCoverage([...good, ...bad])).toBe(0.5);
+  });
+
+  it("counts a 0.5 resolution as half a unit of realized frequency", () => {
+    // Every outcome is a UMA 50/50, so the realized frequency is exactly 0.5.
+    const halves = Array.from({ length: 40 }, (_unused, index) =>
+      observation({
+        conditionId: `half-${index}`,
+        label: 0.5,
+        modelQ: 0.5,
+        baselineQ: 0.5,
+        modelLo: 0.45,
+        modelHi: 0.55,
+      }),
+    );
+    expect(intervalCoverage(halves)).toBe(1);
+
+    const misplaced = halves.map((entry) => ({
+      ...entry,
       modelLo: 0.7,
       modelHi: 0.9,
-    });
-
-    expect(intervalCoverage([inside])).toBe(1);
-    expect(intervalCoverage([outside])).toBe(0);
-    expect(intervalCoverage([inside, outside])).toBe(0.5);
+      modelQ: 0.8,
+    }));
+    expect(intervalCoverage(misplaced)).toBe(0);
   });
 
-  it("treats a bound sitting on the truncation limit as reaching certainty", () => {
-    const reachesZero = observation({
-      label: 0,
-      modelQ: 0.2,
-      baselineQ: 0.2,
-      modelLo: 0.001,
-      modelHi: 0.4,
-    });
-    const reachesOne = observation({
-      label: 1,
-      modelQ: 0.8,
-      baselineQ: 0.8,
-      modelLo: 0.6,
-      modelHi: 0.999,
-    });
-
-    expect(intervalCoverage([reachesZero, reachesOne])).toBe(1);
+  it("skips groups too small to carry evidence", () => {
+    // Five observations cannot establish a frequency, so no group qualifies.
+    expect(
+      Number.isNaN(intervalCoverage(group(0.8, 0.7, 0.9, 5, 4, "tiny"))),
+    ).toBe(true);
   });
 
   it("reports NaN for an empty set", () => {

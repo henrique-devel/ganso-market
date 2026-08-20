@@ -91,14 +91,40 @@ function series(
   const lastBucket = new Date(
     Math.floor(decisionTs.getTime() / MINUTE_MS) * MINUTE_MS - MINUTE_MS,
   );
+  const firstBucket = new Date(
+    lastBucket.getTime() - (values.length - 1) * MINUTE_MS,
+  );
   return {
     symbol: SYMBOL,
     feed: FEED,
     closes: [...values],
-    firstBucket: new Date(
-      lastBucket.getTime() - (values.length - 1) * MINUTE_MS,
-    ),
+    points: values.map((close, index) => ({
+      bucketStart: new Date(firstBucket.getTime() + index * MINUTE_MS),
+      close,
+    })),
+    firstBucket,
     lastBucket,
+  };
+}
+
+/** The same series with `holes` buckets removed from the middle: an RTDS gap. */
+function seriesWithGap(
+  values: readonly number[],
+  holes: number,
+  decisionTs = DECISION_TS,
+): FeedSeries {
+  const full = series(values, decisionTs);
+  const cut = Math.floor(full.points.length / 2);
+  const points = [
+    ...full.points.slice(0, cut),
+    ...full.points.slice(cut + holes),
+  ];
+  return {
+    ...full,
+    closes: points.map((point) => point.close),
+    points,
+    firstBucket: points[0]?.bucketStart ?? full.firstBucket,
+    lastBucket: points[points.length - 1]?.bucketStart ?? full.lastBucket,
   };
 }
 
@@ -720,5 +746,74 @@ describe("crypto model identity", () => {
       ok: false,
       reason: "MODEL_ABSTAINED",
     });
+  });
+});
+
+describe("feed gaps", () => {
+  it("does not price a gap in the feed as a one-minute move", () => {
+    // A trending path: across a hole the two closes differ by many minutes of
+    // drift. Treating that jump as a single minute would inflate the realized
+    // volatility of the whole window and move q with it.
+    const path = Array.from(
+      { length: 400 },
+      (_unused, index) => 100_000 + index * 5,
+    );
+    const contiguous = series(path);
+    const withGap = seriesWithGap(path, 30);
+
+    const base = {
+      spec: {
+        symbol: SYMBOL,
+        strike: 101_500,
+        direction: "above" as const,
+        deadline: new Date(DECISION_TS.getTime() + 6 * 3_600_000),
+      },
+      decisionTs: DECISION_TS,
+      feed: sample(101_000),
+      config: DEFAULT_FUNDAMENTAL_CONFIG,
+      hyperparams: DEFAULT_CRYPTO_HYPERPARAMS,
+    };
+
+    const clean = estimateCryptoUpdown({
+      ...base,
+      series: contiguous,
+      guard: new AsOfGuard(DECISION_TS),
+    });
+    const gapped = estimateCryptoUpdown({
+      ...base,
+      series: withGap,
+      guard: new AsOfGuard(DECISION_TS),
+    });
+    expect(clean.ok && gapped.ok).toBe(true);
+    if (!clean.ok || !gapped.ok) {
+      return;
+    }
+    // The gap removes observations but must not manufacture volatility: the
+    // dispersion stays in the same neighbourhood instead of exploding.
+    expect(gapped.value.sigma).toBeLessThan(clean.value.sigma * 3);
+    expect(gapped.value.dataRefs.sampleCount).toBeLessThan(path.length);
+  });
+
+  it("abstains when the gaps leave too few usable returns", () => {
+    const path = Array.from(
+      { length: 130 },
+      (_unused, index) => 100_000 + index,
+    );
+    const shredded = seriesWithGap(path, 60);
+    const result = estimateCryptoUpdown({
+      spec: {
+        symbol: SYMBOL,
+        strike: 101_000,
+        direction: "above",
+        deadline: new Date(DECISION_TS.getTime() + 3_600_000),
+      },
+      decisionTs: DECISION_TS,
+      feed: sample(100_500),
+      series: shredded,
+      config: DEFAULT_FUNDAMENTAL_CONFIG,
+      hyperparams: DEFAULT_CRYPTO_HYPERPARAMS,
+      guard: new AsOfGuard(DECISION_TS),
+    });
+    expect(result).toEqual({ ok: false, reason: "MODEL_ABSTAINED" });
   });
 });

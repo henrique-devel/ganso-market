@@ -509,6 +509,7 @@ export type PromoteOutcome =
         | "MODEL_NOT_FOUND"
         | "NO_GATE_REPORT"
         | "GATE_NOT_PASSED"
+        | "REVALIDATION_REQUIRED"
         | "REGIME_MIX_INELIGIBLE"
         | "ALREADY_ACTIVE"
         | "MODEL_RETIRED";
@@ -520,6 +521,7 @@ function refuse(
     | "MODEL_NOT_FOUND"
     | "NO_GATE_REPORT"
     | "GATE_NOT_PASSED"
+    | "REVALIDATION_REQUIRED"
     | "REGIME_MIX_INELIGIBLE"
     | "ALREADY_ACTIVE"
     | "MODEL_RETIRED",
@@ -540,13 +542,21 @@ async function updateToActive(
   pool: QueryPool,
   modelId: string,
   at: Date,
+  gateReportId: number,
 ): Promise<ModelRecord | null> {
+  // `demoted_at` is NOT cleared: it is the instant a re-validation was forced,
+  // and promotion has to prove it produced fresh evidence AFTER it. The
+  // `last_gate_report_id` guard closes the race with a concurrent gate run —
+  // if the gate re-pointed the model at a different report between the read and
+  // this write, no row matches and the promotion refuses instead of landing on
+  // evidence nobody checked.
   const result = await pool.query<Record<string, unknown>>(
     `UPDATE fundamental_models
-        SET status = 'active', promoted_at = $2, demoted_at = NULL
+        SET status = 'active', promoted_at = $2
       WHERE model_id = $1 AND status = 'shadow' AND regime_mix = FALSE
+        AND last_gate_report_id = $3
       RETURNING ${MODEL_COLUMNS}`,
-    [modelId, at],
+    [modelId, at, gateReportId],
   );
   const row = result.rows[0];
   return row === undefined ? null : mapModelRow(row);
@@ -605,6 +615,16 @@ export async function promoteModel(
   if (gateReport.verdict !== "PASS") {
     return refuse("GATE_NOT_PASSED", gateReport, modelId);
   }
+  // Mandatory re-validation would be worthless if the operator could
+  // immediately re-promote on the PASS that predates the change which forced
+  // the demotion. Evidence has to be newer than the demotion.
+  if (
+    model.demotedAt !== null &&
+    (gateReport.evaluatedAt === null ||
+      gateReport.evaluatedAt.getTime() <= model.demotedAt.getTime())
+  ) {
+    return refuse("REVALIDATION_REQUIRED", gateReport, modelId);
+  }
 
   // Exactly one active model per category (partial unique index). The incumbent
   // steps down FIRST: the gap between the two statements leaves the category on
@@ -630,7 +650,12 @@ export async function promoteModel(
     }
   }
 
-  const promoted = await updateToActive(pool, modelId, at);
+  const promoted = await updateToActive(
+    pool,
+    modelId,
+    at,
+    gateReport.gateReportId,
+  );
   if (promoted === null) {
     // The row moved between the read and the write; report what it is now.
     const current = await getModel(pool, modelId);

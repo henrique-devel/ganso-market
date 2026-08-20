@@ -452,10 +452,23 @@ export async function loadFeedSamples(
   return samples;
 }
 
+export interface FeedSeriesPoint {
+  readonly bucketStart: Date;
+  readonly close: number;
+}
+
 export interface FeedSeries {
   readonly symbol: string;
   readonly feed: string;
+  /**
+   * Closes of the buckets that EXIST. RTDS has gaps, and a bucket only exists
+   * for a minute that actually saw ticks, so consecutive entries are NOT
+   * necessarily consecutive minutes — `points` carries the timestamps a
+   * consumer needs to tell the difference. Anything computing returns must use
+   * `points`, never `closes`.
+   */
   readonly closes: readonly number[];
+  readonly points: readonly FeedSeriesPoint[];
   readonly firstBucket: Date | null;
   readonly lastBucket: Date | null;
 }
@@ -486,6 +499,7 @@ export async function loadFeedSeries(
     [symbol, feed, from, lastComplete],
   );
   const closes: number[] = [];
+  const points: FeedSeriesPoint[] = [];
   let firstBucket: Date | null = null;
   let lastBucket: Date | null = null;
   for (const row of result.rows) {
@@ -493,14 +507,46 @@ export async function loadFeedSeries(
     if (!Number.isFinite(close) || close <= 0) {
       continue;
     }
-    closes.push(close);
     const bucket = toDate(row.bucket_start);
-    if (bucket !== null) {
-      firstBucket ??= bucket;
-      lastBucket = bucket;
+    if (bucket === null) {
+      continue;
     }
+    closes.push(close);
+    points.push({ bucketStart: bucket, close });
+    firstBucket ??= bucket;
+    lastBucket = bucket;
   }
-  return { symbol, feed, closes, firstBucket, lastBucket };
+  return { symbol, feed, closes, points, firstBucket, lastBucket };
+}
+
+/**
+ * Log returns between CONSECUTIVE one-minute buckets only. A gap in the feed
+ * (a recorder disconnect, a quiet minute) leaves a hole in the series; treating
+ * the two closes across that hole as a one-minute return would inflate the
+ * realized volatility of every window that contains it.
+ */
+export function contiguousLogReturns(
+  points: readonly FeedSeriesPoint[],
+): number[] {
+  const returns: number[] = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (previous === undefined || current === undefined) {
+      continue;
+    }
+    if (
+      current.bucketStart.getTime() - previous.bucketStart.getTime() !==
+      MINUTE_MS
+    ) {
+      continue;
+    }
+    if (!(previous.close > 0) || !(current.close > 0)) {
+      continue;
+    }
+    returns.push(Math.log(current.close / previous.close));
+  }
+  return returns;
 }
 
 export interface MacroCalendarContext {

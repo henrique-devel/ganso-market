@@ -216,12 +216,12 @@ Motivos (`FallbackReason`, `types.ts`), na ordem de precedência de
 | 5     | `FEED_STALE`              | amostra do feed resolutor mais velha que `crypto.max_feed_age_ms` (default 120 s)          |
 | 6     | `MODEL_IN_SHADOW`         | existe modelo em `shadow` na categoria e nenhum promovido: a linha shadow é gravada, o consumidor lê baseline |
 | —     | `GATE_FAILED`             | declarado no contrato; **sem emissor no código atual**                                     |
-| —     | `CATEGORY_NOT_MODELLED`   | declarado no contrato; **sem emissor no código atual**                                     |
+| 1     | `CATEGORY_NOT_MODELLED`   | nenhum modelo é dono da categoria do mercado, ou o mercado não é binário (≠ 2 tokens de desfecho): baseline em todos os tokens |
 
 > **FATO VERIFICADO:** busca por cada literal em
-> `apps/api/src/polymarket/fundamental/` encontra emissor para oito dos onze
-> motivos. `MODEL_TIMEOUT`, `GATE_FAILED` e `CATEGORY_NOT_MODELLED` existem no
-> tipo `FallbackReason` e não são emitidos hoje.
+> `apps/api/src/polymarket/fundamental/` encontra emissor para nove dos onze
+> motivos. `MODEL_TIMEOUT` e `GATE_FAILED` existem no tipo `FallbackReason` e
+> não são emitidos hoje.
 >
 > **INFERÊNCIA:** reprovação de gate aparece na prática como
 > `NO_ACTIVE_MODEL`/`MODEL_IN_SHADOW`, porque um modelo `active` que perde o

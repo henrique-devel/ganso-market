@@ -354,11 +354,13 @@ describe("GET /polymarket/estimates/latest", () => {
     expect(call?.text).toContain("SELECT DISTINCT ON (token_id)");
     // Shadow rows are gate material; the consumer surface never sees them.
     expect(call?.text).toContain("status = 'active'");
-    expect(call?.text).toContain("category = $1");
+    expect(call?.text).toContain("category = $2");
     expect(call?.text).toContain(
       "ORDER BY token_id, decision_ts DESC, estimate_id DESC",
     );
-    expect(call?.params[0]).toBe("crypto_updown");
+    // The first bind parameter is the freshness bound; the category follows.
+    expect(call?.params[0]).toBeInstanceOf(Date);
+    expect(call?.params[1]).toBe("crypto_updown");
     const body = response.json();
     expect(body.as_of).toBe(FIXED_NOW.toISOString());
     expect(body.category).toBe("crypto_updown");
@@ -374,8 +376,9 @@ describe("GET /polymarket/estimates/latest", () => {
       headers: AUTH,
     });
     expect(response.statusCode).toBe(200);
-    expect(calls[0]?.text).not.toContain("category = $1");
-    expect(calls[0]?.params).toHaveLength(0);
+    expect(calls[0]?.text).not.toContain("category = $2");
+    // Only the freshness bound is bound.
+    expect(calls[0]?.params).toHaveLength(1);
     expect(response.json().category).toBeNull();
   });
 
@@ -914,5 +917,30 @@ describe("failure handling", () => {
     });
     expect(response.statusCode).toBe(500);
     expect(response.json().reason_code).toBe("FUNDAMENTAL_API_FAILED");
+  });
+});
+
+describe("GET /polymarket/estimates/latest freshness", () => {
+  it("bounds the query by recency so absence is never served as an estimate", async () => {
+    const { pool, calls } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/estimates/latest",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.max_age_ms).toBeGreaterThan(0);
+
+    // "Latest" must not mean "whatever we last managed to write": an estimate
+    // older than the horizon is an absence, and absence is a veto.
+    const call = calls[0];
+    expect(call?.text).toContain("decision_ts >= $1");
+    const bound = call?.params[0];
+    expect(bound).toBeInstanceOf(Date);
+    expect((bound as Date).getTime()).toBe(
+      FIXED_NOW.getTime() - Number(body.max_age_ms),
+    );
   });
 });
