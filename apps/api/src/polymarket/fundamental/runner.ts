@@ -141,6 +141,19 @@ export async function ensureCatalogModels(
       );
       registered.push(modelId);
     } catch (error: unknown) {
+      // Distinguish the benign case from a real one. Two paths land here with
+      // the row already present: a transient read failure before the INSERT,
+      // and two estimator instances overlapping during a container recreate.
+      // Both are "already registered", not a failure, and reporting them as
+      // errors would train the operator to ignore this reason code.
+      const existing = await getModel(pool, modelId).catch(() => null);
+      if (existing !== null) {
+        logJson("info", "MODEL_ALREADY_REGISTERED", {
+          model_id: modelId,
+          status: existing.status,
+        });
+        continue;
+      }
       // One category failing to register must not stop the others: the
       // categories are independent by construction, and a partially populated
       // registry is strictly better than an empty one.
@@ -220,6 +233,32 @@ export function createRunner(deps: RunnerDeps): Runner {
       });
     },
     async revalidation(): Promise<void> {
+      // The catalog is re-checked here, not only at boot: if the boot attempt
+      // hit a transient database failure, a genuinely new model version would
+      // otherwise stay unregistered until the next restart. Re-running is
+      // free once every model exists.
+      const registered = await ensureCatalogModels(
+        deps.pool,
+        deps.gitSha,
+        clock(),
+      );
+      if (registered.length > 0) {
+        logJson("info", "MODELS_REGISTERED", {
+          models: registered,
+          status: "shadow",
+        });
+      }
+      const staleRevision = await demoteOnRevisionChange(
+        deps.pool,
+        deps.gitSha,
+        clock(),
+      );
+      if (staleRevision.length > 0) {
+        logJson("warn", "REVALIDATION_REQUIRED", {
+          models: staleRevision,
+          cause: "code_revision_changed",
+        });
+      }
       const demoted = await enforceRevalidation(deps.pool, clock());
       if (demoted.length > 0) {
         logJson("warn", "REVALIDATION_REQUIRED", {
@@ -257,36 +296,10 @@ export function createRunner(deps: RunnerDeps): Runner {
       // and demote anything whose recorded revision is not the running one,
       // BEFORE the first estimation cycle. A model invalidated by a code,
       // venue, fee or rule change must never serve one more estimate.
-      try {
-        const registered = await ensureCatalogModels(
-          deps.pool,
-          deps.gitSha,
-          clock(),
-        );
-        if (registered.length > 0) {
-          logJson("info", "MODELS_REGISTERED", {
-            models: registered,
-            status: "shadow",
-          });
-        }
-        const demoted = await demoteOnRevisionChange(
-          deps.pool,
-          deps.gitSha,
-          clock(),
-        );
-        if (demoted.length > 0) {
-          logJson("warn", "REVALIDATION_REQUIRED", {
-            models: demoted,
-            cause: "code_revision_changed",
-          });
-        }
-      } catch (error: unknown) {
-        logJson("error", "JOB_FAILED", {
-          job: "catalog_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
-        });
-      }
-
+      // Boot order matters: the catalog/re-validation job runs BEFORE the first
+      // estimation cycle, so a model invalidated by a code, venue, fee or rule
+      // change never serves one more estimate. It is the same job the timer
+      // runs — one code path, not two.
       await jobs.revalidation().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "revalidation_boot",
