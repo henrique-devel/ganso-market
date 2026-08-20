@@ -1,6 +1,6 @@
 # RFC-010 — Polymarket: modelo fundamental (q e incerteza)
 
-**Status:** draft
+**Status:** implemented (2026-08-20; ver `docs/test-results/RFC-010-fundamental-model.md`)
 **Dependências:** RFC-007 (recorder, market registry, versionamento de regras/fees e feeds externos crypto/macro)
 **Habilita:** RFC-011 (o paper broker consome `q` e `q_lo`) e RFC-013 (sinais, portfólio e gates) — nunca execução real diretamente
 

@@ -236,7 +236,39 @@ campos (`samplers.test.ts` cobre). Nenhuma outra alteração de comportamento na
 RFC-007.
 
 
-## 10. Riscos residuais
+## 10. Produção (2026-08-20)
+
+PR #6 mergeado, CI/CD verde nos três jobs (`Verify source`, `Verify Compose
+runtime`, `Deploy production`), revisão `c055da33` no servidor.
+
+- Migration 0006 aplicada pelo container `migrate` durante o deploy:
+  `schema_versions` tem as versões 1–6 e as 6 tabelas `fundamental_*` existem.
+- `deploy/release-sha` no servidor contém exatamente
+  `c055da33be9f42a9572ee3b224bd3c2b3a3430cd` — o `export-subst` do
+  `git archive` funcionou no caminho real de deploy.
+- `polymarket-estimator` ativado com
+  `--profile polymarket up --build --detach`. Primeiro boot:
+  `git_sha_known: true`, os dois modelos do catálogo registrados em `shadow`.
+- Quatro ciclos observados, universo cheio (100 mercados, 200 tokens):
+  130–158 linhas de consumidor e 25–26 linhas shadow por ciclo,
+  `token_failures: 0`, ausências sempre com motivo explícito
+  (`BOOK_STALE`, `NO_BOOK`, `DEPTH_BELOW_SREF`, `SPREAD_TOO_WIDE`).
+- Estado no banco após 4 ciclos: 571 linhas `MARKET_BASELINE/active` — **todas**
+  com `fallback_reason = MODEL_IN_SHADOW`, isto é, nenhum modelo servindo — e
+  103 linhas `MODEL/shadow`, **todas** com proveniência completa. Único
+  `git_sha` presente: `c055da33`.
+- **Zero erros e zero warnings** nos logs do estimador; zero erros no recorder
+  no mesmo intervalo. Sete containers rodando.
+- Memória: estimador em 39,4 MiB de 384 MiB; agregado dos sete containers
+  ≈ 384 MiB, dentro do orçamento.
+- Endpoints: verificados no container da API, os seis respondem **401 sem
+  token** (registrados e protegidos). Eles **não** estão publicados pelo Nginx:
+  o perímetro da RFC-002 (`location ^~ /api/ { return 404; }`) libera só health
+  e auth, e isso vale igualmente para os endpoints de leitura da RFC-007 já
+  existentes. Publicar essa superfície é decisão de perímetro do proprietário,
+  não foi alterada aqui.
+
+## 11. Riscos residuais
 
 - **Disputa após resolução:** o label store marca `is_final` na resolução e não
   o retrata se uma disputa UMA chegar depois. Na prática a disputa precede a
