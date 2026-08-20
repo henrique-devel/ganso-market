@@ -289,3 +289,23 @@ runtime`, `Deploy production`), revisão `c055da33` no servidor.
   versão calibrada exigirá CLI ou endpoint novo.
 - O soak de 24 h com universo cheio previsto na RFC **não foi executado**; o
   que existe é o smoke em container e a projeção de volumetria medida.
+
+## 12. Estado final em produção (2026-08-20 05:31Z)
+
+Revisão `ba8cbf2a`, imagem do estimador reconstruída, sete containers rodando.
+
+```text
+     source      | status | rows
+-----------------+--------+------
+ MARKET_BASELINE | active | 3892
+ MODEL           | shadow |  625
+
+ stamped_sha | count            model_rows_missing_provenance : 0
+-------------+-------           baseline_rows_missing_reason  : 0
+ ba8cbf2a    |    48            active_models                 : 0
+ c055da33    |   577            estimator errors (5 min)      : 0
+```
+
+As duas revisões carimbadas são a transição do rebuild: o SHA assado na imagem
+acompanha **o código que roda**, não o checkout — que é exatamente o motivo de
+ele ter saído do volume montado e ido para dentro da imagem.
