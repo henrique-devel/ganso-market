@@ -413,6 +413,9 @@ interface GammaStatusRow {
   readonly rawStatus: string | null;
   readonly closed: boolean;
   readonly resolved: boolean;
+  /** Settlement prices per outcome, as Gamma reports them (e.g. ["1","0"]). */
+  readonly outcomePrices: readonly string[] | null;
+  readonly outcomes: readonly string[] | null;
 }
 
 function parseGammaStatusRow(raw: unknown): GammaStatusRow | null {
@@ -440,7 +443,32 @@ function parseGammaStatusRow(raw: unknown): GammaStatusRow | null {
     rawStatus,
     closed: record.closed === true,
     resolved: record.resolved === true || record.umaResolved === true,
+    // The OUTCOME, not just the status. Without it the resolution timeline
+    // records that a market settled but never what it settled to, and the
+    // RFC-010 label store has nothing to score against. Gamma sends these
+    // either as a JSON-encoded string or as a real array.
+    outcomePrices: parseStringList(record.outcomePrices),
+    outcomes: parseStringList(record.outcomes),
   };
+}
+
+/** Gamma encodes list fields either as a JSON string or as a real array. */
+function parseStringList(value: unknown): string[] | null {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+  const items = parsed.filter(
+    (item): item is string => typeof item === "string",
+  );
+  return items.length === parsed.length && items.length > 0 ? items : null;
 }
 
 const GAMMA_STATUS_CHUNK = 20;
@@ -613,6 +641,8 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
                   umaResolutionStatus: row.rawStatus,
                   closed: row.closed,
                   resolved: row.resolved,
+                  outcomePrices: row.outcomePrices,
+                  outcomes: row.outcomes,
                 },
               }),
               new Date(deps.clock()),

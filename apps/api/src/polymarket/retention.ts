@@ -91,6 +91,53 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "bucket_start",
     protected: false,
   },
+  // RFC-010 estimates: 90-day TTL on the raw rows, inside the 6 GB reserve the
+  // RFC-007 budget set aside for the RFC-010..013 tables.
+  {
+    table: "fundamental_estimates",
+    ttlDays: 90,
+    quotaBytes: 3 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  // RFC-010 metadata: model registry, labels, gate reports, lifecycle events
+  // and calibration reports are the audit trail of every promotion decision.
+  // They are never pruned; their size is monitored against the global budget.
+  {
+    table: "fundamental_models",
+    ttlDays: null,
+    quotaBytes: 0.1 * GB,
+    timeColumn: "created_at",
+    protected: true,
+  },
+  {
+    table: "fundamental_labels",
+    ttlDays: null,
+    quotaBytes: 0.5 * GB,
+    timeColumn: "received_at",
+    protected: true,
+  },
+  {
+    table: "fundamental_gate_reports",
+    ttlDays: null,
+    quotaBytes: 0.5 * GB,
+    timeColumn: "evaluated_at",
+    protected: true,
+  },
+  {
+    table: "fundamental_model_events",
+    ttlDays: null,
+    quotaBytes: 0.1 * GB,
+    timeColumn: "at",
+    protected: true,
+  },
+  {
+    table: "fundamental_calibration_reports",
+    ttlDays: null,
+    quotaBytes: 0.5 * GB,
+    timeColumn: "generated_at",
+    protected: true,
+  },
   // Metadata group: never pruned (shared 0.5 GB quota is monitored only).
   ...[
     "polymarket_markets",

@@ -19,6 +19,11 @@ COPY packages/contracts/package.json packages/contracts/package.json
 RUN npm ci --omit=dev --workspace @ganso-market/api --include-workspace-root=false \
     && npm cache clean --force
 COPY --from=build /workspace/apps/api/dist apps/api/dist
+# RFC-010 provenance. `git archive` rewrites this file to the exact commit SHA
+# of the deployed revision (see .gitattributes export-subst), and baking it into
+# the IMAGE — rather than mounting it from the checkout — means the stamp on an
+# estimate can never drift from the code that produced it.
+COPY deploy/release-sha /etc/ganso/release-sha
 USER node
 EXPOSE 3000
 CMD ["node", "apps/api/dist/main.js"]
