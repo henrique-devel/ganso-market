@@ -93,8 +93,16 @@ TTL).
 - **FATO VERIFICADO:** ainda NÃO existem: modelos/estratégias, paper broker,
   wallet, signer, ordens e execução ao vivo.
 
-## RFC-007 IMPLEMENTADA — aguardando merge/deploy (2026-08-20)
+## RFC-007 IMPLEMENTADA E ATIVA EM PRODUÇÃO (2026-08-20)
 
+- **FATO VERIFICADO (produção, 2026-08-20):** PR #5 mergeado, deploy pelo CD
+  verde, migration 0005 aplicada (versões 1–5) e recorder V2 ativo no servidor
+  com `--profile polymarket up --build`. Após 9 minutos: 111 mercados, 516k
+  deltas L2, 90k trades, RTDS fluindo, container estável e **zero erros nos
+  logs**. Gaps registrados: somente `trades_window_overflow` do backfill
+  histórico (comportamento projetado — janelas de 1h com >10k trades na Data
+  API; o WS cobre o fluxo ao vivo). Janela de 7 dias do critério de aceite
+  iniciada em 2026-08-20.
 - **FATO VERIFICADO:** RFC-007 (fundação de dados) implementada na branch
   `claude/rfc-007-data-foundation`: migration 0005 (17 tabelas), registry
   Gamma com universo crypto+macro e log de transições, regras/parâmetros
