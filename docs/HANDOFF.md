@@ -61,6 +61,56 @@ Revisão adversarial de consistência aplicada (numeração cruzada, orçamento 
 40 GB com reserva explícita, fontes macro na coleta, replay independente de
 TTL).
 
+## RFC-010 IMPLEMENTADA (2026-08-20)
+
+- **FATO VERIFICADO:** RFC-010 (modelo fundamental) implementada na branch
+  `claude/rfc-010-estruturacao-producao-3b21cf`: migration 0006 (6 tabelas,
+  com fronteira de regime, imutabilidade de versão e proveniência como
+  constraints do banco), microprice executável em aritmética exata de ponto
+  fixo, intervalo de incerteza versionado, fallback determinístico como função
+  pura, camada de features as-of com guarda anti-leakage, modelos
+  `crypto_updown` e `macro_scheduled`, label store, pipeline walk-forward com
+  block bootstrap, gate `NO_EVIDENCE_OF_ALPHA`, relatório de calibração
+  diário, 6 endpoints autenticados e o serviço Compose `polymarket-estimator`.
+  `make verify` verde. Evidência:
+  [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md).
+- **FATO VERIFICADO:** o serviço foi exercitado em container real (projeto
+  Compose isolado, PostgreSQL próprio): migration aplicada, boot registrando os
+  dois modelos do catálogo em `shadow`, ciclo escrevendo linhas de baseline com
+  proveniência completa, linhas `shadow` do modelo crypto com `git_sha` e
+  `data_refs` reais, e livro velho produzindo ausência explícita
+  (`absent_reasons.BOOK_STALE`), nunca valor default.
+- **FATO VERIFICADO:** nenhum modelo nasce servindo. Os dois modelos do
+  catálogo entram em `shadow`; o consumidor lê `MARKET_BASELINE` com motivo
+  `MODEL_IN_SHADOW` até que um gate PASS seja registrado **e** o proprietário
+  promova manualmente pelo endpoint.
+- **FATO VERIFICADO:** correção adjacente necessária na RFC-007 —
+  `createUmaStatusPoller` gravava o status da resolução mas não o desfecho.
+  Passou a gravar `outcomePrices`/`outcomes` na timeline imutável; sem isso o
+  label store não teria o que pontuar e nenhum gate poderia ter evidência.
+- **DECISÃO PENDENTE (proprietário) — janela de retenção das estimativas:**
+  volumetria medida em PostgreSQL real: **1.020 B por linha** (200 k linhas,
+  após `VACUUM ANALYZE`). No teto da RFC (200 tokens × 1 linha/minuto =
+  288 k linhas/dia ≈ 294 MB/dia), a quota de 3 GB sustenta **~11 dias**, não os
+  90 dias do TTL — quota vence TTL na retenção, então o orçamento local é
+  respeitado e o que encolhe é a janela. Para 90 dias reais dentro de 3 GB
+  seria preciso `min_estimate_gap_ms ≥ ~490 s` (a 600 s dá ~110 dias) ou
+  ~26 GB de quota. O código entrega o default da RFC (60 s); o botão está em
+  `config/fundamental.json`.
+- **RISCO ABERTO — cobertura macro é zero hoje:** `config/macro-calendar.json`
+  não traz `consensus`/`nowcast` em nenhuma entrada, então o modelo
+  `macro_scheduled` **abstém em todo mercado macro** e tudo fica no baseline.
+  É o comportamento correto (não inventar consenso), mas a categoria só produz
+  evidência depois que nowcasts (Cleveland Fed / CME FedWatch) entrarem no
+  calendário. Não é bloqueio de código: `parseMacroCalendar` guarda a entrada
+  inteira em `payload_json`, então basta acrescentar `consensus` (ou `nowcast`
+  / `forecast`) e, opcionalmente, `consensus_std` às entradas de
+  `config/macro-calendar.json` — os valores precisam vir de fonte oficial, não
+  de estimativa nossa.
+- **BLOQUEIO/TODO:** não existe CLI nem endpoint que **registre** uma versão
+  nova de modelo; hoje o registro só acontece pelo catálogo no boot. Treinar
+  uma versão calibrada exigirá esse caminho (registrado no runbook).
+
 ## Estado atual
 
 - **FATO VERIFICADO:** runtime composto por PostgreSQL, market-engine Rust
@@ -137,7 +187,7 @@ TTL).
 | RFC-001 — Fundação e runtime                          | Implementada                                                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
 | RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
 | RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
-| RFC-010 — Modelo fundamental (`q` + incerteza)        | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada (2026-08-20); modelos em `shadow`, nenhum promovido                                       | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                      |
 | RFC-011 — Microestrutura e paper broker               | Não iniciada (draft 2026-08-19)                                                                        | Depende de RFC-007 e RFC-010                                                                                      |
 | RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
 | RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
@@ -181,12 +231,13 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
 ## Próximo passo mínimo
 
-Com a rede local restaurada: push da branch `claude/rfc-007-data-foundation`,
-PR, CI verde, merge, deploy via CD e ativação do recorder novo no servidor
-(`--profile polymarket up --build`). Validar em produção: tabelas novas
-enchendo, `GET /polymarket/data-quality`, zero erros nos logs, e iniciar a
-janela de 7 dias de gravação contínua (critério de aceite da RFC-007). Depois:
-RFC-010 (modelo fundamental).
+Observar o `polymarket-estimator` em produção: `ESTIMATOR_CYCLE` a cada minuto
+com `consumer_rows` cobrindo o universo, `absent_reasons` só com causas
+esperadas, `fundamental_estimates` enchendo e nenhum erro nos logs. Em
+paralelo, decidir a janela de retenção das estimativas (decisão pendente
+acima) e alimentar nowcasts macro no calendário, sem os quais a categoria
+`macro_scheduled` nunca acumula evidência. Só depois: RFC-011
+(microestrutura e paper broker), que consome `q` e `q_lo` desta RFC.
 
 Operação do servidor: `cd /opt/ganso-market` seguido de `make server-status`,
 `make server-health` ou `make server-logs`.
