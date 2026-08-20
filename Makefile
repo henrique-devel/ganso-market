@@ -10,6 +10,7 @@ SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 .PHONY: help doctor install init-secrets format format-check lint test build verify \
 	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \
 	recorder-up recorder-logs recorder-down \
+	estimator-up estimator-logs estimator-down \
 	server-init server-config server-up server-health server-status server-logs server-update server-down
 
 help:
@@ -23,6 +24,9 @@ help:
 	@echo "  make recorder-up    sobe o recorder Polymarket (dados públicos)"
 	@echo "  make recorder-logs  acompanha os logs do recorder Polymarket"
 	@echo "  make recorder-down  encerra o recorder Polymarket"
+	@echo "  make estimator-up   sobe o modelo fundamental (RFC-010)"
+	@echo "  make estimator-logs acompanha os logs do modelo fundamental"
+	@echo "  make estimator-down encerra o modelo fundamental"
 	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
 	@echo "  make server-health  verifica frontend, API, banco e engine"
 	@echo "  make server-status  mostra o estado dos containers"
@@ -108,6 +112,15 @@ recorder-logs:
 
 recorder-down:
 	docker compose --profile polymarket rm --stop --force polymarket-recorder
+
+estimator-up: init-secrets
+	docker compose --profile polymarket up --build --detach polymarket-estimator
+
+estimator-logs:
+	docker compose --profile polymarket logs --follow --tail 100 polymarket-estimator
+
+estimator-down:
+	docker compose --profile polymarket rm --stop --force polymarket-estimator
 
 server-init:
 	@if [ ! -f "$(SERVER_ENV)" ]; then \

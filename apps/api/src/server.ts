@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 
 import { registerAuthRoutes } from "./auth/http.js";
+import { registerFundamentalRoutes } from "./polymarket/fundamental/api.js";
 import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig } from "./config.js";
@@ -175,6 +176,13 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
 
   if (options.authService !== undefined && options.pool !== undefined) {
     registerPolymarketReadRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
+    });
+    // RFC-010 read + lifecycle surface. Read-only over the estimate tables,
+    // plus the operator's manual promote/demote of a model. No route here
+    // creates an order, a signal or touches a wallet.
+    registerFundamentalRoutes(app, {
       pool: options.pool,
       authService: options.authService,
     });

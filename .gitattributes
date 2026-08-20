@@ -1,0 +1,5 @@
+# `git archive` rewrites the placeholder in deploy/release-sha to the exact
+# commit SHA of the archived revision. The CI deploy ships the release as a
+# `git archive` tarball, so the production checkout — which has no .git — still
+# carries a verifiable revision for RFC-010 estimate provenance.
+deploy/release-sha export-subst

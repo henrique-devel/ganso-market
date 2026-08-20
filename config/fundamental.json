@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "s_ref_usd": 100,
+  "max_book_age_ms": 30000,
+  "max_exec_spread": 0.1,
+  "thin_book_multiple": 3,
+  "fallback_widen_factor": 1.5,
+  "estimate_interval_ms": 60000,
+  "min_estimate_gap_ms": 60000,
+  "rule_change_window_ms": 86400000,
+  "gate": {
+    "min_markets": 100,
+    "max_horizon_degradation": 0.2,
+    "bootstrap_resamples": 1000,
+    "bootstrap_seed": 20260819,
+    "block_days": 1
+  },
+  "walk_forward": {
+    "train_days": 21,
+    "validation_days": 7,
+    "step_days": 7
+  },
+  "crypto": {
+    "ewma_lambdas": [0.94, 0.97],
+    "student_df": 4,
+    "min_history_minutes": 120,
+    "max_feed_age_ms": 120000
+  },
+  "macro": {
+    "default_sigma": {
+      "cpi_yoy": 0.15,
+      "cpi_mom": 0.08,
+      "core_cpi_yoy": 0.12,
+      "nonfarm_payrolls": 60000,
+      "unemployment_rate": 0.12,
+      "fed_target_rate": 0.1
+    },
+    "post_release_window_ms": 7200000,
+    "under_reaction_coefficient": 0.64,
+    "max_calendar_age_ms": 2592000000
+  }
+}

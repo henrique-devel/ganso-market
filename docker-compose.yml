@@ -206,6 +206,43 @@ services:
     pids_limit: 128
     logging: *default-logging
 
+  # RFC-010 fundamental model. Estimates and calibration reports only: no order,
+  # no paper order, no signal, no wallet, no signer. It runs beside the recorder
+  # rather than inside it so training and calibration never share the recorder's
+  # hot path. It needs no outbound internet — every input is already in the
+  # database — so it joins only the internal backend network.
+  polymarket-estimator:
+    profiles: ["polymarket"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command:
+      ["node", "--max-old-space-size=320", "apps/api/dist/polymarket-estimator.js"]
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      GANSO_FUNDAMENTAL_CONFIG_FILE: /etc/ganso/fundamental.json
+      GANSO_RELEASE_SHA_FILE: /etc/ganso/release-sha
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      - ./config/fundamental.json:/etc/ganso/fundamental.json:ro
+      # `git archive` substitutes the commit SHA into this file at release time;
+      # it is the provenance stamped on every MODEL estimate.
+      - ./deploy/release-sha:/etc/ganso/release-sha:ro
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *default-logging
+
   nginx:
     image: nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
     ports:
