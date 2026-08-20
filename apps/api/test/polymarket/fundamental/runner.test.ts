@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DatabasePool,
@@ -7,7 +7,10 @@ import type {
 } from "../../../src/database.js";
 import { CATEGORY_MODELS } from "../../../src/polymarket/fundamental/catalog.js";
 import { DEFAULT_FUNDAMENTAL_CONFIG } from "../../../src/polymarket/fundamental/config.js";
-import { createRunner } from "../../../src/polymarket/fundamental/runner.js";
+import {
+  createRunner,
+  ensureCatalogModels,
+} from "../../../src/polymarket/fundamental/runner.js";
 
 const GIT_SHA = "c".repeat(40);
 const NOW = new Date("2026-08-19T12:00:00.000Z");
@@ -69,6 +72,39 @@ function recordingPool(): DatabasePool & { readonly statements: string[] } {
   };
 }
 
+/** A complete model row, as PostgreSQL would return it. */
+function existingRow(): Record<string, unknown> {
+  return {
+    model_id: "crypto_updown_gbm@1.0.0",
+    model_family: "crypto_updown_gbm",
+    category: "crypto_updown",
+    version: "1.0.0",
+    git_sha: GIT_SHA,
+    feature_set_version: "1.0.0",
+    hyperparams_json: {},
+    seed: 0,
+    train_window_start: null,
+    train_window_end: null,
+    regime_mix: false,
+    status: "shadow",
+    last_gate_report_id: null,
+    created_at: NOW,
+    promoted_at: null,
+    demoted_at: null,
+    retired_at: null,
+  };
+}
+
+const stderr: string[] = [];
+
+beforeEach(() => {
+  stderr.length = 0;
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    stderr.push(String(chunk));
+    return true;
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -102,6 +138,47 @@ describe("createRunner boot path", () => {
     expect(
       pool.statements.some((text) => text.includes("polymarket_universe_log")),
     ).toBe(true);
+  });
+
+  it("reports an already-registered model as benign, not as a failure", async () => {
+    // The insert uses ON CONFLICT DO NOTHING and therefore returns no row when
+    // the model exists — which happens whenever a read hiccups before it, or
+    // two containers overlap during a recreate. That is not an error.
+    const statements: string[] = [];
+    const pool: DatabasePool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+      ): Promise<QueryResult<R>> {
+        statements.push(text);
+        if (text.includes("SELECT") && text.includes("fundamental_models")) {
+          // The pre-check fails to see it, the post-failure re-check does.
+          const seen = statements.filter(
+            (entry) =>
+              entry.includes("SELECT") && entry.includes("fundamental_models"),
+          ).length;
+          return Promise.resolve(
+            seen % 2 === 0
+              ? { rows: [], rowCount: 0 }
+              : {
+                  rows: [existingRow() as unknown as R],
+                  rowCount: 1,
+                },
+          );
+        }
+        // INSERT ... ON CONFLICT DO NOTHING RETURNING: no row.
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+      transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+        return run({ query: this.query });
+      },
+      end(): Promise<void> {
+        return Promise.resolve();
+      },
+    };
+
+    const registered = await ensureCatalogModels(pool, GIT_SHA, NOW);
+    expect(registered).toEqual([]);
+    expect(stderr.join("\n")).not.toContain("MODEL_REGISTRATION_FAILED");
   });
 
   it("registers nothing when the running revision is unknown", async () => {

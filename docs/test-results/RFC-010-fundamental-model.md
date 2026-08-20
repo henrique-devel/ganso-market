@@ -52,7 +52,7 @@ verdade.
 ```text
 GANSO_TEST_DATABASE_URL=postgres://…  npx vitest run
  Test Files  43 passed (43)
-      Tests  512 passed (512)
+      Tests  513 passed (513)
 ```
 
 O que a suíte de integração prova, com dados semeados nas tabelas da RFC-007
@@ -86,7 +86,7 @@ make verify   # format-check, lint, test, build, secret-scan, compose-config
 
 | Suíte                                       | Resultado real                    |
 | ------------------------------------------- | --------------------------------- |
-| vitest `@ganso-market/api`                  | 506 passed, 6 skipped (512)       |
+| vitest `@ganso-market/api`                  | 507 passed, 6 skipped (513)       |
 | vitest `@ganso-market/web`                  | 15 passed                         |
 | vitest `@ganso-market/contracts`            | 70 passed                         |
 | `cargo test --workspace`                    | 14 passed, 0 failed               |
@@ -257,8 +257,14 @@ runtime`, `Deploy production`), revisão `c055da33` no servidor.
   com `fallback_reason = MODEL_IN_SHADOW`, isto é, nenhum modelo servindo — e
   103 linhas `MODEL/shadow`, **todas** com proveniência completa. Único
   `git_sha` presente: `c055da33`.
-- **Zero erros e zero warnings** nos logs do estimador; zero erros no recorder
-  no mesmo intervalo. Sete containers rodando.
+- **Zero warnings** e **um erro** nos logs do estimador, no restart provocado
+  pelo deploy seguinte: `MODEL_REGISTRATION_FAILED` para um modelo que **já
+  estava registrado** (o INSERT usa `ON CONFLICT DO NOTHING`, então não devolve
+  linha). Estado benigno relatado como falha — corrigido depois: o caminho
+  passou a distinguir "já registrado" (info) de falha real, e o catálogo é
+  reconferido na varredura periódica em vez de só no boot, para que uma falha
+  transitória se cure sozinha. Zero erros no recorder no mesmo intervalo. Sete
+  containers rodando.
 - Memória: estimador em 39,4 MiB de 384 MiB; agregado dos sete containers
   ≈ 384 MiB, dentro do orçamento.
 - Endpoints: verificados no container da API, os seis respondem **401 sem
