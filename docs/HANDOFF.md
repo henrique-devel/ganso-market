@@ -63,9 +63,10 @@ TTL).
 
 ## RFC-010 IMPLEMENTADA E ATIVA EM PRODUÇÃO (2026-08-20)
 
-- **FATO VERIFICADO (produção, 2026-08-20):** PR #6 mergeado, CI/CD verde nos
-  três jobs, revisão `c055da33` no servidor, migration 0006 aplicada (versões
-  1–6, 6 tabelas `fundamental_*`) e `polymarket-estimator` ativado com
+- **FATO VERIFICADO (produção, 2026-08-20):** PRs #6, #7 e #8 mergeados, CI/CD
+  verde nos três jobs em cada um, revisão final `ba8cbf2a` no servidor,
+  migration 0006 aplicada (versões 1–6, 6 tabelas `fundamental_*`) e
+  `polymarket-estimator` ativado e reconstruído com
   `--profile polymarket up --build`. Quatro ciclos observados no universo cheio
   (100 mercados, 200 tokens): 130–158 linhas de consumidor e 25–26 shadow por
   ciclo, `token_failures: 0`, **zero erros e zero warnings** nos logs. No
@@ -73,6 +74,14 @@ TTL).
   `fallback_reason = MODEL_IN_SHADOW`, 103 linhas `MODEL/shadow` todas com
   proveniência completa, e um único `git_sha` — `c055da33`, a revisão
   implantada. Estimador em 39 MiB de 384 MiB.
+- **FATO VERIFICADO (estado final, 2026-08-20 05:31Z):** 3.892 linhas
+  `MARKET_BASELINE/active` e 625 `MODEL/shadow` em
+  `fundamental_estimates`; **zero** linhas `MODEL` sem proveniência completa,
+  **zero** linhas de baseline sem motivo de fallback, **zero** modelos
+  `active`. O carimbo de proveniência acompanha o código que roda, não o
+  checkout: 577 linhas com `c055da33` (imagem anterior) e 48 com `ba8cbf2a`
+  (imagem reconstruída), a transição exata do rebuild. Zero erros nos logs
+  após a correção do registro benigno; sete containers rodando.
 - **FATO VERIFICADO:** as ausências de estimativa em produção têm sempre motivo
   explícito (`BOOK_STALE`, `NO_BOOK`, `DEPTH_BELOW_SREF`, `SPREAD_TOO_WIDE`) —
   livro inválido produz ausência, nunca valor default.
