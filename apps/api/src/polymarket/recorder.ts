@@ -168,6 +168,21 @@ export function nodeMarketSocketFactory(url: string): MarketSocket {
   const socket = new WebSocket(url, {
     headers: { "User-Agent": USER_AGENT, Origin: WEB_ORIGIN },
   });
+  // Without an error listener the ws client throws "Unhandled 'error' event"
+  // and kills the process (seen live: transient DNS EAI_AGAIN). The library
+  // emits 'close' right after 'error', so the caller's reconnect logic runs.
+  socket.on("error", (error: Error) => {
+    process.stderr.write(
+      `${JSON.stringify({
+        level: "warn",
+        service: "polymarket-recorder",
+        timestamp: new Date().toISOString(),
+        reason_code: "WS_SOCKET_ERROR",
+        error_name: error.name,
+        message: "polymarket_ws_socket_error",
+      })}\n`,
+    );
+  });
   return {
     onOpen(handler): void {
       socket.on("open", () => {

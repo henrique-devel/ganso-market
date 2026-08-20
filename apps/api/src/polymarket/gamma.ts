@@ -1,9 +1,9 @@
 import type { MarketRegistryEntry } from "./types.js";
 
-// Categories the recorder tracks (crypto up/down, scheduled macro, weather).
-// Elections and live sports are excluded (regulatory/oracle risk and anti-sniping
-// frictions) per the RFC-007 amendment.
-const ALLOWED_CATEGORIES = new Set(["crypto", "macro", "weather"]);
+// Categories the recorder tracks per RFC-007 "Universo": crypto price markets
+// and scheduled macro releases only. Elections, live sports, mentions and
+// geopolitics are hard-excluded (regulatory/oracle risk, subjective wording).
+const ALLOWED_CATEGORIES = new Set(["crypto", "macro"]);
 const MIN_RULES_LENGTH = 10;
 
 // Primary classification is by Gamma tag slug (request with include_tag=true).
@@ -31,14 +31,11 @@ const TAG_CATEGORY = new Map<string, string>([
   ["recession", "macro"],
   ["macro", "macro"],
   ["us-economy", "macro"],
-  ["weather", "weather"],
-  ["climate", "weather"],
-  ["temperature", "weather"],
 ]);
-const CATEGORY_PRIORITY = ["crypto", "macro", "weather"] as const;
+const CATEGORY_PRIORITY = ["crypto", "macro"] as const;
 
-// Keyword fallback, used only when a market carries no tags. Election and sports
-// keywords force exclusion.
+// Keyword fallback, used only when a market carries no tags. Election, sports,
+// mentions and geopolitics keywords force exclusion.
 const EXCLUDE_KEYWORDS = [
   "election",
   "eleic",
@@ -52,12 +49,14 @@ const EXCLUDE_KEYWORDS = [
   "mlb",
   "ufc",
   "premier league",
+  "mention",
+  "ceasefire",
+  "invasion",
+  "invade",
+  "airstrike",
+  "military strike",
 ];
 const KEYWORD_CATEGORY: ReadonlyArray<readonly [string, readonly string[]]> = [
-  [
-    "weather",
-    ["temperature", "weather", "hurricane", "warmest", "coldest", "°"],
-  ],
   [
     "macro",
     [
@@ -86,12 +85,20 @@ const KEYWORD_CATEGORY: ReadonlyArray<readonly [string, readonly string[]]> = [
   ],
 ];
 
+// Augmented negRisk events pad their outcome list with placeholder entries;
+// only named outcomes are recorded (RFC-007 "Universo" hard exclusion).
+const PLACEHOLDER_OUTCOME = /^(?:person|candidate|team|other)\s*[a-z]?\d*$/i;
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function asBool(value: unknown): boolean {
   return value === true;
+}
+
+function asBoolOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 // Tick sizes and reward parameters arrive as numbers or strings; keep them as
@@ -110,7 +117,7 @@ function parseStringArray(value: unknown): string[] | null {
   if (Array.isArray(value)) {
     return value.filter((item): item is string => typeof item === "string");
   }
-  // Gamma encodes clobTokenIds as a stringified JSON array.
+  // Gamma encodes clobTokenIds/outcomes as a stringified JSON array.
   if (typeof value === "string") {
     try {
       const parsed: unknown = JSON.parse(value);
@@ -229,10 +236,108 @@ export function parseMarket(raw: unknown): MarketRegistryEntry | null {
   };
 }
 
+/** Gamma event reference embedded in a market payload (negRisk group parent). */
+export interface GammaEventRef {
+  readonly eventId: string;
+  readonly slug: string | null;
+  readonly title: string | null;
+  readonly negRisk: boolean;
+}
+
+/**
+ * RFC-007 extended registry record: everything the versioned-rule and
+ * versioned-param tables need, on top of the base MarketRegistryEntry.
+ * All fields are tolerant: absent/unexpected data becomes null/empty.
+ */
+export interface ExtendedMarketRecord extends MarketRegistryEntry {
+  readonly tagSlugs: readonly string[];
+  readonly negRiskOther: boolean;
+  /** Named outcomes only; augmented-negRisk placeholders are dropped. */
+  readonly outcomes: readonly string[];
+  readonly events: readonly GammaEventRef[];
+  readonly resolutionSource: string | null;
+  readonly resolvedBy: string | null;
+  readonly endDate: string | null;
+  readonly umaEndDate: string | null;
+  readonly umaBond: string | null;
+  readonly umaReward: string | null;
+  readonly customLiveness: string | null;
+  readonly automaticallyResolved: boolean | null;
+  readonly updatedAt: string | null;
+}
+
+function parseEventRefs(value: unknown): GammaEventRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const refs: GammaEventRef[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const eventId =
+      asString(record.id) ??
+      (typeof record.id === "number" && Number.isFinite(record.id)
+        ? String(record.id)
+        : null);
+    if (eventId === null) {
+      continue;
+    }
+    refs.push({
+      eventId,
+      slug: asString(record.slug),
+      title: asString(record.title),
+      negRisk: asBool(record.negRisk),
+    });
+  }
+  return refs;
+}
+
+function parseNamedOutcomes(value: unknown): string[] {
+  const outcomes = parseStringArray(value) ?? [];
+  return outcomes.filter(
+    (name) => name.trim().length > 0 && !PLACEHOLDER_OUTCOME.test(name.trim()),
+  );
+}
+
+/**
+ * Parse the RFC-007 extended registry record. Never throws on unexpected
+ * payloads: a row missing its essential identifiers returns null; every
+ * optional field degrades to null/empty.
+ */
+export function parseExtendedMarket(raw: unknown): ExtendedMarketRecord | null {
+  try {
+    const base = parseMarket(raw);
+    if (base === null) {
+      return null;
+    }
+    const record = raw as Record<string, unknown>;
+    return {
+      ...base,
+      tagSlugs: parseTagSlugs(record.tags),
+      negRiskOther: asBool(record.negRiskOther),
+      outcomes: parseNamedOutcomes(record.outcomes),
+      events: parseEventRefs(record.events),
+      resolutionSource: asString(record.resolutionSource),
+      resolvedBy: asString(record.resolvedBy),
+      endDate: asString(record.endDate) ?? asString(record.endDateIso),
+      umaEndDate: asString(record.umaEndDate),
+      umaBond: asDecimalString(record.umaBond),
+      umaReward: asDecimalString(record.umaReward),
+      customLiveness: asDecimalString(record.customLiveness),
+      automaticallyResolved: asBoolOrNull(record.automaticallyResolved),
+      updatedAt: asString(record.updatedAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether a market belongs to the recorder's universe: an allowed category
- * (crypto/macro/weather, never elections), an active order-book market with
- * non-empty rules and two outcome tokens.
+ * (crypto/macro, never elections/sports/mentions/geopolitics), an active
+ * order-book market with non-empty rules and two outcome tokens.
  */
 export function isInUniverse(entry: MarketRegistryEntry): boolean {
   if (!entry.active || entry.closed || !entry.enableOrderBook) {

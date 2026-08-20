@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 
 import { registerAuthRoutes } from "./auth/http.js";
+import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig } from "./config.js";
-import type { ReadinessProbe } from "./database.js";
+import type { DatabasePool, ReadinessProbe } from "./database.js";
 import {
   POSTGRES_UNAVAILABLE,
   serviceHealthSchema,
@@ -20,6 +21,7 @@ export interface BuildApiOptions {
   readonly config: ApiConfig;
   readonly readinessProbe: ReadinessProbe;
   readonly authService?: AuthService;
+  readonly pool?: DatabasePool;
   readonly cookieSecure?: boolean;
   readonly logger?: boolean;
   readonly logSink?: LogSink;
@@ -168,6 +170,13 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
       ...(options.cookieSecure === undefined
         ? {}
         : { cookieSecure: options.cookieSecure }),
+    });
+  }
+
+  if (options.authService !== undefined && options.pool !== undefined) {
+    registerPolymarketReadRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
     });
   }
 

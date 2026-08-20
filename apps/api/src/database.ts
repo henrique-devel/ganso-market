@@ -25,7 +25,20 @@ export interface ReadinessProbe {
   check(): Promise<void>;
 }
 
-export function createDatabasePool(config: ApiConfig): DatabasePool {
+export interface DatabasePoolOverrides {
+  /** Pool size; the API default (4) is too small for burst writers. */
+  readonly max?: number;
+  /** Query/statement timeout; the API default (connect timeout) is 2s. */
+  readonly queryTimeoutMs?: number;
+  readonly applicationName?: string;
+}
+
+export function createDatabasePool(
+  config: ApiConfig,
+  overrides: DatabasePoolOverrides = {},
+): DatabasePool {
+  const queryTimeoutMs =
+    overrides.queryTimeoutMs ?? config.database.connectTimeoutMs;
   const pool = config.database.password.use((password) => {
     const poolConfig: PoolConfig = {
       host: config.database.host,
@@ -34,11 +47,11 @@ export function createDatabasePool(config: ApiConfig): DatabasePool {
       user: config.database.user,
       password,
       connectionTimeoutMillis: config.database.connectTimeoutMs,
-      query_timeout: config.database.connectTimeoutMs,
-      statement_timeout: config.database.connectTimeoutMs,
+      query_timeout: queryTimeoutMs,
+      statement_timeout: queryTimeoutMs,
       idleTimeoutMillis: 30_000,
-      max: 4,
-      application_name: "ganso-market-api",
+      max: overrides.max ?? 4,
+      application_name: overrides.applicationName ?? "ganso-market-api",
     };
     if (config.database.ssl) {
       poolConfig.ssl = { rejectUnauthorized: true };

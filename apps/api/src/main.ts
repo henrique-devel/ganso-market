@@ -18,6 +18,7 @@ async function run(): Promise<void> {
     config,
     readinessProbe: createPostgresReadinessProbe(pool),
     authService,
+    pool,
   });
   const gracefulShutdown = createGracefulShutdown(app, pool);
   gracefulShutdown.install();

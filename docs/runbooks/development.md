@@ -37,19 +37,19 @@ docker compose --profile model up --build --detach
 
 ## Comandos canônicos
 
-| Comando | Efeito |
-|---|---|
-| `make install` | instala dependências fixadas e usa lockfiles |
-| `make format` | formata Rust, TypeScript/JSON/CSS e Python |
-| `make lint` | TypeScript check, Clippy e Ruff |
-| `make test` | testes unitários sem mainnet/serviço externo |
-| `make build` | compila todos os componentes |
-| `make verify` | executa gates locais e valida Compose |
-| `make migrate` | reaplica migrations de forma idempotente |
-| `make integration` | smoke de health, queda do PostgreSQL e shutdown |
-| `make resource-check` | budgets e consumo atual dos containers |
-| `make secret-scan` | padrões proibidos e vazamento do secret local |
-| `make down` | encerra sem `--volumes`; dados locais permanecem |
+| Comando               | Efeito                                           |
+| --------------------- | ------------------------------------------------ |
+| `make install`        | instala dependências fixadas e usa lockfiles     |
+| `make format`         | formata Rust, TypeScript/JSON/CSS e Python       |
+| `make lint`           | TypeScript check, Clippy e Ruff                  |
+| `make test`           | testes unitários sem mainnet/serviço externo     |
+| `make build`          | compila todos os componentes                     |
+| `make verify`         | executa gates locais e valida Compose            |
+| `make migrate`        | reaplica migrations de forma idempotente         |
+| `make integration`    | smoke de health, queda do PostgreSQL e shutdown  |
+| `make resource-check` | budgets e consumo atual dos containers           |
+| `make secret-scan`    | padrões proibidos e vazamento do secret local    |
+| `make down`           | encerra sem `--volumes`; dados locais permanecem |
 
 Instalação/pull inicial requer os registries das dependências e imagens. Depois
 da instalação, testes unitários não consultam mainnet nem APIs externas.
@@ -59,8 +59,7 @@ da instalação, testes unitários não consultam mainnet nem APIs externas.
 - `CONFIG_INVALID`: confira JSON, schema `1`, campos conhecidos e modo `paper`.
 - `SECRET_FILE_*`: execute `make init-secrets` e confira que o diretório está em
   `0700` e o arquivo regular em `0644`; não imprima seu valor.
-- `POSTGRES_UNAVAILABLE`: liveness deve continuar 200 e readiness deve ficar
-  503. Veja apenas tipo/reason code dos logs; não adicione DSN completa.
+- `POSTGRES_UNAVAILABLE`: liveness deve continuar 200 e readiness deve ficar 503. Veja apenas tipo/reason code dos logs; não adicione DSN completa.
 - checksum de migration divergente: não edite uma migration aplicada. Crie uma
   nova migration em uma RFC que autorize a mudança.
 - porta 8080 ocupada: copie `.env.example` para `.env` e altere somente

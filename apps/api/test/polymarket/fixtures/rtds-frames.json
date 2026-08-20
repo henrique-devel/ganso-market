@@ -1,0 +1,40 @@
+[
+  {
+    "topic": "crypto_prices",
+    "type": "update",
+    "payload": {
+      "symbol": "btc/usd",
+      "price": "50000.5",
+      "timestamp": 1787097600000
+    }
+  },
+  {
+    "topic": "crypto_prices",
+    "type": "update",
+    "payload": {
+      "symbol": "btc/usd",
+      "price": 50110.25,
+      "timestamp": 1787097630000
+    }
+  },
+  {
+    "topic": "crypto_prices_twap_sixty",
+    "type": "update",
+    "payload": [
+      {
+        "symbol": "btc/usd",
+        "price": "50050.1",
+        "timestamp": 1787097612000
+      }
+    ]
+  },
+  {
+    "topic": "crypto_prices",
+    "type": "update",
+    "payload": {
+      "symbol": "btc/usd",
+      "price": "49990",
+      "timestamp": 1787097661000
+    }
+  }
+]
