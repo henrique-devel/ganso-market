@@ -241,9 +241,17 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
       fallbackReason: null,
     });
   } else {
-    const reason: FallbackReason = active.ok
+    // NO_ACTIVE_MODEL means nothing was ever registered for this category;
+    // MODEL_IN_SHADOW means a model exists and simply has not earned promotion
+    // yet. The distinction is what an operator reads to know whether the gate
+    // is the thing standing in the way.
+    const rawReason: FallbackReason = active.ok
       ? "MODEL_IN_SHADOW"
       : active.reason;
+    const reason: FallbackReason =
+      rawReason === "NO_ACTIVE_MODEL" && inputs.shadowModels.length > 0
+        ? "MODEL_IN_SHADOW"
+        : rawReason;
     const interval = buildInterval({
       ...intervalBase,
       qScaled: microprice.micropriceScaled,

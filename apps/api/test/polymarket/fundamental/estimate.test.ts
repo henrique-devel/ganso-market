@@ -233,7 +233,9 @@ describe("decideEstimate - model path", () => {
       throw new Error("expected estimates");
     }
     expect(decision.consumer.source).toBe("MARKET_BASELINE");
-    expect(decision.consumer.fallbackReason).toBe("NO_ACTIVE_MODEL");
+    // A registered but unpromoted model reports MODEL_IN_SHADOW, not
+    // NO_ACTIVE_MODEL: the operator needs to see that the gate is the blocker.
+    expect(decision.consumer.fallbackReason).toBe("MODEL_IN_SHADOW");
     expect(decision.shadow).toHaveLength(2);
     for (const row of decision.shadow) {
       expect(row.source).toBe("MODEL");
