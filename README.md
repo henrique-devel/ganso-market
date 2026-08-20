@@ -13,15 +13,19 @@ histórico permanece no git.
 ## Estado implementado
 
 - `market-engine` em Rust, limitado a bootstrap e health;
-- API Fastify com autenticação single-user (RFC-002) e o recorder Polymarket
-  (dados públicos, RFC-007), ativo em produção;
+- API Fastify com autenticação single-user (RFC-002), o recorder Polymarket
+  (dados públicos, RFC-007) ativo em produção e o modelo fundamental
+  (RFC-010), que produz apenas estimativas `q` com intervalo de incerteza;
 - web React/Vite com login e health real;
 - `model-worker` Python opcional, sem modelo;
 - PostgreSQL com migrations versionadas;
 - Nginx em loopback no desenvolvimento e modo standalone direto na porta 80.
 
 O único modo aceito é `paper`. Não existem signer, wallet, estratégia, ordem
-ou execução neste código.
+ou execução neste código. O modelo fundamental grava estimativas e relatórios
+de calibração; nenhum modelo serve estimativa sem passar o gate de
+não-inferioridade e ser promovido manualmente
+([escopo e limites](docs/architecture/fundamental-model-scope.md)).
 
 Para reproduzir localmente:
 
@@ -73,6 +77,8 @@ servidor automaticamente e valida a saúde do gateway do lado do servidor.
 - [Runbook do servidor único](docs/runbooks/single-server.md)
 - [Runbook do perímetro de autenticação](docs/runbooks/auth-perimeter.md)
 - [Runbook do recorder Polymarket](docs/runbooks/polymarket-recorder.md)
+- [Runbook do modelo fundamental](docs/runbooks/polymarket-fundamental.md)
+- [Escopo e limites do modelo fundamental](docs/architecture/fundamental-model-scope.md)
 - [Dependências e licenças](docs/DEPENDENCIES.md)
 - [Evidência de verificação da RFC-001](docs/test-results/RFC-001.md)
 - [Handoff e continuidade do projeto](docs/HANDOFF.md)
@@ -84,7 +90,8 @@ servidor automaticamente e valida a saúde do gateway do lado do servidor.
 3. RFC-002 — Autenticação e perímetro (implementada; publicada com firewall).
 4. RFC-007 — Polymarket: fundação de dados e recorder V2 (recorder básico em
    produção; expansão de coleta e TTL nesta RFC).
-5. RFC-010 — Modelo fundamental (`q` + incerteza; crypto e macro agendado).
+5. RFC-010 — Modelo fundamental (`q` + incerteza; crypto e macro agendado)
+   (implementada; modelos nascem em shadow).
 6. RFC-011 — Microestrutura e paper broker realista.
 7. RFC-012 — Risco de resolução (UMA) e grafo lógico entre mercados.
 8. RFC-013 — Motor de portfólio, critérios de entrada/saída e gates.

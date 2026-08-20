@@ -109,30 +109,46 @@ export async function ensureCatalogModels(
   const registered: string[] = [];
   for (const descriptor of CATEGORY_MODELS) {
     const modelId = `${descriptor.family}@${descriptor.version}`;
-    if ((await getModel(pool, modelId)) !== null) {
-      continue;
+    try {
+      if ((await getModel(pool, modelId)) !== null) {
+        continue;
+      }
+      await registerModel(
+        pool,
+        {
+          modelId,
+          modelFamily: descriptor.family,
+          category: descriptor.category,
+          version: descriptor.version,
+          gitSha,
+          featureSetVersion: descriptor.featureSetVersion,
+          hyperparams:
+            descriptor.category === "crypto_updown"
+              ? (DEFAULT_CRYPTO_HYPERPARAMS as unknown as Record<
+                  string,
+                  unknown
+                >)
+              : (DEFAULT_MACRO_HYPERPARAMS as unknown as Record<
+                  string,
+                  unknown
+                >),
+          seed: 0,
+          trainWindowStart: null,
+          trainWindowEnd: null,
+          regimeMix: false,
+        },
+        at,
+      );
+      registered.push(modelId);
+    } catch (error: unknown) {
+      // One category failing to register must not stop the others: the
+      // categories are independent by construction, and a partially populated
+      // registry is strictly better than an empty one.
+      logJson("error", "MODEL_REGISTRATION_FAILED", {
+        model_id: modelId,
+        error_name: error instanceof Error ? error.name : "UnknownError",
+      });
     }
-    await registerModel(
-      pool,
-      {
-        modelId,
-        modelFamily: descriptor.family,
-        category: descriptor.category,
-        version: descriptor.version,
-        gitSha,
-        featureSetVersion: descriptor.featureSetVersion,
-        hyperparams:
-          descriptor.category === "crypto_updown"
-            ? (DEFAULT_CRYPTO_HYPERPARAMS as unknown as Record<string, unknown>)
-            : (DEFAULT_MACRO_HYPERPARAMS as unknown as Record<string, unknown>),
-        seed: 0,
-        trainWindowStart: null,
-        trainWindowEnd: null,
-        regimeMix: false,
-      },
-      at,
-    );
-    registered.push(modelId);
   }
   return registered;
 }
@@ -237,8 +253,40 @@ export function createRunner(deps: RunnerDeps): Runner {
         timers.push(setInterval(tick, everyMs));
       };
 
-      // The re-validation sweep runs before the first estimation cycle so a
-      // model invalidated by a venue/fee/rule change never serves once more.
+      // Boot order matters: register the catalog's versions (always in shadow)
+      // and demote anything whose recorded revision is not the running one,
+      // BEFORE the first estimation cycle. A model invalidated by a code,
+      // venue, fee or rule change must never serve one more estimate.
+      try {
+        const registered = await ensureCatalogModels(
+          deps.pool,
+          deps.gitSha,
+          clock(),
+        );
+        if (registered.length > 0) {
+          logJson("info", "MODELS_REGISTERED", {
+            models: registered,
+            status: "shadow",
+          });
+        }
+        const demoted = await demoteOnRevisionChange(
+          deps.pool,
+          deps.gitSha,
+          clock(),
+        );
+        if (demoted.length > 0) {
+          logJson("warn", "REVALIDATION_REQUIRED", {
+            models: demoted,
+            cause: "code_revision_changed",
+          });
+        }
+      } catch (error: unknown) {
+        logJson("error", "JOB_FAILED", {
+          job: "catalog_boot",
+          error_name: error instanceof Error ? error.name : "UnknownError",
+        });
+      }
+
       await jobs.revalidation().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "revalidation_boot",
