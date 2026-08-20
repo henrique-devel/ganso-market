@@ -42,7 +42,7 @@ import type {
   ModelResult,
 } from "./types.js";
 
-const SERVICE = "polymarket-estimator";
+const SERVICE = "polymarket-fundamental";
 
 /** Minutes of one-minute feed history pulled per symbol per cycle. */
 const FEED_SERIES_MINUTES = 1_440;
@@ -89,7 +89,10 @@ function logJson(
 
 interface UniverseMarket {
   readonly conditionId: string;
+  /** Modelled category, or null when no model owns this market. */
   readonly category: FundamentalCategory | null;
+  /** The raw Gamma category, recorded on the estimate row either way. */
+  readonly gammaCategory: string | null;
   readonly tokenIds: readonly string[];
 }
 
@@ -131,11 +134,12 @@ export async function loadUniverse(
         (item): item is string => typeof item === "string",
       );
     }
+    const gammaCategory =
+      typeof row.category === "string" ? row.category : null;
     return {
       conditionId: String(row.condition_id),
-      category: gammaCategoryToModelCategory(
-        typeof row.category === "string" ? row.category : null,
-      ),
+      category: gammaCategoryToModelCategory(gammaCategory),
+      gammaCategory,
       tokenIds,
     };
   });
@@ -367,14 +371,24 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
 
       for (const market of universe) {
         const context = contexts.get(market.conditionId);
-        if (context === undefined || market.category === null) {
+        if (context === undefined) {
           continue;
         }
+        // A market whose category no model owns still gets a baseline estimate
+        // for every one of its tokens: the acceptance criterion is coverage of
+        // the WHOLE universe, and silently skipping a category would look like
+        // "no opportunity" instead of "no model".
+        const categoryModelled = market.category !== null;
+        const recordedCategory =
+          market.category ?? market.gammaCategory ?? "unmodelled";
         const plan = plans.get(market.conditionId);
-        const models = modelsByCategory.get(market.category) ?? {
-          active: null,
-          shadow: [],
-        };
+        const models =
+          market.category === null
+            ? { active: null, shadow: [] }
+            : (modelsByCategory.get(market.category) ?? {
+                active: null,
+                shadow: [],
+              });
         const deadline = plan?.deadline ?? context.endDate;
 
         for (const [outcomeIndex, tokenId] of market.tokenIds.entries()) {
@@ -401,7 +415,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
               : false;
 
           const evaluate = (model: ModelRecord | null): ModelAttempt | null => {
-            if (model === null || plan === undefined) {
+            if (model === null || plan === undefined || !categoryModelled) {
               return null;
             }
             const guard = new AsOfGuard(decisionTs);
@@ -420,7 +434,8 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
           const decision = decideEstimate({
             marketId: market.conditionId,
             tokenId,
-            category: market.category,
+            category: recordedCategory,
+            categoryModelled,
             decisionTs,
             book,
             activeModel: evaluate(models.active),

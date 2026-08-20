@@ -24,7 +24,7 @@ import {
 import { DEFAULT_CRYPTO_HYPERPARAMS } from "./models/crypto-updown.js";
 import { DEFAULT_MACRO_HYPERPARAMS } from "./models/macro-scheduled.js";
 
-const SERVICE = "polymarket-estimator";
+const SERVICE = "polymarket-fundamental";
 
 export interface RunnerIntervals {
   readonly estimateMs?: number;

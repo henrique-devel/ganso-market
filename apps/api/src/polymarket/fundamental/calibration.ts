@@ -19,7 +19,7 @@ import type {
 } from "./types.js";
 import { computeCalibrationMetrics } from "./walkforward.js";
 
-const SERVICE = "polymarket-estimator";
+const SERVICE = "polymarket-fundamental";
 
 /** Below this the market price is degenerate and the observation is annex-only. */
 export const DEGENERATE_LOW = 0.01;

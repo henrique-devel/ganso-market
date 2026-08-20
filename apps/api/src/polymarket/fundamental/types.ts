@@ -116,7 +116,12 @@ export interface DataRefs {
 export interface Estimate {
   readonly marketId: string;
   readonly tokenId: string;
-  readonly category: FundamentalCategory;
+  /**
+   * The market's category as recorded, not necessarily a modelled one: every
+   * token of the universe with a valid book gets a baseline estimate, even when
+   * no model owns its category.
+   */
+  readonly category: string;
   readonly decisionTs: Date;
   readonly q: ProbabilityString;
   readonly qLo: ProbabilityString;

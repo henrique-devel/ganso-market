@@ -416,3 +416,51 @@ describe("recordMarketResolved", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("uma status poller records the outcome, not only the status", () => {
+  it("carries outcomePrices and outcomes into the resolution event", async () => {
+    const inserts: Array<{ text: string; params: unknown[] }> = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        if (text.includes("INSERT INTO polymarket_resolution_events")) {
+          inserts.push({ text, params: [...(params ?? [])] });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const poller = createUmaStatusPoller({
+      pool: pool as never,
+      clock: () => Date.parse("2026-08-19T12:00:00.000Z"),
+      fetcher: () =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve([
+              {
+                conditionId: "0xresolved",
+                umaResolutionStatus: "resolved",
+                closed: true,
+                resolved: true,
+                // Gamma sends these JSON-encoded.
+                outcomePrices: '["1", "0"]',
+                outcomes: '["Yes", "No"]',
+              },
+            ]),
+        }) as never,
+    });
+
+    await poller.pollOnce(["0xresolved"]);
+
+    expect(inserts).toHaveLength(1);
+    const payload = JSON.parse(String(inserts[0]?.params[2])) as {
+      raw: { outcomePrices: string[]; outcomes: string[] };
+    };
+    // Without the outcome the RFC-010 label store has nothing to score.
+    expect(payload.raw.outcomePrices).toEqual(["1", "0"]);
+    expect(payload.raw.outcomes).toEqual(["Yes", "No"]);
+  });
+});

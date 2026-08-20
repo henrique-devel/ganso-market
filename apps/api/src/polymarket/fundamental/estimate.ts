@@ -37,7 +37,6 @@ import type {
   Estimate,
   EstimateFlags,
   FallbackReason,
-  FundamentalCategory,
   Microprice,
   ModelOutput,
   ModelResult,
@@ -55,7 +54,14 @@ export interface ModelAttempt {
 export interface EstimateInputs {
   readonly marketId: string;
   readonly tokenId: string;
-  readonly category: FundamentalCategory;
+  /** Recorded category; not every category has a model. */
+  readonly category: string;
+  /**
+   * False when no model owns this category. The token still gets a baseline
+   * estimate — "for every token of the universe with a valid book there is an
+   * estimate" is an acceptance criterion, not a best effort.
+   */
+  readonly categoryModelled?: boolean;
   readonly decisionTs: Date;
   readonly book: BookView | null;
   /** The promoted model for this category, when one exists. */
@@ -211,11 +217,14 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
     timeToResolutionMs: inputs.timeToResolutionMs,
   };
 
-  const active = resolveAttempt(
-    inputs.activeModel,
-    inputs.gitSha,
-    inputs.umaDisputeActive,
-  );
+  const active =
+    inputs.categoryModelled === false
+      ? ({ ok: false, reason: "CATEGORY_NOT_MODELLED" } as const)
+      : resolveAttempt(
+          inputs.activeModel,
+          inputs.gitSha,
+          inputs.umaDisputeActive,
+        );
 
   let consumer: Estimate;
   if (active.ok && active.attempt.status === "active") {
@@ -236,7 +245,10 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
         featureSetVersion: output.featureSetVersion,
         gitSha: inputs.gitSha ?? "",
       },
-      dataRefs: { ...bookRefs(book, microprice), ...output.dataRefs },
+      // The book's provenance is spread LAST on purpose: a model that
+      // reads no book still has to satisfy the DataRefs contract and fills
+      // those keys with placeholders. The real recorded source_ts must win.
+      dataRefs: { ...output.dataRefs, ...bookRefs(book, microprice) },
       flags: { ...baseFlags, thinBook: thinBook || output.thinBook },
       fallbackReason: null,
     });
@@ -285,7 +297,9 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
   }
 
   const shadow: Estimate[] = [];
-  for (const attempt of shadowAttempts) {
+  for (const attempt of inputs.categoryModelled === false
+    ? []
+    : shadowAttempts) {
     const resolved = resolveAttempt(
       attempt,
       inputs.gitSha,
@@ -312,7 +326,10 @@ export function decideEstimate(inputs: EstimateInputs): EstimateDecision {
           featureSetVersion: output.featureSetVersion,
           gitSha: inputs.gitSha ?? "",
         },
-        dataRefs: { ...bookRefs(book, microprice), ...output.dataRefs },
+        // The book's provenance is spread LAST on purpose: a model that
+        // reads no book still has to satisfy the DataRefs contract and fills
+        // those keys with placeholders. The real recorded source_ts must win.
+        dataRefs: { ...output.dataRefs, ...bookRefs(book, microprice) },
         flags: { ...baseFlags, thinBook: thinBook || output.thinBook },
         fallbackReason: null,
       }),

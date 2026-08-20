@@ -206,8 +206,9 @@ docker compose exec postgres psql -U ganso_market -d ganso_market -c \
 ```
 
 Enquanto nenhum modelo estiver promovido, o esperado é 100% de
-`MARKET_BASELINE` com `NO_ACTIVE_MODEL`. Isso é o sistema funcionando, não
-falha.
+`MARKET_BASELINE`: com `NO_ACTIVE_MODEL` quando a categoria não tem modelo
+nenhum registrado, e com `MODEL_IN_SHADOW` assim que existir um modelo em
+shadow. Isso é o sistema funcionando, não falha.
 
 ## Endpoints da API
 
@@ -457,8 +458,10 @@ docker compose exec postgres psql -U ganso_market -d ganso_market -c \
 
 ## Incidentes conhecidos e resposta
 
-- **Tudo em `MARKET_BASELINE` com `NO_ACTIVE_MODEL`:** estado normal enquanto
-  nenhum modelo foi promovido. Nada a fazer.
+- **Tudo em `MARKET_BASELINE` com `NO_ACTIVE_MODEL` ou `MODEL_IN_SHADOW`:**
+  estado normal enquanto nenhum modelo foi promovido. `NO_ACTIVE_MODEL`
+  significa que a categoria não tem modelo registrado; `MODEL_IN_SHADOW`
+  significa que existe modelo e o que falta é o gate. Nada a fazer.
 - **`PROVENANCE_UNAVAILABLE` em massa:** o `git_sha` não foi resolvido. Ver a
   seção de proveniência. O baseline continua; nenhum modelo serve.
 - **Muitos `absent_reasons.NO_BOOK` ou `BOOK_STALE`:** o problema é do

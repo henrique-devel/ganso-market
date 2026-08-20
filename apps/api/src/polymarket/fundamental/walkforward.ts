@@ -103,7 +103,7 @@ function log(
   process.stderr.write(
     `${JSON.stringify({
       level,
-      service: "polymarket-recorder",
+      service: "polymarket-fundamental",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
       message,

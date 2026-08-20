@@ -30,7 +30,7 @@ async function run(): Promise<void> {
     process.stderr.write(
       `${JSON.stringify({
         level: "info",
-        service: "polymarket-estimator",
+        service: "polymarket-fundamental",
         timestamp: new Date().toISOString(),
         reason_code: `${signal}_RECEIVED`,
         message: "polymarket_estimator_shutdown",
@@ -61,7 +61,7 @@ void run().catch((error: unknown) => {
   process.stderr.write(
     `${JSON.stringify({
       level: "fatal",
-      service: "polymarket-estimator",
+      service: "polymarket-fundamental",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
       error_name: error instanceof Error ? error.name : "UnknownError",

@@ -200,11 +200,13 @@ intervalo do baseline alargado por `fallback_widen_factor` (default 1,5×) — o
 fallback é sempre **mais** incerto, nunca menos.
 
 Motivos (`FallbackReason`, `types.ts`), na ordem de precedência de
-`resolveAttempt`/`decideEstimate`:
+`resolveAttempt`/`decideEstimate`. A distinção entre os dois primeiros estados
+é deliberada: `NO_ACTIVE_MODEL` diz que nada foi registrado para a categoria,
+`MODEL_IN_SHADOW` diz que existe modelo e o que falta é o gate.
 
 | Ordem | `fallback_reason`         | Quando dispara                                                                            |
 | ----- | ------------------------- | ----------------------------------------------------------------------------------------- |
-| 1     | `NO_ACTIVE_MODEL`         | a categoria não tem modelo promovido (estado normal enquanto ninguém passou o gate)        |
+| 1     | `NO_ACTIVE_MODEL`         | a categoria não tem modelo promovido **nem** modelo em shadow: nada foi registrado ainda   |
 | 2     | `UMA_DISPUTE_ACTIVE`      | disputa UMA aberta no mercado no instante da decisão — veto, vence qualquer modelo         |
 | 3     | `PROVENANCE_UNAVAILABLE`  | `git_sha` não resolvido: nenhuma linha `MODEL` pode ser escrita                            |
 | 4     | `RULE_NOT_PARSEABLE`      | a regra versionada não parseia de forma inequívoca; o mercado fica no baseline             |
@@ -212,7 +214,7 @@ Motivos (`FallbackReason`, `types.ts`), na ordem de precedência de
 | 4     | `MODEL_ERROR`             | exceção do modelo (capturada em `catalog.ts`) ou `q` não finito                            |
 | 4     | `MODEL_TIMEOUT`           | declarado no contrato; **sem emissor no código atual**                                     |
 | 5     | `FEED_STALE`              | amostra do feed resolutor mais velha que `crypto.max_feed_age_ms` (default 120 s)          |
-| 6     | `MODEL_IN_SHADOW`         | o modelo respondeu, mas ainda está em `shadow`: a linha shadow é gravada, o consumidor lê baseline |
+| 6     | `MODEL_IN_SHADOW`         | existe modelo em `shadow` na categoria e nenhum promovido: a linha shadow é gravada, o consumidor lê baseline |
 | —     | `GATE_FAILED`             | declarado no contrato; **sem emissor no código atual**                                     |
 | —     | `CATEGORY_NOT_MODELLED`   | declarado no contrato; **sem emissor no código atual**                                     |
 

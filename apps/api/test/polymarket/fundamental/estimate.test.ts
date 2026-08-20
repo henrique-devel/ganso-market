@@ -292,3 +292,69 @@ describe("decideEstimate - model path", () => {
 function replacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
+
+describe("provenance merge", () => {
+  it("keeps the recorded book's source_ts over a model's placeholder", () => {
+    const bookSourceTs = new Date(DECISION_TS.getTime() - 4_000);
+    const consumer = consumerOf(
+      decideEstimate(
+        inputs({
+          book: book({ sourceTs: bookSourceTs, observedAt: bookSourceTs }),
+          activeModel: attempt({
+            result: {
+              ok: true,
+              value: modelOutput({
+                dataRefs: {
+                  // A model that reads no book still has to fill these keys.
+                  bookSourceTs: null,
+                  bookObservedAt: DECISION_TS.toISOString(),
+                  feedSourceTs: DECISION_TS.toISOString(),
+                  feedSymbol: "btc/usd",
+                },
+              }),
+            },
+          }),
+        }),
+      ),
+    );
+    expect(consumer.dataRefs.bookSourceTs).toBe(bookSourceTs.toISOString());
+    expect(consumer.dataRefs.bookObservedAt).toBe(bookSourceTs.toISOString());
+    // The model's own provenance is preserved alongside it.
+    expect(consumer.dataRefs.feedSymbol).toBe("btc/usd");
+  });
+});
+
+describe("categories without a model", () => {
+  it("still emits a baseline estimate, flagged CATEGORY_NOT_MODELLED", () => {
+    // RFC-010 acceptance: EVERY token of the universe with a valid book has an
+    // estimate. A category no model owns must produce a baseline row, never
+    // silence — silence reads as "no opportunity" instead of "no model".
+    const consumer = consumerOf(
+      decideEstimate(
+        inputs({
+          category: "sports",
+          categoryModelled: false,
+          activeModel: attempt(),
+        }),
+      ),
+    );
+    expect(consumer.source).toBe("MARKET_BASELINE");
+    expect(consumer.fallbackReason).toBe("CATEGORY_NOT_MODELLED");
+    expect(consumer.category).toBe("sports");
+    expect(consumer.q).toBe(consumer.marketProb);
+  });
+
+  it("writes no shadow row for an unmodelled category", () => {
+    const decision = decideEstimate(
+      inputs({
+        category: "sports",
+        categoryModelled: false,
+        shadowModels: [attempt({ status: "shadow" })],
+      }),
+    );
+    if (decision.kind !== "estimates") {
+      throw new Error("expected estimates");
+    }
+    expect(decision.shadow).toHaveLength(0);
+  });
+});
