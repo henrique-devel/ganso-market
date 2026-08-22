@@ -131,6 +131,21 @@ TTL).
   recente) e consulta o Gamma **com os dois filtros** — aberto e
   `closed=true`. Coberto por teste.
 
+- **FATO VERIFICADO (produção, 2026-08-22, após o deploy da correção):** a
+  cadeia fechou de ponta a ponta. A primeira varredura pendente gravou **99
+  eventos `resolved`** (antes: 0 em ~2 dias), todos com `outcomePrices` não
+  nulo. O `syncLabels` seguinte produziu **204 labels em 102 mercados** — 102
+  com label `0` e 102 com `1`, complementares como manda um mercado binário —,
+  **todos finais, zero disputados, zero sem instante conhecível**. Disso saem
+  **62.356 observações pontuáveis** (estimativa anterior ao instante em que o
+  desfecho ficou público) em **39 mercados**, das quais 8.211 são linhas de
+  modelo em shadow.
+- **ESTADO DO GATE (2026-08-22):** dois relatórios gravados, ambos
+  `NO_EVIDENCE_OF_ALPHA` com `NO_OBSERVATIONS` — eles rodaram às 01:27, **antes**
+  de os labels existirem (02:27). Ambos os modelos seguem em `shadow`. O
+  primeiro relatório com métricas reais sai na próxima execução diária. A
+  cobertura hoje é **39 de 100 mercados** exigidos, só em `crypto_updown`;
+  `macro_scheduled` continua em zero porque o modelo se abstém sem consenso.
 - **FATO VERIFICADO:** o restante da cadeia já estava correto — a captura de
   desfecho grava `outcomePrices`/`outcomes` no payload (confirmado nos 80
   eventos `proposed` em produção) e `labels.ts` aceita `resolved`/
