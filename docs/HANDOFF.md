@@ -93,10 +93,10 @@ TTL).
 
 ## BLOQUEIO ATUAL DA RFC-010 — o gate ainda não tem como acumular evidência
 
-- **FATO VERIFICADO (2026-08-20 10:2xZ):** 52.246 estimativas gravadas (6.828
-  em shadow), mas **0 linhas em `fundamental_labels`**. A causa é a montante:
-  `polymarket_resolution_events` tem **5 eventos `proposed` e nenhum
-  `resolved`/`market_resolved`**, então não existe desfecho para rotular.
+- **FATO VERIFICADO (2026-08-21):** 52 mil+ estimativas gravadas, mas
+  **0 linhas em `fundamental_labels`**. A causa era a montante:
+  `polymarket_resolution_events` tinha **80 eventos `proposed` e nenhum
+  `resolved`/`market_resolved`**, então não existia desfecho para rotular.
 - **FATO VERIFICADO — furo operacional encontrado e corrigido:** o deploy do CD
   **não troca a imagem dos containers de profile**. Depois de mergear a RFC-010
   eu reconstruí só o `polymarket-estimator`; o `polymarket-recorder` continuou
@@ -109,15 +109,38 @@ TTL).
   42/min para 4, 12 e 0/min em três janelas de 1 min — é a rajada de
   re-subscribe (o livro recebido É o resync, comportamento da RFC-007), não uma
   regressão. Zero erros no recorder.
-- **HIPÓTESE A VERIFICAR (não confirmada):** o poller UMA só consulta mercados
-  **atualmente no universo**, e um mercado resolvido sai do universo por
-  `inactive_or_closed` no ciclo Gamma de 10 min. Se a saída acontecer antes da
-  varredura de 2 min, a transição `resolved` nunca é gravada e o label store
-  nunca enche. Os 5 `proposed` sem nenhum `resolved` são indício fraco disso,
-  mas a coleta expandida é recente demais para concluir. **É a primeira coisa a
-  checar nas próximas 24–48 h.** Se confirmar, a correção é da RFC-007: manter
-  na varredura os `condition_id` que saíram do universo há pouco, ou hidratar o
-  desfecho pelo Gamma no momento da saída.
+- **CAUSA RAIZ CONFIRMADA (2026-08-21) — eram DUAS causas somadas.** Corrigidas.
+
+  1. **O poller UMA só consulta mercados no universo atual, e o mercado sai do
+     universo antes de resolver.** Medido em produção: os **80** mercados com
+     evento `proposed` **todos** já haviam saído do universo, em média
+     **17,4 min depois** da proposta — muito antes de a liveness de ~2 h da UMA
+     terminar. Ou seja, paramos de perguntar exatamente sobre o mercado que
+     está prestes a resolver.
+  2. **O `/markets` do Gamma filtra `closed=false` por padrão.** Verificado
+     contra a API real: o mesmo `condition_id` devolve **0 resultados** sem
+     filtro e o mercado resolvido **com** `&closed=true`
+     (`umaResolutionStatus: resolved`, `outcomePrices: ["1","0"]`). Mesmo que
+     continuássemos perguntando, a consulta padrão nunca enxergaria a
+     resolução.
+
+  **Correção (RFC-007, exigida pela tarefa 7 da RFC-010):** novo
+  `pollPendingOnce()` no poller UMA, agendado a cada 10 min, que segue os
+  mercados que saíram do universo e ainda não chegaram a estado terminal
+  (janela de 7 dias, teto de 200 por varredura, ordenados por atividade mais
+  recente) e consulta o Gamma **com os dois filtros** — aberto e
+  `closed=true`. Coberto por teste.
+
+- **FATO VERIFICADO:** o restante da cadeia já estava correto — a captura de
+  desfecho grava `outcomePrices`/`outcomes` no payload (confirmado nos 80
+  eventos `proposed` em produção) e `labels.ts` aceita `resolved`/
+  `market_resolved` com desfecho. Faltava só observar a transição.
+- **BLOQUEIO/TODO (RFC-007):** o caminho WS de resolução é **código morto** —
+  `recordMarketResolved` existe em `samplers.ts` e **ninguém o chama**, e
+  `market_resolved` não está no union `MarketMessage` nem em
+  `parseMarketFrame`. Hoje a única fonte de resolução é o polling do Gamma.
+  Não foi corrigido aqui: o polling resolve a necessidade da RFC-010 e mexer no
+  parser do WS é escopo da RFC-007.
 
 ## RFC-010 — implementação (2026-08-20)
 

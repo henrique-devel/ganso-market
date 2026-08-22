@@ -43,6 +43,7 @@ export interface OrchestratorIntervals {
   readonly tradesMs?: number;
   readonly oiHoldersMs?: number;
   readonly umaMs?: number;
+  readonly umaPendingMs?: number;
   readonly reconcileMs?: number;
   readonly retentionMs?: number;
   readonly macroReleaseMs?: number;
@@ -431,6 +432,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       schedule("uma", intervals.umaMs ?? 120_000, async () => {
         await umaPoller.pollOnce(conditionIds());
+      });
+      // Markets leave the universe within minutes of their UMA proposal, well
+      // before liveness completes, so the universe poll above can never see
+      // them resolve. This slower sweep follows them until they reach a
+      // terminal state — it is what makes any label, and therefore any gate
+      // evidence, possible at all.
+      schedule("uma_pending", intervals.umaPendingMs ?? 600_000, async () => {
+        await umaPoller.pollPendingOnce();
       });
       schedule("reconcile", intervals.reconcileMs ?? 3_600_000, async () => {
         await reconciler.reconcileOnce(tokenIds);

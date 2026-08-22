@@ -226,7 +226,7 @@ Achados **não** corrigidos, com motivo:
 - *"label store não retrata `is_final` se uma disputa chegar depois da
   resolução"* — **risco residual aceito nesta RFC**, registrado abaixo.
 
-## 9. Correção adjacente na RFC-007 (necessária para a RFC-010)
+## 9. Correções adjacentes na RFC-007 (necessárias para a RFC-010)
 
 `createUmaStatusPoller` gravava a transição de status mas **não o desfecho**.
 Sem `outcomePrices`/`outcomes` na linha imutável de resolução, o label store da
@@ -309,3 +309,38 @@ Revisão `ba8cbf2a`, imagem do estimador reconstruída, sete containers rodando.
 As duas revisões carimbadas são a transição do rebuild: o SHA assado na imagem
 acompanha **o código que roda**, não o checkout — que é exatamente o motivo de
 ele ter saído do volume montado e ido para dentro da imagem.
+
+
+## 13. Por que o label store ficava zerado (2026-08-21)
+
+Investigação com evidência, não suposição. `fundamental_estimates` tinha 52 mil+
+linhas e `fundamental_labels` tinha **zero**, com 80 eventos `proposed` e
+nenhum `resolved`. Duas causas somadas:
+
+1. **Paramos de perguntar sobre o mercado certo.** Consulta em produção: os 80
+   mercados com `proposed` **todos** já haviam saído do universo, em média
+   **17,4 min** depois da proposta, e já se passavam ~21 h. O poller UMA só
+   consulta `conditionIds()` — o universo atual —, então a liveness de ~2 h da
+   UMA termina fora do nosso campo de visão.
+
+2. **O Gamma esconde mercado fechado.** Teste direto contra a API real, mesmo
+   `condition_id`:
+
+   ```text
+   [0 resultado(s)]  condition_ids=0xc68a...
+   [1 resultado(s)]  condition_ids=0xc68a...&closed=true
+   ```
+
+   E o mercado estava resolvido o tempo todo:
+   `umaResolutionStatus: resolved`, `outcomePrices: ["1","0"]`,
+   `closedTime: 2026-08-21 23:55:57+00`.
+
+**Correção:** `pollPendingOnce()` a cada 10 min segue os mercados que saíram do
+universo sem estado terminal (janela de 7 dias, teto de 200, ordenados por
+atividade) e consulta o Gamma com os dois filtros. Dois testes fixam as duas
+causas.
+
+**Achado não corrigido (escopo RFC-007):** o caminho WS de resolução é código
+morto — `recordMarketResolved` não é chamado por ninguém e `market_resolved`
+não é parseado. O polling cobre a necessidade da RFC-010; consertar o parser do
+WS é da RFC-007.
