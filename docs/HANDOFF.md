@@ -131,6 +131,11 @@ TTL).
   recente) e consulta o Gamma **com os dois filtros** — aberto e
   `closed=true`. Coberto por teste.
 
+- **FATO VERIFICADO (produção, 2026-08-22, após o deploy da correção):** a
+  primeira varredura pendente gravou **99 eventos `resolved`**, todos com
+  `outcomePrices` não nulo, todos com ≥2 tokens na nossa tabela, e **59 desses
+  mercados já têm estimativas nossas** — ou seja, viram observações pontuáveis
+  para o walk-forward. Antes da correção eram 0 resoluções em ~2 dias de coleta.
 - **FATO VERIFICADO:** o restante da cadeia já estava correto — a captura de
   desfecho grava `outcomePrices`/`outcomes` no payload (confirmado nos 80
   eventos `proposed` em produção) e `labels.ts` aceita `resolved`/
