@@ -406,6 +406,62 @@ export function normalizeUmaStatus(
 
 export interface UmaStatusPoller {
   pollOnce(conditionIds: readonly string[]): Promise<void>;
+  /**
+   * Follow markets that have LEFT the universe but have not reached a terminal
+   * resolution yet. A market exits the universe within minutes of its UMA
+   * proposal (measured in production: ~17 min), long before the ~2 h liveness
+   * completes, so polling only the current universe means the `resolved`
+   * transition is never observed and no label is ever produced.
+   */
+  pollPendingOnce(): Promise<void>;
+}
+
+/** How far back a market that left the universe is still followed. */
+export const PENDING_RESOLUTION_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1_000;
+/** Upper bound on one pending sweep, so the Gamma load stays predictable. */
+export const PENDING_RESOLUTION_LIMIT = 200;
+
+/**
+ * Markets that left the universe, have no terminal resolution event yet, and
+ * were active recently enough to still be resolvable. Ordered by most recent
+ * activity so the cap drops the coldest markets first.
+ */
+export async function pendingResolutionIds(
+  pool: SqlExecutor,
+  now: Date,
+  lookbackMs: number = PENDING_RESOLUTION_LOOKBACK_MS,
+  limit: number = PENDING_RESOLUTION_LIMIT,
+): Promise<string[]> {
+  const since = new Date(now.getTime() - lookbackMs);
+  const result = await pool.query<{ condition_id: string }>(
+    `WITH membership AS (
+       SELECT DISTINCT ON (condition_id) condition_id, action, at
+         FROM polymarket_universe_log
+        WHERE action IN ('enter', 'exit')
+        ORDER BY condition_id, at DESC
+     ),
+     terminal AS (
+       SELECT DISTINCT condition_id
+         FROM polymarket_resolution_events
+        WHERE event_type IN ('resolved', 'market_resolved')
+     ),
+     activity AS (
+       SELECT condition_id, max(received_at) AS last_event
+         FROM polymarket_resolution_events
+        GROUP BY condition_id
+     )
+     SELECT m.condition_id
+       FROM membership m
+       LEFT JOIN terminal t ON t.condition_id = m.condition_id
+       LEFT JOIN activity a ON a.condition_id = m.condition_id
+      WHERE m.action = 'exit'
+        AND t.condition_id IS NULL
+        AND GREATEST(m.at, COALESCE(a.last_event, m.at)) > $1
+      ORDER BY GREATEST(m.at, COALESCE(a.last_event, m.at)) DESC
+      LIMIT $2`,
+    [since, limit],
+  );
+  return result.rows.map((row) => row.condition_id);
 }
 
 interface GammaStatusRow {
@@ -525,8 +581,16 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
     hydrated = true;
   }
 
+  /**
+   * `closedOnly` is not cosmetic: Gamma's /markets defaults to `closed=false`,
+   * so a market that has RESOLVED is invisible to the default query. Verified
+   * against the live API — the same condition_id returns 0 results without the
+   * filter and the resolved market with it. Without this, the resolution of
+   * every market is unobservable and the RFC-010 label store stays empty.
+   */
   async function fetchStatuses(
     conditionIds: readonly string[],
+    closedOnly = false,
   ): Promise<GammaStatusRow[]> {
     const rows: GammaStatusRow[] = [];
     for (let i = 0; i < conditionIds.length; i += GAMMA_STATUS_CHUNK) {
@@ -534,8 +598,9 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
       const params = chunk
         .map((id) => `condition_ids=${encodeURIComponent(id)}`)
         .join("&");
+      const closedParam = closedOnly ? "&closed=true" : "";
       const response = await fetcher(
-        `${baseUrl}/markets?limit=${chunk.length}&${params}`,
+        `${baseUrl}/markets?limit=${chunk.length}${closedParam}&${params}`,
         { headers: { accept: "application/json", "user-agent": USER_AGENT } },
       );
       if (!response.ok) {
@@ -617,53 +682,119 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         }
         return;
       }
-      for (const row of rows) {
-        let current = normalizeUmaStatus(row.rawStatus, row.closed);
-        if (current === null && row.resolved) {
-          current = "resolved";
+      await processRows(rows);
+    },
+
+    async pollPendingOnce(): Promise<void> {
+      if (!hydrated) {
+        try {
+          await hydrate();
+        } catch {
+          return;
         }
-        const previous = lastStatus.get(row.conditionId) ?? null;
-        if (current === null || current === previous) {
-          continue;
-        }
+      }
+      let pending: string[];
+      try {
+        pending = await pendingResolutionIds(deps.pool, new Date(deps.clock()));
+      } catch (error: unknown) {
+        logJson(
+          "error",
+          "PENDING_RESOLUTION_QUERY_FAILED",
+          "polymarket_pending_resolution_query_failed",
+          { error_name: error instanceof Error ? error.name : "UnknownError" },
+        );
+        return;
+      }
+      if (pending.length === 0) {
+        return;
+      }
+      const startedAtMs = deps.clock();
+      try {
+        // Both filters: a market awaiting UMA liveness is still open, while a
+        // market that already resolved is only visible with closed=true.
+        const open = await fetchStatuses(pending);
+        const closed = await fetchStatuses(pending, true);
+        // Closed last: a terminal status must be applied after any open-state
+        // reading of the same market in this sweep.
+        await processRows([...open, ...closed]);
+      } catch (error: unknown) {
+        logJson(
+          "error",
+          "PENDING_RESOLUTION_POLL_FAILED",
+          "polymarket_pending_resolution_poll_failed",
+          { error_name: error instanceof Error ? error.name : "UnknownError" },
+        );
         try {
           await deps.pool.query(
-            `INSERT INTO polymarket_resolution_events
-               (condition_id, event_type, payload_json, source_ts, received_at)
-             VALUES ($1,$2,$3::jsonb,NULL,$4)`,
+            `INSERT INTO polymarket_data_gaps
+               (source, token_id, gap_start, gap_end, cause, details_json)
+             VALUES ('gamma',NULL,$1,$2,$3,$4::jsonb)`,
             [
-              row.conditionId,
-              current,
-              JSON.stringify({
-                from: previous,
-                to: current,
-                raw: {
-                  umaResolutionStatus: row.rawStatus,
-                  closed: row.closed,
-                  resolved: row.resolved,
-                  outcomePrices: row.outcomePrices,
-                  outcomes: row.outcomes,
-                },
-              }),
+              new Date(startedAtMs),
               new Date(deps.clock()),
+              "pending_resolution_poll_failed",
+              JSON.stringify({ markets: pending.length }),
             ],
           );
-          lastStatus.set(row.conditionId, current);
-        } catch (error: unknown) {
-          // Not updating lastStatus means the transition is retried next poll.
+        } catch {
           logJson(
             "error",
-            "RESOLUTION_EVENT_PERSIST_FAILED",
-            "polymarket_resolution_event_persist_failed",
-            {
-              condition_id: row.conditionId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
-            },
+            "GAP_PERSIST_FAILED",
+            "polymarket_gap_persist_failed",
+            { cause: "pending_resolution_poll_failed" },
           );
         }
       }
     },
   };
+
+  async function processRows(rows: readonly GammaStatusRow[]): Promise<void> {
+    for (const row of rows) {
+      let current = normalizeUmaStatus(row.rawStatus, row.closed);
+      if (current === null && row.resolved) {
+        current = "resolved";
+      }
+      const previous = lastStatus.get(row.conditionId) ?? null;
+      if (current === null || current === previous) {
+        continue;
+      }
+      try {
+        await deps.pool.query(
+          `INSERT INTO polymarket_resolution_events
+               (condition_id, event_type, payload_json, source_ts, received_at)
+             VALUES ($1,$2,$3::jsonb,NULL,$4)`,
+          [
+            row.conditionId,
+            current,
+            JSON.stringify({
+              from: previous,
+              to: current,
+              raw: {
+                umaResolutionStatus: row.rawStatus,
+                closed: row.closed,
+                resolved: row.resolved,
+                outcomePrices: row.outcomePrices,
+                outcomes: row.outcomes,
+              },
+            }),
+            new Date(deps.clock()),
+          ],
+        );
+        lastStatus.set(row.conditionId, current);
+      } catch (error: unknown) {
+        // Not updating lastStatus means the transition is retried next poll.
+        logJson(
+          "error",
+          "RESOLUTION_EVENT_PERSIST_FAILED",
+          "polymarket_resolution_event_persist_failed",
+          {
+            condition_id: row.conditionId,
+            error_name: error instanceof Error ? error.name : "UnknownError",
+          },
+        );
+      }
+    }
+  }
 }
 
 /**

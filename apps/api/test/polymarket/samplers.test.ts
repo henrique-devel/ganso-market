@@ -4,10 +4,13 @@ import type { QueryResultRow } from "pg";
 
 import type { QueryResult, SqlExecutor } from "../../src/database.js";
 import {
+  PENDING_RESOLUTION_LIMIT,
+  PENDING_RESOLUTION_LOOKBACK_MS,
   computeConcentration,
   createOiHoldersSampler,
   createUmaStatusPoller,
   normalizeUmaStatus,
+  pendingResolutionIds,
   recordMarketResolved,
 } from "../../src/polymarket/samplers.js";
 
@@ -462,5 +465,103 @@ describe("uma status poller records the outcome, not only the status", () => {
     // Without the outcome the RFC-010 label store has nothing to score.
     expect(payload.raw.outcomePrices).toEqual(["1", "0"]);
     expect(payload.raw.outcomes).toEqual(["Yes", "No"]);
+  });
+});
+
+describe("resolution follow-up after a market leaves the universe", () => {
+  it("asks Gamma with closed=true, without which a resolved market is invisible", async () => {
+    // Verified against the live API: /markets defaults to closed=false, so the
+    // same condition_id returns 0 results without the filter and the resolved
+    // market with it. This is the reason no label could ever be produced.
+    const urls: string[] = [];
+    const inserts: unknown[][] = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        if (text.includes("INSERT INTO polymarket_resolution_events")) {
+          inserts.push([...(params ?? [])]);
+        }
+        if (text.includes("WITH membership")) {
+          return Promise.resolve({
+            rows: [{ condition_id: "0xgone" } as unknown as R],
+            rowCount: 1,
+          });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const poller = createUmaStatusPoller({
+      pool: pool as never,
+      clock: () => Date.parse("2026-08-21T23:00:00.000Z"),
+      fetcher: ((url: string) => {
+        urls.push(url);
+        const isClosedQuery = url.includes("closed=true");
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              isClosedQuery
+                ? [
+                    {
+                      conditionId: "0xgone",
+                      umaResolutionStatus: "resolved",
+                      closed: true,
+                      resolved: true,
+                      outcomePrices: '["1", "0"]',
+                      outcomes: '["Yes", "No"]',
+                    },
+                  ]
+                : [],
+            ),
+        });
+      }) as never,
+    });
+
+    await poller.pollPendingOnce();
+
+    // Both filters are tried: still-open markets awaiting liveness, and
+    // already-closed ones.
+    expect(urls.some((url) => url.includes("closed=true"))).toBe(true);
+    expect(urls.some((url) => !url.includes("closed=true"))).toBe(true);
+
+    expect(inserts).toHaveLength(1);
+    const [conditionId, eventType, payloadJson] = inserts[0] ?? [];
+    expect(conditionId).toBe("0xgone");
+    expect(eventType).toBe("resolved");
+    const payload = JSON.parse(String(payloadJson)) as {
+      raw: { outcomePrices: string[] };
+    };
+    // With the outcome attached, the label store finally has something to score.
+    expect(payload.raw.outcomePrices).toEqual(["1", "0"]);
+  });
+
+  it("follows only markets that left the universe without resolving", async () => {
+    const captured: Array<{ text: string; params: unknown[] }> = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        captured.push({ text, params: [...(params ?? [])] });
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const now = new Date("2026-08-21T23:00:00.000Z");
+    await pendingResolutionIds(pool as never, now);
+
+    const query = captured[0];
+    expect(query?.text).toContain("action = 'exit'");
+    // A market that already reached a terminal state is not followed again.
+    expect(query?.text).toContain("t.condition_id IS NULL");
+    expect(query?.text).toContain("'resolved', 'market_resolved'");
+    // Bounded in both time and size, so the Gamma load stays predictable.
+    expect(query?.params[0]).toBeInstanceOf(Date);
+    expect((query?.params[0] as Date).getTime()).toBe(
+      now.getTime() - PENDING_RESOLUTION_LOOKBACK_MS,
+    );
+    expect(query?.params[1]).toBe(PENDING_RESOLUTION_LIMIT);
   });
 });
