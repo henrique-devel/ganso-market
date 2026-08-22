@@ -344,3 +344,16 @@ causas.
 morto — `recordMarketResolved` não é chamado por ninguém e `market_resolved`
 não é parseado. O polling cobre a necessidade da RFC-010; consertar o parser do
 WS é da RFC-007.
+
+**Resultado da correção, medido em produção (2026-08-22):**
+
+```text
+resolved:                 0  ->  99 na primeira varredura
+labels:                   0  ->  204 (102 mercados; 102 label "0", 102 label "1")
+                                 todos finais, 0 disputados, 0 sem instante conhecível
+observações pontuáveis:   0  ->  62.356 em 39 mercados (8.211 de modelo em shadow)
+```
+
+O gate continua `NO_EVIDENCE_OF_ALPHA` e os dois modelos seguem em `shadow`: os
+relatórios existentes rodaram antes de os labels chegarem, e a cobertura atual
+(39 mercados) está abaixo dos 100 exigidos. É o comportamento correto.
