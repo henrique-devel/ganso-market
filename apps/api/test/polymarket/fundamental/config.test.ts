@@ -114,3 +114,31 @@ describe("loadFundamentalConfig", () => {
     expect(config).toEqual(DEFAULT_FUNDAMENTAL_CONFIG);
   });
 });
+
+describe("per-horizon cadence", () => {
+  it("refuses a cadence that samples a far market finer than a near one", () => {
+    // Inverting the order would spend the storage budget exactly where it can
+    // never become gate evidence.
+    expect(() =>
+      parseFundamentalConfig({
+        estimate_cadence_ms: { lt_1h: 600_000, gt_7d: 10_000 },
+      }),
+    ).toThrow(FundamentalConfigError);
+  });
+
+  it("accepts a partial override and keeps the other buckets", () => {
+    const parsed = parseFundamentalConfig({
+      estimate_cadence_ms: { gt_7d: 1_800_000 },
+    });
+    expect(parsed.estimateCadenceMs.gt_7d).toBe(1_800_000);
+    expect(parsed.estimateCadenceMs.lt_1h).toBe(
+      DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs.lt_1h,
+    );
+  });
+
+  it("rejects an unknown bucket", () => {
+    expect(() =>
+      parseFundamentalConfig({ estimate_cadence_ms: { lt_2h: 10_000 } }),
+    ).toThrow(FundamentalConfigError);
+  });
+});

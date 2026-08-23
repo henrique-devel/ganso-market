@@ -18,36 +18,70 @@ const DAY_MS = 24 * 3_600_000;
 const MAX_TOKENS = 200;
 
 /**
- * Consumer rows only: one per token per cycle. Every token of the universe with
- * a valid book gets exactly one row a consumer can read.
+ * Measured share of the universe's tokens sitting in each horizon bucket,
+ * from production on 2026-08-22 (586 878 rows over ~1.9 days). The cadence is
+ * per bucket, so the daily row count is the sum over buckets, not one rate
+ * times one token count.
  */
-function consumerRowsPerDay(minGapMs: number): number {
-  return Math.floor((MAX_TOKENS * DAY_MS) / minGapMs);
-}
+const MEASURED_ROW_SHARE: Readonly<Record<string, number>> = {
+  lt_1h: 0.003,
+  "1h_6h": 0.028,
+  "6h_24h": 0.074,
+  "1d_7d": 0.145,
+  gt_7d: 0.75,
+};
+
+/** Rows a day under a flat 60 s cadence, the shape production ran at first. */
+const FLAT_60S_ROWS_PER_DAY = Math.floor((MAX_TOKENS * DAY_MS) / 60_000);
 
 /**
- * Total rows written per day, including the shadow rows. A token belongs to
- * exactly one category and each category has exactly one model family, so at
- * most ONE shadow row per token per cycle is added on top of the consumer row.
- * Ignoring them would understate the storage by a factor of two.
+ * Rows a day under the per-horizon cadence: each bucket's share of the tokens
+ * sampled at that bucket's own rate.
  */
-function totalRowsPerDay(minGapMs: number, shadowModelsPerToken = 1): number {
-  return consumerRowsPerDay(minGapMs) * (1 + shadowModelsPerToken);
+function rowsPerDay(cadence: Readonly<Record<string, number>>): number {
+  let total = 0;
+  for (const [bucket, share] of Object.entries(MEASURED_ROW_SHARE)) {
+    const gap = cadence[bucket] ?? 60_000;
+    total += (MAX_TOKENS * share * DAY_MS) / gap;
+  }
+  return Math.floor(total);
 }
 
 describe("estimate volumetry", () => {
-  it("respects the RFC's per-token rate limit and daily ceiling", () => {
-    const config = DEFAULT_FUNDAMENTAL_CONFIG;
-    expect(config.minEstimateGapMs).toBe(60_000);
-    // The RFC's stated ceiling for a 50-100 market universe is ~150-300k
-    // consumer rows per day; at 200 tokens and one row per token per minute
-    // the loop lands at the top of that range and cannot exceed it.
-    expect(consumerRowsPerDay(config.minEstimateGapMs)).toBe(288_000);
-    expect(consumerRowsPerDay(config.minEstimateGapMs)).toBeLessThanOrEqual(
-      300_000,
+  it("spends resolution near the resolution instant, not far from it", () => {
+    const cadence = DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs;
+    // A market resolving within the hour is sampled every 10 s; one resolving
+    // in months every 10 min. Sampling the far market more often would spend
+    // the whole budget exactly where it can never become gate evidence.
+    expect(cadence.lt_1h).toBe(10_000);
+    expect(cadence["1h_6h"]).toBe(60_000);
+    expect(cadence["6h_24h"]).toBe(300_000);
+    expect(cadence["1d_7d"]).toBe(600_000);
+    expect(cadence.gt_7d).toBe(600_000);
+
+    // The loop has to tick at least as fine as the finest cadence, or the
+    // 10 s bucket could never actually be served every 10 s.
+    expect(DEFAULT_FUNDAMENTAL_CONFIG.estimateIntervalMs).toBeLessThanOrEqual(
+      cadence.lt_1h,
     );
-    // With the catalog's model in shadow, each token also writes one gate row.
-    expect(totalRowsPerDay(config.minEstimateGapMs)).toBe(576_000);
+
+    // Never finer as the horizon grows.
+    const ordered = [
+      cadence.lt_1h,
+      cadence["1h_6h"],
+      cadence["6h_24h"],
+      cadence["1d_7d"],
+      cadence.gt_7d,
+    ];
+    for (let index = 1; index < ordered.length; index += 1) {
+      expect(ordered[index]).toBeGreaterThanOrEqual(ordered[index - 1] ?? 0);
+    }
+  });
+
+  it("cuts the daily volume several times over versus a flat cadence", () => {
+    const perHorizon = rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs);
+    expect(FLAT_60S_ROWS_PER_DAY).toBe(288_000);
+    expect(perHorizon).toBeLessThan(FLAT_60S_ROWS_PER_DAY / 4);
   });
 
   it("keeps the estimates quota inside the module's shared reserve", () => {
@@ -67,33 +101,21 @@ describe("estimate volumetry", () => {
       (table) => table.table === "fundamental_estimates",
     );
     const quotaBytes = estimates?.quotaBytes ?? 0;
-    const bytesPerDay =
-      totalRowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.minEstimateGapMs) *
-      MEASURED_BYTES_PER_ROW;
-    const daysWithinQuota = quotaBytes / bytesPerDay;
+    // Consumer rows plus one shadow row per token per cycle.
+    const rows = rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs) * 2;
+    const daysWithinQuota = quotaBytes / (rows * MEASURED_BYTES_PER_ROW);
 
-    // This is the honest number, and it is deliberately asserted rather than
-    // hidden: at the full 200-token universe, the RFC's maximum cadence and one
-    // model per category in shadow, the 3 GB quota holds about five and a half
-    // days, NOT the 90-day TTL. Quota beats TTL in the retention job, so the
-    // data stays inside the local budget and the window is what shrinks.
-    // Reaching a true 90 days needs either a much slower cadence or ~52 GB of
-    // quota; that is an owner decision, recorded in the handoff.
-    expect(daysWithinQuota).toBeGreaterThan(5);
-    expect(daysWithinQuota).toBeLessThan(6);
+    // The honest number, asserted rather than hidden. The per-horizon cadence
+    // buys weeks instead of the ~5.5 days a flat 60 s cadence bought, which is
+    // what makes accumulating 100 resolved markets realistic at all.
+    expect(daysWithinQuota).toBeGreaterThan(30);
 
-    // A baseline-only deployment (no model registered yet) writes half as much
-    // and therefore keeps twice the window.
-    const baselineOnlyBytesPerDay =
-      consumerRowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.minEstimateGapMs) *
-      MEASURED_BYTES_PER_ROW;
-    expect(quotaBytes / baselineOnlyBytesPerDay).toBeGreaterThan(10);
-
-    // The documented knob really does buy the 90-day window, shadow rows
-    // included: at a 20-minute cadence the same quota holds over 90 days.
-    const slowerBytesPerDay =
-      totalRowsPerDay(1_200_000) * MEASURED_BYTES_PER_ROW;
-    expect(quotaBytes / slowerBytesPerDay).toBeGreaterThan(90);
+    // And an estimate must outlive the evidence chain that scores it:
+    // resolution, then UMA liveness (~2 h), the hourly label sync, and up to a
+    // full day until the daily calibration runs. Anything under ~2 days would
+    // prune the row before it could ever become evidence.
+    const EVIDENCE_CHAIN_DAYS = 27 / 24;
+    expect(daysWithinQuota).toBeGreaterThan(EVIDENCE_CHAIN_DAYS * 7);
   });
 
   it("keeps the whole module inside the RFC-007 40 GB budget", () => {

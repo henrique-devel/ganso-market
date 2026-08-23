@@ -8,6 +8,8 @@
 
 import { readFile } from "node:fs/promises";
 
+import { HORIZON_BUCKETS, type HorizonBucket } from "./interval.js";
+
 export const FUNDAMENTAL_CONFIG_FILE_ENV = "GANSO_FUNDAMENTAL_CONFIG_FILE";
 
 export class FundamentalConfigError extends Error {
@@ -62,15 +64,25 @@ export interface MacroModelConfig {
   readonly maxCalendarAgeMs: number;
 }
 
+/**
+ * Estimation cadence per horizon bucket. Resolution is spent where it matters:
+ * the market moves fastest and the model has its best chance close to
+ * resolution (the RFC's own prior), while a market resolving in months is
+ * sampled coarsely — those far-horizon rows dominate the storage and can never
+ * become gate evidence, because they are pruned long before they resolve.
+ */
+export type EstimateCadenceMs = Readonly<Record<HorizonBucket, number>>;
+
 export interface FundamentalConfig {
   readonly sRefUsd: number;
   readonly maxBookAgeMs: number;
   readonly maxExecSpread: number;
   readonly thinBookMultiple: number;
   readonly fallbackWidenFactor: number;
-  /** Estimation cadence and the per-token rate limit (both 60 s by default). */
+  /** Loop tick; must be at least as fine as the finest cadence below. */
   readonly estimateIntervalMs: number;
-  readonly minEstimateGapMs: number;
+  /** Per-token minimum gap between estimates, by horizon bucket. */
+  readonly estimateCadenceMs: EstimateCadenceMs;
   /** A rule version newer than this at the decision instant sets the flag. */
   readonly ruleChangeWindowMs: number;
   readonly gate: GateConfig;
@@ -85,8 +97,14 @@ export const DEFAULT_FUNDAMENTAL_CONFIG: FundamentalConfig = Object.freeze({
   maxExecSpread: 0.1,
   thinBookMultiple: 3,
   fallbackWidenFactor: 1.5,
-  estimateIntervalMs: 60_000,
-  minEstimateGapMs: 60_000,
+  estimateIntervalMs: 10_000,
+  estimateCadenceMs: Object.freeze({
+    lt_1h: 10_000,
+    "1h_6h": 60_000,
+    "6h_24h": 300_000,
+    "1d_7d": 600_000,
+    gt_7d: 600_000,
+  }),
   ruleChangeWindowMs: 24 * 3_600_000,
   gate: Object.freeze({
     minMarkets: 100,
@@ -122,6 +140,54 @@ export const DEFAULT_FUNDAMENTAL_CONFIG: FundamentalConfig = Object.freeze({
 });
 
 type JsonObject = Record<string, unknown>;
+
+/**
+ * Cadence must be non-increasing in resolution as the horizon grows: sampling a
+ * month-away market MORE often than one resolving within the hour would spend
+ * the storage budget exactly where it produces no evidence. A document that
+ * inverts the order is refused rather than silently accepted.
+ */
+function parseCadence(
+  raw: unknown,
+  defaults: FundamentalConfig,
+): EstimateCadenceMs {
+  if (raw === undefined) {
+    return defaults.estimateCadenceMs;
+  }
+  const object = requireObject(raw, "fundamental.estimate_cadence_ms");
+  rejectUnknownKeys(
+    object,
+    [...HORIZON_BUCKETS],
+    "fundamental.estimate_cadence_ms",
+  );
+  const parsed: Record<string, number> = {};
+  for (const bucket of HORIZON_BUCKETS) {
+    parsed[bucket] =
+      object[bucket] === undefined
+        ? defaults.estimateCadenceMs[bucket]
+        : parseInteger(
+            object[bucket],
+            `fundamental.estimate_cadence_ms.${bucket}`,
+            1_000,
+            3_600_000,
+          );
+  }
+  for (let index = 1; index < HORIZON_BUCKETS.length; index += 1) {
+    const nearer = HORIZON_BUCKETS[index - 1];
+    const farther = HORIZON_BUCKETS[index];
+    if (
+      nearer !== undefined &&
+      farther !== undefined &&
+      (parsed[farther] ?? 0) < (parsed[nearer] ?? 0)
+    ) {
+      throw new FundamentalConfigError(
+        "FUNDAMENTAL_CONFIG_FIELD_INVALID",
+        `estimate_cadence_ms.${farther} must not be finer than ${nearer}`,
+      );
+    }
+  }
+  return Object.freeze(parsed as Record<HorizonBucket, number>);
+}
 
 function requireObject(value: unknown, field: string): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -215,7 +281,7 @@ export function parseFundamentalConfig(raw: unknown): FundamentalConfig {
       "thin_book_multiple",
       "fallback_widen_factor",
       "estimate_interval_ms",
-      "min_estimate_gap_ms",
+      "estimate_cadence_ms",
       "rule_change_window_ms",
       "gate",
       "walk_forward",
@@ -367,15 +433,7 @@ export function parseFundamentalConfig(raw: unknown): FundamentalConfig {
             1_000,
             3_600_000,
           ),
-    minEstimateGapMs:
-      root.min_estimate_gap_ms === undefined
-        ? defaults.minEstimateGapMs
-        : parseInteger(
-            root.min_estimate_gap_ms,
-            "fundamental.min_estimate_gap_ms",
-            1_000,
-            3_600_000,
-          ),
+    estimateCadenceMs: parseCadence(root.estimate_cadence_ms, defaults),
     ruleChangeWindowMs:
       root.rule_change_window_ms === undefined
         ? defaults.ruleChangeWindowMs

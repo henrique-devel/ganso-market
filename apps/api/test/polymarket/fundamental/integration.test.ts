@@ -217,7 +217,7 @@ describe.skipIf(DATABASE_URL === undefined)(
 
       // A fresh anchor: the first one is already older than the 30 s staleness
       // threshold at this instant, and a stale book means no estimate at all.
-      const laterBookAt = new Date(DECISION_TS.getTime() + 115_000);
+      const laterBookAt = new Date(DECISION_TS.getTime() + 355_000);
       for (const [tokenId, bidPrice, askPrice] of [
         [TOKEN_YES, "0.50", "0.52"],
         [TOKEN_NO, "0.48", "0.50"],
@@ -245,7 +245,8 @@ describe.skipIf(DATABASE_URL === undefined)(
         pool,
         config: DEFAULT_FUNDAMENTAL_CONFIG,
         gitSha: GIT_SHA,
-        clock: () => new Date(DECISION_TS.getTime() + 120_000),
+        // Past the 5-minute cadence of this market's horizon bucket.
+        clock: () => new Date(DECISION_TS.getTime() + 360_000),
       });
       const report = await estimator.runCycle();
       expect(report.consumerRows).toBe(2);

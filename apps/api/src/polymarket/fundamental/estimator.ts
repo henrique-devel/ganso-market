@@ -8,6 +8,7 @@
 // that silence is explicit (the consumer treats an absent estimate as a veto).
 
 import type { DatabasePool } from "../../database.js";
+import { horizonBucket } from "./interval.js";
 import {
   planMarket,
   runCategoryModel,
@@ -150,26 +151,45 @@ export async function loadUniverse(
   });
 }
 
-/** Tokens whose newest estimate is younger than the per-token rate limit. */
-async function rateLimitedTokens(
+/**
+ * Newest estimate per token, bounded by the coarsest cadence so the scan stays
+ * small. The cadence itself is per token (it depends on the market's horizon),
+ * so the decision is made by the caller against this map rather than by a
+ * single SQL window.
+ */
+async function lastEstimateByToken(
   pool: QueryPool,
   tokenIds: readonly string[],
   decisionTs: Date,
-  minGapMs: number,
-): Promise<Set<string>> {
-  if (tokenIds.length === 0 || minGapMs <= 0) {
-    return new Set();
+  maxGapMs: number,
+): Promise<Map<string, number>> {
+  const last = new Map<string, number>();
+  if (tokenIds.length === 0 || maxGapMs <= 0) {
+    return last;
   }
-  const since = new Date(decisionTs.getTime() - minGapMs);
+  const since = new Date(decisionTs.getTime() - maxGapMs);
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT DISTINCT token_id
+    `SELECT token_id, max(decision_ts) AS last_ts
        FROM fundamental_estimates
       WHERE token_id = ANY($1::text[])
         AND decision_ts > $2
-        AND decision_ts <= $3`,
+        AND decision_ts <= $3
+      GROUP BY token_id`,
     [[...tokenIds], since, decisionTs],
   );
-  return new Set(result.rows.map((row) => String(row.token_id)));
+  for (const row of result.rows) {
+    const value = row.last_ts;
+    const at =
+      value instanceof Date
+        ? value.getTime()
+        : typeof value === "string"
+          ? Date.parse(value)
+          : Number.NaN;
+    if (Number.isFinite(at)) {
+      last.set(String(row.token_id), at);
+    }
+  }
+  return last;
 }
 
 function increment(counter: Record<string, number>, key: string): void {
@@ -352,9 +372,74 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         }
       }
 
+      // Which tokens are DUE this tick. The cadence is per horizon bucket, so
+      // a market resolving within the hour is sampled every 10 s while one
+      // resolving in months is sampled every 10 min. Deciding this BEFORE any
+      // expensive read is what makes a 10 s loop affordable: on most ticks
+      // almost nothing is due, and the cycle costs one query.
+      const cadence = deps.config.estimateCadenceMs;
+      const maxGapMs = Math.max(...Object.values(cadence));
+      const allTokens = universe.flatMap((market) => [...market.tokenIds]);
+      const lastEstimate = await lastEstimateByToken(
+        pool,
+        allTokens,
+        decisionTs,
+        maxGapMs,
+      );
+      const deadlineOf = (market: UniverseMarket): Date | null =>
+        plans.get(market.conditionId)?.deadline ??
+        contexts.get(market.conditionId)?.endDate ??
+        null;
+      const isDue = (market: UniverseMarket, tokenId: string): boolean => {
+        const deadline = deadlineOf(market);
+        const bucket = horizonBucket(
+          deadline === null ? null : deadline.getTime() - decisionTs.getTime(),
+        );
+        const previous = lastEstimate.get(tokenId);
+        return (
+          previous === undefined ||
+          decisionTs.getTime() - previous >= cadence[bucket]
+        );
+      };
+      const dueTokens = new Set<string>();
+      for (const market of universe) {
+        for (const tokenId of market.tokenIds) {
+          if (isDue(market, tokenId)) {
+            dueTokens.add(tokenId);
+          }
+        }
+      }
+      const rateLimited = allTokens.length - dueTokens.size;
+
+      if (dueTokens.size === 0) {
+        // Nothing to price: skip the feed windows entirely. Loading a day of
+        // one-minute closes per symbol on every 10 s tick would cost far more
+        // than the estimates it would produce.
+        return {
+          decisionTs,
+          markets: universe.length,
+          tokensConsidered: 0,
+          tokensRateLimited: rateLimited,
+          consumerRows: 0,
+          shadowRows: 0,
+          absent: 0,
+          absentReasons: {},
+          fallbackReasons: {},
+          tokenFailures: 0,
+        };
+      }
+
+      // Only the plans of markets with a due token: the feed series is the
+      // expensive read and it is fetched per symbol.
+      const duePlans = universe
+        .filter((market) => market.tokenIds.some((id) => dueTokens.has(id)))
+        .flatMap((market) => {
+          const plan = plans.get(market.conditionId);
+          return plan === undefined ? [] : [plan];
+        });
       const cycle = await loadCycleData(
         pool,
-        [...plans.values()],
+        duePlans,
         decisionTs,
         deps.config,
       );
@@ -371,14 +456,6 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
           shadow: await shadowModelsFor(pool, category),
         });
       }
-
-      const allTokens = universe.flatMap((market) => [...market.tokenIds]);
-      const limited = await rateLimitedTokens(
-        pool,
-        allTokens,
-        decisionTs,
-        deps.config.minEstimateGapMs,
-      );
 
       const absentReasons: Record<string, number> = {};
       const fallbackReasons: Record<string, number> = {};
@@ -416,7 +493,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         const deadline = plan?.deadline ?? context.endDate;
 
         for (const [outcomeIndex, tokenId] of market.tokenIds.entries()) {
-          if (limited.has(tokenId)) {
+          if (!dueTokens.has(tokenId)) {
             continue;
           }
           tokensConsidered += 1;
@@ -511,7 +588,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         decisionTs,
         markets: universe.length,
         tokensConsidered,
-        tokensRateLimited: limited.size,
+        tokensRateLimited: rateLimited,
         consumerRows: pending.length - shadowRows,
         shadowRows,
         absent,
