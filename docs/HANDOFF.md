@@ -204,6 +204,21 @@ espera que o modelo tenha alguma chance. Implementado como
 `estimate_cadence_ms` por bucket, com o laço tiquetaqueando a 10 s e o trabalho
 caro (janelas de feed) pulado quando nenhum token está vencido.
 
+**FATO VERIFICADO (produção, 2026-08-23, após o rebuild):** ciclos a cada 10 s
+com **2 tokens avaliados por tique** e 126 limitados, zero ausências, zero
+erros. Taxa medida: **82 linhas em 5 min ⇒ ~23,6 mil linhas/dia ⇒ ~23 MB/dia**,
+o que dá **~134 dias** dentro da quota de 3 GB. Melhor que a projeção de ~47 k
+porque o universo hoje é de 64 mercados (128 tokens) e a maioria está em
+buckets distantes; a taxa sobe quando muitos mercados se aproximam da resolução
+ao mesmo tempo, e o teto continua sendo o que `budget.test.ts` modela sobre a
+distribuição medida de horizontes.
+
+**FATO VERIFICADO — desperdício encontrado e corrigido em produção:** minutos
+depois de o laço de 10 s subir, 17 tokens com livro permanentemente inválido
+estavam sendo reavaliados **a cada tique**, porque estimativa ausente não grava
+linha (de propósito) e a cadência só olhava linhas gravadas. A cadência passou
+a contar **avaliações**; `tokens_considered` caiu de 17 para 2 por tique.
+
 **INVARIANTE:** uma estimativa precisa sobreviver `horizonte + ~27 h` para
 virar evidência (resolução → liveness UMA ~2 h → sync de label ≤ 1 h → até 24 h
 até a calibração diária). `budget.test.ts` segura esse piso; encurtar a janela

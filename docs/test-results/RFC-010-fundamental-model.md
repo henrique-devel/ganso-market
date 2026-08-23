@@ -357,3 +357,37 @@ observações pontuáveis:   0  ->  62.356 em 39 mercados (8.211 de modelo em sh
 O gate continua `NO_EVIDENCE_OF_ALPHA` e os dois modelos seguem em `shadow`: os
 relatórios existentes rodaram antes de os labels chegarem, e a cobertura atual
 (39 mercados) está abaixo dos 100 exigidos. É o comportamento correto.
+
+## 14. Cadência por horizonte (2026-08-23)
+
+Decisão do proprietário, motivada pela distribuição real das 586.878 linhas:
+mercados de menos de 6h eram **3,1%** do volume, contra **67%** de horizonte
+> 7 dias — linhas que pagam dois terços do armazenamento e nunca viram
+evidência.
+
+| horizonte | cadência |
+|---|---|
+| < 1h | 10 s |
+| 1–6h | 60 s |
+| 6–24h | 5 min |
+| 1–7 dias | 10 min |
+| > 7 dias | 10 min |
+
+**Medido em produção após o deploy** (universo de 64 mercados / 128 tokens):
+
+```text
+ciclos:        a cada 10 s
+por tique:     2 tokens avaliados, 126 limitados, 0 ausências, 0 erros
+taxa:          82 linhas / 5 min  ->  ~23,6 mil linhas/dia  ->  ~23 MB/dia
+janela 3 GB:   ~134 dias (era ~5,5 dias com cadência plana de 60 s)
+```
+
+A taxa medida é melhor que a projeção de ~47 k/dia porque o universo estava em
+64 mercados e a maioria em buckets distantes; ela sobe quando muitos mercados
+se aproximam da resolução ao mesmo tempo. O teto modelado sobre a distribuição
+medida de horizontes está em `budget.test.ts`.
+
+**Correção descoberta em produção:** com o laço a 10 s, 17 tokens com livro
+inválido eram reavaliados a cada tique — estimativa ausente não grava linha, e
+a cadência só olhava linhas gravadas. A cadência passou a contar avaliações;
+`tokens_considered` caiu de 17 para 2 por tique.
