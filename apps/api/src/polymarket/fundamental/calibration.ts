@@ -242,6 +242,19 @@ export async function insertCalibrationReport(
   return Number(result.rows[0]?.calibration_report_id ?? 0);
 }
 
+/**
+ * When the calibration last produced a report, from the reports themselves.
+ * The daily job is scheduled against THIS, not against a timer started at
+ * boot: a timer is reset by every deploy, so a week of frequent deploys would
+ * silently starve the job that produces the only evidence a gate can read.
+ */
+export async function lastCalibrationAt(pool: QueryPool): Promise<Date | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT max(generated_at) AS last_at FROM fundamental_calibration_reports`,
+  );
+  return toDate(result.rows[0]?.last_at);
+}
+
 export async function latestCalibrationReport(
   pool: QueryPool,
   modelId: string,

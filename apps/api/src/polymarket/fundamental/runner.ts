@@ -8,7 +8,7 @@
 // wallet, no signer and no trading credential of any kind.
 
 import type { DatabasePool } from "../../database.js";
-import { runCalibrationJob } from "./calibration.js";
+import { lastCalibrationAt, runCalibrationJob } from "./calibration.js";
 import { CATEGORY_MODELS } from "./catalog.js";
 import type { FundamentalConfig } from "./config.js";
 import { createEstimator, type Estimator } from "./estimator.js";
@@ -26,10 +26,15 @@ import { DEFAULT_MACRO_HYPERPARAMS } from "./models/macro-scheduled.js";
 
 const SERVICE = "polymarket-fundamental";
 
+const DAY_MS = 86_400_000;
+
 export interface RunnerIntervals {
   readonly estimateMs?: number;
   readonly labelsMs?: number;
+  /** How long a calibration period lasts (default 24 h). */
   readonly calibrationMs?: number;
+  /** How often the due-check runs (default 10 min). */
+  readonly calibrationTickMs?: number;
   readonly revalidationMs?: number;
 }
 
@@ -224,7 +229,27 @@ export function createRunner(deps: RunnerDeps): Runner {
         skipped_unparsable: report.skippedUnparsable,
       });
     },
+    /**
+     * Runs only when a full period has passed since the LAST STORED REPORT,
+     * not since this process booted. A `setInterval` started at boot is reset
+     * by every deploy: the job that produces the only evidence a gate can read
+     * would be starved by exactly the activity that most needs it measured.
+     * The check is one query, so the tick can be frequent and cheap.
+     */
     async calibration(): Promise<void> {
+      const periodMs = intervals.calibrationMs ?? DAY_MS;
+      const last = await lastCalibrationAt(deps.pool);
+      const elapsed =
+        last === null
+          ? Number.POSITIVE_INFINITY
+          : clock().getTime() - last.getTime();
+      if (elapsed < periodMs) {
+        return;
+      }
+      logJson("info", "CALIBRATION_DUE", {
+        last_report_at: last === null ? null : last.toISOString(),
+        period_ms: periodMs,
+      });
       await runCalibrationJob({
         pool: deps.pool,
         config: deps.config,
@@ -306,6 +331,18 @@ export function createRunner(deps: RunnerDeps): Runner {
           error_name: error instanceof Error ? error.name : "UnknownError",
         });
       });
+      await jobs.labels().catch((error: unknown) => {
+        logJson("error", "JOB_FAILED", {
+          job: "labels_boot",
+          error_name: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
+      await jobs.calibration().catch((error: unknown) => {
+        logJson("error", "JOB_FAILED", {
+          job: "calibration_boot",
+          error_name: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
       await jobs.estimate().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "estimate_boot",
@@ -319,9 +356,11 @@ export function createRunner(deps: RunnerDeps): Runner {
         jobs.estimate,
       );
       schedule("labels", intervals.labelsMs ?? 3_600_000, jobs.labels);
+      // Ticks often; the job itself decides whether a period has elapsed since
+      // the last STORED report, so restarts cannot push the run forward.
       schedule(
         "calibration",
-        intervals.calibrationMs ?? 86_400_000,
+        intervals.calibrationTickMs ?? 10 * 60_000,
         jobs.calibration,
       );
       schedule(

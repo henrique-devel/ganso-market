@@ -21,11 +21,18 @@ não fala com nenhuma API externa.
 | -------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `estimate`     | `fundamental.estimate_interval_ms` (default 60 s) + 1× no boot | um ciclo completo: universo → livro as-of → modelo → `fundamental_estimates`         |
 | `revalidation` | 15 min + 1× no boot, **antes** do primeiro ciclo         | rebaixa a `shadow` todo modelo `active` cuja categoria mudou de regra/param depois da promoção |
-| `labels`       | 1 h                                                      | sincroniza `fundamental_labels` a partir da timeline de resolução da RFC-007              |
-| `calibration`  | 24 h                                                     | materializa o relatório de calibração de cada modelo não-retired e roda o gate            |
+| `labels`       | 1 h + 1× no boot                                         | sincroniza `fundamental_labels` a partir da timeline de resolução da RFC-007              |
+| `calibration`  | checagem a cada 10 min + 1× no boot                      | roda quando 24 h se passaram desde o **último relatório gravado** (não desde o boot); materializa a calibração de cada modelo não-retired e roda o gate |
 
 Cada job é supervisionado: falha vira uma linha JSON em stderr com
-`reason_code` e **nunca derruba o processo**. Ciclo que ainda está rodando
+`reason_code` e **nunca derruba o processo**.
+
+> **Por que a calibração não usa um timer de 24 h:** um `setInterval` iniciado
+> no boot é zerado por todo deploy. Numa semana de deploys frequentes o job que
+> produz a única evidência que o gate consegue ler nunca rodaria — foi
+> exatamente o que aconteceu em 2026-08-23. A cadência agora é medida contra o
+> `generated_at` do **último relatório gravado**, então reinício não empurra a
+> execução. `CALIBRATION_DUE` no log marca cada disparo. Ciclo que ainda está rodando
 quando o próximo dispara é pulado (`JOB_STILL_RUNNING`), não enfileirado.
 
 Por ciclo o serviço emite `ESTIMATOR_CYCLE` com `rows_written`, `markets`,
