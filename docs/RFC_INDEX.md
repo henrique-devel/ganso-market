@@ -23,6 +23,7 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 | [RFC-012](rfcs/RFC-012-polymarket-resolution-graph.md)     | Risco de resolução e grafo lógico           | RFC-007                    | score de resolução (UMA) e consistência entre mercados                                |
 | [RFC-013](rfcs/RFC-013-polymarket-portfolio-engine.md)     | Motor de portfólio e gates                  | RFC-010, RFC-011 e RFC-012 | EV mínimo, Kelly fracionário, limites, painel e gates da execução                     |
 | [RFC-009](rfcs/RFC-009-polymarket-live-execution.md)       | Execução Polymarket maker-side              | RFC-013 + aprovação        | live V2 maker-first com burn wallet na Polygon                                        |
+| [RFC-014](rfcs/RFC-014-polymarket-first-passage.md)        | Variante de primeira passagem (barreira)    | RFC-010                    | cobertura dos mercados "reach"/"dip to" da categoria crypto (incremento, não bloqueia) |
 
 ## Descopo — 2026-08-18
 

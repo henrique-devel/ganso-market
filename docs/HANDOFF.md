@@ -193,6 +193,36 @@ TTL).
   `createUmaStatusPoller` gravava o status da resolução mas não o desfecho.
   Passou a gravar `outcomePrices`/`outcomes` na timeline imutável; sem isso o
   label store não teria o que pontuar e nenhum gate poderia ter evidência.
+## ESTADO DA EVIDÊNCIA E PRÓXIMO GARGALO (2026-08-23)
+
+- **FATO VERIFICADO:** a cadeia de evidência está viva e crescendo. **358
+  labels em 179 mercados** (eram 204/102 no dia anterior), **60 mercados
+  pontuáveis**, e o primeiro gate com dados reais rodou (relatório #3,
+  7.334 observações, `crypto_updown`).
+- **FATO VERIFICADO — o gate contou 8 mercados, não 60.** A diferença **não** é
+  degeneração de preço: é cobertura do modelo. Dos 80 mercados crypto com
+  estimativa nas últimas 6 h, o modelo atende **7** e fica silencioso em **73**.
+- **CAUSA VERIFICADA:** as perguntas que ele recusa são de **barreira**
+  ("Will Bitcoin **reach** $82,500 in August?", "Will Ethereum **dip to**
+  $1,250?"), enquanto as que ele atende são terminais ("Will the price of
+  Bitcoin **be above** $68,000 on August 25?"). A recusa está **correta** — um
+  mapa de distribuição terminal subestima sistematicamente um payoff que paga
+  no caminho —, mas custa ~90% da cobertura. No ritmo atual, os 100 mercados do
+  gate exigiriam ~660 mercados resolvidos.
+- **DECISÃO DO PROPRIETÁRIO (2026-08-23):** desenvolver o fluxo inteiro
+  primeiro e só depois incrementar. A variante de primeira passagem virou a
+  **RFC-014** (`docs/rfcs/RFC-014-polymarket-first-passage.md`), em `draft`,
+  não implementada.
+- **CORRIGIDO (2026-08-23):** a calibração diária era zerada por todo deploy
+  (`setInterval` de 24 h a partir do boot). Passou a ser medida contra o
+  `generated_at` do último relatório gravado, com checagem a cada 10 min e uma
+  no boot; `labels` também passou a rodar no boot em vez de esperar 1 h.
+- **BLOQUEIO/TODO conhecido:** quando um modelo em `shadow` se abstém, **nada
+  registra o porquê**. A linha do consumidor diz `MODEL_IN_SHADOW` (status de
+  promoção), não o motivo da abstenção. Diagnosticar a cobertura exigiu quatro
+  consultas ad-hoc em vez de um `grep`. Gravar o motivo da abstenção é pequeno
+  e paga em toda investigação futura.
+
 ## DECISÃO DO PROPRIETÁRIO — cadência por horizonte (2026-08-22)
 
 **FATO INFORMADO:** o proprietário definiu a cadência de estimativa por

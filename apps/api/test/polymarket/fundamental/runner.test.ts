@@ -216,3 +216,111 @@ describe("createRunner boot path", () => {
     expect(pool.statements.length).toBe(afterStop);
   });
 });
+
+describe("daily calibration survives restarts", () => {
+  /** A pool that reports the last stored report at `lastAt`. */
+  function poolWithLastReport(
+    lastAt: Date | null,
+    statements: string[],
+  ): DatabasePool {
+    const query = <R extends Record<string, unknown>>(
+      text: string,
+    ): Promise<QueryResult<R>> => {
+      statements.push(text);
+      if (text.includes("max(generated_at)")) {
+        return Promise.resolve({
+          rows: [{ last_at: lastAt } as unknown as R],
+          rowCount: 1,
+        });
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    };
+    return {
+      query,
+      transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+        return run({ query });
+      },
+      end(): Promise<void> {
+        return Promise.resolve();
+      },
+    };
+  }
+
+  it("does not re-run when a report already exists inside the period", async () => {
+    const statements: string[] = [];
+    // A report from an hour ago: a restart must NOT trigger another run.
+    const pool = poolWithLastReport(
+      new Date(NOW.getTime() - 3_600_000),
+      statements,
+    );
+    const runner = createRunner({
+      pool,
+      config: DEFAULT_FUNDAMENTAL_CONFIG,
+      gitSha: GIT_SHA,
+      clock: () => NOW,
+    });
+    await runner.start();
+    await runner.stop();
+
+    expect(
+      statements.some((text) =>
+        text.includes("INSERT INTO fundamental_calibration_reports"),
+      ),
+    ).toBe(false);
+  });
+
+  it("runs when a full period has passed, however many restarts happened", async () => {
+    const statements: string[] = [];
+    // The last report is 25 h old. A boot-started timer would wait another
+    // 24 h from now; the due-check runs immediately, which is the point.
+    const pool = poolWithLastReport(
+      new Date(NOW.getTime() - 25 * 3_600_000),
+      statements,
+    );
+    const runner = createRunner({
+      pool,
+      config: DEFAULT_FUNDAMENTAL_CONFIG,
+      gitSha: GIT_SHA,
+      clock: () => NOW,
+    });
+    await runner.start();
+    await runner.stop();
+
+    expect(stderr.join("\n")).toContain("CALIBRATION_DUE");
+  });
+
+  it("runs on a database that has never produced a report", async () => {
+    const statements: string[] = [];
+    const pool = poolWithLastReport(null, statements);
+    const runner = createRunner({
+      pool,
+      config: DEFAULT_FUNDAMENTAL_CONFIG,
+      gitSha: GIT_SHA,
+      clock: () => NOW,
+    });
+    await runner.start();
+    await runner.stop();
+
+    expect(stderr.join("\n")).toContain("CALIBRATION_DUE");
+  });
+
+  it("syncs labels at boot instead of waiting a full hour", async () => {
+    const statements: string[] = [];
+    const pool = poolWithLastReport(
+      new Date(NOW.getTime() - 60_000),
+      statements,
+    );
+    const runner = createRunner({
+      pool,
+      config: DEFAULT_FUNDAMENTAL_CONFIG,
+      gitSha: GIT_SHA,
+      clock: () => NOW,
+    });
+    await runner.start();
+    await runner.stop();
+
+    // An hourly timer restarted by a deploy delays the label store by a full
+    // hour every single time.
+    expect(stderr.join("\n")).toContain("LABELS_SYNCED");
+  });
+});
