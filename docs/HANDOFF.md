@@ -150,6 +150,15 @@ TTL).
   desfecho grava `outcomePrices`/`outcomes` no payload (confirmado nos 80
   eventos `proposed` em produção) e `labels.ts` aceita `resolved`/
   `market_resolved` com desfecho. Faltava só observar a transição.
+- **FRAGILIDADE CONHECIDA (RFC-007, não corrigida):** o sync do calendário
+  macro roda **só no boot do recorder e não tem retry**. Em 2026-08-23 o
+  postgres foi recriado 187 ms **depois** do recorder no `server-update`, então
+  o sync pegou o banco subindo e registrou `MACRO_CALENDAR_SYNC_FAILED`. Sem
+  perda nesta vez (arquivo e banco têm as mesmas 15 entradas), mas se o arquivo
+  tivesse mudado a alteração seria silenciosamente perdida até o próximo
+  restart. Correção natural: agendar o sync junto do job `macro_releases`
+  (10 min) em vez de só no boot. Fora do escopo da RFC-010 — a categoria macro
+  já está bloqueada por falta de consenso no calendário.
 - **BLOQUEIO/TODO (RFC-007):** o caminho WS de resolução é **código morto** —
   `recordMarketResolved` existe em `samplers.ts` e **ninguém o chama**, e
   `market_resolved` não está no union `MarketMessage` nem em
