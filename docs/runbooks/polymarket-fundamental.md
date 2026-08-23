@@ -101,8 +101,12 @@ disto:
 | `max_exec_spread`             | `0.1`      | 0,001 – 0,5          | spread executável a `S_ref` acima do qual o livro é inválido      |
 | `thin_book_multiple`          | `3`        | 1 – 100 (inteiro)    | múltiplos de `S_ref` abaixo dos quais o livro é marcado fino      |
 | `fallback_widen_factor`       | `1.5`      | 1,0001 – 10          | alargamento do intervalo no fallback                              |
-| `estimate_interval_ms`        | `60000`    | 1 000 – 3 600 000    | cadência do ciclo de estimativa                                   |
-| `min_estimate_gap_ms`         | `60000`    | 1 000 – 3 600 000    | rate limit por token                                              |
+| `estimate_interval_ms`        | `10000`    | 1 000 – 3 600 000    | tique do laço; precisa ser ≤ a cadência mais fina                 |
+| `estimate_cadence_ms.lt_1h`   | `10000`    | 1 000 – 3 600 000    | cadência por token quando falta < 1h para resolver                |
+| `estimate_cadence_ms.1h_6h`   | `60000`    | 1 000 – 3 600 000    | idem, 1–6h                                                        |
+| `estimate_cadence_ms.6h_24h`  | `300000`   | 1 000 – 3 600 000    | idem, 6–24h                                                       |
+| `estimate_cadence_ms.1d_7d`   | `600000`   | 1 000 – 3 600 000    | idem, 1–7 dias                                                    |
+| `estimate_cadence_ms.gt_7d`   | `600000`   | 1 000 – 3 600 000    | idem, > 7 dias                                                    |
 | `rule_change_window_ms`       | `86400000` | 0 – 2 592 000 000    | janela em que uma regra nova marca `rule_changed_recently`        |
 | `gate.min_markets`            | `100`      | **100** – 100 000    | mercados resolvidos cobertos exigidos; 100 é piso, não teto       |
 | `gate.max_horizon_degradation`| `0.2`      | 0,0001 – **0,2**     | degradação relativa de Brier que reprova uma fatia de horizonte   |
@@ -437,21 +441,31 @@ mudança de regra/param ignora o histórico.
   `polymarket_retention_log`; 90% dos 40 GB globais dispara
   `QUOTA_GLOBAL_ALARM`. `GET /polymarket/data-quality` (endpoint da RFC-007)
   mostra bytes por tabela e % do orçamento.
-- Taxa: no máximo 1 estimativa por token a cada `min_estimate_gap_ms`
-  (default 60 s). Com o universo de 50–100 mercados isso dá o teto de
-  ~150–300 mil linhas de consumidor por dia previsto na RFC.
+- Taxa: no máximo 1 estimativa por token a cada `estimate_cadence_ms[bucket]`,
+  onde o bucket é o horizonte do mercado naquele instante. Um mercado migra de
+  `gt_7d` para `lt_1h` conforme se aproxima da resolução, e a cadência aperta
+  junto.
   **Atenção:** cada modelo em shadow soma uma linha adicional por token e por
   ciclo. Rodar N modelos shadow multiplica a volumetria por (1 + N); observe
   `shadow_rows` no `ESTIMATOR_CYCLE` e o crescimento da tabela antes de deixar
   vários modelos em shadow ao mesmo tempo.
+- **Cadência por horizonte (decisão do proprietário, 2026-08-22).** A resolução
+  temporal é gasta onde importa: 10 s na última hora, 60 s até 6h, 5 min até
+  24h, 10 min daí em diante. O motivo é duplo — perto da resolução o mercado se
+  move rápido e é onde a RFC espera que o modelo tenha chance; longe da
+  resolução as linhas dominavam o armazenamento (67% do volume vinha de
+  horizonte > 7 dias) e **nunca viravam evidência**, porque são podadas muito
+  antes de o mercado resolver.
 - **Janela real, medida:** 1.020 B por linha em PostgreSQL 18 (200 k linhas,
-  após `VACUUM ANALYZE`). No universo cheio, a 60 s e com um modelo em shadow
-  por categoria, são 576 k linhas/dia ≈ 588 MB/dia, e a quota de 3 GB guarda
-  **~5,5 dias** (≈11 dias enquanto não houver modelo registrado). Quota vence
-  TTL: o TTL de 90 dias só é alcançável reduzindo a cadência (~20 min) ou
-  aumentando a quota. Isso limita o gate — 100 mercados resolvidos só se
-  acumulam se eles resolverem dentro da janela guardada. Decisão do
-  proprietário, registrada no handoff.
+  após `VACUUM ANALYZE`). Com a cadência plana de 60 s eram ~576 k linhas/dia e
+  a quota de 3 GB guardava **~5,5 dias**. Com a cadência por horizonte o volume
+  cai ~6,6× e a janela passa de **um mês**, que é o que torna realista acumular
+  os 100 mercados resolvidos do gate.
+- **Piso que não pode ser violado:** uma estimativa precisa sobreviver
+  `horizonte + ~27 h` para virar evidência (resolução → liveness UMA ~2 h →
+  sync de label ≤ 1 h → até 24 h até a calibração diária). Encurtar a janela
+  para menos que isso apaga a evidência antes de ela ser pontuada — é o teste
+  `budget.test.ts` que segura essa invariante.
 - Memória: `mem_limit` 384 MiB com `--max-old-space-size=320`. O orçamento do
   módulo (RFC-007) é de 40 GB de PostgreSQL e 3 GB de RAM para as aplicações.
 

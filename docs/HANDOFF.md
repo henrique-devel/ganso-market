@@ -184,7 +184,32 @@ TTL).
   `createUmaStatusPoller` gravava o status da resolução mas não o desfecho.
   Passou a gravar `outcomePrices`/`outcomes` na timeline imutável; sem isso o
   label store não teria o que pontuar e nenhum gate poderia ter evidência.
-- **DECISÃO PENDENTE (proprietário) — janela de retenção das estimativas:**
+## DECISÃO DO PROPRIETÁRIO — cadência por horizonte (2026-08-22)
+
+**FATO INFORMADO:** o proprietário definiu a cadência de estimativa por
+horizonte: **10 s na última hora, 60 s até 6h, 5 min até 24h, 10 min daí em
+diante**, em vez da cadência plana de 60 s.
+
+**FATO VERIFICADO (medição que motivou a decisão):** a distribuição das
+586.878 linhas em produção era o oposto do intuitivo — os mercados de menos de
+6h eram só **3,1%** do volume, enquanto **67% vinha de horizonte > 7 dias**
+(116 mercados, tipo "ETH chega a $2.500 até 31/dez/2026"). Essas linhas
+distantes pagavam dois terços do armazenamento e **nunca viravam evidência**,
+porque são podadas meses antes de o mercado resolver.
+
+**FATO VERIFICADO:** com a cadência por horizonte o volume cai de ~309 k para
+~47 k linhas/dia (**6,6×**), a janela de 3 GB passa de ~5,5 dias para **mais de
+um mês**, e a resolução temporal *aumenta* na última hora — que é onde a RFC
+espera que o modelo tenha alguma chance. Implementado como
+`estimate_cadence_ms` por bucket, com o laço tiquetaqueando a 10 s e o trabalho
+caro (janelas de feed) pulado quando nenhum token está vencido.
+
+**INVARIANTE:** uma estimativa precisa sobreviver `horizonte + ~27 h` para
+virar evidência (resolução → liveness UMA ~2 h → sync de label ≤ 1 h → até 24 h
+até a calibração diária). `budget.test.ts` segura esse piso; encurtar a janela
+abaixo dele apagaria a evidência antes de ela ser pontuada.
+
+- **DECISÃO RESOLVIDA (era pendente) — janela de retenção das estimativas:**
   volumetria medida em PostgreSQL real: **1.020 B por linha** (200 k linhas,
   após `VACUUM ANALYZE`). No teto da RFC (200 tokens × 1 linha/minuto), a
   superfície do consumidor são 288 k linhas/dia — **mais as linhas `shadow`**,

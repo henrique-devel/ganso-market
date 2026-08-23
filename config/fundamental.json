@@ -5,8 +5,14 @@
   "max_exec_spread": 0.1,
   "thin_book_multiple": 3,
   "fallback_widen_factor": 1.5,
-  "estimate_interval_ms": 60000,
-  "min_estimate_gap_ms": 60000,
+  "estimate_interval_ms": 10000,
+  "estimate_cadence_ms": {
+    "lt_1h": 10000,
+    "1h_6h": 60000,
+    "6h_24h": 300000,
+    "1d_7d": 600000,
+    "gt_7d": 600000
+  },
   "rule_change_window_ms": 86400000,
   "gate": {
     "min_markets": 100,
