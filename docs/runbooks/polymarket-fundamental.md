@@ -441,8 +441,11 @@ mudança de regra/param ignora o histórico.
   `polymarket_retention_log`; 90% dos 40 GB globais dispara
   `QUOTA_GLOBAL_ALARM`. `GET /polymarket/data-quality` (endpoint da RFC-007)
   mostra bytes por tabela e % do orçamento.
-- Taxa: no máximo 1 estimativa por token a cada `estimate_cadence_ms[bucket]`,
-  onde o bucket é o horizonte do mercado naquele instante. Um mercado migra de
+- Taxa: no máximo 1 **avaliação** por token a cada `estimate_cadence_ms[bucket]`,
+  onde o bucket é o horizonte do mercado naquele instante. A cadência conta
+  tentativas, não linhas gravadas: um token cujo livro está inválido produz
+  ausência (sem linha) e mesmo assim respeita a cadência, senão ele seria
+  relido seis vezes por minuto para sempre sem produzir nada. Um mercado migra de
   `gt_7d` para `lt_1h` conforme se aproxima da resolução, e a cadência aperta
   junto.
   **Atenção:** cada modelo em shadow soma uma linha adicional por token e por

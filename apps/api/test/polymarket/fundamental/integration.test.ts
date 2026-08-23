@@ -266,6 +266,37 @@ describe.skipIf(DATABASE_URL === undefined)(
       }
     });
 
+    it("does not re-evaluate a token whose book is invalid on every tick", async () => {
+      // An absent estimate writes no row on purpose. If the cadence keyed only on
+      // stored rows, a token with a permanently invalid book would be re-read six
+      // times a minute forever, producing nothing.
+      await pool.query(`DELETE FROM polymarket_book_snapshots_full`);
+      let now = DECISION_TS.getTime() + 3_600_000;
+      const estimator = createEstimator({
+        pool,
+        config: DEFAULT_FUNDAMENTAL_CONFIG,
+        gitSha: GIT_SHA,
+        clock: () => new Date(now),
+      });
+
+      const first = await estimator.runCycle();
+      expect(first.tokensConsidered).toBeGreaterThan(0);
+      expect(first.absent).toBe(first.tokensConsidered);
+      expect(first.consumerRows).toBe(0);
+
+      // One tick later, the same instance: the attempt itself counted against
+      // the cadence, so nothing is due.
+      now += 10_000;
+      const nextTick = await estimator.runCycle();
+      expect(nextTick.tokensConsidered).toBe(0);
+      expect(nextTick.tokensRateLimited).toBeGreaterThan(0);
+
+      // Past this market's 5-minute bucket, it is evaluated again.
+      now += 300_000;
+      const afterCadence = await estimator.runCycle();
+      expect(afterCadence.tokensConsidered).toBeGreaterThan(0);
+    });
+
     it("refuses to promote a model without a passing gate", async () => {
       const models = await pool.query<{ model_id: string }>(
         `SELECT model_id FROM fundamental_models ORDER BY model_id LIMIT 1`,
