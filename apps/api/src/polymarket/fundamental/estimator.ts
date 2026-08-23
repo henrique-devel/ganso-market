@@ -336,6 +336,17 @@ function attemptFor(
 export function createEstimator(deps: EstimatorDeps): Estimator {
   const pool = deps.pool;
   const clock = deps.clock ?? ((): Date => new Date());
+  /**
+   * Last instant each token was EVALUATED, not just written. An absent
+   * estimate writes no row on purpose, so keying the cadence on stored rows
+   * alone would re-evaluate a token whose book is permanently invalid on every
+   * single tick — at a 10 s tick that is six book reads a minute, per token,
+   * that can never produce anything. The cadence governs attempts.
+   *
+   * In memory by design: it is a rate limiter, not a record. After a restart
+   * every token is attempted once more, which is harmless.
+   */
+  const lastAttemptMs = new Map<string, number>();
 
   return {
     async runCycle(): Promise<EstimatorCycleReport> {
@@ -395,10 +406,12 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         const bucket = horizonBucket(
           deadline === null ? null : deadline.getTime() - decisionTs.getTime(),
         );
-        const previous = lastEstimate.get(tokenId);
+        const previous = Math.max(
+          lastEstimate.get(tokenId) ?? 0,
+          lastAttemptMs.get(tokenId) ?? 0,
+        );
         return (
-          previous === undefined ||
-          decisionTs.getTime() - previous >= cadence[bucket]
+          previous === 0 || decisionTs.getTime() - previous >= cadence[bucket]
         );
       };
       const dueTokens = new Set<string>();
@@ -410,6 +423,16 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
         }
       }
       const rateLimited = allTokens.length - dueTokens.size;
+
+      // Forget tokens that left the universe so the map cannot grow forever.
+      if (lastAttemptMs.size > allTokens.length * 2) {
+        const current = new Set(allTokens);
+        for (const tokenId of [...lastAttemptMs.keys()]) {
+          if (!current.has(tokenId)) {
+            lastAttemptMs.delete(tokenId);
+          }
+        }
+      }
 
       if (dueTokens.size === 0) {
         // Nothing to price: skip the feed windows entirely. Loading a day of
@@ -497,6 +520,9 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
             continue;
           }
           tokensConsidered += 1;
+          // Recorded before the work, so a token that throws is not retried on
+          // the very next tick either.
+          lastAttemptMs.set(tokenId, decisionTs.getTime());
           try {
             const book = await loadBookView(pool, tokenId, decisionTs);
             // The macro model must know whether the book is thin, and thinness
