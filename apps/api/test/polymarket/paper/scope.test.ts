@@ -63,6 +63,9 @@ const WRITABLE_TABLES: readonly string[] = [
   "paper_ledger_events",
   "paper_positions",
   "paper_kill_switch",
+  "paper_markouts",
+  "paper_fill_samples",
+  "paper_fill_reports",
 ];
 
 /**
