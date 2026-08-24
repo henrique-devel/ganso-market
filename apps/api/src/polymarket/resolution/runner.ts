@@ -5,9 +5,16 @@
 // supervised: skip-if-running, catch-all logging, never a crash loop.
 
 import { ensureScoreVersion, loadScoreableMarkets } from "./store.js";
+import { buildGraph } from "./graph.js";
+import { divergenceCheck } from "./divergence.js";
+import { evaluateGraph } from "./evaluate.js";
+import { pollOnchainOnce } from "./onchain.js";
 import { recomputeMarkets } from "./recompute.js";
+import { generateResolutionReport, reportDue } from "./report.js";
+import { sanityCheck } from "./sanity.js";
 import { lexiconHash, type ResolutionLexicon } from "./lexicon.js";
 import { scoreConfigHash, type ResolutionConfig } from "./config.js";
+import type { CuratedEdge } from "./curated.js";
 import type { ResolutionPool } from "./types.js";
 
 export const RESOLUTION_SERVICE = "polymarket-resolution";
@@ -42,9 +49,10 @@ export interface ResolutionRunnerDeps {
   readonly pool: ResolutionPool;
   readonly config: ResolutionConfig;
   readonly lexicon: ResolutionLexicon;
+  readonly curatedEdges: readonly CuratedEdge[];
   readonly executionMode: string;
   readonly clock?: () => Date;
-  /** Extra supervised jobs (graph evaluation, divergence, onchain, report). */
+  /** Extra supervised jobs (onchain collector, daily report). */
   readonly extraJobs?: ReadonlyArray<{
     readonly name: string;
     readonly everyMs: number;
@@ -151,6 +159,67 @@ export function createResolutionRunner(
     logJson("info", "SCORES_RECOMPUTED", { trigger: "sweep", ...summary });
   }
 
+  // Consecutive beyond-band counter per edge_key (violations need k in a row;
+  // an in-memory reset on restart only makes the detector MORE conservative).
+  const streaks = new Map<string, number>();
+
+  async function graphBuild(asOf: Date): Promise<void> {
+    const summary = await buildGraph(deps.pool, deps.curatedEdges, asOf);
+    logJson("info", "GRAPH_BUILT", { ...summary });
+  }
+
+  async function graphEval(asOf: Date): Promise<void> {
+    const violations = await evaluateGraph(
+      deps.pool,
+      deps.config,
+      streaks,
+      asOf,
+    );
+    const vetoes = await sanityCheck(deps.pool, deps.config, asOf);
+    logJson("info", "GRAPH_EVALUATED", {
+      ...violations,
+      sanity_active: vetoes.active,
+      sanity_opened: vetoes.opened,
+      sanity_closed: vetoes.closed,
+    });
+  }
+
+  async function divergence(asOf: Date): Promise<void> {
+    const summary = await divergenceCheck(deps.pool, asOf);
+    if (summary.rfc012Only > 0 || summary.rfc011Only > 0) {
+      // The comparison the owner asked for: which layer fired alone.
+      logJson("warn", "LAYER_DIVERGENCE_ACTIVE", { ...summary });
+    }
+  }
+
+  async function onchain(_asOf: Date): Promise<void> {
+    const summary = await pollOnchainOnce({
+      pool: deps.pool,
+      config: deps.config.onchain,
+      clock,
+    });
+    if (
+      summary !== null &&
+      (summary.inserted > 0 || summary.decodedUnknown > 0)
+    ) {
+      logJson("info", "ONCHAIN_POLLED", {
+        inserted: summary.inserted,
+        decoded_unknown: summary.decodedUnknown,
+        to_block: summary.toBlock?.toString() ?? null,
+      });
+    }
+  }
+
+  async function report(asOf: Date): Promise<void> {
+    // Due-check against the last STORED report: a deploy restarts the timer
+    // but must never starve the daily measurement.
+    if (!(await reportDue(deps.pool, deps.config.cadence.reportMs, asOf))) {
+      return;
+    }
+    const { reportId } = await generateResolutionReport(recomputeDeps, asOf);
+    logJson("info", "RESOLUTION_REPORT_GENERATED", { report_id: reportId });
+  }
+
   async function heartbeat(asOf: Date): Promise<void> {
     await deps.pool.query("SELECT 1");
     const markets = await loadScoreableMarkets(deps.pool, asOf);
@@ -226,6 +295,25 @@ export function createResolutionRunner(
         run: stateTick,
       });
       jobs.set("sweep", { everyMs: deps.config.cadence.sweepMs, run: sweep });
+      jobs.set("graph_build", {
+        everyMs: deps.config.cadence.graphBuildMs,
+        run: graphBuild,
+      });
+      jobs.set("graph_eval", {
+        everyMs: deps.config.cadence.graphEvalMs,
+        run: graphEval,
+      });
+      jobs.set("divergence", {
+        everyMs: deps.config.cadence.divergenceMs,
+        run: divergence,
+      });
+      if (deps.config.onchain.enabled) {
+        jobs.set("onchain", {
+          everyMs: deps.config.cadence.onchainPollMs,
+          run: onchain,
+        });
+      }
+      jobs.set("report", { everyMs: 600_000, run: report });
       jobs.set("heartbeat", {
         everyMs: deps.config.cadence.heartbeatMs,
         run: heartbeat,
@@ -234,8 +322,8 @@ export function createResolutionRunner(
         jobs.set(job.name, { everyMs: job.everyMs, run: job.run });
       }
 
-      // One boot sweep before the timers: every market gets a score row and a
-      // current state as soon as the service is up.
+      // One boot pass before the timers: every market gets a score row, a
+      // current state and a graph as soon as the service is up.
       await recomputeMarkets(recomputeDeps, "boot", clock(), null)
         .then((summary) => {
           logJson("info", "SCORES_RECOMPUTED", { trigger: "boot", ...summary });
@@ -246,6 +334,18 @@ export function createResolutionRunner(
             error_name: error instanceof Error ? error.name : "UnknownError",
           });
         });
+      await graphBuild(clock()).catch((error: unknown) => {
+        logJson("error", "JOB_FAILED", {
+          job: "graph_build_boot",
+          error_name: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
+      await report(clock()).catch((error: unknown) => {
+        logJson("error", "JOB_FAILED", {
+          job: "report_boot",
+          error_name: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
 
       for (const [name, job] of jobs) {
         const timer = setInterval(supervised(name, job.run), job.everyMs);

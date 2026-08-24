@@ -5,6 +5,10 @@ import {
   loadResolutionConfig,
 } from "./polymarket/resolution/config.js";
 import {
+  GraphEdgesConfigError,
+  loadCuratedEdges,
+} from "./polymarket/resolution/curated.js";
+import {
   ResolutionLexiconError,
   loadResolutionLexicon,
 } from "./polymarket/resolution/lexicon.js";
@@ -17,6 +21,7 @@ async function run(): Promise<void> {
   const config = await loadConfig();
   const resolution = await loadResolutionConfig();
   const lexicon = await loadResolutionLexicon();
+  const curatedEdges = await loadCuratedEdges();
   // Scores and graph checks read wide as-of windows (rule versions, status
   // timelines, books) and write small batches: a slightly larger query
   // timeout than the request-path API, a small pool.
@@ -32,6 +37,7 @@ async function run(): Promise<void> {
     pool,
     config: resolution,
     lexicon,
+    curatedEdges,
     executionMode: config.executionMode,
   });
 
@@ -75,12 +81,14 @@ void run().catch((error: unknown) => {
   const reasonCode =
     error instanceof ConfigError ||
     error instanceof ResolutionConfigError ||
-    error instanceof ResolutionLexiconError
+    error instanceof ResolutionLexiconError ||
+    error instanceof GraphEdgesConfigError
       ? error.reasonCode
       : "RESOLUTION_FAILED";
   const detail =
     error instanceof ResolutionConfigError ||
-    error instanceof ResolutionLexiconError
+    error instanceof ResolutionLexiconError ||
+    error instanceof GraphEdgesConfigError
       ? { detail: error.message }
       : {};
   process.stderr.write(

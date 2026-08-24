@@ -167,6 +167,7 @@ async function sampleAdjudicationPremium(
   proposedAt: Date | null,
   asOf: Date,
   maxBookAgeMs: number,
+  persistSample = true,
 ): Promise<AdjudicationSampleResult> {
   const tokenId = market.tokenIds[0];
   if (tokenId === undefined) {
@@ -183,6 +184,9 @@ async function sampleAdjudicationPremium(
   const mid = (book.bestBid + book.bestAsk) / 2;
   const premium = Math.min(Math.max(mid, 0), Math.max(1 - mid, 0));
   const premiumText = (Math.round(premium * 1e6) / 1e6).toFixed(6);
+  if (!persistSample) {
+    return { premium };
+  }
   try {
     await pool.query(
       `INSERT INTO resolution_adjudication_samples
@@ -330,19 +334,34 @@ async function questionIdOf(
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-async function recomputeOne(
+export interface ComposedForMarket {
+  readonly composed: ReturnType<typeof composeScore>;
+  readonly rule: RuleAsOf | null;
+  readonly disputeActive: boolean;
+  readonly suspectJump: boolean;
+}
+
+/**
+ * Assemble the as-of inputs and compose the score for one market. With
+ * `persistArtifacts` off (the task-10 backtest) the live series are never
+ * touched: no timeline sync, no adjudication sample rows — clarification
+ * classification still runs because it is version-pure and idempotent.
+ */
+export async function composeForMarket(
   deps: RecomputeDeps,
   market: ScoreableMarket,
   statsByCategory: ReadonlyMap<string, MeasuredPriorInput>,
-  trigger: ScoreTrigger,
   asOf: Date,
-): Promise<void> {
+  persistArtifacts: boolean,
+): Promise<ComposedForMarket> {
   const { pool, config, lexicon } = deps;
   const rule = await ruleAsOf(pool, market.conditionId, asOf);
-  const questionId = await questionIdOf(pool, market.conditionId);
 
   await syncClarifications(pool, market.conditionId, asOf);
-  await syncTimeline(pool, market.conditionId, rule, questionId, asOf);
+  if (persistArtifacts) {
+    const questionId = await questionIdOf(pool, market.conditionId);
+    await syncTimeline(pool, market.conditionId, rule, questionId, asOf);
+  }
 
   const status = await statusAsOf(pool, market.conditionId, asOf);
   const holders = await holdersAsOf(pool, market.conditionId, asOf);
@@ -361,6 +380,7 @@ async function recomputeOne(
       status.proposedAt,
       asOf,
       config.graph.maxBookAgeMs,
+      persistArtifacts,
     );
     adjudicationPremium = sample.premium;
   }
@@ -407,6 +427,29 @@ async function recomputeOne(
     },
     config,
   );
+  return {
+    composed,
+    rule,
+    disputeActive: status.status === "disputed",
+    suspectJump,
+  };
+}
+
+async function recomputeOne(
+  deps: RecomputeDeps,
+  market: ScoreableMarket,
+  statsByCategory: ReadonlyMap<string, MeasuredPriorInput>,
+  trigger: ScoreTrigger,
+  asOf: Date,
+): Promise<void> {
+  const { pool } = deps;
+  const { composed, rule, disputeActive, suspectJump } = await composeForMarket(
+    deps,
+    market,
+    statsByCategory,
+    asOf,
+    true,
+  );
 
   const scoreId = await insertScore(pool, {
     conditionId: market.conditionId,
@@ -438,7 +481,7 @@ async function recomputeOne(
     p5050: composed.p5050Text,
     expectedLockupS: composed.expectedLockupS,
     p95LockupS: composed.p95LockupS,
-    disputeActive: status.status === "disputed",
+    disputeActive,
     suspectJump,
     hardFlags: composed.hardFlags,
     eventIds: [],

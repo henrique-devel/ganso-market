@@ -309,6 +309,13 @@ export interface AcceptInput {
   readonly policyVersion?: string | null;
   /** Intent audit trail (task 9): q/q_lo/size_max as received. */
   readonly intent?: Record<string, unknown> | null;
+  /**
+   * RFC-012 task 17: when a manual order proceeds over a resolution VETO,
+   * the override rides into the ledger (score/action/justification at the
+   * decision instant) — the operator may disagree with the score, but the
+   * disagreement stays auditable.
+   */
+  readonly resolutionOverride?: Record<string, unknown> | null;
 }
 
 export type AcceptOutcome =
@@ -451,6 +458,7 @@ export async function acceptPaperOrder(
       source: input.source,
       policy_reason: input.policyReason ?? null,
       intent: input.intent ?? null,
+      override_veto: input.resolutionOverride ?? null,
     },
     eventTs: now,
   });

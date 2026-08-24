@@ -5,6 +5,7 @@ import Fastify, { LogController, type FastifyInstance } from "fastify";
 import { registerAuthRoutes } from "./auth/http.js";
 import { registerFundamentalRoutes } from "./polymarket/fundamental/api.js";
 import { registerPaperRoutes } from "./polymarket/paper/api.js";
+import { registerResolutionRoutes } from "./polymarket/resolution/api.js";
 import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig } from "./config.js";
@@ -190,6 +191,13 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     // RFC-011 read surface: microstructure feature snapshots. Simulation
     // scope only; stamped with the mandatory banner.
     registerPaperRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
+    });
+    // RFC-012 read surface: resolution-risk scores, the logical graph, its
+    // violations, sanity vetoes and layer divergences, plus the curated-edge
+    // POST. Analytics only — no route here creates an order or a signal.
+    registerResolutionRoutes(app, {
       pool: options.pool,
       authService: options.authService,
     });

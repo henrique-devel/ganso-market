@@ -648,6 +648,97 @@ export async function ensureScoreVersion(
   }
 }
 
+export interface ParamsAsOf {
+  readonly takerFeeBps: string | null;
+  readonly tickSize: string | null;
+  readonly negRisk: boolean | null;
+}
+
+/** Versioned fee/tick parameters at the instant ([valid_from, valid_to)). */
+export async function paramsAsOf(
+  pool: ResolutionPool,
+  conditionId: string,
+  asOf: Date,
+): Promise<ParamsAsOf | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT taker_fee_bps, tick_size, neg_risk
+       FROM polymarket_param_versions
+      WHERE condition_id = $1
+        AND valid_from <= $2
+        AND (valid_to IS NULL OR valid_to > $2)
+      ORDER BY version DESC
+      LIMIT 1`,
+    [conditionId, asOf],
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    takerFeeBps: asString(row.taker_fee_bps),
+    tickSize: asString(row.tick_size),
+    negRisk: typeof row.neg_risk === "boolean" ? row.neg_risk : null,
+  };
+}
+
+export interface FreshModelEstimate {
+  readonly tokenId: string;
+  readonly conditionId: string | null;
+  readonly q: string;
+  readonly modelId: string | null;
+  readonly status: "shadow" | "active";
+  readonly decisionTs: Date;
+}
+
+/**
+ * Latest MODEL estimate per token within the freshness window (the module's
+ * contract everywhere: an estimate older than the window is an ABSENCE, never
+ * a stale value). Shadow rows are included on purpose — the sanity veto must
+ * exercise the machinery before any model is promoted — and the status rides
+ * along so consumers can tell them apart.
+ */
+export async function freshModelEstimates(
+  pool: ResolutionPool,
+  tokenIds: readonly string[],
+  asOf: Date,
+  maxAgeMs: number = 5 * 60_000,
+): Promise<FreshModelEstimate[]> {
+  if (tokenIds.length === 0) {
+    return [];
+  }
+  const since = new Date(asOf.getTime() - maxAgeMs);
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT DISTINCT ON (token_id)
+            token_id, market_id, q, model_id, status, decision_ts
+       FROM fundamental_estimates
+      WHERE token_id = ANY($1)
+        AND source = 'MODEL'
+        AND decision_ts >= $2
+        AND decision_ts <= $3
+      ORDER BY token_id, decision_ts DESC, estimate_id DESC`,
+    [[...tokenIds], since, asOf],
+  );
+  const estimates: FreshModelEstimate[] = [];
+  for (const row of result.rows) {
+    const tokenId = asString(row.token_id);
+    const q = asString(row.q);
+    const decisionTs = toDate(row.decision_ts);
+    const status = row.status === "active" ? "active" : "shadow";
+    if (tokenId === null || q === null || decisionTs === null) {
+      continue;
+    }
+    estimates.push({
+      tokenId,
+      conditionId: asString(row.market_id),
+      q,
+      modelId: asString(row.model_id),
+      status,
+      decisionTs,
+    });
+  }
+  return estimates;
+}
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
