@@ -129,6 +129,8 @@ export interface OnchainPollSummary {
   readonly adapters: number;
   readonly inserted: number;
   readonly decodedUnknown: number;
+  /** Decoded fine but for a questionID no recorded market names: not stored. */
+  readonly skippedUnmapped: number;
   readonly toBlock: bigint | null;
 }
 
@@ -151,11 +153,30 @@ export async function pollOnchainOnce(
   }
   const target = head - BigInt(deps.config.confirmations);
   if (target <= 0n) {
-    return { adapters: 0, inserted: 0, decodedUnknown: 0, toBlock: null };
+    return {
+      adapters: 0,
+      inserted: 0,
+      decodedUnknown: 0,
+      skippedUnmapped: 0,
+      toBlock: null,
+    };
   }
+  // Budget guard: the adapters carry EVERY Polymarket market (measured live:
+  // thousands of logs per 10k blocks). Only events whose questionID names a
+  // market this recorder has ever seen are stored — the module's dispute
+  // history is prospective over the recorded universe, not venue-wide.
+  const known = await deps.pool.query<Record<string, unknown>>(
+    `SELECT question_id FROM polymarket_markets WHERE question_id IS NOT NULL`,
+  );
+  const knownQuestionIds = new Set<string>(
+    known.rows
+      .map((row) => row.question_id)
+      .filter((value): value is string => typeof value === "string"),
+  );
   const topics = [...adapterTopicMap().keys()];
   let inserted = 0;
   let decodedUnknown = 0;
+  let skippedUnmapped = 0;
   let lastScanned: bigint | null = null;
 
   for (const adapter of deps.config.adapters) {
@@ -201,6 +222,10 @@ export async function pollOnchainOnce(
           decodedUnknown += 1;
           continue;
         }
+        if (!knownQuestionIds.has(decoded.questionId)) {
+          skippedUnmapped += 1;
+          continue;
+        }
         const blockKey = log.blockNumber;
         if (!blockTimestamps.has(blockKey)) {
           blockTimestamps.set(blockKey, await blockTimestamp(deps, blockKey));
@@ -244,6 +269,7 @@ export async function pollOnchainOnce(
     adapters: deps.config.adapters.length,
     inserted,
     decodedUnknown,
+    skippedUnmapped,
     toBlock: lastScanned,
   };
 }

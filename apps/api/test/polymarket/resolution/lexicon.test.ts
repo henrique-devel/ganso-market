@@ -272,10 +272,12 @@ describe("loadResolutionLexicon", () => {
 
   it("parses the file shipped in the repository", async () => {
     const { readFile } = await import("node:fs/promises");
+    const shipped = new URL(
+      "../../../../../config/resolution-lexicon.json",
+      import.meta.url,
+    ).pathname;
     const lexicon = await loadResolutionLexicon({
-      env: {
-        [RESOLUTION_LEXICON_FILE_ENV]: "../../config/resolution-lexicon.json",
-      },
+      env: { [RESOLUTION_LEXICON_FILE_ENV]: shipped },
       readTextFile: (path) => readFile(path, "utf8"),
     });
     // The shipped file must stay in sync with the defaults documented in code.

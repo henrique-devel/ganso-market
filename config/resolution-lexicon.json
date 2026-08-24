@@ -30,7 +30,7 @@
     "onchain data",
     "official settlement price",
     "closing price",
-    "the fed's target rate",
+    "fed target rate",
     "cme"
   ],
   "objective_multiple_terms": [

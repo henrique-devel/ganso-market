@@ -236,9 +236,14 @@ export const DEFAULT_RESOLUTION_CONFIG: ResolutionConfig = Object.freeze({
   onchain: Object.freeze({
     enabled: false,
     rpcUrls: Object.freeze(["https://polygon-rpc.com"]),
+    // The RFC-named V2 adapter plus the deployments Gamma's resolvedBy names
+    // today (verified live 2026-08-24: both emit exactly the verified event
+    // signatures). Addresses are config: a new deployment is a config change.
     adapters: Object.freeze([
       "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",
       "0x157ce2d672854c848c9b79c49a8cc6cc89176a49",
+      "0x65070be91477460d8a7aeeb94ef92fe056c2f2a7",
+      "0x69c47de9d4d3dad79590d61b9e05918e03775f24",
     ]),
     confirmations: 60,
     chunkBlocks: 2_000,

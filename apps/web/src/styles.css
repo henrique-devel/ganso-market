@@ -204,3 +204,387 @@ h1 {
   background: #17231c;
   cursor: pointer;
 }
+
+/* --- Painel autenticado largo (RFC-012) ------------------------------- */
+
+.shell--wide {
+  width: min(72rem, calc(100% - 2rem));
+}
+
+/* --- Abas -------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0 0 1.5rem;
+}
+
+.tab {
+  padding: 0.55rem 1.1rem;
+  border: 1px solid #28372e;
+  border-radius: 999px;
+  color: #8eaa98;
+  background: transparent;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: #dfe8e2;
+  background: #17231c;
+}
+
+.tab--active {
+  color: #f6faf7;
+  background: #1d2c23;
+  border-color: #35483c;
+  font-weight: 600;
+}
+
+.tab:focus-visible {
+  outline: 2px solid #66d697;
+  outline-offset: 2px;
+}
+
+/* --- Banner de simulação ------------------------------------------------ */
+
+.sim-banner {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 5;
+  margin: 0 0 1.5rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid rgb(214 178 86 / 35%);
+  border-radius: 999px;
+  color: #e6c86e;
+  background: rgb(19 30 24 / 92%);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.stale-note {
+  margin: 0 0 1rem;
+  color: #f3b760;
+  font-size: 0.8rem;
+}
+
+/* --- Cards de resumo ---------------------------------------------------- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  padding: 1rem 1.15rem;
+  border: 1px solid #28372e;
+  border-radius: 1rem;
+  background: rgb(19 30 24 / 82%);
+}
+
+.card h3 {
+  margin: 0 0 0.5rem;
+  color: #8eaa98;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.card-value {
+  margin: 0;
+  color: #f6faf7;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.card-note {
+  margin: 0.35rem 0 0;
+  color: #8eaa98;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.card--actions {
+  grid-column: span 2;
+}
+
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  margin: 0;
+}
+
+.badge-count {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: #c5d2c9;
+  font-size: 0.85rem;
+}
+
+/* --- Badges de ação ------------------------------------------------------ */
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.badge--veto {
+  color: #eb8a90;
+  border-color: rgb(179 73 79 / 55%);
+  background: rgb(179 73 79 / 16%);
+}
+
+.badge--breaker {
+  color: #f0a869;
+  border-color: rgb(224 138 74 / 55%);
+  background: rgb(224 138 74 / 14%);
+}
+
+.badge--buffer {
+  color: #e6c86e;
+  border-color: rgb(214 178 86 / 45%);
+  background: rgb(214 178 86 / 12%);
+}
+
+.badge--none {
+  color: #7fc79a;
+  border-color: rgb(87 214 141 / 30%);
+  background: rgb(87 214 141 / 8%);
+}
+
+.badge--unknown {
+  color: #8eaa98;
+  border-color: #28372e;
+  background: rgb(142 170 152 / 8%);
+}
+
+.badge-inline {
+  margin-left: 0.45rem;
+}
+
+/* --- Seções -------------------------------------------------------------- */
+
+.section {
+  margin-bottom: 1.5rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid #28372e;
+  border-radius: 1rem;
+  background: rgb(19 30 24 / 82%);
+}
+
+.section h2 {
+  margin-bottom: 0.35rem;
+  color: #f6faf7;
+  font-size: 1.05rem;
+}
+
+.section h3 {
+  margin: 1.25rem 0 0.5rem;
+  color: #8eaa98;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.section-note {
+  margin: 0 0 1rem;
+  color: #8eaa98;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.empty {
+  margin: 0.5rem 0 0;
+  color: #8eaa98;
+  font-size: 0.85rem;
+}
+
+.muted {
+  color: #8eaa98;
+}
+
+.kill-switch-alert {
+  margin: 0 0 1rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid rgb(179 73 79 / 55%);
+  border-radius: 0.65rem;
+  color: #eb8a90;
+  background: rgb(179 73 79 / 12%);
+  font-size: 0.88rem;
+}
+
+/* --- Tabelas --------------------------------------------------------------- */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.data th {
+  padding: 0.5rem 0.9rem 0.5rem 0;
+  border-bottom: 1px solid #28372e;
+  color: #8eaa98;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.data td {
+  padding: 0.55rem 0.9rem 0.55rem 0;
+  border-bottom: 1px solid rgb(40 55 46 / 55%);
+  color: #c5d2c9;
+  font-size: 0.85rem;
+  vertical-align: top;
+}
+
+.data tr:last-child td {
+  border-bottom: none;
+}
+
+.row-click {
+  cursor: pointer;
+}
+
+.row-click:hover td {
+  background: rgb(29 44 35 / 45%);
+}
+
+.row-selected td {
+  background: rgb(29 44 35 / 70%);
+}
+
+/* --- Barras proporcionais -------------------------------------------------- */
+
+.score-cell {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.score-num {
+  min-width: 3.2rem;
+}
+
+.bar {
+  display: inline-block;
+  width: 6rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #17231c;
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #57d68d;
+}
+
+.bar-fill--neg {
+  background: #e2776a;
+}
+
+/* --- Detalhe do mercado ----------------------------------------------------- */
+
+.detail-card {
+  border-color: #35483c;
+}
+
+.detail-head {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.detail-close {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid #35483c;
+  border-radius: 0.5rem;
+  color: #dfe8e2;
+  background: #17231c;
+  cursor: pointer;
+}
+
+.detail-close:hover {
+  background: #1d2c23;
+}
+
+.detail-question {
+  margin: 0 0 1rem;
+  color: #e8eee9;
+  line-height: 1.5;
+}
+
+.detail-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  margin: 0 0 1.25rem;
+}
+
+.detail-stats div {
+  margin: 0;
+}
+
+.detail-stats dt {
+  color: #8eaa98;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.detail-stats dd {
+  margin: 0.25rem 0 0;
+  color: #f6faf7;
+  font-size: 0.95rem;
+}
+
+.detail-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+}
+
+.detail-flags .badge-inline {
+  margin-left: 0;
+}
+
+.justification {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid #35483c;
+  border-radius: 0 0.5rem 0.5rem 0;
+  color: #aab8af;
+  background: rgb(23 35 28 / 60%);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}

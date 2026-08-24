@@ -78,7 +78,7 @@ export const DEFAULT_RESOLUTION_LEXICON: ResolutionLexicon = Object.freeze({
     "onchain data",
     "official settlement price",
     "closing price",
-    "the fed's target rate",
+    "fed target rate",
     "cme",
   ]),
   objectiveMultipleTerms: Object.freeze([

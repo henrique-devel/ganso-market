@@ -205,6 +205,7 @@ export function createResolutionRunner(
       logJson("info", "ONCHAIN_POLLED", {
         inserted: summary.inserted,
         decoded_unknown: summary.decodedUnknown,
+        skipped_unmapped: summary.skippedUnmapped,
         to_block: summary.toBlock?.toString() ?? null,
       });
     }
