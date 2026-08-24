@@ -165,6 +165,9 @@ describe("paper runner heartbeat", () => {
       gitSha: null,
       heartbeatMs: 1_000,
       featuresTickMs: 3_600_000,
+      brokerTickMs: 3_600_000,
+      settlementTickMs: 3_600_000,
+      markTickMs: 3_600_000,
       logSink: sink,
     });
     await runner.start();
