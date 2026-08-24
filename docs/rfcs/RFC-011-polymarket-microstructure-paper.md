@@ -1,6 +1,6 @@
 # RFC-011 — Polymarket: microestrutura e paper broker
 
-**Status:** accepted (2026-08-23 — refinada após verificação de prontidão; decisões de RAM, disco e sequenciamento aprovadas pelo proprietário)
+**Status:** in-progress (código completo em 2026-08-24, PRs #18–#23 com CI verde; ver `docs/test-results/RFC-011-microstructure-paper.md` — `implemented` aguarda ativação em produção, soak de 24 h e track record real)
 **Dependências:** RFC-007 (recorder: registry Gamma, snapshots top-10, trades, regras versionadas, feeSchedule), RFC-010 (modelo fundamental — probabilidade `q` e limite inferior `q_lo`)
 **Habilita:** RFC-009 (execução live) — o track record do paper broker desta RFC é insumo obrigatório dos gates; a RFC-013 (portfólio) consome as features e o ledger daqui
 
