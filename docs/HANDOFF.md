@@ -2,7 +2,7 @@
 
 - Última atualização: 2026-08-24
 - Branch principal: `main`
-- RFC ativa: RFC-011 (código completo em 2026-08-24; ativação em produção pendente)
+- RFC ativa: RFC-012 (aceita em 2026-08-24); RFC-011 com código completo aguardando ativação em produção
 - Modo permitido no runtime atual: `paper`
 
 Este documento registra o ponto de continuidade entre sessões. Ele não
@@ -408,16 +408,16 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 
 ## Sequência de RFCs
 
-| RFC                                                   | Estado de acompanhamento                                                                               | Evidência/condição                                                                                                |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| RFC-001 — Fundação e runtime                          | Implementada                                                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
-| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
-| RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
-| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
-| RFC-011 — Microestrutura e paper broker               | **Código completo (2026-08-24)**, PRs #18–#23 mergeados com CI verde; ativação em produção pendente    | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
-| RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
-| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
-| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
+| RFC                                                   | Estado de acompanhamento                                                                                     | Evidência/condição                                                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| RFC-001 — Fundação e runtime                          | Implementada                                                                                                 | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
+| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                          | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
+| RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18       | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                         | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
+| RFC-011 — Microestrutura e paper broker               | **Código completo (2026-08-24)**, PRs #18–#23 mergeados com CI verde; ativação em produção pendente          | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
+| RFC-012 — Risco de resolução e grafo lógico           | **Aceita (2026-08-24)**; verificação de prontidão feita; decisões de orçamento/onchain/dashboard registradas | Depende da RFC-007 (em produção); ver "Estado verificado das dependências" na RFC                                 |
+| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                              | Gates G1–G6 habilitam a RFC-009                                                                                   |
+| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                             | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
@@ -455,6 +455,46 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 - **BLOQUEIO (RFC-009):** parecer jurídico/tributário e provisionamento da burn
   wallet na Polygon antes de qualquer execução real na Polymarket.
 
+## DECISÃO DO PROPRIETÁRIO — RFC-012 aceita para implementação (2026-08-24)
+
+**FATO INFORMADO:** o proprietário aprovou a RFC-012 (risco de resolução e
+grafo lógico) com as seguintes decisões, registradas também na própria RFC:
+
+1. **Disco:** a quota de `fundamental_estimates` cai de 3,0 → 2,0 GB (janela
+   medida continua ~87 dias a ~23 MB/dia), liberando **1,0 GB** para a
+   RFC-012 (scores 0,4 / grafo+violações 0,3 / timeline de disputas 0,2 /
+   relatórios 0,1). Mudança de `retention.ts` acontece no PR de fundação da
+   RFC-012.
+2. **RAM:** novo container `polymarket-resolution` com 192 MiB, financiado
+   pela redução do estimador de 384 → 192 MiB (uso medido: 39 MiB).
+3. **Coletor onchain em duas fases:** v1 do score usa a timeline Gamma já
+   gravada; eventos onchain do UMA Adapter via `eth_getLogs` em RPC público
+   da Polygon (sem dependência nova) como parte 2, com verificação de
+   ABI/endereço contra a doc atual no início do desenvolvimento.
+4. **Circuit breaker em camadas:** o estado da RFC-012 é a fonte autoritativa
+   consultada pelo paper broker; o gatilho de disputa da RFC-011 permanece
+   como redundância independente e **toda divergência entre as camadas é
+   logada e exposta como métrica** — o proprietário quer a comparação para
+   decisão, não a eliminação de uma das camadas.
+5. **Enforcement imediato:** os vetos ganham dentes já na RFC-012 — intents
+   sob `VETO`/`CIRCUIT_BREAKER` recusados; ordem manual sob `VETO` só com
+   `override_veto` auditado no ledger.
+6. **Dashboard visual (FATO INFORMADO, com implicação de perímetro):** o
+   proprietário quer operar por interface gráfica — página no web app com
+   score/decomposição, ações, disputas, violações, vetos, divergências e o
+   estado do pipeline paper. Isso implica **publicar os endpoints read-only
+   pelo Nginx** (hoje `location ^~ /api/` devolve 404), mantendo a auth de
+   sessão da RFC-002 e o firewall Hetzner que restringe a porta 80 ao IP do
+   operador. Nenhum endpoint de escrita novo é publicado.
+
+**FATO VERIFICADO (prontidão):** todos os insumos Gamma existem e estão em
+produção (timeline UMA com `outcomePrices`, regras versionadas com
+`rule_change`, campos UMA em `rule_versions`, grupos negRisk, holders,
+placeholders de augmented negRisk já filtrados no registry); zero
+infraestrutura onchain existe (escopo da própria RFC); migration `0010`
+livre. Registro completo na seção "Estado verificado das dependências" da
+RFC-012.
+
 ## RFC-011 — CÓDIGO COMPLETO (2026-08-24)
 
 **FATO VERIFICADO:** as 10 tarefas da RFC-011 foram implementadas e mergeadas
@@ -477,7 +517,13 @@ trigger de imutabilidade exercitados. Evidência completa:
 
 ## Próximo passo mínimo
 
-RFC ativa: **RFC-011** (código completo; falta produção).
+RFC ativa para desenvolvimento: **RFC-012** (aceita em 2026-08-24). A
+RFC-011 está com código completo e depende só dos passos de produção abaixo.
+Plano de PRs da RFC-012: (A) migration 0010 + rebalanceamento de retenção +
+timeline/score `R` + léxico rule-precision; (B) grafo + bandas de custo +
+violações; (C) enforcement no paper broker + coletor onchain fase 2 + API;
+(D) dashboard visual no web app + publicação dos endpoints read-only no
+Nginx; test-results ao final.
 
 1. **No servidor (proprietário — o SSH foi bloqueado na sessão de
    implementação):** rebuild do recorder (a correção do parser de trades do

@@ -1,8 +1,47 @@
 # RFC-012 — Polymarket: risco de resolução e grafo lógico de mercados
 
-**Status:** draft (2026-08-19)
+**Status:** accepted (2026-08-24 — refinada após verificação de prontidão; decisões de disco, RAM, coletor onchain e dashboard aprovadas pelo proprietário)
 **Dependências:** RFC-007 (recorder, registry versionado, timeline UMA e eventos de regra)
 **Habilita:** RFC-013 (portfólio/sizing consome score, buffers e vetos do grafo); o veto de sanidade sobre `q` é aplicado à saída da RFC-010 na camada de sinais/portfólio
+
+### Estado verificado das dependências (2026-08-24)
+
+Verificação executada contra o código e a produção:
+
+- **Prontos:** timeline UMA imutável com `outcomePrices` (polling Gamma +
+  `pollPendingOnce`); regras versionadas por hash com evento `rule_change`
+  imutável (o detector que a tarefa 2 consome); `uma_bond`/`uma_reward`/
+  `custom_liveness`/`end_date`/`uma_end_date` em `polymarket_rule_versions`;
+  grupos negRisk (`polymarket_events` + `polymarket_event_markets`);
+  placeholders de augmented negRisk já descartados no registry (`gamma.ts`);
+  concentração de holders (`top1_share`/`top5_share`); books/trades/fees/tick
+  as-of; primitivas da RFC-011 reutilizáveis (book-walk executável,
+  `feeRateFromBps`, `jump_count`, `frozen_markets` do kill switch);
+  `q`/`q_lo` publicados para o veto de sanidade; auth da RFC-002 para o
+  endpoint de arestas curadas; migration `0010` livre.
+- **Não existem (escopo desta RFC):** qualquer infraestrutura onchain
+  (nenhum RPC Polygon no projeto); classificação de clarificações; léxico de
+  rule-precision; score `R`; grafo; dashboard.
+
+**Decisões do proprietário (2026-08-24):**
+
+1. **Disco:** a reserva de 6 GB estava 100% alocada. A quota de
+   `fundamental_estimates` cai de 3,0 → 2,0 GB (na taxa medida de ~23 MB/dia
+   a janela continua ~87 dias, acima do piso da cadeia de evidência),
+   liberando **1,0 GB** para esta RFC: scores versionados 0,4 GB; grafo +
+   violações 0,3 GB; timeline própria de disputas 0,2 GB; relatórios 0,1 GB.
+2. **RAM:** novo container `polymarket-resolution` com **192 MiB**,
+   financiado pela redução do estimador de 384 → 192 MiB (uso medido em
+   produção: 39 MiB). O cap de 4 GiB do `check_compose_policy.py` permanece
+   respeitado.
+3. **Coletor onchain (tarefa 1) em duas fases:** a v1 do score usa a
+   timeline Gamma **já gravada** (proposed/disputed/resolved); os eventos
+   onchain do UMA Adapter (semântica de reset/2-requests, P1–P4 exatos)
+   entram como parte 2 desta mesma RFC, via `eth_getLogs` em RPC público da
+   Polygon (fetch nativo, **sem dependência nova**) — mesmo precedente do
+   faseamento do `OrderFilled` na RFC-007. A verificação de ABI/endereço
+   contra a documentação atual é feita no início do desenvolvimento
+   (condição de parada permanece).
 
 ## Prompt a executar
 
@@ -71,11 +110,13 @@ edge — nunca a fonte primária de PnL.
 
 - Dentro do orçamento da RFC-007: até 40 GB de PostgreSQL no total do módulo,
   aplicações até 3 GB de RAM em carga.
-- Estimativa incremental desta RFC: < 2 GB de PostgreSQL (scores versionados,
-  arestas do grafo, log de violações, histórico de disputas do universo) e
-  < 300 MB de RAM (grafo em memória para 50–100 mercados é trivial). Essas
-  tabelas usam a reserva compartilhada de 6 GB das RFCs 010–013 definida na
-  RFC-007.
+- Incremental desta RFC (**aprovado em 2026-08-24**): **1,0 GB** de
+  PostgreSQL na reserva das RFCs 010–013 (scores 0,4 / grafo+violações 0,3 /
+  timeline de disputas 0,2 / relatórios 0,1), liberado pela redução da quota
+  de `fundamental_estimates` de 3,0 → 2,0 GB; container
+  `polymarket-resolution` com 192 MiB, financiado pelo estimador
+  (384 → 192 MiB; uso medido 39 MiB). Quota vence TTL, como em toda a
+  retenção do módulo.
 - Recomputação do score: event-driven (nova versão de regra, mudança de
   `umaResolutionStatus`) + varredura horária. Grafo: reavaliação a cada
   snapshot agregado de 1 min do universo, não a cada delta.
@@ -168,6 +209,14 @@ resolution_buffer`), incluindo o cenário 50/50 como perda de cauda;
      grupo de evento, reavaliar posições paper existentes, **proibido
      aumentar posição** durante a janela; salto de preço sem catalisador
      (padrões 17%→95%, 9%→100%) dispara o mesmo estado em modo suspeita.
+     **Camadas e divergência (decisão de 2026-08-24):** o estado desta RFC é
+     a fonte **autoritativa** que o aceite do paper broker consulta; o
+     gatilho de disputa que a RFC-011 já implementa (`frozen_markets` do
+     kill switch) **permanece ativo como redundância independente** — não é
+     removido. Toda divergência entre as duas camadas (uma dispara e a outra
+     não, em qualquer direção) é registrada como evento e exposta como
+     métrica/painel para comparação do operador: a divergência é informação
+     de decisão, não ruído a eliminar.
 10. **Backtest de sanidade do buffer**: sobre os mercados já resolvidos no
     recorder, verificar que o veto teria bloqueado os mercados que entraram
     em disputa com antecedência mensurável, e reportar taxa de
@@ -220,6 +269,30 @@ resolution_buffer`), incluindo o cenário 50/50 como perda de cauda;
     grupo de evento, arestas e violações ativas; RFC-013 usa o grupo do grafo
     como unidade de correlação/fator para sizing e caps (worst-case por grupo
     negRisk assumindo perda total).
+17. **Aplicação imediata no paper broker (decisão de 2026-08-24)**: como a
+    RFC-013 ainda não existe, os vetos ganham dentes já nesta RFC — o
+    endpoint `POST /polymarket/paper/intents` (RFC-011) passa a consultar a
+    ação corrente desta RFC antes de aceitar: `VETO` ou `CIRCUIT_BREAKER`
+    (mercado ou grupo de evento) ⇒ intent recusado com a justificativa;
+    `resolution_buffer` é devolvido na decisão para o chamador descontar do
+    EV. Ordens manuais também são recusadas sob `CIRCUIT_BREAKER` (aumentar
+    posição em disputa é proibido); sob `VETO` são aceitas apenas com flag
+    explícita `override_veto` gravada no ledger (o operador pode discordar
+    do score, mas a discordância fica auditável).
+18. **Dashboard visual do processo de resolução (decisão de 2026-08-24)**: o
+    proprietário operará por interface gráfica, não por API. Página no web
+    app (React/Vite existente, atrás do login da RFC-002) mostrando, de
+    forma gráfica e legível para o operador: score `R` por mercado com a
+    decomposição por feature, ação corrente (VETO/BUFFER/CIRCUIT_BREAKER)
+    com justificativa, disputas ativas e sua linha do tempo, violações do
+    grafo com magnitude líquida e tamanho executável, vetos de sanidade
+    emitidos, divergências entre as camadas de circuit breaker (tarefa 9) e
+    o estado geral do pipeline paper (ordens abertas, posições, kill
+    switch). **Implicação de perímetro (decisão implícita do proprietário):
+    os endpoints read-only necessários passam a ser publicados pelo Nginx**,
+    mantendo a auth de sessão da RFC-002 e o firewall Hetzner que já
+    restringe a porta 80 ao IP do operador; nenhum endpoint de escrita além
+    dos já definidos é publicado.
 
 ### API mínima
 
@@ -252,8 +325,14 @@ Nenhum endpoint de trading/wallet/deposit.
   avaliador com bandas de custo).
 - Emissor de `inconsistency_signal` e de vetos de sanidade integrado ao
   pipeline de sinais da RFC-013.
-- Painel no dashboard paper: score por mercado, disputas ativas, violações
-  do grafo, vetos emitidos.
+- Dashboard visual do processo de resolução no web app (tarefa 18): score e
+  decomposição por mercado, ações e justificativas, disputas ativas,
+  violações do grafo, vetos, divergências entre camadas e estado do pipeline
+  paper — com a publicação dos endpoints read-only pelo Nginx atrás da auth.
+- Arquivos de configuração versionados no padrão existente do repo
+  (`config/*.json`, loader fail-closed): léxico de rule-precision, pesos do
+  score, priors externos de disputa e arestas curadas (com autor e
+  justificativa).
 - Relatório de medição própria: taxa de disputa por categoria, distribuição
   P1–P4, frequência de 50/50, lockup observado — estatísticas que **não
   existem de forma independente** e que este pipeline passa a produzir.
@@ -288,9 +367,18 @@ Nenhum endpoint de trading/wallet/deposit.
   falha se vazar; `closedTime` da UMA ausente de qualquer label.
 - Reprodutibilidade: decisão paper antiga referencia `score_version` e
   versão de regra; recomputação com a mesma versão reproduz o mesmo score.
+- Enforcement (tarefa 17): intent sob `VETO`/`CIRCUIT_BREAKER` é recusado
+  com justificativa; ordem manual sob `CIRCUIT_BREAKER` recusada; `VETO`
+  manual só com `override_veto` gravado no ledger.
+- Divergência de camadas (tarefa 9): cenário em que só uma das camadas de
+  circuit breaker dispara gera o evento de divergência — nas duas direções.
 - Busca de código confirma ausência de auth/wallet/order real.
 - Soak: recomputação horária + avaliação de grafo a cada 1 min por 24h
-  dentro do orçamento incremental (< 2 GB PG, < 300 MB RAM).
+  dentro do orçamento incremental (1 GB PG, 192 MiB de container).
+- Relatórios iniciais declaram o `n` real com intervalo: o histórico próprio
+  de disputas tem dias de vida — `prior_external` vigora até 200 resoluções
+  por categoria e o backtest do veto (tarefa 10) reporta a amostra que
+  existir, sem meta mínima para entrega.
 
 ### Critérios de aceite
 
@@ -327,7 +415,7 @@ Pare se:
   otimista;
 - qualquer feature exigir dado posterior à decisão ou o label depender de
   `closedTime` da UMA;
-- o custo incremental ultrapassar o orçamento (2 GB PG / 300 MB RAM) sem
-  aprovação explícita do proprietário;
+- o custo incremental ultrapassar o orçamento aprovado (1 GB de PostgreSQL /
+  192 MiB de container) sem aprovação explícita do proprietário;
 - a tolerância de violação precisar ser afrouxada além de custos medidos para
   "encontrar mais sinais" — isso é fabricação de edge, não detecção.
