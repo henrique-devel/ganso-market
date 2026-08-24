@@ -1,7 +1,8 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-20
+- Última atualização: 2026-08-23
 - Branch principal: `main`
+- RFC ativa: RFC-011 (aceita em 2026-08-23)
 - Modo permitido no runtime atual: `paper`
 
 Este documento registra o ponto de continuidade entre sessões. Ele não
@@ -193,6 +194,7 @@ TTL).
   `createUmaStatusPoller` gravava o status da resolução mas não o desfecho.
   Passou a gravar `outcomePrices`/`outcomes` na timeline imutável; sem isso o
   label store não teria o que pontuar e nenhum gate poderia ter evidência.
+
 ## ESTADO DA EVIDÊNCIA E PRÓXIMO GARGALO (2026-08-23)
 
 - **FATO VERIFICADO:** a cadeia de evidência está viva e crescendo. **358
@@ -223,6 +225,48 @@ TTL).
   consultas ad-hoc em vez de um `grep`. Gravar o motivo da abstenção é pequeno
   e paga em toda investigação futura.
 
+## DECISÃO DO PROPRIETÁRIO — RFC-011 aceita para implementação (2026-08-23)
+
+**FATO INFORMADO:** o proprietário aprovou iniciar a RFC-011 (microestrutura e
+paper broker) **antes** do gate PASS da RFC-010, revogando a nota anterior
+deste handoff ("Só depois disso: RFC-011"). Coerente com a decisão de
+2026-08-23 de desenvolver o fluxo inteiro primeiro e só depois incrementar.
+A RFC-011 não exige modelo promovido (opera com ordens manuais/intents e o
+baseline publicado); **a promoção de modelo continua exigindo gate PASS +
+ação manual — isso não muda.**
+
+**FATO INFORMADO — decisões de orçamento aprovadas junto com a aceitação:**
+
+1. **RAM:** novo serviço Compose `polymarket-paper` com 256 MiB, com
+   `model-worker` (stub sem modelo) reduzido de 256 para 128 MiB para caber
+   no cap de 4 GiB do `check_compose_policy.py` (folga era de 128 MiB). A
+   mudança de Compose acontece no PR de fundação da RFC-011, junto com o
+   serviço novo.
+2. **Disco:** dos ~1,3 GB restantes da reserva de 6 GB das RFCs 010–013
+   (as `fundamental_*` já alocam 4,7 GB em `retention.ts`), sub-quotas:
+   features em janelas 0,6 GB; markouts + calibração de P(fill) 0,4 GB;
+   ledger + ordens paper 0,3 GB.
+
+**FATO VERIFICADO (verificação de prontidão, 2026-08-23):** todos os insumos
+de dados da RFC-011 existem e estão em produção (book L2 + replay
+determinístico, fees/tick versionados as-of, resolução com `outcomePrices`
+via polling Gamma, `q`/`q_lo` publicados, microprice executável compartilhado).
+O registro completo — incluindo o que nasce `UNAVAILABLE` (direção de fluxo,
+sem pipeline onchain) e os defaults conservadores (latência sem round-trip
+medido) — está na seção "Estado verificado das dependências" da própria
+RFC-011.
+
+**FATO VERIFICADO — pré-trabalho obrigatório encontrado na verificação
+(escopo RFC-007):** `parseLastTrade` em
+`apps/api/src/polymarket/messages.ts` constrói o objeto com apenas 6 campos e
+**descarta `size`, `fee_rate_bps` e `transaction_hash`** do frame cru do WS.
+Em produção, `polymarket_trades` com `provenance='ws'` tem os três campos
+NULL e o índice de dedupe WS (`WHERE transaction_hash IS NOT NULL`) nunca se
+aplica. O teste existente passa porque monta a mensagem à mão com os campos.
+Sem isso a fila passiva (C2) e a reconciliação de fee (C4) da RFC-011 não têm
+insumo. Correção antes do corpo da RFC-011; deploy exige rebuild explícito do
+recorder (o CD não troca imagem de profile).
+
 ## DECISÃO DO PROPRIETÁRIO — cadência por horizonte (2026-08-22)
 
 **FATO INFORMADO:** o proprietário definiu a cadência de estimativa por
@@ -238,7 +282,7 @@ porque são podadas meses antes de o mercado resolver.
 
 **FATO VERIFICADO:** com a cadência por horizonte o volume cai de ~309 k para
 ~47 k linhas/dia (**6,6×**), a janela de 3 GB passa de ~5,5 dias para **mais de
-um mês**, e a resolução temporal *aumenta* na última hora — que é onde a RFC
+um mês**, e a resolução temporal _aumenta_ na última hora — que é onde a RFC
 espera que o modelo tenha alguma chance. Implementado como
 `estimate_cadence_ms` por bucket, com o laço tiquetaqueando a 10 s e o trabalho
 caro (janelas de feed) pulado quando nenhum token está vencido.
@@ -367,8 +411,8 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 | RFC-001 — Fundação e runtime                          | Implementada                                                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
 | RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
 | RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
-| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                      |
-| RFC-011 — Microestrutura e paper broker               | Não iniciada (draft 2026-08-19)                                                                        | Depende de RFC-007 e RFC-010                                                                                      |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
+| RFC-011 — Microestrutura e paper broker               | **Aceita (2026-08-23)**; verificação de prontidão feita; pré-trabalho: parser de trades WS             | Depende de RFC-007 e RFC-010 (ambas em produção); ver "Estado verificado das dependências" na RFC                 |
 | RFC-012 — Risco de resolução e grafo lógico           | Não iniciada (draft 2026-08-19)                                                                        | Depende da RFC-007                                                                                                |
 | RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
 | RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
@@ -411,24 +455,28 @@ As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
 ## Próximo passo mínimo
 
-O estimador já está ativo e verificado. O que falta é **evidência**, e hoje ela
-está bloqueada a montante:
+RFC ativa: **RFC-011** (aceita em 2026-08-23 — ver decisão acima). Os itens 1
+e 2 da versão anterior desta seção foram resolvidos (label store fechado de
+ponta a ponta em 2026-08-22; retenção decidida pela cadência por horizonte).
 
-1. **Provar que o label store enche.** Nas próximas 24–48 h, conferir se
-   aparecem eventos `resolved`/`market_resolved` **com `outcomePrices`** e se
-   `fundamental_labels` sai de zero. Se continuar em zero, investigar a
-   hipótese da janela de saída do universo registrada acima — sem label não
-   existe gate, e sem gate nenhum modelo sai de `shadow`. Consulta:
-   `SELECT event_type, count(*) FROM polymarket_resolution_events GROUP BY 1;`
-   e `SELECT count(*) FROM fundamental_labels;`
-2. decidir a janela de retenção das estimativas (decisão pendente acima) —
-   ela é o teto do que o gate consegue enxergar;
-3. alimentar `consensus`/`nowcast` no `config/macro-calendar.json`, sem os
-   quais a categoria `macro_scheduled` nunca acumula evidência.
+1. **Pré-trabalho obrigatório (escopo RFC-007):** corrigir `parseLastTrade`
+   (`apps/api/src/polymarket/messages.ts`) para carregar `size`,
+   `fee_rate_bps` e `transaction_hash`, com teste exercitando o caminho real
+   de produção. No deploy, rebuild explícito do recorder.
+2. **PR de fundação da RFC-011:** migration 0007, entradas de retenção
+   (sub-quotas aprovadas), esqueleto de `apps/api/src/polymarket/paper/`,
+   `scope.test.ts` do módulo com padrões EIP-712, entrypoint
+   `polymarket-paper.ts` e serviço Compose (`polymarket-paper` 256 MiB;
+   `model-worker` 256→128 MiB).
+3. Em seguida, as partes A→D da RFC-011 em PRs incrementais (features →
+   validador/política → simulador/ledger → calibração/relatório).
+4. Em paralelo, a evidência do gate da RFC-010 continua acumulando sozinha;
+   alimentar `consensus`/`nowcast` no `config/macro-calendar.json` continua
+   pendente para a categoria macro.
 
-Nenhum modelo deve ser promovido antes de um gate PASS com os 100 mercados
-resolvidos. Só depois disso: RFC-011 (microestrutura e paper broker), que
-consome `q` e `q_lo` desta RFC.
+Nenhum modelo é promovido antes de um gate PASS com os 100 mercados
+resolvidos + ação manual do proprietário — a aceitação da RFC-011 não muda
+essa invariante.
 
 Operação do servidor: `cd /opt/ganso-market` seguido de `make server-status`,
 `make server-health` ou `make server-logs`.
