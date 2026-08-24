@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "score_version": "1.0.0",
+  "weights": {
+    "rule_precision": 0.3,
+    "dispute_prior": 0.15,
+    "clarification": 0.1,
+    "uma_sensitivity": 0.1,
+    "end_date_mismatch": 0.05,
+    "holders_concentration": 0.1,
+    "p_5050": 0.1,
+    "adjudication_premium": 0.1
+  },
+  "thresholds": { "r_veto": 0.7, "r_buffer": 0.4 },
+  "buffer": { "max_base": 0.05, "capital_daily_hurdle": 0.0005 },
+  "hard_flags": {
+    "clarification_window_ms": 86400000,
+    "clarification_decay_ms": 604800000,
+    "jump_threshold": 0.25,
+    "jump_window_ms": 300000,
+    "catalyst_proximity_min": 60
+  },
+  "p5050": {
+    "base": 0.002,
+    "precision_multiplier": 0.03,
+    "measured_min_n": 200,
+    "cap": 0.1
+  },
+  "lockup": {
+    "base_median_minutes": { "crypto": 38, "macro": 120, "default": 60 },
+    "dispute_added_median_minutes": 2940,
+    "dispute_p95_minutes": 6060,
+    "p95_base_minutes": { "crypto": 120, "macro": 360, "default": 240 }
+  },
+  "priors": {
+    "crypto": {
+      "dispute_rate": 0.006,
+      "source": "pesquisa 2026-08: cripto-preço 0,6%"
+    },
+    "macro": {
+      "dispute_rate": 0.034,
+      "source": "pesquisa 2026-08: politics-policy 3,4% como proxy conservador"
+    },
+    "default": {
+      "dispute_rate": 0.048,
+      "source": "pesquisa 2026-08: geopolítica 4,8% — teto observado"
+    },
+    "measured_min_n": 200,
+    "rate_cap": 0.05
+  },
+  "uma": { "baseline_bond": "750", "baseline_liveness_s": 7200 },
+  "cadence": {
+    "state_tick_ms": 10000,
+    "sweep_ms": 3600000,
+    "graph_build_ms": 600000,
+    "graph_eval_ms": 60000,
+    "divergence_ms": 60000,
+    "report_ms": 86400000,
+    "onchain_poll_ms": 300000,
+    "heartbeat_ms": 60000
+  },
+  "graph": {
+    "epsilon": 0.005,
+    "persistence_k": 3,
+    "max_book_age_ms": 90000,
+    "min_confidence": 0.5,
+    "walk_size_cap_shares": "1000",
+    "s_ref_usd": 100
+  },
+  "onchain": {
+    "enabled": true,
+    "rpc_urls": [
+      "https://polygon-rpc.com",
+      "https://polygon-bor-rpc.publicnode.com"
+    ],
+    "adapters": [
+      "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",
+      "0x157ce2d672854c848c9b79c49a8cc6cc89176a49"
+    ],
+    "confirmations": 60,
+    "chunk_blocks": 2000,
+    "max_chunks_per_poll": 5,
+    "lookback_blocks": 200000,
+    "request_timeout_ms": 10000
+  }
+}

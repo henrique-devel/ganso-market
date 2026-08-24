@@ -339,8 +339,8 @@ async function upsertMarket(
     `INSERT INTO polymarket_markets
        (condition_id, question, slug, category, neg_risk, clob_token_ids, rules,
         tick_size, min_order_size, rewards_min_size, rewards_max_spread, fee_type,
-        end_date_iso, active, closed, source_ts, received_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)
+        end_date_iso, active, closed, question_id, source_ts, received_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
      ON CONFLICT (condition_id) DO UPDATE SET
        question = EXCLUDED.question,
        slug = EXCLUDED.slug,
@@ -358,6 +358,7 @@ async function upsertMarket(
        end_date_iso = EXCLUDED.end_date_iso,
        active = EXCLUDED.active,
        closed = EXCLUDED.closed,
+       question_id = COALESCE(EXCLUDED.question_id, polymarket_markets.question_id),
        source_ts = EXCLUDED.source_ts,
        updated_at = EXCLUDED.updated_at`,
     [
@@ -376,6 +377,7 @@ async function upsertMarket(
       record.endDateIso ?? record.endDate,
       record.active,
       record.closed,
+      record.questionId,
       parseIsoDate(record.updatedAt),
       now,
     ],

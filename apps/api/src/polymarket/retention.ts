@@ -92,11 +92,14 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     protected: false,
   },
   // RFC-010 estimates: 90-day TTL on the raw rows, inside the 6 GB reserve the
-  // RFC-007 budget set aside for the RFC-010..013 tables.
+  // RFC-007 budget set aside for the RFC-010..013 tables. RFC-012 decision
+  // (owner, 2026-08-24): 3.0 -> 2.0 GB — at the measured ~23 MB/day the window
+  // stays ~87 days, above the evidence-chain floor — freeing 1.0 GB for the
+  // resolution-risk and graph tables below.
   {
     table: "fundamental_estimates",
     ttlDays: 90,
-    quotaBytes: 3 * GB,
+    quotaBytes: 2 * GB,
     timeColumn: "received_at",
     protected: false,
   },
@@ -167,6 +170,103 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     ttlDays: null,
     quotaBytes: 0.005 * GB,
     timeColumn: "updated_at",
+    protected: true,
+  },
+  // RFC-012 resolution-risk and graph tables: the 1.0 GB freed above, split as
+  // the owner approved on 2026-08-24 — scores 0.4 / graph+violations 0.3 /
+  // dispute timeline 0.2 / reports 0.1. Score versions, current state, the
+  // dispute timelines, curated edges and reports are audit/reproducibility
+  // material: never pruned, size monitored. Series tables carry TTLs and
+  // quota beats TTL, as everywhere in the module.
+  {
+    table: "resolution_scores",
+    ttlDays: 180,
+    quotaBytes: 0.35 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "resolution_score_versions",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "created_at",
+    protected: true,
+  },
+  {
+    table: "resolution_market_state",
+    ttlDays: null,
+    quotaBytes: 0.01 * GB,
+    timeColumn: "updated_at",
+    protected: true,
+  },
+  {
+    table: "resolution_clarifications",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "received_at",
+    protected: true,
+  },
+  {
+    table: "resolution_uma_timeline",
+    ttlDays: null,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "received_at",
+    protected: true,
+  },
+  {
+    table: "resolution_onchain_events",
+    ttlDays: null,
+    quotaBytes: 0.09 * GB,
+    timeColumn: "received_at",
+    protected: true,
+  },
+  {
+    table: "resolution_onchain_cursor",
+    ttlDays: null,
+    quotaBytes: 0.01 * GB,
+    timeColumn: "updated_at",
+    protected: true,
+  },
+  {
+    table: "resolution_adjudication_samples",
+    ttlDays: 90,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "graph_edges",
+    ttlDays: null,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "created_at",
+    protected: true,
+  },
+  {
+    table: "graph_violations",
+    ttlDays: 180,
+    quotaBytes: 0.15 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "graph_sanity_vetoes",
+    ttlDays: 180,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "resolution_layer_divergences",
+    ttlDays: 180,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "resolution_reports",
+    ttlDays: null,
+    quotaBytes: 0.1 * GB,
+    timeColumn: "generated_at",
     protected: true,
   },
   // RFC-010 metadata: model registry, labels, gate reports, lifecycle events

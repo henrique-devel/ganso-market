@@ -264,6 +264,12 @@ export interface ExtendedMarketRecord extends MarketRegistryEntry {
   readonly customLiveness: string | null;
   readonly automaticallyResolved: boolean | null;
   readonly updatedAt: string | null;
+  /**
+   * UMA question identifier (bytes32). RFC-012's onchain collector keys the
+   * adapter's lifecycle events by it; without this capture those events could
+   * never be mapped back to a condition_id.
+   */
+  readonly questionId: string | null;
 }
 
 function parseEventRefs(value: unknown): GammaEventRef[] {
@@ -292,6 +298,16 @@ function parseEventRefs(value: unknown): GammaEventRef[] {
     });
   }
   return refs;
+}
+
+/** bytes32 hex id, normalized to lowercase; anything else degrades to null. */
+function parseQuestionId(value: unknown): string | null {
+  const raw = asString(value);
+  if (raw === null) {
+    return null;
+  }
+  const normalized = raw.toLowerCase();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? normalized : null;
 }
 
 function parseNamedOutcomes(value: unknown): string[] {
@@ -328,6 +344,7 @@ export function parseExtendedMarket(raw: unknown): ExtendedMarketRecord | null {
       customLiveness: asDecimalString(record.customLiveness),
       automaticallyResolved: asBoolOrNull(record.automaticallyResolved),
       updatedAt: asString(record.updatedAt),
+      questionId: parseQuestionId(record.questionID ?? record.questionId),
     };
   } catch {
     return null;

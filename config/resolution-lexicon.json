@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "subjective_terms": [
+    "credible reporting",
+    "consensus of reporting",
+    "consensus",
+    "significant",
+    "officially",
+    "agrees to",
+    "widely reported",
+    "credible sources",
+    "reputable",
+    "substantial",
+    "generally accepted",
+    "in the judgment",
+    "at the discretion",
+    "commonly understood"
+  ],
+  "objective_single_terms": [
+    "chainlink",
+    "twap",
+    "price feed",
+    "resolution source is the",
+    "coinbase",
+    "binance",
+    "bls.gov",
+    "bureau of labor statistics",
+    "federal reserve",
+    "on-chain data",
+    "onchain data",
+    "official settlement price",
+    "closing price",
+    "the fed's target rate",
+    "cme"
+  ],
+  "objective_multiple_terms": [
+    "any of the following sources",
+    "either source",
+    "official website or",
+    "or any other official",
+    "multiple sources"
+  ],
+  "condition_terms": [
+    "unless",
+    "except",
+    "provided that",
+    "however",
+    "in the event that",
+    "if and only if",
+    "notwithstanding",
+    "subject to",
+    "as long as",
+    "but not"
+  ],
+  "disclosure_terms": [
+    "8-k",
+    "10-q",
+    "10-k",
+    "press release",
+    "publicly announce",
+    "publicly disclose",
+    "publicly confirm",
+    "is announced",
+    "is disclosed",
+    "is reported",
+    "according to a filing",
+    "sec filing",
+    "official announcement"
+  ],
+  "fallback_clause_terms": [
+    "cannot be determined",
+    "will resolve to no",
+    "resolve 50/50",
+    "resolve 50-50",
+    "otherwise resolve",
+    "unable to be determined",
+    "not able to determine"
+  ],
+  "by_date_patterns": [
+    "\\bby\\s+(january|february|march|april|may|june|july|august|september|october|november|december)\\b",
+    "\\bby\\s+(the\\s+end\\s+of\\s+)?(q[1-4]|\\d{4})\\b",
+    "\\bby\\s+\\d{1,2}[\\/\\-]",
+    "\\bbefore\\s+(january|february|march|april|may|june|july|august|september|october|november|december|\\d{4})\\b",
+    "\\breach(es)?\\b",
+    "\\bdip(s)?\\s+to\\b",
+    "\\bhit(s)?\\b",
+    "\\bat\\s+any\\s+point\\b"
+  ],
+  "component_weights": {
+    "source": 0.35,
+    "conditions": 0.15,
+    "disclosure": 0.15,
+    "by_date": 0.1,
+    "title_mismatch": 0.15,
+    "fallback": 0.1
+  },
+  "conditions_cap": 4
+}

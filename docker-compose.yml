@@ -220,7 +220,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     command:
-      ["node", "--max-old-space-size=320", "apps/api/dist/polymarket-estimator.js"]
+      ["node", "--max-old-space-size=160", "apps/api/dist/polymarket-estimator.js"]
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -240,7 +240,56 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 10s
-    mem_limit: 384m
+    # RFC-012 decision (2026-08-24): the estimator (39 MiB measured in
+    # production) cedes 384 -> 192 MiB to fund the new polymarket-resolution
+    # service; the compose policy cap stays strictly under 4 GiB.
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *default-logging
+
+  # RFC-012 resolution-risk score and logical market graph. Analytics only:
+  # scores, vetoes, EV buffers and consistency signals over recorded data — no
+  # order, no paper order, no execution path (the module's scope test enforces
+  # it). It joins edge ONLY for the read-only eth_getLogs polling of the UMA
+  # Adapter on a public Polygon RPC (task 1, part 2); everything else it reads
+  # is already in the database.
+  polymarket-resolution:
+    profiles: ["polymarket"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command:
+      [
+        "node",
+        "--max-old-space-size=160",
+        "apps/api/dist/polymarket-resolution.js",
+      ]
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      GANSO_RESOLUTION_CONFIG_FILE: /etc/ganso/resolution.json
+      GANSO_RESOLUTION_LEXICON_FILE: /etc/ganso/resolution-lexicon.json
+      GANSO_GRAPH_EDGES_FILE: /etc/ganso/graph-edges.json
+      # The revision is baked into the image (apps/api/Dockerfile), so the
+      # provenance on a score is always the code that produced it.
+      GANSO_RELEASE_SHA_FILE: /etc/ganso/release-sha
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      - ./config/resolution.json:/etc/ganso/resolution.json:ro
+      - ./config/resolution-lexicon.json:/etc/ganso/resolution-lexicon.json:ro
+      - ./config/graph-edges.json:/etc/ganso/graph-edges.json:ro
+    networks:
+      - backend
+      - edge
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 192m
     cpus: 0.5
     pids_limit: 128
     logging: *default-logging
