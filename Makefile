@@ -11,6 +11,7 @@ SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \
 	recorder-up recorder-logs recorder-down \
 	estimator-up estimator-logs estimator-down \
+	paper-up paper-logs paper-down \
 	server-init server-config server-up server-health server-status server-logs server-update server-down
 
 help:
@@ -27,6 +28,9 @@ help:
 	@echo "  make estimator-up   sobe o modelo fundamental (RFC-010)"
 	@echo "  make estimator-logs acompanha os logs do modelo fundamental"
 	@echo "  make estimator-down encerra o modelo fundamental"
+	@echo "  make paper-up       sobe o paper broker (RFC-011, simulação)"
+	@echo "  make paper-logs     acompanha os logs do paper broker"
+	@echo "  make paper-down     encerra o paper broker"
 	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
 	@echo "  make server-health  verifica frontend, API, banco e engine"
 	@echo "  make server-status  mostra o estado dos containers"
@@ -121,6 +125,15 @@ estimator-logs:
 
 estimator-down:
 	docker compose --profile polymarket rm --stop --force polymarket-estimator
+
+paper-up: init-secrets
+	docker compose --profile polymarket up --build --detach polymarket-paper
+
+paper-logs:
+	docker compose --profile polymarket logs --follow --tail 100 polymarket-paper
+
+paper-down:
+	docker compose --profile polymarket rm --stop --force polymarket-paper
 
 server-init:
 	@if [ ! -f "$(SERVER_ENV)" ]; then \

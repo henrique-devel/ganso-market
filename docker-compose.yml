@@ -171,7 +171,10 @@ services:
       start_period: 5s
     restart: unless-stopped
     stop_grace_period: 10s
-    mem_limit: 256m
+    # RFC-011 decision (2026-08-23): the stub worker cedes memory to the new
+    # polymarket-paper service. 96m, not 128m: the compose policy cap is a
+    # strict < 4 GiB and 128m would land the aggregate exactly on the cap.
+    mem_limit: 96m
     cpus: 0.5
     pids_limit: 64
     logging: *default-logging
@@ -238,6 +241,39 @@ services:
     restart: unless-stopped
     stop_grace_period: 10s
     mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *default-logging
+
+  # RFC-011 paper broker (foundation). Simulation only — SIMULAÇÃO, SEM
+  # EXECUÇÃO REAL: no trading auth, wallet, signer or real order path may ever
+  # exist in this process (the module's scope test enforces it). Every input is
+  # already in the database, so it joins only the internal backend network.
+  polymarket-paper:
+    profiles: ["polymarket"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command:
+      ["node", "--max-old-space-size=192", "apps/api/dist/polymarket-paper.js"]
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # The revision is baked into the image (apps/api/Dockerfile), so the
+      # provenance on a paper fill is always the code that produced it.
+      GANSO_RELEASE_SHA_FILE: /etc/ganso/release-sha
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 256m
     cpus: 0.5
     pids_limit: 128
     logging: *default-logging
