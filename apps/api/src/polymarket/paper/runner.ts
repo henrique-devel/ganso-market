@@ -11,6 +11,12 @@
 
 import type { SqlExecutor } from "../../database.js";
 import {
+  brokerTick,
+  killSwitchTriggersTick,
+  markTick,
+  settlementTick,
+} from "./brokerstore.js";
+import {
   WINDOW_MS,
   windowKindsForHorizon,
   type WindowKind,
@@ -24,6 +30,9 @@ export const SIMULATION_BANNER = "SIMULAÇÃO — SEM EXECUÇÃO REAL";
 
 export const DEFAULT_HEARTBEAT_MS = 60_000;
 export const DEFAULT_FEATURES_TICK_MS = 10_000;
+export const DEFAULT_BROKER_TICK_MS = 2_000;
+export const DEFAULT_SETTLEMENT_TICK_MS = 60_000;
+export const DEFAULT_MARK_TICK_MS = 60_000;
 
 /** A token with a book snapshot this recent is "being recorded" (in universe). */
 export const ACTIVE_TOKEN_WINDOW_MS = 10 * 60_000;
@@ -61,6 +70,10 @@ export interface PaperRunnerDeps {
   readonly gitSha: string | null;
   readonly heartbeatMs?: number;
   readonly featuresTickMs?: number;
+  readonly brokerTickMs?: number;
+  readonly settlementTickMs?: number;
+  readonly markTickMs?: number;
+  readonly latencyMs?: number;
   readonly clock?: () => Date;
   /** Test seam: replaces process.stderr. */
   readonly logSink?: (line: string) => void;
@@ -94,8 +107,14 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let featuresTimer: ReturnType<typeof setInterval> | null = null;
+  let brokerTimer: ReturnType<typeof setInterval> | null = null;
+  let settlementTimer: ReturnType<typeof setInterval> | null = null;
+  let markTimer: ReturnType<typeof setInterval> | null = null;
   let probing = false;
   let computing = false;
+  let brokering = false;
+  let settling = false;
+  let marking = false;
 
   // Cursor of the last computed window start per token per kind. In-memory by
   // design: a restart resumes from "now" (bounded skip, logged), never from a
@@ -286,17 +305,59 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       featuresTimer = setInterval(() => {
         void featuresTickOnce();
       }, featuresTickMs);
+      const brokerDeps = {
+        clock,
+        logSink: sink,
+        ...(deps.latencyMs === undefined ? {} : { latencyMs: deps.latencyMs }),
+      };
+      brokerTimer = setInterval(() => {
+        if (brokering) {
+          return;
+        }
+        brokering = true;
+        void brokerTick(pool, brokerDeps).finally(() => {
+          brokering = false;
+        });
+      }, deps.brokerTickMs ?? DEFAULT_BROKER_TICK_MS);
+      settlementTimer = setInterval(() => {
+        if (settling) {
+          return;
+        }
+        settling = true;
+        void settlementTick(pool, brokerDeps)
+          .then(() => killSwitchTriggersTick(pool, brokerDeps))
+          .finally(() => {
+            settling = false;
+          });
+      }, deps.settlementTickMs ?? DEFAULT_SETTLEMENT_TICK_MS);
+      markTimer = setInterval(() => {
+        if (marking) {
+          return;
+        }
+        marking = true;
+        void markTick(pool, brokerDeps).finally(() => {
+          marking = false;
+        });
+      }, deps.markTickMs ?? DEFAULT_MARK_TICK_MS);
       return Promise.resolve();
     },
     stop(): Promise<void> {
-      if (heartbeatTimer !== null) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
+      for (const timer of [
+        heartbeatTimer,
+        featuresTimer,
+        brokerTimer,
+        settlementTimer,
+        markTimer,
+      ]) {
+        if (timer !== null) {
+          clearInterval(timer);
+        }
       }
-      if (featuresTimer !== null) {
-        clearInterval(featuresTimer);
-        featuresTimer = null;
-      }
+      heartbeatTimer = null;
+      featuresTimer = null;
+      brokerTimer = null;
+      settlementTimer = null;
+      markTimer = null;
       logJson("info", "PAPER_STOPPED", {});
       return Promise.resolve();
     },

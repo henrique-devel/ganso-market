@@ -54,11 +54,16 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; what: string }> = [
 ];
 
 /**
- * Tables this module is allowed to write to. The RFC-011 migrations (orders,
- * ledger, markouts) extend this list PR by PR, and any write outside it fails
- * the guard.
+ * Tables this module is allowed to write to. The RFC-011 migrations extend
+ * this list PR by PR, and any write outside it fails the guard.
  */
-const WRITABLE_TABLES: readonly string[] = ["paper_feature_windows"];
+const WRITABLE_TABLES: readonly string[] = [
+  "paper_feature_windows",
+  "paper_orders",
+  "paper_ledger_events",
+  "paper_positions",
+  "paper_kill_switch",
+];
 
 /**
  * Strip comments before scanning. The module's own prose says "no wallet, no

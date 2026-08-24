@@ -111,6 +111,38 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "window_start",
     protected: false,
   },
+  // RFC-011 ledger + orders: no TTL, bounded by the approved 0.3 GB slice of
+  // the reserve (the ledger is the gates' track record; quota beats TTL and
+  // any prune is logged). Positions and the kill switch are current state:
+  // never pruned, monitored only.
+  {
+    table: "paper_ledger_events",
+    ttlDays: null,
+    quotaBytes: 0.25 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "paper_orders",
+    ttlDays: null,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "created_at",
+    protected: false,
+  },
+  {
+    table: "paper_positions",
+    ttlDays: null,
+    quotaBytes: 0.01 * GB,
+    timeColumn: "updated_at",
+    protected: true,
+  },
+  {
+    table: "paper_kill_switch",
+    ttlDays: null,
+    quotaBytes: 0.005 * GB,
+    timeColumn: "updated_at",
+    protected: true,
+  },
   // RFC-010 metadata: model registry, labels, gate reports, lifecycle events
   // and calibration reports are the audit trail of every promotion decision.
   // They are never pruned; their size is monitored against the global budget.
