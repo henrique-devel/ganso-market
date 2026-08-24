@@ -238,10 +238,12 @@ ação manual — isso não muda.**
 **FATO INFORMADO — decisões de orçamento aprovadas junto com a aceitação:**
 
 1. **RAM:** novo serviço Compose `polymarket-paper` com 256 MiB, com
-   `model-worker` (stub sem modelo) reduzido de 256 para 128 MiB para caber
-   no cap de 4 GiB do `check_compose_policy.py` (folga era de 128 MiB). A
-   mudança de Compose acontece no PR de fundação da RFC-011, junto com o
-   serviço novo.
+   `model-worker` (stub sem modelo) cedendo memória para caber no cap de
+   4 GiB do `check_compose_policy.py` (folga era de 128 MiB). **FATO
+   VERIFICADO na implementação:** o corte do `model-worker` foi para
+   **96 MiB**, não os 128 cogitados — o cap é estrito (`< 4 GiB`) e com 128
+   o agregado cairia exatamente em 4 GiB; com 96 fica em 4064 MiB. Feito no
+   PR de fundação da RFC-011, junto com o serviço novo.
 2. **Disco:** dos ~1,3 GB restantes da reserva de 6 GB das RFCs 010–013
    (as `fundamental_*` já alocam 4,7 GB em `retention.ts`), sub-quotas:
    features em janelas 0,6 GB; markouts + calibração de P(fill) 0,4 GB;

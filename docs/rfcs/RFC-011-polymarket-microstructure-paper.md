@@ -101,9 +101,12 @@ absorver essa diferença antes que ela custe capital.
   gate de CI `check_compose_policy.py` limita a soma dos `mem_limit` do
   Compose a 4 GiB e a folga atual é de 128 MiB. **Decisão aprovada pelo
   proprietário em 2026-08-23:** criar o serviço `polymarket-paper` com
-  256 MiB, reduzindo `model-worker` (stub sem modelo) de 256 para 128 MiB
-  para caber no cap. O runner nunca vive no estimador — o `scope.test.ts`
-  da RFC-010 proíbe qualquer caminho de ordem naquele módulo.
+  256 MiB, reduzindo `model-worker` (stub sem modelo) para caber no cap.
+  **Nota de implementação:** o corte foi para **96 MiB**, não os 128
+  cogitados — o cap do `check_compose_policy.py` é estrito (`< 4 GiB`) e
+  com 128 o agregado cairia exatamente em 4 GiB; com 96 fica em 4064 MiB.
+  O runner nunca vive no estimador — o `scope.test.ts` da RFC-010 proíbe
+  qualquer caminho de ordem naquele módulo.
 - Persistência dentro da quota compartilhada de 40 GB do PostgreSQL:
   features agregadas em janelas (1s/10s/1min), nunca re-persistir o book cru;
   ledger e ordens paper são pequenos (single-user).
