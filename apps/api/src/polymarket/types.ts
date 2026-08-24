@@ -58,6 +58,13 @@ export interface LastTradePriceMessage {
   readonly price: string;
   readonly side: "BUY" | "SELL";
   readonly timestamp: string;
+  // The live feed also sends these on last_trade_price. Optional because the
+  // venue schema is tolerant: a missing field never drops the trade, it just
+  // persists as NULL. transaction_hash is the WS dedupe key and the future
+  // onchain reconciliation join key (RFC-011).
+  readonly size?: string;
+  readonly fee_rate_bps?: string;
+  readonly transaction_hash?: string;
 }
 
 export interface TickSizeChangeMessage {

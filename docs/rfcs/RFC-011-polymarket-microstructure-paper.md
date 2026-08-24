@@ -1,8 +1,46 @@
 # RFC-011 — Polymarket: microestrutura e paper broker
 
-**Status:** draft
+**Status:** accepted (2026-08-23 — refinada após verificação de prontidão; decisões de RAM, disco e sequenciamento aprovadas pelo proprietário)
 **Dependências:** RFC-007 (recorder: registry Gamma, snapshots top-10, trades, regras versionadas, feeSchedule), RFC-010 (modelo fundamental — probabilidade `q` e limite inferior `q_lo`)
 **Habilita:** RFC-009 (execução live) — o track record do paper broker desta RFC é insumo obrigatório dos gates; a RFC-013 (portfólio) consome as features e o ledger daqui
+
+### Estado verificado das dependências (2026-08-23)
+
+Verificação de prontidão executada contra o código e a produção (branch
+`claude/rfc-011-readiness-2a6695`):
+
+- **Prontos:** registry Gamma; snapshots top-10; book deltas L2 + âncoras +
+  replay determinístico em instante arbitrário (`replay.ts`, endpoint
+  `GET /polymarket/books/{token_id}?at=`); feeSchedule/tick/min_size
+  versionados com consulta as-of (`/params?at=`); evento `tick_size_change`
+  roteado para nova versão de parâmetro; disputas UMA e resolução com
+  `outcomePrices` (via polling Gamma + `pollPendingOnce` de 10 min);
+  calendário macro versionado; `q`/`q_lo`/`q_hi` publicados por
+  `fundamental_estimates` e `GET /polymarket/estimates/latest`; microprice
+  executável por book-walk **já versionado e declarado compartilhado com esta
+  RFC** (`apps/api/src/polymarket/fundamental/microprice.ts` — é a primitiva
+  da marcação a bid executável da Parte D2); `execution_mode` fail-closed em
+  `paper`; retenção TTL+quota extensível (`retention.ts`); observabilidade
+  JSON + `/data-quality`.
+- **Parciais:** trades do WS perdem `size`, `fee_rate_bps` e
+  `transaction_hash` no parser (ver Pré-trabalho abaixo — afeta C2 e C4);
+  latência WS só tem lag one-way `ingest_lag_ms` p50/p99, sem round-trip
+  (afeta C1 — usar default conservador); a verificação de CI de ausência de
+  execução existe só para o módulo da RFC-010 e sem padrões EIP-712 (a
+  tarefa 10 cria a do módulo paper).
+- **Não existem:** pipeline onchain `OrderFilled`/HyperSync (fase 2 opcional
+  da RFC-007 — a feature A4 de direção nasce `UNAVAILABLE`); parser WS de
+  `market_resolved` (código morto — o polling Gamma cobre C5); qualquer
+  emissor de intents (a tarefa 9 define o struct aqui); qualquer código,
+  tabela ou serviço de paper broker.
+- **Nota de sequenciamento:** a RFC-010 está em produção com modelos em
+  `shadow` e gate `NO_EVIDENCE_OF_ALPHA` (8/100 mercados). Esta RFC **não**
+  exige modelo promovido: opera com ordens manuais e intents (tarefa 9), e o
+  consumo de `q`/`q_lo` usa o baseline publicado. Iniciar antes do gate PASS
+  foi **aprovado pelo proprietário em 2026-08-23** (coerente com a decisão de
+  "desenvolver o fluxo inteiro primeiro e só depois incrementar") e está
+  registrado no HANDOFF. A promoção de modelo continua exigindo gate PASS +
+  ação manual — isso não muda aqui.
 
 ## Prompt a executar
 
@@ -52,10 +90,20 @@ absorver essa diferença antes que ela custe capital.
 ### Orçamento
 
 - As tabelas desta RFC usam a reserva compartilhada de 6 GB das RFCs 010–013
-  definida na RFC-007.
-
+  definida na RFC-007. **Estado medido (2026-08-23):** as tabelas
+  `fundamental_*` já alocam 4,7 GB dessa reserva em `retention.ts`, sobrando
+  ~1,3 GB. Sub-quotas **aprovadas pelo proprietário em 2026-08-23**:
+  features em janelas 0,6 GB; markouts + calibração de P(fill) 0,4 GB;
+  ledger + ordens paper 0,3 GB. Quota vence TTL, como em toda a retenção do
+  módulo.
 - Feature pipeline + paper broker dentro do teto de 3 GB de RAM do módulo
-  Polymarket (somado aos collectors da RFC-007).
+  Polymarket (somado aos collectors da RFC-007). **Restrição concreta:** o
+  gate de CI `check_compose_policy.py` limita a soma dos `mem_limit` do
+  Compose a 4 GiB e a folga atual é de 128 MiB. **Decisão aprovada pelo
+  proprietário em 2026-08-23:** criar o serviço `polymarket-paper` com
+  256 MiB, reduzindo `model-worker` (stub sem modelo) de 256 para 128 MiB
+  para caber no cap. O runner nunca vive no estimador — o `scope.test.ts`
+  da RFC-010 proíbe qualquer caminho de ordem naquele módulo.
 - Persistência dentro da quota compartilhada de 40 GB do PostgreSQL:
   features agregadas em janelas (1s/10s/1min), nunca re-persistir o book cru;
   ledger e ordens paper são pequenos (single-user).
@@ -86,6 +134,10 @@ ao timestamp da decisão (teste de look-ahead obrigatório).
    válidas acima; OFI/pressão só quando houver reconciliação onchain; enquanto
    não houver, publicar volume não-assinado e marcar a feature de direção como
    `UNAVAILABLE` (nunca degradar silenciosamente para o campo do WS).
+   **Estado na entrega:** o pipeline onchain `OrderFilled` (Envio HyperSync)
+   não está implementado (fase 2 opcional da RFC-007), então esta feature
+   nasce `UNAVAILABLE` publicando apenas volume não-assinado — isso não
+   bloqueia a RFC; a política de ordem (Parte B) não depende dela.
 5. **Velocidade de cancel/repost**: taxa de eventos `price_change` com
    remoção (size→0) e reposição por nível por janela; proxy de quote churn e
    de MM ativo no mercado.
@@ -150,6 +202,12 @@ Política determinística, sem discricionariedade, registrada com cada ordem
    do próprio recorder: p50/p95 de round-trip WS + margem configurável;
    default conservador se ainda não houver medição). Consome níveis na ordem,
    respeita `worst_price`, gera partial fills por nível.
+   **Estado na entrega:** o recorder mede hoje apenas o lag one-way de
+   ingestão (`ingest_lag_ms`, p50/p99 em `/data-quality`); o PONG do WS é
+   descartado sem cronometrar, logo não existe round-trip medido. Usar
+   default conservador configurável (proposta: 1.000 ms, nunca abaixo do
+   p99 do lag one-way corrente) até haver medição própria; cronometrar o
+   PONG é pré-trabalho opcional (abaixo).
 2. **Fila passiva conservadora**: ordem passiva entra **atrás de toda a
    profundidade visível** no nível no momento do aceite. Fill passivo só
    ocorre quando o volume de trades observado no nível (via
@@ -169,7 +227,11 @@ Política determinística, sem discricionariedade, registrada com cada ordem
    líquido (upside não confiável; taker rebate tem relato de não-pagamento) —
    se estimados, aparecem em linha separada "não realizada".
 5. **Resolução trinária 0/1/0,5**: ao evento `market_resolved`
-   (`winning_asset_id`) ou resolução via Gamma, o ledger liquida shares a
+   (`winning_asset_id`) ou resolução via Gamma — **fonte operante hoje: o
+   polling Gamma com `pollPendingOnce` (10 min), que grava `outcomePrices`
+   em `polymarket_resolution_events`; o caminho WS `market_resolved` é
+   código morto no parser (TODO da RFC-007, não bloqueia)** — o ledger
+   liquida shares a
    US$ 1 (vencedor), US$ 0 (perdedor) ou US$ 0,50 (resultado 50/50). Em
    mercados negRisk o desfecho 0,5 é estruturalmente impossível (o
    NegRiskAdapter reverte `[1,1]`) — o simulador deve rejeitar 0,5 nesses
@@ -204,6 +266,28 @@ Política determinística, sem discricionariedade, registrada com cada ordem
    configurável, staleness global do recorder, disputa UMA detectada em
    mercado com posição (congela entradas naquele mercado).
 
+### Pré-trabalho (correções de escopo RFC-007, antes da Parte C)
+
+1. **Obrigatório — parser de trades WS descarta campos.**
+   `parseLastTrade` em `apps/api/src/polymarket/messages.ts` constrói um
+   literal com apenas 6 campos e descarta `size`, `fee_rate_bps` e
+   `transaction_hash` do frame cru; em produção, `polymarket_trades` com
+   `provenance='ws'` tem esses três campos NULL e o índice de dedupe WS
+   (`WHERE transaction_hash IS NOT NULL`) nunca se aplica. Sem `size` em
+   tempo real, a fila passiva (C2) não tem volume por nível; sem
+   `fee_rate_bps`, a reconciliação de fee (C4) não existe; sem
+   `transaction_hash`, a futura reconciliação onchain (A4) perde a chave de
+   junção. Corrigir o parser para carregar os três campos, corrigir o teste
+   (hoje ele monta a mensagem à mão com os campos e não exercita o caminho
+   real) e lembrar do rebuild explícito do recorder no deploy (o CD não
+   troca a imagem de profile).
+2. **Opcional — round-trip WS:** cronometrar o PONG em `dualws.ts` e expor
+   p50/p95 (hoje o PONG é descartado); enquanto não houver, vale o default
+   conservador de C1.
+3. **Opcional — sync do calendário macro:** agendar junto do job de 10 min
+   em vez de só no boot (fragilidade registrada no HANDOFF em 2026-08-23;
+   alimenta a feature A8).
+
 ### Tarefas
 
 1. Schema PostgreSQL de features (janelas 1s/10s/1min por token) + jobs
@@ -227,8 +311,17 @@ policy_reason}`; proibir por tipo qualquer saída sem limite de preço.
 9. Integração com RFC-010: o paper broker aceita intents
    `{token_id, lado, q, q_lo, tamanho_máx}` e devolve decisão da política +
    resultado simulado; sem RFC-010 ativa, aceita ordens manuais via API.
+   **Interface concreta:** não existe emissor de intents (o escopo da
+   RFC-010 proíbe o módulo fundamental de emitir sinal/ordem), então o
+   struct de intent é definido aqui e o consumo de `q`/`q_lo` se dá por
+   polling de `GET /polymarket/estimates/latest` ou leitura direta de
+   `fundamental_estimates` (respeitando o filtro de frescor de 5 min).
 10. Documento explícito de ausência de execução real + verificação automática
     no CI (grep por endpoints/domains de trading, structs EIP-712 de ordem).
+    **Implementação:** clonar
+    `apps/api/test/polymarket/fundamental/scope.test.ts` para o módulo
+    paper, acrescentando padrões EIP-712 (`signTypedData`, `EIP712Domain`,
+    `verifyingContract`) que o guard existente não cobre.
 
 ### API mínima
 

@@ -130,6 +130,17 @@ function parsePriceChange(
   };
 }
 
+// Numbers become their canonical string form; they are never used in math.
+function decimalStr(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
 function parseLastTrade(record: Record<string, unknown>): MarketMessage | null {
   const market = str(record.market);
   const assetId = str(record.asset_id);
@@ -145,6 +156,12 @@ function parseLastTrade(record: Record<string, unknown>): MarketMessage | null {
   ) {
     return null;
   }
+  // size/fee_rate_bps/transaction_hash ride along when the feed sends them;
+  // their absence never drops the trade (exactOptionalPropertyTypes: omit,
+  // never assign undefined).
+  const size = decimalStr(record.size);
+  const feeRateBps = decimalStr(record.fee_rate_bps);
+  const transactionHash = str(record.transaction_hash);
   return {
     event_type: "last_trade_price",
     market,
@@ -152,6 +169,9 @@ function parseLastTrade(record: Record<string, unknown>): MarketMessage | null {
     price,
     side,
     timestamp,
+    ...(size !== null ? { size } : {}),
+    ...(feeRateBps !== null ? { fee_rate_bps: feeRateBps } : {}),
+    ...(transactionHash !== null ? { transaction_hash: transactionHash } : {}),
   };
 }
 
