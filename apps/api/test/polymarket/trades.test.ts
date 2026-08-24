@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { QueryResultRow } from "pg";
 
 import type { QueryResult, SqlExecutor } from "../../src/database.js";
+import { parseMarketFrame } from "../../src/polymarket/messages.js";
 import {
   createTradesBackfill,
   handleLastTrade,
   parseDataApiTrade,
 } from "../../src/polymarket/trades.js";
+import type { LastTradePriceMessage } from "../../src/polymarket/types.js";
 
 interface CapturedQuery {
   readonly text: string;
@@ -49,17 +51,39 @@ function jsonResponse(
 }
 
 describe("handleLastTrade (WS provenance)", () => {
-  const message = {
-    event_type: "last_trade_price" as const,
-    market: "0xcond",
-    asset_id: "111",
-    price: "0.42",
-    size: "12.5",
-    side: "BUY" as const,
-    timestamp: "1787098643398",
-    fee_rate_bps: "100",
-    transaction_hash: "0xabc",
-  };
+  // The message is produced by the real production path (raw WS frame →
+  // parseMarketFrame), not built by hand: a hand-built literal used to hide
+  // that the parser dropped size/fee_rate_bps/transaction_hash.
+  function parsedLastTrade(): LastTradePriceMessage {
+    const messages = parseMarketFrame(
+      JSON.stringify({
+        event_type: "last_trade_price",
+        market: "0xcond",
+        asset_id: "111",
+        price: "0.42",
+        size: "12.5",
+        side: "BUY",
+        timestamp: "1787098643398",
+        fee_rate_bps: "100",
+        transaction_hash: "0xabc",
+      }),
+    );
+    const trade = messages[0];
+    if (trade?.event_type !== "last_trade_price") {
+      throw new Error("fixture frame must parse as last_trade_price");
+    }
+    return trade;
+  }
+  const message = parsedLastTrade();
+
+  it("persists size, fee_rate_bps and transaction_hash from the parsed frame", async () => {
+    const { calls, executor } = createFakeExecutor();
+    await handleLastTrade(executor, message, () => 1_787_098_643_500);
+    const params = calls[0]?.params;
+    expect(params?.[3]).toBe("12.5");
+    expect(params?.[5]).toBe("100");
+    expect(params?.[6]).toBe("0xabc");
+  });
 
   it("relies on ON CONFLICT DO NOTHING so the same tx twice is one row", async () => {
     const { calls, executor } = createFakeExecutor();

@@ -28,15 +28,6 @@ export const BEHIND_GAP_THRESHOLD_MS = 15 * 60 * 1_000;
 const MAX_FETCH_RETRIES = 3;
 const BACKOFF_BASE_MS = 1_000;
 
-// types.ts does not model the fee/tx fields the live feed sends on
-// last_trade_price; accept them as an optional extension without touching the
-// shared contract.
-export type WsLastTradeMessage = LastTradePriceMessage & {
-  readonly size?: string;
-  readonly fee_rate_bps?: string;
-  readonly transaction_hash?: string;
-};
-
 type JsonFetcher = (
   input: string,
   init?: { headers?: Record<string, string> },
@@ -68,7 +59,7 @@ function logJson(
  */
 export async function handleLastTrade(
   pool: SqlExecutor,
-  msg: WsLastTradeMessage,
+  msg: LastTradePriceMessage,
   clock: () => number,
 ): Promise<void> {
   try {
