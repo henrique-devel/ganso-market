@@ -119,10 +119,31 @@ describe("estimate volumetry", () => {
   });
 
   it("keeps the whole module inside the RFC-007 40 GB budget", () => {
-    const total = RETENTION_TABLES.reduce(
-      (sum, table) => sum + table.quotaBytes,
-      0,
+    // The protected polymarket_* metadata tables SHARE one 0.5 GB monitored
+    // quota (RFC-007's retention table has a single line for the whole group);
+    // retention.ts stamps that same 0.5 GB on each member, so a naive sum
+    // counts it eleven times. Count the group once, everything else per table.
+    const metadataGroup = RETENTION_TABLES.filter(
+      (table) => table.protected && table.table.startsWith("polymarket_"),
     );
-    expect(total).toBeLessThan(40 * GB);
+    const metadataShared = Math.max(
+      ...metadataGroup.map((table) => table.quotaBytes),
+    );
+    const individual = RETENTION_TABLES.filter(
+      (table) => !(table.protected && table.table.startsWith("polymarket_")),
+    ).reduce((sum, table) => sum + table.quotaBytes, 0);
+    expect(individual + metadataShared).toBeLessThan(40 * GB);
+  });
+
+  it("keeps the RFC-010..013 tables inside their 6 GB reserve", () => {
+    // The RFC-007 budget reserves 6 GB for the fundamental_* and paper_*
+    // tables; RFC-010 holds 4.7 GB of it and the owner allotted 1.3 GB to
+    // RFC-011 on 2026-08-23. Any new table in the reserve must fit here.
+    const reserve = RETENTION_TABLES.filter(
+      (table) =>
+        table.table.startsWith("fundamental_") ||
+        table.table.startsWith("paper_"),
+    ).reduce((sum, table) => sum + table.quotaBytes, 0);
+    expect(reserve).toBeLessThanOrEqual(6 * GB);
   });
 });

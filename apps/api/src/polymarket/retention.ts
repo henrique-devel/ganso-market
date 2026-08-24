@@ -100,6 +100,17 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "received_at",
     protected: false,
   },
+  // RFC-011 feature windows: 30-day TTL inside the sub-quota the owner
+  // approved on 2026-08-23 (0.6 GB of the 6 GB RFC-010..013 reserve). Quota
+  // beats TTL, as everywhere: under pressure the window shrinks, the budget
+  // holds.
+  {
+    table: "paper_feature_windows",
+    ttlDays: 30,
+    quotaBytes: 0.6 * GB,
+    timeColumn: "window_start",
+    protected: false,
+  },
   // RFC-010 metadata: model registry, labels, gate reports, lifecycle events
   // and calibration reports are the audit trail of every promotion decision.
   // They are never pruned; their size is monitored against the global budget.

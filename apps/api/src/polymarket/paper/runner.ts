@@ -1,13 +1,21 @@
-// RFC-011 foundation: the paper-broker process skeleton. This revision only
-// boots, proves its guards and heartbeats; the microstructure features, the
-// order validator/policy, the simulator and the ledger arrive with the next
-// PRs of the RFC.
+// RFC-011: the paper-broker process. This revision boots under the paper-only
+// guard, heartbeats, and runs the Part A feature pipeline: event-driven,
+// incremental windows (1s/10s/1m per token, gated by horizon), computed only
+// from data the recorder already persisted and never from anything after the
+// window end. The order validator/policy, the simulator and the ledger arrive
+// with the next PRs of the RFC.
 //
 // SIMULAÇÃO — SEM EXECUÇÃO REAL: this process must never gain trading auth, a
 // wallet, a signer or a real order path (scope.test.ts enforces it, the same
 // guard the fundamental module carries).
 
 import type { SqlExecutor } from "../../database.js";
+import {
+  WINDOW_MS,
+  windowKindsForHorizon,
+  type WindowKind,
+} from "./features.js";
+import { computeAndStoreWindow, type QueryPool } from "./featurestore.js";
 
 const SERVICE = "polymarket-paper";
 
@@ -15,6 +23,26 @@ const SERVICE = "polymarket-paper";
 export const SIMULATION_BANNER = "SIMULAÇÃO — SEM EXECUÇÃO REAL";
 
 export const DEFAULT_HEARTBEAT_MS = 60_000;
+export const DEFAULT_FEATURES_TICK_MS = 10_000;
+
+/** A token with a book snapshot this recent is "being recorded" (in universe). */
+export const ACTIVE_TOKEN_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Catch-up cap per token/kind/tick. A longer backlog (boot after downtime) is
+ * SKIPPED, not replayed: features are a hot-path product, and re-scanning
+ * history on boot is explicitly out of budget (RFC-011). The skip is logged.
+ */
+export const MAX_WINDOW_BACKLOG = 5;
+
+/** Operational query (current state, not a feature input). */
+const ACTIVE_TOKENS_SQL =
+  "SELECT s.token_id, MAX(s.condition_id) AS condition_id, " +
+  "MAX(m.end_date_iso) AS end_date_iso " +
+  "FROM polymarket_book_snapshots s " +
+  "LEFT JOIN polymarket_markets m ON m.condition_id = s.condition_id " +
+  "WHERE s.received_at > $1 " +
+  "GROUP BY s.token_id";
 
 export class PaperScopeError extends Error {
   readonly reasonCode: string;
@@ -32,6 +60,8 @@ export interface PaperRunnerDeps {
   readonly executionMode: string;
   readonly gitSha: string | null;
   readonly heartbeatMs?: number;
+  readonly featuresTickMs?: number;
+  readonly clock?: () => Date;
   /** Test seam: replaces process.stderr. */
   readonly logSink?: (line: string) => void;
 }
@@ -41,6 +71,14 @@ export interface PaperRunner {
   stop(): Promise<void>;
   /** One heartbeat probe; exposed for tests and the smoke path. */
   heartbeatOnce(): Promise<void>;
+  /** One feature-pipeline tick; exposed for tests and the smoke path. */
+  featuresTickOnce(): Promise<void>;
+}
+
+interface ActiveToken {
+  readonly tokenId: string;
+  readonly conditionId: string | null;
+  readonly endDate: Date | null;
 }
 
 export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
@@ -49,9 +87,20 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
     ((line: string): void => {
       process.stderr.write(line);
     });
+  const clock = deps.clock ?? ((): Date => new Date());
   const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
-  let timer: ReturnType<typeof setInterval> | null = null;
+  const featuresTickMs = deps.featuresTickMs ?? DEFAULT_FEATURES_TICK_MS;
+  const pool: QueryPool = deps.pool;
+
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let featuresTimer: ReturnType<typeof setInterval> | null = null;
   let probing = false;
+  let computing = false;
+
+  // Cursor of the last computed window start per token per kind. In-memory by
+  // design: a restart resumes from "now" (bounded skip, logged), never from a
+  // history re-scan.
+  const cursors = new Map<string, number>();
 
   function logJson(
     level: "info" | "warn" | "error",
@@ -89,6 +138,129 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
     }
   }
 
+  async function listActiveTokens(now: Date): Promise<ActiveToken[]> {
+    const since = new Date(now.getTime() - ACTIVE_TOKEN_WINDOW_MS);
+    const result = await deps.pool.query(ACTIVE_TOKENS_SQL, [since]);
+    const tokens: ActiveToken[] = [];
+    for (const row of result.rows) {
+      const tokenId = row["token_id"];
+      if (typeof tokenId !== "string" || tokenId.length === 0) {
+        continue;
+      }
+      const conditionId = row["condition_id"];
+      const endDateIso = row["end_date_iso"];
+      let endDate: Date | null = null;
+      if (typeof endDateIso === "string" && endDateIso.length > 0) {
+        const parsed = new Date(endDateIso);
+        endDate = Number.isNaN(parsed.getTime()) ? null : parsed;
+      }
+      tokens.push({
+        tokenId,
+        conditionId: typeof conditionId === "string" ? conditionId : null,
+        endDate,
+      });
+    }
+    return tokens;
+  }
+
+  async function computeDueWindows(
+    token: ActiveToken,
+    kind: WindowKind,
+    nowMs: number,
+  ): Promise<{ computed: number; persisted: number }> {
+    const kindMs = WINDOW_MS[kind];
+    // Latest window whose end is at or before now.
+    const latestStart = Math.floor((nowMs - kindMs) / kindMs) * kindMs;
+    if (latestStart < 0) {
+      return { computed: 0, persisted: 0 };
+    }
+    const cursorKey = `${token.tokenId}:${kind}`;
+    const cursor = cursors.get(cursorKey);
+    // First sight of the token/kind: start at the latest complete window.
+    let nextStart = cursor === undefined ? latestStart : cursor + kindMs;
+    if (nextStart > latestStart) {
+      return { computed: 0, persisted: 0 };
+    }
+    const backlog = (latestStart - nextStart) / kindMs + 1;
+    if (backlog > MAX_WINDOW_BACKLOG) {
+      const skipped = backlog - MAX_WINDOW_BACKLOG;
+      logJson("warn", "FEATURES_BACKLOG_SKIPPED", {
+        token_id: token.tokenId,
+        window_kind: kind,
+        windows_skipped: skipped,
+      });
+      nextStart = latestStart - (MAX_WINDOW_BACKLOG - 1) * kindMs;
+    }
+    let computed = 0;
+    let persisted = 0;
+    for (let start = nextStart; start <= latestStart; start += kindMs) {
+      const stored = await computeAndStoreWindow(
+        pool,
+        token.tokenId,
+        token.conditionId,
+        kind,
+        new Date(start),
+        new Date(start + kindMs),
+      );
+      computed += 1;
+      if (stored) {
+        persisted += 1;
+      }
+      cursors.set(cursorKey, start);
+    }
+    return { computed, persisted };
+  }
+
+  async function featuresTickOnce(): Promise<void> {
+    if (computing) {
+      logJson("warn", "JOB_STILL_RUNNING", { job: "paper_features" });
+      return;
+    }
+    computing = true;
+    try {
+      const now = clock();
+      const tokens = await listActiveTokens(now);
+      let computed = 0;
+      let persisted = 0;
+      let failures = 0;
+      for (const token of tokens) {
+        const horizon =
+          token.endDate === null
+            ? null
+            : token.endDate.getTime() - now.getTime();
+        for (const kind of windowKindsForHorizon(horizon)) {
+          try {
+            const result = await computeDueWindows(token, kind, now.getTime());
+            computed += result.computed;
+            persisted += result.persisted;
+          } catch (error: unknown) {
+            // One token/kind failing must not starve the rest of the universe.
+            failures += 1;
+            logJson("error", "FEATURES_WINDOW_FAILED", {
+              token_id: token.tokenId,
+              window_kind: kind,
+              error_name: error instanceof Error ? error.name : "UnknownError",
+            });
+          }
+        }
+      }
+      if (computed > 0 || failures > 0) {
+        logJson("info", "FEATURES_TICK", {
+          tokens: tokens.length,
+          windows_computed: computed,
+          windows_persisted: persisted,
+          failures,
+        });
+      }
+    } catch (error: unknown) {
+      logJson("error", "FEATURES_TICK_FAILED", {
+        error_name: error instanceof Error ? error.name : "UnknownError",
+      });
+    } finally {
+      computing = false;
+    }
+  }
+
   return {
     start(): Promise<void> {
       if (deps.executionMode !== "paper") {
@@ -108,19 +280,27 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         git_sha_known: deps.gitSha !== null,
         simulation: SIMULATION_BANNER,
       });
-      timer = setInterval(() => {
+      heartbeatTimer = setInterval(() => {
         void heartbeatOnce();
       }, heartbeatMs);
+      featuresTimer = setInterval(() => {
+        void featuresTickOnce();
+      }, featuresTickMs);
       return Promise.resolve();
     },
     stop(): Promise<void> {
-      if (timer !== null) {
-        clearInterval(timer);
-        timer = null;
+      if (heartbeatTimer !== null) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      if (featuresTimer !== null) {
+        clearInterval(featuresTimer);
+        featuresTimer = null;
       }
       logJson("info", "PAPER_STOPPED", {});
       return Promise.resolve();
     },
     heartbeatOnce,
+    featuresTickOnce,
   };
 }
