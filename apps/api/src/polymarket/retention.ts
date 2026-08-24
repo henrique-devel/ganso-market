@@ -122,10 +122,13 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "received_at",
     protected: false,
   },
+  // 0.035 GB, not 0.05: orders + positions + kill switch share the approved
+  // 0.3 GB ledger slice with the events table, and the reserve sum is a
+  // tested invariant.
   {
     table: "paper_orders",
     ttlDays: null,
-    quotaBytes: 0.05 * GB,
+    quotaBytes: 0.035 * GB,
     timeColumn: "created_at",
     protected: false,
   },
@@ -134,6 +137,29 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     ttlDays: null,
     quotaBytes: 0.01 * GB,
     timeColumn: "updated_at",
+    protected: true,
+  },
+  // RFC-011 markouts and P(fill) calibration: the RFC-009 validation
+  // datasets, 180-day TTL inside the approved 0.4 GB slice of the reserve.
+  {
+    table: "paper_markouts",
+    ttlDays: 180,
+    quotaBytes: 0.25 * GB,
+    timeColumn: "fill_ts",
+    protected: false,
+  },
+  {
+    table: "paper_fill_samples",
+    ttlDays: 180,
+    quotaBytes: 0.1 * GB,
+    timeColumn: "sampled_at",
+    protected: false,
+  },
+  {
+    table: "paper_fill_reports",
+    ttlDays: null,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "generated_at",
     protected: true,
   },
   {

@@ -10,13 +10,18 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SqlExecutor } from "../../database.js";
 import {
   acceptPaperOrder,
+  bookAtOrBefore,
   engageKillSwitch,
+  feeRateFromBps,
   loadKillSwitch,
+  paramsAtOrBefore,
   rearmKillSwitch,
   requestCancel,
   type BrokerDeps,
 } from "./brokerstore.js";
 import { unrealizedPnlUsd } from "./ledger.js";
+import { buildPerformanceReport } from "./performance.js";
+import { decideOrderType, POLICY_VERSION } from "./policy.js";
 import { SIMULATION_BANNER } from "./runner.js";
 import type { OrderDraft, OrderSide, OrderType } from "./validator.js";
 
@@ -380,6 +385,154 @@ export function registerPaperRoutes(
         return await reply.send({
           simulation: SIMULATION_BANNER,
           positions,
+        });
+      } catch (error) {
+        logPaperApiError("PAPER_API_FAILED", error);
+        return jsonError(reply, 500, "PAPER_API_FAILED");
+      }
+    },
+  );
+
+  // Task 9: RFC-010 integration. An intent carries the fundamental estimate;
+  // the deterministic policy decides the order type and the paper broker
+  // simulates it. Without an active RFC-010 model the manual POST above keeps
+  // working — this endpoint never requires a promoted model.
+  app.post(
+    "/polymarket/paper/intents",
+    { preHandler: guard },
+    async (request, reply) => {
+      try {
+        const body = bodyRecord(request);
+        const tokenId = asStr(body["token_id"]);
+        const sideRaw = body["side"];
+        const side: OrderSide | null =
+          sideRaw === "BUY" || sideRaw === "SELL" ? sideRaw : null;
+        const q = asStr(body["q"]);
+        const qLo = asStr(body["q_lo"]);
+        const sizeMax = asStr(body["size_max"]);
+        if (
+          tokenId === null ||
+          side === null ||
+          qLo === null ||
+          sizeMax === null
+        ) {
+          return await jsonError(reply, 422, "INVALID_INTENT_BODY");
+        }
+        const now = brokerDeps.clock?.() ?? new Date();
+
+        const market = await pool.query(
+          "SELECT condition_id FROM polymarket_markets WHERE clob_token_ids @> to_jsonb($1::text) LIMIT 1",
+          [tokenId],
+        );
+        const conditionId = asStr(market.rows[0]?.["condition_id"]);
+        if (conditionId === null) {
+          return await jsonError(reply, 422, "UNKNOWN_MARKET");
+        }
+        const params = await paramsAtOrBefore(pool, conditionId, now);
+        if (params === null || params.tickSize === null) {
+          return await jsonError(reply, 422, "UNKNOWN_MARKET_PARAMS");
+        }
+        const book = await bookAtOrBefore(pool, tokenId, now);
+        const reference = book?.sourceTs ?? book?.receivedAt ?? null;
+        if (
+          book === null ||
+          reference === null ||
+          now.getTime() - reference.getTime() > 30_000
+        ) {
+          return await jsonError(reply, 409, "NO_FRESH_BOOK");
+        }
+
+        // Catalyst clock from the latest persisted feature window (A8).
+        const features = await pool.query(
+          "SELECT mins_to_catalyst FROM paper_feature_windows " +
+            "WHERE token_id = $1 ORDER BY window_start DESC LIMIT 1",
+          [tokenId],
+        );
+        const minsRaw = features.rows[0]?.["mins_to_catalyst"];
+        const minsToCatalyst = typeof minsRaw === "number" ? minsRaw : null;
+
+        const decision = decideOrderType({
+          side,
+          qLo,
+          size: sizeMax,
+          bids: book.bids,
+          asks: book.asks,
+          tickSize: params.tickSize,
+          takerFeeRate: feeRateFromBps(params.takerFeeBps),
+          minsToCatalyst,
+          // The defensive external-fair wire (RTDS divergence) lands with the
+          // RFC-013 portfolio inputs; absent signal means no retreat, never
+          // an attack.
+          externalFairAgainst: false,
+        });
+        if (!decision.ok) {
+          return await reply.send({
+            simulation: SIMULATION_BANNER,
+            decision: null,
+            reason: decision.reason,
+          });
+        }
+        const draft: OrderDraft = {
+          tokenId,
+          side,
+          orderType: decision.value.orderType,
+          limitPrice: decision.value.limitPrice,
+          size: sizeMax,
+          postOnly: decision.value.postOnly,
+          worstPrice: decision.value.worstPrice,
+          ttlS: decision.value.ttlS,
+        };
+        const orderId = newOrderId();
+        const outcome = await acceptPaperOrder(
+          pool,
+          {
+            orderId,
+            draft,
+            conditionId,
+            source: "intent",
+            policyReason: decision.value.policyReason,
+            policyVersion: POLICY_VERSION,
+            intent: { q, q_lo: qLo, size_max: sizeMax },
+          },
+          brokerDeps,
+        );
+        if (outcome.status === "rejected") {
+          return await reply.code(outcome.httpStatus).send({
+            simulation: SIMULATION_BANNER,
+            decision: decision.value,
+            reason_code: outcome.reason,
+            correlation_id: reply.request.id,
+          });
+        }
+        return await reply.code(201).send({
+          simulation: SIMULATION_BANNER,
+          decision: decision.value,
+          order_id: orderId,
+          status: "open",
+        });
+      } catch (error) {
+        logPaperApiError("PAPER_API_FAILED", error);
+        return jsonError(reply, 500, "PAPER_API_FAILED");
+      }
+    },
+  );
+
+  // Task 8: the three-column performance report. The optimistic column is
+  // diagnostic only; RFC-009 gates read base or stress exclusively.
+  app.get(
+    "/polymarket/paper/performance",
+    { preHandler: guard },
+    async (_request, reply) => {
+      try {
+        const report = await buildPerformanceReport(pool);
+        const fillReport = await pool.query(
+          "SELECT generated_at, data_from, data_to, samples_total, buckets_json " +
+            "FROM paper_fill_reports ORDER BY generated_at DESC LIMIT 1",
+        );
+        return await reply.send({
+          simulation: SIMULATION_BANNER,
+          ...report,
+          fill_calibration: fillReport.rows[0] ?? null,
         });
       } catch (error) {
         logPaperApiError("PAPER_API_FAILED", error);

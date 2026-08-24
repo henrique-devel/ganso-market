@@ -118,7 +118,7 @@ interface BookAt {
   readonly receivedAt: Date;
 }
 
-async function bookAtOrBefore(
+export async function bookAtOrBefore(
   pool: PaperPool,
   tokenId: string,
   at: Date,
@@ -154,7 +154,7 @@ interface MarketParamsAt {
   readonly paramVersionId: number | null;
 }
 
-async function paramsAtOrBefore(
+export async function paramsAtOrBefore(
   pool: PaperPool,
   conditionId: string,
   at: Date,
@@ -307,6 +307,8 @@ export interface AcceptInput {
   readonly source: "manual" | "intent";
   readonly policyReason?: string | null;
   readonly policyVersion?: string | null;
+  /** Intent audit trail (task 9): q/q_lo/size_max as received. */
+  readonly intent?: Record<string, unknown> | null;
 }
 
 export type AcceptOutcome =
@@ -446,6 +448,9 @@ export async function acceptPaperOrder(
       worst_price: order.worstPrice,
       expiration_s: order.expirationS,
       simulated_latency_ms: latencyMs,
+      source: input.source,
+      policy_reason: input.policyReason ?? null,
+      intent: input.intent ?? null,
     },
     eventTs: now,
   });
@@ -814,6 +819,7 @@ export async function brokerTick(
               fee: fill.feeUsd,
               taker: true,
               fee_param_version_id: params?.paramVersionId ?? null,
+              tick_size: params?.tickSize ?? null,
               book_slice: execution.consumedSlice,
               exec_ts: execTs.toISOString(),
             },

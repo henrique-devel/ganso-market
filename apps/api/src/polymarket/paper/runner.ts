@@ -17,6 +17,12 @@ import {
   settlementTick,
 } from "./brokerstore.js";
 import {
+  fillLabelerTick,
+  fillReportIfDue,
+  fillSamplerTick,
+  markoutTick,
+} from "./calibration.js";
+import {
   WINDOW_MS,
   windowKindsForHorizon,
   type WindowKind,
@@ -33,6 +39,8 @@ export const DEFAULT_FEATURES_TICK_MS = 10_000;
 export const DEFAULT_BROKER_TICK_MS = 2_000;
 export const DEFAULT_SETTLEMENT_TICK_MS = 60_000;
 export const DEFAULT_MARK_TICK_MS = 60_000;
+export const DEFAULT_CALIBRATION_TICK_MS = 60_000;
+export const DEFAULT_SAMPLER_TICK_MS = 300_000;
 
 /** A token with a book snapshot this recent is "being recorded" (in universe). */
 export const ACTIVE_TOKEN_WINDOW_MS = 10 * 60_000;
@@ -73,6 +81,8 @@ export interface PaperRunnerDeps {
   readonly brokerTickMs?: number;
   readonly settlementTickMs?: number;
   readonly markTickMs?: number;
+  readonly calibrationTickMs?: number;
+  readonly samplerTickMs?: number;
   readonly latencyMs?: number;
   readonly clock?: () => Date;
   /** Test seam: replaces process.stderr. */
@@ -110,11 +120,15 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
   let brokerTimer: ReturnType<typeof setInterval> | null = null;
   let settlementTimer: ReturnType<typeof setInterval> | null = null;
   let markTimer: ReturnType<typeof setInterval> | null = null;
+  let calibrationTimer: ReturnType<typeof setInterval> | null = null;
+  let samplerTimer: ReturnType<typeof setInterval> | null = null;
   let probing = false;
   let computing = false;
   let brokering = false;
   let settling = false;
   let marking = false;
+  let calibrating = false;
+  let sampling = false;
 
   // Cursor of the last computed window start per token per kind. In-memory by
   // design: a restart resumes from "now" (bounded skip, logged), never from a
@@ -339,6 +353,27 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
           marking = false;
         });
       }, deps.markTickMs ?? DEFAULT_MARK_TICK_MS);
+      calibrationTimer = setInterval(() => {
+        if (calibrating) {
+          return;
+        }
+        calibrating = true;
+        void markoutTick(pool, brokerDeps)
+          .then(() => fillLabelerTick(pool, brokerDeps))
+          .then(() => fillReportIfDue(pool, brokerDeps))
+          .finally(() => {
+            calibrating = false;
+          });
+      }, deps.calibrationTickMs ?? DEFAULT_CALIBRATION_TICK_MS);
+      samplerTimer = setInterval(() => {
+        if (sampling) {
+          return;
+        }
+        sampling = true;
+        void fillSamplerTick(pool, brokerDeps).finally(() => {
+          sampling = false;
+        });
+      }, deps.samplerTickMs ?? DEFAULT_SAMPLER_TICK_MS);
       return Promise.resolve();
     },
     stop(): Promise<void> {
@@ -348,6 +383,8 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         brokerTimer,
         settlementTimer,
         markTimer,
+        calibrationTimer,
+        samplerTimer,
       ]) {
         if (timer !== null) {
           clearInterval(timer);
@@ -358,6 +395,8 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       brokerTimer = null;
       settlementTimer = null;
       markTimer = null;
+      calibrationTimer = null;
+      samplerTimer = null;
       logJson("info", "PAPER_STOPPED", {});
       return Promise.resolve();
     },

@@ -168,6 +168,8 @@ describe("paper runner heartbeat", () => {
       brokerTickMs: 3_600_000,
       settlementTickMs: 3_600_000,
       markTickMs: 3_600_000,
+      calibrationTickMs: 3_600_000,
+      samplerTickMs: 3_600_000,
       logSink: sink,
     });
     await runner.start();
