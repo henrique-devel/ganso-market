@@ -4,6 +4,7 @@ import Fastify, { LogController, type FastifyInstance } from "fastify";
 
 import { registerAuthRoutes } from "./auth/http.js";
 import { registerFundamentalRoutes } from "./polymarket/fundamental/api.js";
+import { registerPaperRoutes } from "./polymarket/paper/api.js";
 import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig } from "./config.js";
@@ -183,6 +184,12 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     // plus the operator's manual promote/demote of a model. No route here
     // creates an order, a signal or touches a wallet.
     registerFundamentalRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
+    });
+    // RFC-011 read surface: microstructure feature snapshots. Simulation
+    // scope only; stamped with the mandatory banner.
+    registerPaperRoutes(app, {
       pool: options.pool,
       authService: options.authService,
     });
