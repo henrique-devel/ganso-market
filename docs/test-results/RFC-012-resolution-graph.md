@@ -205,6 +205,39 @@ material:
    evidência de que o mispricing acabou (fail-closed); só leitura
    intra-banda fecha.
 
+## 7-bis. Ensaio do deploy contra dados em formato de produção (2026-08-25)
+
+Feito antes do merge do PR #25, num PostgreSQL 18.4 descartável levado ao
+estado de produção de hoje (migrations 0001–0009) e semeado com linhas na
+forma real gravada pelo recorder antigo — inclusive eventos de resolução
+duplicados, que a tabela permite por não ter UNIQUE.
+
+- **Migrations 0010→0012 aplicaram limpas** sobre esse estado. Journal
+  retroalimentado com 12 linhas e histórico de metadados criado com uma versão
+  por mercado (`valid_from` = instante da migration, nunca projetado para trás).
+- **Compatibilidade com o binário ANTIGO durante a janela de deploy**
+  (containers de profile não são recriados pelo `server-update`): o upsert do
+  recorder antigo com dados idênticos passa (early return do trigger); com
+  pergunta alterada, o trigger fecha a versão 1 e abre a 2 corretamente, mesmo
+  sem o binário novo. O único caminho que levanta exceção
+  (`MARKET_METADATA_OBSERVATION_TIME_NOT_MONOTONIC`) exige `updated_at`
+  anterior ao `valid_from` da migration **e** mudança de metadados no mesmo
+  instante; o loop do registry trata por mercado (`REGISTRY_PERSIST_FAILED`),
+  então o efeito máximo é um mercado com metadados adiados até o próximo
+  ciclo de 10 min — sem crash-loop e sem dado corrompido.
+- **Inserções do binário antigo em `polymarket_resolution_events` e
+  `polymarket_universe_log`** disparam os gatilhos do journal sem erro; nenhum
+  código do repositório faz UPDATE/DELETE nas tabelas que a 0011 tornou
+  append-only (verificado por busca), e ambas já eram `protected` na retenção.
+- **Boot do serviço com o universo sem `affirmative_token_id`:** falha fechado
+  com `RESOLUTION_MARKET_AFFIRMATIVE_TOKEN_MISSING:<condition_id>`. É o
+  comportamento correto — mapear o token afirmativo por posição de array
+  inverteria a semântica de preço de todo o grafo —, mas implica ordem de
+  ativação em duas etapas (recorder primeiro, resolução depois do primeiro
+  ciclo), agora documentada no HANDOFF com a consulta de verificação.
+  Amostragem ao vivo do Gamma no mesmo dia: **28 de 28** mercados
+  crypto/macro do universo têm outcomes mapeáveis (`Yes/No`, `Up/Down`).
+
 ## 8. Não verificado / pendências
 
 - **Soak de 24 h em produção** (recomputação horária + grafo a cada 1 min

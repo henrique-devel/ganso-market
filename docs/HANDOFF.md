@@ -641,11 +641,43 @@ Falta:
    não desfaz migrations — regra vigente).
 2. **No servidor (proprietário — SSH bloqueado nas sessões de
    implementação):** rebuild dos containers de profile (o CD não troca a
-   imagem deles) e ativação dos serviços novos:
-   `cd /opt/ganso-market && docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder polymarket-estimator polymarket-paper polymarket-resolution`
-   — o recorder precisa do rebuild por DOIS motivos acumulados: o parser de
-   trades do PR #18 e a captura de `question_id` desta RFC; o estimador
-   precisa porque o limite de RAM caiu para 192 MiB.
+   imagem deles). A ativação tem **duas etapas obrigatórias, nesta ordem**:
+
+   **(2a) primeiro o recorder, o estimador e o paper:**
+   `cd /opt/ganso-market && docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder polymarket-estimator polymarket-paper`
+   — o recorder precisa do rebuild por TRÊS motivos acumulados: o parser de
+   trades do PR #18, a captura de `question_id` e a captura do
+   `affirmative_token_id` desta RFC; o estimador precisa porque o limite de
+   RAM caiu para 192 MiB.
+
+   **(2b) só depois do primeiro ciclo gamma completo (até 10 min), o serviço
+   de resolução:**
+   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-resolution`
+
+   **Por que a ordem importa (verificado contra PostgreSQL real):** as colunas
+   `affirmative_token_id` nascem NULL para todo mercado já gravado — a
+   migration é prospectiva e nunca infere o outcome afirmativo por posição de
+   array. O serviço de resolução **falha fechado no boot** enquanto qualquer
+   mercado do universo estiver sem esse mapeamento
+   (`RESOLUTION_MARKET_AFFIRMATIVE_TOKEN_MISSING:<condition_id>`), reiniciando
+   em laço até que o recorder novo re-observe o universo e preencha o campo.
+   Subir os dois juntos funciona, mas gera minutos de crash-loop ruidoso sem
+   necessidade. Confirmar antes de (2b):
+   `docker compose --env-file deploy/server.env exec postgres psql -U ganso_market -d ganso_market -tAc "SELECT count(*) FILTER (WHERE affirmative_token_id IS NULL) AS pendentes, count(*) AS total FROM polymarket_markets WHERE closed IS NOT TRUE;"`
+   — seguir para (2b) quando `pendentes` for 0. Se algum mercado ficar
+   permanentemente pendente (outcomes fora de `Yes/No` e `Up/Down`), o serviço
+   não sobe: é o fail-closed correto (mapear o token errado inverteria a
+   semântica de preço do grafo inteiro), e a saída é excluir esse mercado do
+   universo ou estender o mapeamento de outcomes — nunca adivinhar.
+
+   **Esperado entre (2a) e (2b):** com o paper broker novo no ar e o serviço de
+   resolução ainda fora, o aceite de ordens/intents é recusado com
+   `RESOLUTION_RUNTIME_MISSING`/`RESOLUTION_RUNTIME_NOT_READY`. É o fail-closed
+   projetado — a camada de risco desta RFC é obrigatória no caminho de aceite —
+   e se resolve sozinho quando (2b) publica a primeira geração pronta. O mesmo
+   vale sempre que o serviço de resolução for parado: ordens em repouso deixam
+   de executar e novas são recusadas até ele voltar.
+
 3. **Observação pós-ativação:** logs `RESOLUTION_BOOT` (com config/lexicon
    hash), `SCORES_RECOMPUTED`, `GRAPH_BUILT`/`GRAPH_EVALUATED`,
    `ONCHAIN_POLLED` (com `skipped_unmapped`), `LAYER_DIVERGENCE_ACTIVE`
