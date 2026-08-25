@@ -38,7 +38,8 @@ conjunto completo de dados exigido pelo plano do proprietário (2026-08-18):
    versionados — insumo do modelo fundamental (RFC-010).
 
 Com qualidade auditável (gaps medidos, reconciliação por hash, replay
-determinístico) e retenção dentro de 40 GB de PostgreSQL.
+determinístico) e retenção dentro de 110 GB de PostgreSQL (40 GB até a emenda
+de 2026-08-25 — ver "Orçamento").
 
 ### Restrições não negociáveis
 
@@ -93,9 +94,24 @@ throttling, não ban). O design deve respeitar margem de 50% dos limites.
 
 ### Orçamento
 
-- Até 40 GB de PostgreSQL para o módulo (quotas por tipo abaixo somam 30 GB;
-  4 GB de headroom para índices/WAL/bloat; 6 GB reservados para as tabelas
-  das RFCs 010–013, que citam essa reserva).
+> **EMENDA — 2026-08-25 (decisão do proprietário).** O orçamento global passou
+> de **40 GB para 110 GB** e três quotas por tipo foram elevadas. Motivo: a
+> medição em produção mostrou que o fluxo L2 gravado é uma ordem de grandeza
+> maior que a estimativa original — **~15,3 GB/dia** de `book_deltas` sobre 198
+> tokens (232 M linhas em 5 dias), ~1,6 GB/dia de snapshots top-10 e ~100 MB/dia
+> de agregados 1 min. Com as quotas originais, `book_deltas` retinha menos de
+> 20 horas de profundidade (contra um TTL declarado de 14 dias) e os agregados
+> 1 min travavam em ~30 dias, o que tornaria o gate G2 da RFC-013 (≥ 60 dias de
+> paper contínuo) impossível de medir. A alternativa — manter 40 GB — exigiria
+> podar o histórico de deltas para ~0,6 dia. O host tem 301 GB de disco com
+> 192 GB livres, então 110 GB permanece folgado. As quotas novas estão na
+> tabela da tarefa 11 abaixo. Nenhum dado passou a ser gravado a mais: apenas a
+> janela de retenção mudou.
+
+- Até 110 GB de PostgreSQL para o módulo (quotas por tipo abaixo somam 95 GB;
+  15 GB de headroom para índices/WAL/bloat; 6 GB reservados para as tabelas
+  das RFCs 010–013, que citam essa reserva — a reserva **não** foi alterada
+  pela emenda).
 - Aplicações do módulo até 3 GB de RAM em carga (book cache em memória
   limitado ao universo; sem Redis).
 - Dimensionar ingestão para bursts de ~1.000 updates/s (relato de recording
@@ -183,9 +199,37 @@ throttling, não ban). O design deve respeitar margem de 50% dos limites.
     | Metadados, regras versionadas, fees/tick versionados, eventos de status/disputa, `data_gaps` | sem TTL (nunca podados) | 0,5 GB     |
 
     Ao atingir 90% da quota de um tipo, podar o mais antigo até 80% e
-    registrar o corte; ao atingir 90% dos 40 GB globais, alarmar e reduzir
+    registrar o corte; ao atingir 90% dos 110 GB globais, alarmar e reduzir
     TTLs efetivos na ordem da tabela (de cima para baixo). Antes de podar
     `book_deltas`, garantir que os agregados 1 min do período já existem.
+
+    **Quotas vigentes após a emenda de 2026-08-25:** `book_deltas` 12 → **60 GB**
+    (~3,9 dias na taxa medida), book top-10 4 → **8 GB**, agregados 1 min
+    3 → **10 GB** (~100 dias, o que o G2 da RFC-013 exige). As demais quotas
+    da tabela permanecem como escritas.
+
+    **A quota é medida em bytes VIVOS, não no tamanho físico.**
+    `pg_total_relation_size` não encolhe com `DELETE` (tuplas mortas ocupam as
+    páginas até o VACUUM devolvê-las ao free space map, e o arquivo só encolhe
+    num rewrite). Usar o tamanho físico aqui apaga dados: uma tabela podada de
+    76 GB para 48 GB de linhas vivas continua medindo 76 GB, então a execução
+    seguinte apagaria outros 28 GB de linhas **vivas**, e a próxima outros 28,
+    até esvaziar a tabela. O tamanho físico continua sendo o que alimenta o
+    alarme global de disco — são duas perguntas diferentes.
+
+    **Toda tabela podada precisa de índice na coluna de tempo da poda.** Sem
+    ele, o probe de corte (`ORDER BY received_at OFFSET n LIMIT 1`) vira um
+    sort completo da tabela e o `DELETE` em lote vira seq scan. Medido em
+    produção em 2026-08-25: nenhuma das tabelas grandes tinha índice na coluna
+    de retenção (só compostos liderados por `token_id`), o job diário não
+    conseguia concluir, e `book_deltas` chegou a 6,3× a quota com o banco em
+    89 GB. Corrigido pela migration `0013_retention_time_indexes.sql`.
+
+    **O job de retenção executa no boot, além do intervalo diário.** Com
+    `setInterval` puro o job era inalcançável na prática: o recorder reinicia a
+    cada deploy/rebuild, mais frequentemente que uma vez por dia, então o timer
+    de 24 h nunca vencia — `polymarket_retention_log` tinha **uma única linha**
+    em toda a vida do serviço.
 
 12. **Calendário e releases macro.** Persistir o calendário oficial
     BLS/BEA/FOMC versionado (timezone UTC explícito) e os valores oficiais
@@ -256,7 +300,7 @@ Read-only, atrás da auth da RFC-002; nenhum endpoint de trading/wallet:
 - Toda linha de toda tabela tem `source_ts` e `received_at` não nulos.
 - Regras, fees, tick e min size consultáveis "as-of" qualquer instante
   coberto; pelo menos um `rule_change` real capturado ou simulado em teste.
-- Uso de disco ≤ 40 GB com pruning comprovado em teste de quota.
+- Uso de disco ≤ 110 GB (emenda de 2026-08-25) com pruning comprovado em teste de quota.
 - Nenhum caminho de execução real; API é read-only.
 - Métricas de qualidade expostas e alarmes de quota/lag funcionando.
 
@@ -268,7 +312,7 @@ Pare e reporte se:
   contorno de geoblock (VPN/proxy/spoofing);
 - endpoints/schemas oficiais V2 divergirem da doc e não puderem ser
   verificados (ex.: campos do evento `price_change` mudarem);
-- o volume real do universo estourar o orçamento de 40 GB mesmo após reduzir
+- o volume real do universo estourar o orçamento de 110 GB mesmo após reduzir
   TTLs — reduzir o universo exige decisão do proprietário;
 - a ingestão exigir descarte silencioso para acompanhar o feed;
 - qualquer dependência precisar ser instalada de fora do org oficial

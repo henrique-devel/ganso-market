@@ -100,6 +100,44 @@ function safeJob(name: string, job: () => Promise<void>): () => void {
   };
 }
 
+export interface ScheduleOptions {
+  /**
+   * Fire the job once immediately, in addition to the interval.
+   *
+   * This exists because setInterval alone made the daily retention job
+   * unreachable in practice: the recorder process restarts on every
+   * deploy/rebuild, which is more often than once a day, so a 24h timer never
+   * elapsed. Measured in production on 2026-08-25: a single row in
+   * polymarket_retention_log for the whole life of the service, while
+   * polymarket_book_deltas sat at 6.3x its quota. Only safe for idempotent
+   * jobs that are cheap when there is nothing to do.
+   */
+  readonly runAtBoot?: boolean;
+}
+
+/**
+ * Job scheduler used by the orchestrator. The boot tick is fired without
+ * awaiting so a long first run never delays ORCHESTRATOR_STARTED, and safeJob
+ * guarantees the interval cannot start a second copy while it is still
+ * running.
+ */
+export function createJobScheduler(
+  timers: NodeJS.Timeout[],
+): (
+  name: string,
+  everyMs: number,
+  job: () => Promise<void>,
+  options?: ScheduleOptions,
+) => void {
+  return (name, everyMs, job, options) => {
+    const tick = safeJob(name, job);
+    timers.push(setInterval(tick, everyMs));
+    if (options?.runAtBoot === true) {
+      tick();
+    }
+  };
+}
+
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const pool = deps.pool;
   const socketFactory = deps.socketFactory ?? nodeMarketSocketFactory;
@@ -398,14 +436,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       rtds.start();
 
-      const schedule = (
-        name: string,
-        everyMs: number,
-        job: () => Promise<void>,
-      ): void => {
-        const tick = safeJob(name, job);
-        timers.push(setInterval(tick, everyMs));
-      };
+      const schedule = createJobScheduler(timers);
 
       schedule("gamma", intervals.gammaMs ?? 600_000, gammaCycle);
       schedule("params", intervals.paramsMs ?? 3_600_000, async () => {
@@ -444,9 +475,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       schedule("reconcile", intervals.reconcileMs ?? 3_600_000, async () => {
         await reconciler.reconcileOnce(tokenIds);
       });
-      schedule("retention", intervals.retentionMs ?? 86_400_000, async () => {
-        await retention.runOnce();
-      });
+      schedule(
+        "retention",
+        intervals.retentionMs ?? 86_400_000,
+        async () => {
+          await retention.runOnce();
+        },
+        { runAtBoot: true },
+      );
       schedule(
         "macro_releases",
         intervals.macroReleaseMs ?? 600_000,

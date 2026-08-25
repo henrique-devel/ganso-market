@@ -5,6 +5,7 @@
 
 import type { SqlExecutor } from "../database.js";
 import { OrderBook } from "./book.js";
+import { DEFAULT_BUDGET_BYTES } from "./retention.js";
 import type { PriceLevel } from "./types.js";
 
 /** Minimal query surface so tests can inject a fake pool. */
@@ -19,8 +20,12 @@ export type GapSource =
   | "macro"
   | "internal";
 
-/** Global module budget: 40 GB of PostgreSQL (RFC-007 "Orçamento"). */
-export const BUDGET_BYTES = 40 * 1024 ** 3;
+/**
+ * Global module budget (RFC-007 "Orçamento", amended by the owner on
+ * 2026-08-25 from 40 GB to 110 GB). Re-exported from retention.ts so the
+ * alarm here and the pruning there can never disagree.
+ */
+export const BUDGET_BYTES = DEFAULT_BUDGET_BYTES;
 
 export const CLOB_REST_BASE_URL = "https://clob.polymarket.com";
 

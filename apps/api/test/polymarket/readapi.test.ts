@@ -692,7 +692,7 @@ describe("GET /polymarket/resolution-events", () => {
 });
 
 describe("GET /polymarket/data-quality", () => {
-  it("aggregates gaps, lag percentiles and storage against the 40 GB budget", async () => {
+  it("aggregates gaps, lag percentiles and storage against the module budget", async () => {
     const { pool } = fakePool((text) => {
       if (text.includes("polymarket_data_gaps")) {
         return [
@@ -726,9 +726,10 @@ describe("GET /polymarket/data-quality", () => {
     ]);
     expect(body.ingest_lag_ms_last_hour).toEqual({ p50: 45.5, p99: 900 });
     expect(body.storage.total_bytes).toBe(10737418240 + 1073741824);
-    // (10 GiB + 1 GiB) of 40 GiB = 27.5%
-    expect(body.storage.budget_used_pct).toBe(27.5);
-    expect(body.storage.budget_bytes).toBe(40 * 1024 ** 3);
+    // (10 GiB + 1 GiB) of the 110 GiB budget the owner approved on 2026-08-25
+    // (RFC-007 amendment) = 10%.
+    expect(body.storage.budget_used_pct).toBe(10);
+    expect(body.storage.budget_bytes).toBe(110 * 1024 ** 3);
   });
 });
 

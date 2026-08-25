@@ -130,7 +130,7 @@ edge — nunca a fonte primária de PnL.
 
 ### Orçamento
 
-- Dentro do orçamento da RFC-007: até 40 GB de PostgreSQL no total do módulo,
+- Dentro do orçamento da RFC-007: até 110 GB de PostgreSQL no total do módulo,
   aplicações até 3 GB de RAM em carga.
 - Incremental desta RFC (**aprovado em 2026-08-24**): **1,0 GB** de
   PostgreSQL na reserva das RFCs 010–013 (scores 0,4 / grafo+violações 0,3 /

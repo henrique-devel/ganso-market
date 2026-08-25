@@ -54,8 +54,8 @@ por replay.
 
 ### Orçamento
 
-- Dentro do orçamento do módulo (RFC-007): até 40 GB PostgreSQL, apps até 3 GB
-  de RAM em carga.
+- Dentro do orçamento do módulo (RFC-007): até 110 GB PostgreSQL (emenda do
+  proprietário de 2026-08-25; eram 40 GB), apps até 3 GB de RAM em carga.
 - Motor de portfólio é event-driven sobre dados já gravados; sem novas
   conexões externas além das já autorizadas nas RFCs 010–012.
 - Tabelas novas (decisões, exposições, snapshots de painel, medições de gate)

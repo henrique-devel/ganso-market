@@ -356,7 +356,9 @@ describe("metrics snapshot", () => {
     expect(metrics.updatesLastHour).toBe(4200);
     expect(metrics.totalBytes).toBe(3 * 1024 ** 3);
     expect(metrics.budgetBytes).toBe(BUDGET_BYTES);
-    expect(metrics.budgetUsedPct).toBeCloseTo((3 / 40) * 100, 6);
+    // Budget raised from 40 to 110 GB by the owner on 2026-08-25 (RFC-007
+    // amendment); derived from the constant so the two cannot drift.
+    expect(metrics.budgetUsedPct).toBeCloseTo((3 / 110) * 100, 6);
 
     // The lag query covers both raw feeds with percentile_cont.
     const lagQuery = pool.captured.find((q) =>

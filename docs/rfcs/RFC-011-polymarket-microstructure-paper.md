@@ -107,7 +107,7 @@ absorver essa diferença antes que ela custe capital.
   com 128 o agregado cairia exatamente em 4 GiB; com 96 fica em 4064 MiB.
   O runner nunca vive no estimador — o `scope.test.ts` da RFC-010 proíbe
   qualquer caminho de ordem naquele módulo.
-- Persistência dentro da quota compartilhada de 40 GB do PostgreSQL:
+- Persistência dentro da quota compartilhada de 110 GB do PostgreSQL:
   features agregadas em janelas (1s/10s/1min), nunca re-persistir o book cru;
   ledger e ordens paper são pequenos (single-user).
 - Computação incremental orientada a evento (novo snapshot/trade → update de
