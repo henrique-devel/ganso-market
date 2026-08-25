@@ -12,6 +12,7 @@ SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 	recorder-up recorder-logs recorder-down \
 	estimator-up estimator-logs estimator-down \
 	paper-up paper-logs paper-down \
+	resolution-up resolution-logs resolution-down \
 	server-init server-config server-up server-health server-status server-logs server-update server-down
 
 help:
@@ -31,6 +32,9 @@ help:
 	@echo "  make paper-up       sobe o paper broker (RFC-011, simulação)"
 	@echo "  make paper-logs     acompanha os logs do paper broker"
 	@echo "  make paper-down     encerra o paper broker"
+	@echo "  make resolution-up  sobe o risco de resolução/grafo (RFC-012)"
+	@echo "  make resolution-logs acompanha os logs do risco de resolução"
+	@echo "  make resolution-down encerra o risco de resolução"
 	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
 	@echo "  make server-health  verifica frontend, API, banco e engine"
 	@echo "  make server-status  mostra o estado dos containers"
@@ -134,6 +138,15 @@ paper-logs:
 
 paper-down:
 	docker compose --profile polymarket rm --stop --force polymarket-paper
+
+resolution-up: init-secrets
+	docker compose --profile polymarket up --build --detach polymarket-resolution
+
+resolution-logs:
+	docker compose --profile polymarket logs --follow --tail 100 polymarket-resolution
+
+resolution-down:
+	docker compose --profile polymarket rm --stop --force polymarket-resolution
 
 server-init:
 	@if [ ! -f "$(SERVER_ENV)" ]; then \

@@ -9,6 +9,10 @@ import {
   type AuthenticatedSession,
 } from "./auth.js";
 import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
+// The explicit .tsx extension keeps module resolution unambiguous on
+// case-insensitive filesystems, where "./Resolution.js" (and Vite's
+// extension substitution) would match src/resolution.ts instead.
+import { ResolutionPanel } from "./Resolution.tsx";
 
 const REFRESH_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -82,6 +86,29 @@ export function App() {
     }
   }, [auth]);
 
+  const handleUnauthorized = useCallback(async (): Promise<void> => {
+    const refreshed = await refreshSession(readCsrfCookie());
+    if (!mounted.current) {
+      return;
+    }
+    if (refreshed.kind === "ok") {
+      setAuth((previous) =>
+        previous.kind === "authenticated"
+          ? {
+              kind: "authenticated",
+              session: {
+                ...previous.session,
+                accessToken: refreshed.accessToken,
+                expiresAt: refreshed.expiresAt,
+              },
+            }
+          : previous,
+      );
+      return;
+    }
+    setAuth({ kind: "anonymous", error: null });
+  }, []);
+
   if (auth.kind === "checking") {
     return (
       <main className="shell">
@@ -96,7 +123,13 @@ export function App() {
     );
   }
 
-  return <Dashboard username={auth.session.username} onLogout={handleLogout} />;
+  return (
+    <Dashboard
+      session={auth.session}
+      onLogout={handleLogout}
+      onUnauthorized={handleUnauthorized}
+    />
+  );
 }
 
 export function LoginPanel({
@@ -161,10 +194,16 @@ export function LoginPanel({
 }
 
 function Dashboard({
-  username,
+  session,
   onLogout,
-}: Readonly<{ username: string; onLogout: () => void }>) {
+  onUnauthorized,
+}: Readonly<{
+  session: AuthenticatedSession;
+  onLogout: () => void;
+  onUnauthorized: () => void;
+}>) {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
+  const [tab, setTab] = useState<"status" | "resolucao">("status");
   const mounted = useRef(true);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -193,7 +232,7 @@ function Dashboard({
   }, [refresh]);
 
   return (
-    <main className="shell">
+    <main className="shell shell--wide">
       <header className="header">
         <p className="eyebrow">Fundação RFC-001</p>
         <h1>Ganso Market</h1>
@@ -202,16 +241,49 @@ function Dashboard({
           o único modo configurável é paper.
         </p>
         <p className="session">
-          Sessão de <strong>{username}</strong>.{" "}
+          Sessão de <strong>{session.username}</strong>.{" "}
           <button className="logout" type="button" onClick={onLogout}>
             Sair
           </button>
         </p>
       </header>
-      <StatusPanel status={status} />
-      <button className="refresh" type="button" onClick={() => void refresh()}>
-        Verificar novamente
-      </button>
+      <nav className="tabs" aria-label="Seções do painel">
+        <button
+          type="button"
+          className={tab === "status" ? "tab tab--active" : "tab"}
+          onClick={() => {
+            setTab("status");
+          }}
+        >
+          Status
+        </button>
+        <button
+          type="button"
+          className={tab === "resolucao" ? "tab tab--active" : "tab"}
+          onClick={() => {
+            setTab("resolucao");
+          }}
+        >
+          Resolução
+        </button>
+      </nav>
+      {tab === "status" ? (
+        <>
+          <StatusPanel status={status} />
+          <button
+            className="refresh"
+            type="button"
+            onClick={() => void refresh()}
+          >
+            Verificar novamente
+          </button>
+        </>
+      ) : (
+        <ResolutionPanel
+          accessToken={session.accessToken}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
     </main>
   );
 }

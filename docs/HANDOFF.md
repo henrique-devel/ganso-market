@@ -1,8 +1,10 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-24
+- Última atualização: 2026-08-24 (noite — RFC-012 verificada localmente)
 - Branch principal: `main`
-- RFC ativa: RFC-012 (aceita em 2026-08-24); RFC-011 com código completo aguardando ativação em produção
+- RFC ativa: RFC-012 com fases A–D e hardening final verificados localmente;
+  revisão, merge e ativação pendentes; RFC-011 com código completo
+  aguardando ativação em produção
 - Modo permitido no runtime atual: `paper`
 
 Este documento registra o ponto de continuidade entre sessões. Ele não
@@ -408,16 +410,16 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 
 ## Sequência de RFCs
 
-| RFC                                                   | Estado de acompanhamento                                                                                     | Evidência/condição                                                                                                |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| RFC-001 — Fundação e runtime                          | Implementada                                                                                                 | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
-| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                          | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
-| RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18       | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
-| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                         | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
-| RFC-011 — Microestrutura e paper broker               | **Código completo (2026-08-24)**, PRs #18–#23 mergeados com CI verde; ativação em produção pendente          | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
-| RFC-012 — Risco de resolução e grafo lógico           | **Aceita (2026-08-24)**; verificação de prontidão feita; decisões de orçamento/onchain/dashboard registradas | Depende da RFC-007 (em produção); ver "Estado verificado das dependências" na RFC                                 |
-| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                              | Gates G1–G6 habilitam a RFC-009                                                                                   |
-| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                             | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
+| RFC                                                   | Estado de acompanhamento                                                                               | Evidência/condição                                                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| RFC-001 — Fundação e runtime                          | Implementada                                                                                           | [`docs/test-results/RFC-001.md`](test-results/RFC-001.md)                                                         |
+| RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
+| RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
+| RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
+| RFC-011 — Microestrutura e paper broker               | **Código completo (2026-08-24)**, PRs #18–#23 mergeados com CI verde; ativação em produção pendente    | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
+| RFC-012 — Risco de resolução e grafo lógico           | Fases A–D + hardening final verificados localmente; revisão, merge e ativação pendentes                | [`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md)                       |
+| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
+| RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
@@ -495,6 +497,117 @@ infraestrutura onchain existe (escopo da própria RFC); migration `0010`
 livre. Registro completo na seção "Estado verificado das dependências" da
 RFC-012.
 
+## RFC-012 — FASES A–D + HARDENING FINAL VERIFICADOS (2026-08-24)
+
+**FATO VERIFICADO:** as 18 tarefas da RFC-012 foram implementadas nas quatro
+fases do plano de PRs (A: migration 0010 + retenção + score `R` + léxico;
+B: grafo + bandas de custo + violações; C: enforcement + onchain fase 2 +
+API; D: dashboard + Nginx), na branch `claude/rfc-012-execucao-c254e1`.
+O hardening pós-revisão foi verificado por `make verify`, suíte API integral
+serial em PostgreSQL real (**79/79 arquivos, 1.041/1.041 testes**), recorte PG
+de resolução/versionamento (**23/23**) e `make integration` em Compose
+isolado. Migrations 0001–0012 foram aplicadas em PostgreSQL 18.4 descartável
+pelo protocolo do `apply.sh`; a 0010 permaneceu inalterada e as garantias
+novas foram introduzidas de forma aditiva nas 0011–0012. Revisão, merge e
+ativação em produção continuam pendentes.
+Evidência completa:
+[`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md).
+
+- **Score `R`**: composição monotônica de 8 features normalizadas (léxico de
+  rule-precision determinístico versionado, prior de disputa
+  externo→medido com limiar de 200 resoluções, clarificações
+  material/cosmética, sensibilidade UMA por bond/liveness, delta
+  endDate/umaEndDate, concentração de holders, P(50/50) estrutural — zero em
+  negRisk —, prêmio de adjudicação na janela de settlement). Pesos/léxico
+  hasheados em `resolution_score_versions`; o boot RECUSA reutilizar um
+  nome de versão com conteúdo diferente (verificado em runtime real).
+- **Ações**: disputa ativa ⇒ CIRCUIT_BREAKER (grupo herda o pior estado do
+  evento negRisk); salto de preço sem catalisador ⇒ CB em modo suspeita;
+  flag dura (fonte subjetiva, clarificação <24h, título≠regra) ou R ≥ 0,7 ⇒
+  VETO; banda média ⇒ `resolution_buffer` (base + hurdle de capital pelo
+  lockup esperado + cauda 50/50 avaliada no preço da decisão). Mercado
+  terminal é carregado pelo ID mesmo fora do universo e só libera sua ação e
+  a do grupo após `settle + recomputação`, evitando CB/VETO residual.
+- **Enforcement (tarefa 17) com dentes**: `POST /polymarket/paper/intents`
+  recusa sob VETO/CB/veto de sanidade com justificativa e devolve
+  `resolution_buffer` no aceite; ordem manual recusada sob CB e, sob VETO,
+  aceita só com `override_veto` auditado no payload de `order_accepted` do
+  ledger. Para ordens já abertas sob CB, o restante só executa se for
+  reduce-only contra a posição assinada reconstruída do ledger (`long`: SELL;
+  `short`: BUY). `FAK` maior que a capacidade preenche somente até zero e
+  cancela o restante; `FOK` e ordens passivas que cruzariam zero são
+  canceladas sem fill. Lado expansivo, posição zero e restante inválido
+  também são cancelados com evento auditável. Leitura indisponível do estado
+  autoritativo ou da posição cancela as ordens afetadas, sem fill. Intent sem
+  estado de resolução também falha fechado (`RESOLUTION_STATE_MISSING`).
+- **Atomicidade e ordem de locks**: aceite + ledger, kill switch, settlement,
+  release terminal e fills passivos foram fechados em transações com ordem de
+  locks determinística e rechecagens finais. O journal autoritativo impede
+  TOCTOU entre resolução, política e execução paper; settlement não permite
+  fill posterior e replay de fill já persistido não reaplica risco mutável.
+- **Runtime durável**: migration 0011 adiciona journal de seis fontes,
+  geração/lease, cursor, watermarks e validade do grafo. O pipeline inteiro é
+  serializado por uma mutex e só publica uma geração pronta após recompute →
+  build → evaluate → sanity na mesma transação lógica; heartbeat não renova
+  freshness e mutação curada invalida readiness atomicamente.
+- **Metadados as-of**: migration 0012 preserva o histórico dos outcomes e o
+  token afirmativo. Só mercados exatamente binários com um único `Yes`/`Up`
+  são mapeados; payload ambíguo, multivalorado ou legado falha fechado. O
+  versionamento usa advisory locks e conflitos stale, exercitados com conexões
+  PostgreSQL concorrentes.
+- **Grafo**: NEGRISK estrutural por evento Gamma; LADDER por extração
+  determinística de título (família de limiar e de data — esta só para
+  payoffs de barreira); arestas curadas por arquivo versionado
+  (`config/graph-edges.json`) e por `POST /polymarket/graph/edges` (autor +
+  justificativa obrigatórios). Avaliação a cada 1 min com preços executáveis
+  em bigint (nunca midpoint), banda = fees taker por perna + ε (o spread já
+  está pago nas pernas bid/ask), violação só após k=3 avaliações
+  consecutivas, tamanho executável por book-walk sobre a profundidade
+  gravada, supressão de sinal em nós sob VETO/CB.
+- **Divergência de camadas (decisão 4)**: comparação periódica entre o CB
+  desta RFC e o `frozen_markets` da RFC-011, registrada nas DUAS direções em
+  `resolution_layer_divergences` e exposta na API e no painel.
+- **Onchain (fase 2) — verificação de ABI/endereço feita no início, como a
+  RFC exige, com achado material:** a ABI dos eventos foi confirmada no
+  repositório oficial (v2.0.0 e main idênticos nos eventos de ciclo de
+  vida), mas o adapter nomeado na RFC (`0x6A9D…4F74`, V2) está **dormente** —
+  sondagem ao vivo na Polygon achou zero logs em ~2 dias. Os resolvedores
+  reais de hoje, obtidos do `resolvedBy` do Gamma e confirmados emitindo
+  exatamente os topic0 verificados (7,3k logs/10k blocos), são
+  `0x65070be9…` (binários) e `0x69c47de9…` (negRisk). Os quatro endereços
+  estão na config. O coletor usa `eth_getLogs` com fetch nativo (keccak-256
+  próprio com dupla implementação verificada por vetores), chunks de 2k
+  blocos (RPCs públicos limitam 10k), cursor por adapter e **filtro de
+  orçamento**: só eventos de `questionID` de mercados já registrados são
+  gravados (medição ao vivo: o fluxo global é de milhares de logs/dia, que
+  estourariam a quota de 0,09 GB). O `questionID` passou a ser capturado
+  pelo registry (coluna nova em `polymarket_markets`, backfill conforme o
+  Gamma re-observa cada mercado; exige rebuild do recorder).
+- **Relatório próprio**: taxa de disputa por categoria com IC de Wilson,
+  distribuição P1–P4, frequência de 50/50, lockup observado e o backtest do
+  veto (tarefa 10: cobertura de disputados e falso-positivo em limpos,
+  incluindo resolvidos fora do universo e re-pontuando 1 min antes da
+  proposta). O replay usa somente buckets de 1 min totalmente fechados e o
+  prior medido disponível naquele instante histórico, nunca estatísticas do
+  relatório; diário com due-check contra o último relatório gravado.
+- **Dashboard (tarefa 18)**: aba "Resolução" no web app atrás do login
+  (score com decomposição, ações e justificativas, disputas, violações,
+  vetos, divergências, pipeline paper, relatório); Nginx publica **somente
+  GET** de `/api/polymarket/resolution-risk*` e `/api/polymarket/graph*` —
+  o `POST /graph/edges` e todo o resto de `/api/*` continuam fechados no
+  perímetro.
+- **Orçamento e retenção**: 1,0 GB de PG (0,4 scores / 0,3 grafo / 0,2
+  timeline / 0,1 relatórios), `fundamental_estimates` 3→2 GB e container
+  `polymarket-resolution` 192 MiB financiado pelo estimador (384→192;
+  `--max-old-space-size` 320→160); agregado do Compose em 4064 MiB (< 4 GiB
+  estrito, verificado pelo policy check). A série `resolution_scores` usa
+  180 dias/0,35 GB e pode ser podada por `DELETE`; `UPDATE` continua proibido,
+  enquanto versões/configuração permanecem imutáveis. O replay exato fica
+  limitado à janela em que os inputs as-of estão retidos; depois dela, a
+  trilha paper continua auditável sem prometer consulta ao score bruto podado.
+  O pruning por `DELETE`, com `UPDATE` ainda proibido, foi exercitado no gate
+  final.
+
 ## RFC-011 — CÓDIGO COMPLETO (2026-08-24)
 
 **FATO VERIFICADO:** as 10 tarefas da RFC-011 foram implementadas e mergeadas
@@ -517,28 +630,71 @@ trigger de imutabilidade exercitados. Evidência completa:
 
 ## Próximo passo mínimo
 
-RFC ativa para desenvolvimento: **RFC-012** (aceita em 2026-08-24). A
-RFC-011 está com código completo e depende só dos passos de produção abaixo.
-Plano de PRs da RFC-012: (A) migration 0010 + rebalanceamento de retenção +
-timeline/score `R` + léxico rule-precision; (B) grafo + bandas de custo +
-violações; (C) enforcement no paper broker + coletor onchain fase 2 + API;
-(D) dashboard visual no web app + publicação dos endpoints read-only no
-Nginx; test-results ao final.
+A RFC-012 tem as fases A–D e o hardening final verificados na branch
+`claude/rfc-012-execucao-c254e1`, ainda sem merge/ativação. A RFC-011 já está
+com código completo na `main`.
+Falta:
 
-1. **No servidor (proprietário — o SSH foi bloqueado na sessão de
-   implementação):** rebuild do recorder (a correção do parser de trades do
-   PR #18 ainda não roda em produção — sem ela os trades WS não têm
-   `size`/`fee_rate_bps`) e ativação do paper broker:
-   `cd /opt/ganso-market && docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder polymarket-paper`
-2. **Observação:** logs `PAPER_BOOT`/`FEATURES_TICK`/`PAPER_HEARTBEAT`, RAM
-   dentro dos 256 MiB, crescimento das tabelas `paper_*` dentro das
-   sub-quotas; soak de 24 h registrado no test-results (pendência declarada).
-3. **Track record:** ordens paper via `POST /polymarket/paper/orders` (ou
-   intents quando a RFC-010 sinalizar); os gates da RFC-009 leem apenas as
-   colunas base/estresse de `GET /polymarket/paper/performance`.
-4. Em paralelo: evidência do gate da RFC-010 segue acumulando;
-   `consensus`/`nowcast` no `config/macro-calendar.json` continua pendente;
-   próximas RFCs do fluxo: RFC-012 (grafo de resolução) e RFC-013 (portfólio).
+1. **Revisar e aprovar o PR da RFC-012:** não fazer merge antes da aprovação
+   explícita do proprietário. Depois do merge na `main`, o CD é disparado. As
+   migrations 0010–0012 são aditivas e retrocompatíveis (o rollback automático
+   não desfaz migrations — regra vigente).
+2. **No servidor (proprietário — SSH bloqueado nas sessões de
+   implementação):** rebuild dos containers de profile (o CD não troca a
+   imagem deles). A ativação tem **duas etapas obrigatórias, nesta ordem**:
+
+   **(2a) primeiro o recorder, o estimador e o paper:**
+   `cd /opt/ganso-market && docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder polymarket-estimator polymarket-paper`
+   — o recorder precisa do rebuild por TRÊS motivos acumulados: o parser de
+   trades do PR #18, a captura de `question_id` e a captura do
+   `affirmative_token_id` desta RFC; o estimador precisa porque o limite de
+   RAM caiu para 192 MiB.
+
+   **(2b) só depois do primeiro ciclo gamma completo (até 10 min), o serviço
+   de resolução:**
+   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-resolution`
+
+   **Por que a ordem importa (verificado contra PostgreSQL real):** as colunas
+   `affirmative_token_id` nascem NULL para todo mercado já gravado — a
+   migration é prospectiva e nunca infere o outcome afirmativo por posição de
+   array. O serviço de resolução **falha fechado no boot** enquanto qualquer
+   mercado do universo estiver sem esse mapeamento
+   (`RESOLUTION_MARKET_AFFIRMATIVE_TOKEN_MISSING:<condition_id>`), reiniciando
+   em laço até que o recorder novo re-observe o universo e preencha o campo.
+   Subir os dois juntos funciona, mas gera minutos de crash-loop ruidoso sem
+   necessidade. Confirmar antes de (2b):
+   `docker compose --env-file deploy/server.env exec postgres psql -U ganso_market -d ganso_market -tAc "SELECT count(*) FILTER (WHERE affirmative_token_id IS NULL) AS pendentes, count(*) AS total FROM polymarket_markets WHERE closed IS NOT TRUE;"`
+   — seguir para (2b) quando `pendentes` for 0. Se algum mercado ficar
+   permanentemente pendente (outcomes fora de `Yes/No` e `Up/Down`), o serviço
+   não sobe: é o fail-closed correto (mapear o token errado inverteria a
+   semântica de preço do grafo inteiro), e a saída é excluir esse mercado do
+   universo ou estender o mapeamento de outcomes — nunca adivinhar.
+
+   **Esperado entre (2a) e (2b):** com o paper broker novo no ar e o serviço de
+   resolução ainda fora, o aceite de ordens/intents é recusado com
+   `RESOLUTION_RUNTIME_MISSING`/`RESOLUTION_RUNTIME_NOT_READY`. É o fail-closed
+   projetado — a camada de risco desta RFC é obrigatória no caminho de aceite —
+   e se resolve sozinho quando (2b) publica a primeira geração pronta. O mesmo
+   vale sempre que o serviço de resolução for parado: ordens em repouso deixam
+   de executar e novas são recusadas até ele voltar.
+
+3. **Observação pós-ativação:** logs `RESOLUTION_BOOT` (com config/lexicon
+   hash), `SCORES_RECOMPUTED`, `GRAPH_BUILT`/`GRAPH_EVALUATED`,
+   `ONCHAIN_POLLED` (com `skipped_unmapped`), `LAYER_DIVERGENCE_ACTIVE`
+   quando houver; RAM dos dois serviços novos dentro de 192 MiB; soak de
+   24 h (recomputação horária + grafo a cada 1 min) registrado no
+   test-results — pendência declarada, como na RFC-011.
+4. **Operação:** painel "Resolução" no web app (o Nginx passou a publicar os
+   GET de `resolution-risk`/`graph`); ordens manuais sob VETO exigem
+   `override_veto` e ficam auditadas no ledger. Sob CIRCUIT_BREAKER, ordem
+   aberta só pode reduzir a posição assinada sem cruzar zero; `FAK` pode ser
+   recortada até zero, e as demais ordens inseguras são canceladas. Falha de
+   leitura autoritativa cancela as ordens abertas e não permite fill.
+5. Em paralelo: soak/ativação da RFC-011 (item anterior deste handoff);
+   evidência do gate da RFC-010 segue acumulando; `consensus`/`nowcast` no
+   `config/macro-calendar.json` continua pendente; próxima RFC do fluxo:
+   RFC-013 (portfólio), que consome score/ação/buffer/grupos/violações
+   desta RFC pela API e pelas tabelas.
 
 Nenhum modelo é promovido antes de um gate PASS com os 100 mercados
 resolvidos + ação manual do proprietário — nada nesta RFC muda essa

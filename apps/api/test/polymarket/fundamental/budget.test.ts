@@ -91,9 +91,10 @@ describe("estimate volumetry", () => {
     expect(estimates).toBeDefined();
     expect(estimates?.ttlDays).toBe(90);
     expect(estimates?.protected).toBe(false);
-    // The RFC-007 budget reserves 6 GB in total for the RFC-010..013 tables;
-    // this module takes at most half of it and leaves the rest for 011-013.
-    expect(estimates?.quotaBytes).toBeLessThanOrEqual(3 * GB);
+    // The RFC-007 budget reserves 6 GB in total for the RFC-010..013 tables.
+    // Owner decision of 2026-08-24 (RFC-012): the estimates quota is 2 GB —
+    // the 1 GB it gave up funds the resolution-risk and graph tables.
+    expect(estimates?.quotaBytes).toBe(2 * GB);
   });
 
   it("states the real retention window the quota buys", () => {
@@ -107,8 +108,12 @@ describe("estimate volumetry", () => {
 
     // The honest number, asserted rather than hidden. The per-horizon cadence
     // buys weeks instead of the ~5.5 days a flat 60 s cadence bought, which is
-    // what makes accumulating 100 resolved markets realistic at all.
-    expect(daysWithinQuota).toBeGreaterThan(30);
+    // what makes accumulating 100 resolved markets realistic at all. This is
+    // the MODELED CEILING (200 tokens, every bucket at full rate): the 2 GB
+    // quota buys ~24 days there, while at the rate actually measured in
+    // production (~23 MB/day, 2026-08-23) it buys ~87 days — the number the
+    // owner's 2026-08-24 rebalancing decision was based on.
+    expect(daysWithinQuota).toBeGreaterThan(20);
 
     // And an estimate must outlive the evidence chain that scores it:
     // resolution, then UMA liveness (~2 h), the hourly label sync, and up to a
@@ -136,14 +141,46 @@ describe("estimate volumetry", () => {
   });
 
   it("keeps the RFC-010..013 tables inside their 6 GB reserve", () => {
-    // The RFC-007 budget reserves 6 GB for the fundamental_* and paper_*
-    // tables; RFC-010 holds 4.7 GB of it and the owner allotted 1.3 GB to
-    // RFC-011 on 2026-08-23. Any new table in the reserve must fit here.
+    // The RFC-007 budget reserves 6 GB for the RFC-010..013 tables: RFC-010
+    // holds 3.7 GB (after ceding 1.0 GB of the estimates quota on 2026-08-24),
+    // RFC-011 holds the 1.3 GB allotted on 2026-08-23, and RFC-012 holds the
+    // 1.0 GB approved on 2026-08-24 (scores 0.4 / graph+violations 0.3 /
+    // dispute timeline 0.2 / reports 0.1). Any new table must fit here.
     const reserve = RETENTION_TABLES.filter(
       (table) =>
         table.table.startsWith("fundamental_") ||
-        table.table.startsWith("paper_"),
+        table.table.startsWith("paper_") ||
+        table.table.startsWith("resolution_") ||
+        table.table.startsWith("graph_"),
     ).reduce((sum, table) => sum + table.quotaBytes, 0);
     expect(reserve).toBeLessThanOrEqual(6 * GB);
+  });
+
+  it("splits the RFC-012 gigabyte exactly as the owner approved", () => {
+    const quota = (name: string): number =>
+      RETENTION_TABLES.find((table) => table.table === name)?.quotaBytes ?? 0;
+    const scores =
+      quota("resolution_scores") +
+      quota("resolution_score_versions") +
+      quota("resolution_market_state") +
+      quota("resolution_clarifications");
+    const timeline =
+      quota("resolution_uma_timeline") +
+      quota("resolution_onchain_events") +
+      quota("resolution_onchain_cursor") +
+      quota("resolution_adjudication_samples");
+    const graph =
+      quota("graph_edges") +
+      quota("graph_violations") +
+      quota("graph_sanity_vetoes") +
+      quota("resolution_layer_divergences");
+    const reports = quota("resolution_reports");
+    expect(scores).toBeCloseTo(0.4 * GB, 0);
+    expect(timeline).toBeCloseTo(0.2 * GB, 0);
+    expect(graph).toBeCloseTo(0.3 * GB, 0);
+    expect(reports).toBeCloseTo(0.1 * GB, 0);
+    // Within half a byte of the approved 1.0 GB (float dust from the GB
+    // multiples; the 6 GB reserve assertion above is the binding budget).
+    expect(scores + timeline + graph + reports).toBeCloseTo(1 * GB, 0);
   });
 });

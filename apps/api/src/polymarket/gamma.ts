@@ -115,22 +115,48 @@ function asDecimalString(value: unknown): string | null {
 
 function parseStringArray(value: unknown): string[] | null {
   if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string");
+    return value.every((item): item is string => typeof item === "string")
+      ? value
+      : null;
   }
   // Gamma encodes clobTokenIds/outcomes as a stringified JSON array.
   if (typeof value === "string") {
     try {
       const parsed: unknown = JSON.parse(value);
       if (Array.isArray(parsed)) {
-        return parsed.filter(
-          (item): item is string => typeof item === "string",
-        );
+        return parsed.every((item): item is string => typeof item === "string")
+          ? parsed
+          : null;
       }
     } catch {
       return null;
     }
   }
   return null;
+}
+
+function affirmativeTokenId(
+  tokenIds: readonly string[],
+  rawOutcomes: unknown,
+): string | null {
+  const outcomes = parseStringArray(rawOutcomes);
+  if (
+    tokenIds.length !== 2 ||
+    outcomes === null ||
+    outcomes.length !== tokenIds.length
+  ) {
+    return null;
+  }
+  const affirmativeIndexes = outcomes.flatMap((outcome, index) =>
+    /^(?:yes|up)$/i.test(outcome.trim()) ? [index] : [],
+  );
+  if (affirmativeIndexes.length !== 1) {
+    return null;
+  }
+  const tokenId = tokenIds[affirmativeIndexes[0] ?? -1];
+  return typeof tokenId === "string" && tokenId.trim().length > 0
+    ? tokenId
+    : null;
 }
 
 function parseTagSlugs(value: unknown): string[] {
@@ -223,6 +249,7 @@ export function parseMarket(raw: unknown): MarketRegistryEntry | null {
     category,
     negRisk: asBool(record.negRisk),
     clobTokenIds,
+    affirmativeTokenId: affirmativeTokenId(clobTokenIds, record.outcomes),
     rules,
     tickSize: asDecimalString(record.orderPriceMinTickSize),
     minOrderSize: asDecimalString(record.orderMinSize),
@@ -264,6 +291,12 @@ export interface ExtendedMarketRecord extends MarketRegistryEntry {
   readonly customLiveness: string | null;
   readonly automaticallyResolved: boolean | null;
   readonly updatedAt: string | null;
+  /**
+   * UMA question identifier (bytes32). RFC-012's onchain collector keys the
+   * adapter's lifecycle events by it; without this capture those events could
+   * never be mapped back to a condition_id.
+   */
+  readonly questionId: string | null;
 }
 
 function parseEventRefs(value: unknown): GammaEventRef[] {
@@ -292,6 +325,16 @@ function parseEventRefs(value: unknown): GammaEventRef[] {
     });
   }
   return refs;
+}
+
+/** bytes32 hex id, normalized to lowercase; anything else degrades to null. */
+function parseQuestionId(value: unknown): string | null {
+  const raw = asString(value);
+  if (raw === null) {
+    return null;
+  }
+  const normalized = raw.toLowerCase();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? normalized : null;
 }
 
 function parseNamedOutcomes(value: unknown): string[] {
@@ -328,6 +371,7 @@ export function parseExtendedMarket(raw: unknown): ExtendedMarketRecord | null {
       customLiveness: asDecimalString(record.customLiveness),
       automaticallyResolved: asBoolOrNull(record.automaticallyResolved),
       updatedAt: asString(record.updatedAt),
+      questionId: parseQuestionId(record.questionID ?? record.questionId),
     };
   } catch {
     return null;

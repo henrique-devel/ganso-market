@@ -29,6 +29,7 @@ function parseJsonParam(value: unknown): unknown {
 export class FakeDb implements DatabasePool {
   public readonly ruleVersions: Row[] = [];
   public readonly paramVersions: Row[] = [];
+  public readonly metadataVersions: Row[] = [];
   public readonly resolutionEvents: Row[] = [];
   public readonly universeLog: Row[] = [];
   public readonly markets: Row[] = [];
@@ -61,6 +62,56 @@ export class FakeDb implements DatabasePool {
   }
 
   private dispatch(text: string, params: unknown[]): Row[] {
+    if (
+      text.includes("FROM polymarket_markets") &&
+      text.includes("FOR UPDATE")
+    ) {
+      return this.markets
+        .filter((row) => row.condition_id === params[0])
+        .slice(0, 1);
+    }
+    if (text.includes("pg_advisory_xact_lock")) {
+      return [];
+    }
+    if (text.includes("INSERT INTO polymarket_market_metadata_versions")) {
+      this.metadataVersions.push({
+        condition_id: params[0],
+        version: params[1],
+        question: params[2],
+        category: params[3],
+        clob_token_ids: parseJsonParam(params[4]),
+        affirmative_token_id: params[5],
+        valid_from: params[6],
+        valid_to: null,
+        source_ts: params[7],
+        received_at: params[6],
+      });
+      return [];
+    }
+    if (text.includes("UPDATE polymarket_market_metadata_versions")) {
+      for (const row of this.metadataVersions) {
+        if (row.condition_id === params[0] && row.valid_to === null) {
+          row.valid_to = params[1];
+        }
+      }
+      return [];
+    }
+    if (text.includes("FROM polymarket_market_metadata_versions")) {
+      if (text.includes("MAX(version)")) {
+        const versions = this.metadataVersions
+          .filter((row) => row.condition_id === params[0])
+          .map((row) => Number(row.version));
+        return [
+          { max_version: versions.length === 0 ? 0 : Math.max(...versions) },
+        ];
+      }
+      return this.metadataVersions
+        .filter(
+          (row) => row.condition_id === params[0] && row.valid_to === null,
+        )
+        .sort((left, right) => Number(right.version) - Number(left.version))
+        .slice(0, 1);
+    }
     if (text.includes("INSERT INTO polymarket_rule_versions")) {
       this.ruleVersions.push({
         condition_id: params[0],
@@ -121,6 +172,11 @@ export class FakeDb implements DatabasePool {
       return [];
     }
     if (text.includes("FROM polymarket_param_versions")) {
+      if (text.includes("ORDER BY version ASC")) {
+        return this.paramVersions
+          .filter((row) => row.condition_id === params[0])
+          .sort((left, right) => Number(left.version) - Number(right.version));
+      }
       return this.selectVersion(this.paramVersions, text, params);
     }
     if (text.includes("INSERT INTO polymarket_resolution_events")) {
@@ -156,8 +212,9 @@ export class FakeDb implements DatabasePool {
         question: params[1],
         category: params[3],
         clob_token_ids: parseJsonParam(params[5]),
-        rules: params[6],
-        source_ts: params[15],
+        affirmative_token_id: params[6],
+        rules: params[7],
+        source_ts: params[17],
       });
       return [];
     }

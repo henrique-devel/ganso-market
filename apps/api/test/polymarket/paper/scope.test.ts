@@ -119,10 +119,12 @@ describe("RFC-011 scope", () => {
       // `ON CONFLICT ... DO UPDATE SET` is an upsert on the table already named
       // by the INSERT, not a second write target; collapse it so the scan does
       // not read "SET" as a table name.
-      const source = stripComments(await readFile(file, "utf8")).replace(
-        /DO\s+UPDATE\s+SET/gi,
-        "DO_UPDATE_SET",
-      );
+      const source = stripComments(await readFile(file, "utf8"))
+        .replace(/DO\s+UPDATE\s+SET/gi, "DO_UPDATE_SET")
+        .replace(
+          /FOR\s+UPDATE(?:\s+OF\s+[a-z_][a-z0-9_]*)?/gi,
+          "FOR_UPDATE_LOCK",
+        );
       for (const match of source.matchAll(
         /(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-z_][a-z0-9_]*)/gi,
       )) {

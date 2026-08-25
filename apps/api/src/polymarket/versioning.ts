@@ -78,24 +78,6 @@ function sha256(fields: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(fields)).digest("hex");
 }
 
-function logJson(
-  level: "error" | "warn" | "info",
-  reasonCode: string,
-  message: string,
-  extra?: Record<string, unknown>,
-): void {
-  process.stderr.write(
-    `${JSON.stringify({
-      level,
-      service: "polymarket-recorder",
-      timestamp: new Date().toISOString(),
-      reason_code: reasonCode,
-      message,
-      ...extra,
-    })}\n`,
-  );
-}
-
 // jsonb round-trips reorder object keys; the content hash must be computed
 // over a canonical form (recursively sorted keys) so a re-read of the same
 // curve never opens a spurious new version.
@@ -136,20 +118,6 @@ async function inTransaction<T>(
   run: (tx: SqlExecutor) => Promise<T>,
 ): Promise<T> {
   return hasTransaction(db) ? db.transaction(run) : run(db);
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) {
-    return false;
-  }
-  const candidate = error as { code?: unknown; message?: unknown };
-  if (candidate.code === "23505") {
-    return true;
-  }
-  return (
-    typeof candidate.message === "string" &&
-    candidate.message.includes("duplicate key value violates unique")
-  );
 }
 
 // Repair fallback: a chain left without an open version (e.g. a historical
@@ -199,10 +167,7 @@ function paramNormativeFields(
     fee_base_bps: obs.feeBaseBps,
     maker_fee_bps: obs.makerFeeBps,
     taker_fee_bps: obs.takerFeeBps,
-    fee_curve_json:
-      obs.feeCurveJson === null || obs.feeCurveJson === undefined
-        ? null
-        : JSON.stringify(obs.feeCurveJson),
+    fee_curve_json: canonicalJson(obs.feeCurveJson),
     tick_size: obs.tickSize,
     min_order_size: obs.minOrderSize,
     neg_risk: obs.negRisk,
@@ -239,6 +204,7 @@ interface OpenRuleRow {
   readonly uma_reward: string | null;
   readonly custom_liveness: string | null;
   readonly automatically_resolved: boolean | null;
+  readonly valid_from: Date;
 }
 
 async function openRuleVersion(
@@ -248,14 +214,24 @@ async function openRuleVersion(
   const result = await db.query<OpenRuleRow>(
     `SELECT version, content_hash, description, resolution_source, resolved_by,
             end_date, uma_end_date, uma_bond, uma_reward, custom_liveness,
-            automatically_resolved
+            automatically_resolved, valid_from
        FROM polymarket_rule_versions
       WHERE condition_id = $1 AND valid_to IS NULL
       ORDER BY version DESC
-      LIMIT 1`,
+      LIMIT 1
+      FOR UPDATE`,
     [conditionId],
   );
   return result.rows[0] ?? null;
+}
+
+async function lockRuleVersions(
+  db: SqlExecutor,
+  conditionId: string,
+): Promise<void> {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 2))`, [
+    conditionId,
+  ]);
 }
 
 async function insertRuleVersion(
@@ -263,7 +239,8 @@ async function insertRuleVersion(
   obs: RuleObservation,
   version: number,
   contentHash: string,
-  now: Date,
+  validFrom: Date,
+  receivedAt: Date,
 ): Promise<void> {
   await db.query(
     `INSERT INTO polymarket_rule_versions
@@ -284,9 +261,9 @@ async function insertRuleVersion(
       obs.umaReward,
       obs.customLiveness,
       obs.automaticallyResolved,
-      now,
+      validFrom,
       obs.sourceTs,
-      now,
+      receivedAt,
     ],
   );
 }
@@ -295,36 +272,30 @@ async function insertRuleVersion(
  * Compare a fresh Gamma rules observation against the open version. First
  * observation inserts version 1 (no event); a chain left without an open
  * version resumes at MAX(version)+1. A content change closes the open version
- * at `now` and inserts version n+1 plus one immutable `rule_change`
- * resolution event, atomically when the executor is a pool. A concurrent
- * writer's UNIQUE violation is retried once after a re-read.
+ * and inserts version n+1 plus one immutable `rule_change` resolution event.
+ * The whole read/close/insert sequence is serialized and atomic when the
+ * executor is a pool.
  */
 export async function applyRuleObservation(
   db: VersioningExecutor,
   obs: RuleObservation,
   now: Date,
 ): Promise<ApplyResult> {
-  try {
-    return await applyRuleObservationOnce(db, obs, now);
-  } catch (error: unknown) {
-    if (!isUniqueViolation(error)) {
-      throw error;
-    }
-    logJson("warn", "VERSION_RACE_RETRY", "polymarket_rule_version_retry", {
-      condition_id: obs.conditionId,
-    });
-    return applyRuleObservationOnce(db, obs, now);
-  }
+  return inTransaction(db, async (tx) => {
+    await lockRuleVersions(tx, obs.conditionId);
+    const open = await openRuleVersion(tx, obs.conditionId);
+    return applyRuleObservationLocked(tx, obs, now, open);
+  });
 }
 
-async function applyRuleObservationOnce(
-  db: VersioningExecutor,
+async function applyRuleObservationLocked(
+  db: SqlExecutor,
   obs: RuleObservation,
   now: Date,
+  open: OpenRuleRow | null,
 ): Promise<ApplyResult> {
   const nextFields = ruleNormativeFields(obs);
   const contentHash = sha256(Object.values(nextFields));
-  const open = await openRuleVersion(db, obs.conditionId);
 
   if (open === null) {
     const version = await nextVersionAfterGap(
@@ -332,11 +303,14 @@ async function applyRuleObservationOnce(
       "polymarket_rule_versions",
       obs.conditionId,
     );
-    await insertRuleVersion(db, obs, version, contentHash, now);
+    await insertRuleVersion(db, obs, version, contentHash, now, now);
     return { version, changed: true, changedFields: [] };
   }
   if (open.content_hash === contentHash) {
     return { version: open.version, changed: false, changedFields: [] };
+  }
+  if (now.getTime() <= open.valid_from.getTime()) {
+    throw new Error("RULE_OBSERVATION_TIME_NOT_MONOTONIC");
   }
 
   const previousFields: Record<string, unknown> = {
@@ -352,35 +326,32 @@ async function applyRuleObservationOnce(
   };
   const changedFields = changedFieldNames(previousFields, nextFields);
   const nextVersion = open.version + 1;
+  const validFrom = now;
 
-  // Close + insert + event atomically: a partial failure must never leave
-  // the chain without an open version.
-  await inTransaction(db, async (tx) => {
-    await tx.query(
-      `UPDATE polymarket_rule_versions
-          SET valid_to = $2
-        WHERE condition_id = $1 AND valid_to IS NULL`,
-      [obs.conditionId, now],
-    );
-    await insertRuleVersion(tx, obs, nextVersion, contentHash, now);
-    await tx.query(
-      `INSERT INTO polymarket_resolution_events
-         (condition_id, event_type, payload_json, source_ts, received_at)
-       VALUES ($1, 'rule_change', $2::jsonb, $3, $4)`,
-      [
-        obs.conditionId,
-        JSON.stringify({
-          changed_fields: changedFields,
-          previous_version: open.version,
-          new_version: nextVersion,
-          previous_hash: open.content_hash,
-          new_hash: contentHash,
-        }),
-        obs.sourceTs,
-        now,
-      ],
-    );
-  });
+  await db.query(
+    `UPDATE polymarket_rule_versions
+        SET valid_to = $2
+      WHERE condition_id = $1 AND valid_to IS NULL`,
+    [obs.conditionId, validFrom],
+  );
+  await insertRuleVersion(db, obs, nextVersion, contentHash, validFrom, now);
+  await db.query(
+    `INSERT INTO polymarket_resolution_events
+       (condition_id, event_type, payload_json, source_ts, received_at)
+     VALUES ($1, 'rule_change', $2::jsonb, $3, $4)`,
+    [
+      obs.conditionId,
+      JSON.stringify({
+        changed_fields: changedFields,
+        previous_version: open.version,
+        new_version: nextVersion,
+        previous_hash: open.content_hash,
+        new_hash: contentHash,
+      }),
+      obs.sourceTs,
+      now,
+    ],
+  );
   return { version: nextVersion, changed: true, changedFields };
 }
 
@@ -394,6 +365,40 @@ interface OpenParamRow {
   readonly tick_size: string | null;
   readonly min_order_size: string | null;
   readonly neg_risk: boolean | null;
+  readonly valid_from: Date;
+  readonly received_at: Date;
+}
+
+type ParamFieldName =
+  | "fee_base_bps"
+  | "maker_fee_bps"
+  | "taker_fee_bps"
+  | "fee_curve_json"
+  | "tick_size"
+  | "min_order_size"
+  | "neg_risk";
+
+function paramFieldsFromRow(
+  row: Pick<
+    OpenParamRow,
+    | "fee_base_bps"
+    | "maker_fee_bps"
+    | "taker_fee_bps"
+    | "fee_curve_json"
+    | "tick_size"
+    | "min_order_size"
+    | "neg_risk"
+  >,
+): Record<ParamFieldName, unknown> {
+  return {
+    fee_base_bps: row.fee_base_bps,
+    maker_fee_bps: row.maker_fee_bps,
+    taker_fee_bps: row.taker_fee_bps,
+    fee_curve_json: canonicalJson(row.fee_curve_json),
+    tick_size: row.tick_size,
+    min_order_size: row.min_order_size,
+    neg_risk: row.neg_risk,
+  };
 }
 
 async function openParamVersion(
@@ -402,14 +407,42 @@ async function openParamVersion(
 ): Promise<OpenParamRow | null> {
   const result = await db.query<OpenParamRow>(
     `SELECT version, content_hash, fee_base_bps, maker_fee_bps, taker_fee_bps,
-            fee_curve_json, tick_size, min_order_size, neg_risk
+            fee_curve_json, tick_size, min_order_size, neg_risk, valid_from,
+            received_at
        FROM polymarket_param_versions
       WHERE condition_id = $1 AND valid_to IS NULL
       ORDER BY version DESC
-      LIMIT 1`,
+      LIMIT 1
+      FOR UPDATE`,
     [conditionId],
   );
   return result.rows[0] ?? null;
+}
+
+async function lockParamVersions(
+  db: SqlExecutor,
+  conditionId: string,
+): Promise<void> {
+  // Seed 1 keeps this lock namespace separate from metadata versioning while
+  // still serializing first inserts, for which no row exists to lock yet.
+  await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 1))`, [
+    conditionId,
+  ]);
+}
+
+function nextPatchValidFrom(
+  open: { readonly valid_from: Date },
+  observedAt: Date,
+): Date {
+  const openMs = open.valid_from.getTime();
+  const observedMs = observedAt.getTime();
+  if (!Number.isFinite(openMs) || !Number.isFinite(observedMs)) {
+    throw new Error("VERSION_OBSERVATION_TIME_INVALID");
+  }
+  // Callers timestamp observations before waiting for the per-market lock. A
+  // later observation can therefore commit first. Preserve both changes in
+  // serialization order without creating a zero or negative validity window.
+  return observedMs > openMs ? observedAt : new Date(openMs + 1);
 }
 
 async function insertParamVersion(
@@ -417,7 +450,8 @@ async function insertParamVersion(
   obs: ParamObservation,
   version: number,
   contentHash: string,
-  now: Date,
+  validFrom: Date,
+  receivedAt: Date,
 ): Promise<void> {
   await db.query(
     `INSERT INTO polymarket_param_versions
@@ -438,9 +472,9 @@ async function insertParamVersion(
       obs.tickSize,
       obs.minOrderSize,
       obs.negRisk,
-      now,
+      validFrom,
       obs.sourceTs,
-      now,
+      receivedAt,
     ],
   );
 }
@@ -451,44 +485,59 @@ async function insertParamVersion(
  * `now` only when the content hash changes.
  */
 export async function applyParamObservation(
-  db: SqlExecutor,
+  db: VersioningExecutor,
   obs: ParamObservation,
   now: Date,
 ): Promise<ApplyResult> {
+  return inTransaction(db, async (tx) => {
+    await lockParamVersions(tx, obs.conditionId);
+    const open = await openParamVersion(tx, obs.conditionId);
+    return applyParamObservationLocked(tx, obs, now, open);
+  });
+}
+
+async function applyParamObservationLocked(
+  db: SqlExecutor,
+  obs: ParamObservation,
+  now: Date,
+  open: OpenParamRow | null,
+  temporalPolicy: "complete" | "partial" = "complete",
+): Promise<ApplyResult> {
   const nextFields = paramNormativeFields(obs);
   const contentHash = sha256(Object.values(nextFields));
-  const open = await openParamVersion(db, obs.conditionId);
 
   if (open === null) {
-    await insertParamVersion(db, obs, 1, contentHash, now);
-    return { version: 1, changed: true, changedFields: [] };
+    const version = await nextVersionAfterGap(
+      db,
+      "polymarket_param_versions",
+      obs.conditionId,
+    );
+    await insertParamVersion(db, obs, version, contentHash, now, now);
+    return { version, changed: true, changedFields: [] };
   }
   if (open.content_hash === contentHash) {
     return { version: open.version, changed: false, changedFields: [] };
   }
+  if (
+    temporalPolicy === "complete" &&
+    now.getTime() <= open.valid_from.getTime()
+  ) {
+    throw new Error("PARAM_OBSERVATION_TIME_NOT_MONOTONIC");
+  }
 
-  const previousFields: Record<string, unknown> = {
-    fee_base_bps: open.fee_base_bps,
-    maker_fee_bps: open.maker_fee_bps,
-    taker_fee_bps: open.taker_fee_bps,
-    fee_curve_json:
-      open.fee_curve_json === null || open.fee_curve_json === undefined
-        ? null
-        : JSON.stringify(open.fee_curve_json),
-    tick_size: open.tick_size,
-    min_order_size: open.min_order_size,
-    neg_risk: open.neg_risk,
-  };
+  const previousFields = paramFieldsFromRow(open);
   const changedFields = changedFieldNames(previousFields, nextFields);
   const nextVersion = open.version + 1;
+  const validFrom =
+    temporalPolicy === "partial" ? nextPatchValidFrom(open, now) : now;
 
   await db.query(
     `UPDATE polymarket_param_versions
         SET valid_to = $2
       WHERE condition_id = $1 AND valid_to IS NULL`,
-    [obs.conditionId, now],
+    [obs.conditionId, validFrom],
   );
-  await insertParamVersion(db, obs, nextVersion, contentHash, now);
+  await insertParamVersion(db, obs, nextVersion, contentHash, validFrom, now);
   return { version: nextVersion, changed: true, changedFields };
 }
 
@@ -506,49 +555,155 @@ export interface ParamFieldPatch {
   readonly negRisk?: boolean | null;
 }
 
-export async function applyParamFields(
+function providedParamFields(patch: ParamFieldPatch): Set<ParamFieldName> {
+  const fields = new Set<ParamFieldName>();
+  if (patch.feeBaseBps !== undefined) fields.add("fee_base_bps");
+  if (patch.makerFeeBps !== undefined) fields.add("maker_fee_bps");
+  if (patch.takerFeeBps !== undefined) fields.add("taker_fee_bps");
+  if (patch.feeCurveJson !== undefined) fields.add("fee_curve_json");
+  if (patch.tickSize !== undefined) fields.add("tick_size");
+  if (patch.minOrderSize !== undefined) fields.add("min_order_size");
+  if (patch.negRisk !== undefined) fields.add("neg_risk");
+  return fields;
+}
+
+/**
+ * A delayed partial source may merge fields that were untouched by newer
+ * observations. It may not overwrite a field whose latest transition was
+ * received after the patch timestamp. Equal timestamps have no causal order
+ * in the current schema, so their advisory-lock serialization is authoritative.
+ * The version chain itself is the per-field causal journal.
+ */
+async function assertPatchHasNoCausalConflict(
   db: SqlExecutor,
+  conditionId: string,
+  patch: ParamFieldPatch,
+  merged: ParamObservation,
+  open: OpenParamRow,
+  receivedAt: Date,
+): Promise<void> {
+  if (receivedAt.getTime() > open.valid_from.getTime()) {
+    return;
+  }
+  const provided = providedParamFields(patch);
+  const currentFields = paramFieldsFromRow(open);
+  const mergedFields = paramNormativeFields(merged);
+  const changing = new Set(
+    changedFieldNames(currentFields, mergedFields).filter((field) =>
+      provided.has(field as ParamFieldName),
+    ) as ParamFieldName[],
+  );
+  if (changing.size === 0) {
+    return;
+  }
+
+  const history = await db.query<OpenParamRow>(
+    `SELECT version, content_hash, fee_base_bps, maker_fee_bps, taker_fee_bps,
+            fee_curve_json, tick_size, min_order_size, neg_risk, valid_from,
+            received_at
+       FROM polymarket_param_versions
+      WHERE condition_id = $1
+      ORDER BY version ASC`,
+    [conditionId],
+  );
+  const conflicts = new Set<ParamFieldName>();
+  let previousFields: Record<ParamFieldName, unknown> = {
+    fee_base_bps: null,
+    maker_fee_bps: null,
+    taker_fee_bps: null,
+    fee_curve_json: null,
+    tick_size: null,
+    min_order_size: null,
+    neg_risk: null,
+  };
+  for (const row of history.rows) {
+    if (row === undefined) {
+      continue;
+    }
+    const rowReceivedAt = row.received_at.getTime();
+    if (!Number.isFinite(rowReceivedAt)) {
+      throw new Error("PARAM_PATCH_HISTORY_TIME_INVALID");
+    }
+    if (rowReceivedAt <= receivedAt.getTime()) {
+      previousFields = paramFieldsFromRow(row);
+      continue;
+    }
+    const transitionFields = changedFieldNames(
+      previousFields,
+      paramFieldsFromRow(row),
+    );
+    for (const field of transitionFields) {
+      if (changing.has(field as ParamFieldName)) {
+        conflicts.add(field as ParamFieldName);
+      }
+    }
+    previousFields = paramFieldsFromRow(row);
+  }
+  if (conflicts.size > 0) {
+    throw new Error(
+      `PARAM_PATCH_CAUSAL_CONFLICT:${[...conflicts].sort().join(",")}`,
+    );
+  }
+}
+
+export async function applyParamFields(
+  db: VersioningExecutor,
   conditionId: string,
   patch: ParamFieldPatch,
   now: Date,
   sourceTs: Date | null = null,
 ): Promise<ApplyResult> {
-  const open = await openParamVersion(db, conditionId);
-  const merged: ParamObservation = {
-    conditionId,
-    feeBaseBps:
-      patch.feeBaseBps !== undefined
-        ? patch.feeBaseBps
-        : (open?.fee_base_bps ?? null),
-    makerFeeBps:
-      patch.makerFeeBps !== undefined
-        ? patch.makerFeeBps
-        : (open?.maker_fee_bps ?? null),
-    takerFeeBps:
-      patch.takerFeeBps !== undefined
-        ? patch.takerFeeBps
-        : (open?.taker_fee_bps ?? null),
-    feeCurveJson:
-      patch.feeCurveJson !== undefined
-        ? patch.feeCurveJson
-        : (open?.fee_curve_json ?? null),
-    tickSize:
-      patch.tickSize !== undefined ? patch.tickSize : (open?.tick_size ?? null),
-    minOrderSize:
-      patch.minOrderSize !== undefined
-        ? patch.minOrderSize
-        : (open?.min_order_size ?? null),
-    negRisk:
-      patch.negRisk !== undefined ? patch.negRisk : (open?.neg_risk ?? null),
-    sourceTs,
-  };
-  return applyParamObservation(db, merged, now);
+  return inTransaction(db, async (tx) => {
+    await lockParamVersions(tx, conditionId);
+    const open = await openParamVersion(tx, conditionId);
+    const merged: ParamObservation = {
+      conditionId,
+      feeBaseBps:
+        patch.feeBaseBps !== undefined
+          ? patch.feeBaseBps
+          : (open?.fee_base_bps ?? null),
+      makerFeeBps:
+        patch.makerFeeBps !== undefined
+          ? patch.makerFeeBps
+          : (open?.maker_fee_bps ?? null),
+      takerFeeBps:
+        patch.takerFeeBps !== undefined
+          ? patch.takerFeeBps
+          : (open?.taker_fee_bps ?? null),
+      feeCurveJson:
+        patch.feeCurveJson !== undefined
+          ? patch.feeCurveJson
+          : (open?.fee_curve_json ?? null),
+      tickSize:
+        patch.tickSize !== undefined
+          ? patch.tickSize
+          : (open?.tick_size ?? null),
+      minOrderSize:
+        patch.minOrderSize !== undefined
+          ? patch.minOrderSize
+          : (open?.min_order_size ?? null),
+      negRisk:
+        patch.negRisk !== undefined ? patch.negRisk : (open?.neg_risk ?? null),
+      sourceTs,
+    };
+    if (open !== null) {
+      await assertPatchHasNoCausalConflict(
+        tx,
+        conditionId,
+        patch,
+        merged,
+        open,
+        now,
+      );
+    }
+    return applyParamObservationLocked(tx, merged, now, open, "partial");
+  });
 }
 
 /** WS `tick_size_change`: open a new param version with the new tick size,
  * carrying every other field over from the currently open version. */
 export async function applyTickSizeChange(
-  db: SqlExecutor,
+  db: VersioningExecutor,
   msg: {
     readonly market: string;
     readonly asset_id: string;

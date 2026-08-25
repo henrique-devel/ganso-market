@@ -122,6 +122,7 @@ describe("extended market parsing", () => {
       },
     ]);
     expect(parsed.outcomes).toEqual(["Yes", "No"]);
+    expect(parsed.affirmativeTokenId).toBe("11");
   });
 
   it("degrades missing optional fields to null/empty without throwing", () => {
@@ -136,6 +137,7 @@ describe("extended market parsing", () => {
     expect(parsed?.automaticallyResolved).toBeNull();
     expect(parsed?.events).toEqual([]);
     expect(parsed?.outcomes).toEqual([]);
+    expect(parsed?.affirmativeTokenId).toBeNull();
   });
 
   it("returns null (never throws) for unusable payloads", () => {
@@ -303,6 +305,7 @@ describe("runGammaCycle", () => {
 
     // Registry upserts and versioning ran for both members.
     expect(db.markets).toHaveLength(2);
+    expect(db.metadataVersions).toHaveLength(2);
     expect(db.events).toHaveLength(1); // Only the BTC row carries an event.
     expect(db.eventMarkets).toHaveLength(1);
     expect(db.ruleVersions).toHaveLength(2);
@@ -311,6 +314,65 @@ describe("runGammaCycle", () => {
       (row) => row.condition_id === "0xbtc",
     );
     expect(btcParams).toMatchObject({ tick_size: "0.001", neg_risk: false });
+  });
+
+  it("versions market metadata only when its content changes", async () => {
+    const db = new FakeDb();
+    const initial = stubFetcher(() => ({ ok: true, body: [gammaRow()] }));
+    await runGammaCycle({
+      pool: db,
+      fetcher: initial.fetcher,
+      now: () => NOW,
+    });
+
+    const unchangedAt = new Date(NOW.getTime() + 60_000);
+    await runGammaCycle({
+      pool: db,
+      fetcher: initial.fetcher,
+      now: () => unchangedAt,
+    });
+    expect(db.metadataVersions).toHaveLength(1);
+
+    const changedAt = new Date(NOW.getTime() + 120_000);
+    const changed = stubFetcher(() => ({
+      ok: true,
+      body: [
+        gammaRow({
+          question: "Will the Fed cut rates before October?",
+          slug: "fed-cut-before-october",
+          tags: [{ slug: "fed" }],
+          clobTokenIds: '["21","22"]',
+        }),
+      ],
+    }));
+    await runGammaCycle({
+      pool: db,
+      fetcher: changed.fetcher,
+      now: () => changedAt,
+    });
+
+    expect(db.metadataVersions).toEqual([
+      expect.objectContaining({
+        condition_id: "0xbtc",
+        version: 1,
+        question: "Will Bitcoin close above $70,000 on Friday?",
+        category: "crypto",
+        clob_token_ids: ["11", "12"],
+        affirmative_token_id: "11",
+        valid_from: NOW,
+        valid_to: changedAt,
+      }),
+      expect.objectContaining({
+        condition_id: "0xbtc",
+        version: 2,
+        question: "Will the Fed cut rates before October?",
+        category: "macro",
+        clob_token_ids: ["21", "22"],
+        affirmative_token_id: "21",
+        valid_from: changedAt,
+        valid_to: null,
+      }),
+    ]);
   });
 
   it("logs an exit when a previous member leaves the universe", async () => {

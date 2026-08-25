@@ -19,6 +19,8 @@ export default defineConfig({
       "/api/auth/refresh": apiProxy,
       "/api/auth/logout": apiProxy,
       "/api/auth/session": apiProxy,
+      "/api/polymarket/resolution-risk": apiProxy,
+      "/api/polymarket/graph": apiProxy,
     },
   },
   build: {

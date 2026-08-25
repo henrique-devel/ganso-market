@@ -7,7 +7,13 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import type { SqlExecutor } from "../../database.js";
+import type { DatabasePool } from "../../database.js";
+import {
+  gateBufferAtPrice,
+  resolutionGate,
+  type ResolutionGateFn,
+  type ResolutionGateResult,
+} from "../resolution/enforcement.js";
 import {
   acceptPaperOrder,
   bookAtOrBefore,
@@ -26,13 +32,37 @@ import { SIMULATION_BANNER } from "./runner.js";
 import type { OrderDraft, OrderSide, OrderType } from "./validator.js";
 
 export interface PaperRoutesDeps {
-  readonly pool: { query: SqlExecutor["query"] };
+  readonly pool: Pick<DatabasePool, "query" | "transaction">;
   readonly authService: {
     session(token: string): Promise<{ status: string }>;
   };
   /** Test seams / operational knobs for the broker calls. */
   readonly broker?: BrokerDeps;
   readonly newOrderId?: () => string;
+  /**
+   * RFC-012 task 17 gate consulted before ANY acceptance. Defaults to the
+   * real resolution gate over the same pool; injectable for tests.
+   */
+  readonly resolutionGateFn?: ResolutionGateFn;
+}
+
+/** Refusal body carrying the RFC-012 justification back to the caller. */
+function resolutionRefusal(
+  reply: FastifyReply,
+  gate: ResolutionGateResult,
+): FastifyReply {
+  return reply.code(409).send({
+    simulation: SIMULATION_BANNER,
+    reason_code: gate.reason ?? "RESOLUTION_REFUSED",
+    resolution: {
+      action: gate.action,
+      score: gate.score,
+      score_version: gate.scoreVersion,
+      justification: gate.justification,
+      sanity_veto_active: gate.sanityVetoActive,
+    },
+    correlation_id: reply.request.id,
+  });
 }
 
 const LATEST_WINDOWS_SQL =
@@ -147,6 +177,8 @@ export function registerPaperRoutes(
   const { pool, authService } = deps;
   const brokerDeps: BrokerDeps = deps.broker ?? {};
   const newOrderId = deps.newOrderId ?? ((): string => randomUUID());
+  const gateFn: ResolutionGateFn =
+    deps.resolutionGateFn ?? ((input) => resolutionGate(pool, input));
 
   async function guard(
     request: FastifyRequest,
@@ -243,6 +275,31 @@ export function registerPaperRoutes(
         );
         const conditionId = asStr(market.rows[0]?.["condition_id"]);
 
+        // RFC-012 task 17: CIRCUIT_BREAKER refuses outright (raising exposure
+        // in a dispute is forbidden); VETO refuses unless the operator sends
+        // the explicit override, which is audited in the ledger.
+        const overrideVeto = body["override_veto"] === true;
+        let resolutionOverride: Record<string, unknown> | null = null;
+        if (conditionId !== null) {
+          const gate = await gateFn({
+            conditionId,
+            tokenId,
+            source: "manual",
+            overrideVeto,
+          });
+          if (!gate.allowed) {
+            return await resolutionRefusal(reply, gate);
+          }
+          if (gate.overrideApplied) {
+            resolutionOverride = {
+              score: gate.score,
+              score_version: gate.scoreVersion,
+              action: gate.action,
+              justification: gate.justification,
+            };
+          }
+        }
+
         const draft: OrderDraft = {
           tokenId,
           side,
@@ -261,6 +318,7 @@ export function registerPaperRoutes(
             draft,
             conditionId,
             source: "manual",
+            resolutionOverride,
           },
           brokerDeps,
         );
@@ -272,6 +330,9 @@ export function registerPaperRoutes(
           order_id: orderId,
           status: "open",
           accepted_at: outcome.acceptedAt.toISOString(),
+          ...(resolutionOverride === null
+            ? {}
+            : { override_veto: resolutionOverride }),
         });
       } catch (error) {
         logPaperApiError("PAPER_API_FAILED", error);
@@ -428,6 +489,16 @@ export function registerPaperRoutes(
         if (conditionId === null) {
           return await jsonError(reply, 422, "UNKNOWN_MARKET");
         }
+
+        // RFC-012 task 17: an intent is a model-dependent signal. VETO,
+        // CIRCUIT_BREAKER (market or event group) and an active sanity veto
+        // all refuse it, with the justification returned to the caller; the
+        // resolution_buffer rides back on acceptance for the EV discount.
+        const gate = await gateFn({ conditionId, tokenId, source: "intent" });
+        if (!gate.allowed) {
+          return await resolutionRefusal(reply, gate);
+        }
+
         const params = await paramsAtOrBefore(pool, conditionId, now);
         if (params === null || params.tickSize === null) {
           return await jsonError(reply, 422, "UNKNOWN_MARKET_PARAMS");
@@ -509,6 +580,10 @@ export function registerPaperRoutes(
           decision: decision.value,
           order_id: orderId,
           status: "open",
+          // RFC-013's EV formula subtracts this at the decision price:
+          // EV = q - ask - custos - resolution_buffer.
+          resolution_buffer: gateBufferAtPrice(gate, decision.value.limitPrice),
+          resolution_action: gate.action,
         });
       } catch (error) {
         logPaperApiError("PAPER_API_FAILED", error);

@@ -63,6 +63,8 @@ describe("retention config", () => {
       "polymarket_event_markets",
       "polymarket_rule_versions",
       "polymarket_param_versions",
+      "polymarket_market_metadata_versions",
+      "polymarket_resolution_input_changes",
       "polymarket_resolution_events",
       "polymarket_data_gaps",
       "polymarket_universe_log",
@@ -86,6 +88,26 @@ describe("retention config", () => {
     expect(byName.get("polymarket_series_1m")?.ttlDays).toBeNull();
     expect(byName.get("polymarket_series_1m")?.quotaBytes).toBe(3 * 1024 ** 3);
     expect(byName.get("polymarket_rtds_prices")?.ttlDays).toBe(90);
+    expect(byName.get("resolution_scores")).toMatchObject({
+      ttlDays: 180,
+      quotaBytes: 0.35 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+    });
+    expect(byName.get("resolution_score_versions")).toMatchObject({
+      ttlDays: null,
+      protected: true,
+    });
+    expect(byName.get("resolution_market_state")).toMatchObject({
+      ttlDays: null,
+      protected: true,
+    });
+    expect(byName.get("graph_sanity_vetoes")).toMatchObject({
+      ttlDays: 180,
+      timeColumn: "ended_at",
+      protected: false,
+      closedRowsOnly: true,
+    });
   });
 });
 
@@ -228,6 +250,83 @@ describe("retention job", () => {
       new Date(NOW.getTime() - 14 * DAY_MS),
       3,
     ]);
+  });
+
+  it("applies sanity-veto TTL only to rows that are already closed", async () => {
+    const config = RETENTION_TABLES.find(
+      (table) => table.table === "graph_sanity_vetoes",
+    );
+    if (config === undefined) {
+      throw new Error("graph_sanity_vetoes retention config missing");
+    }
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "100", reltuples: "2" }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM graph_sanity_vetoes")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+
+    await job.runOnce();
+
+    const deletion = pool.captured.find((query) =>
+      query.text.includes("DELETE FROM graph_sanity_vetoes"),
+    );
+    expect(deletion?.text).toContain("ended_at < $1");
+    expect(deletion?.text).toContain("ended_at IS NOT NULL");
+    expect(deletion?.params[0]).toEqual(new Date(NOW.getTime() - 180 * DAY_MS));
+  });
+
+  it("applies sanity-veto quota only to rows that are already closed", async () => {
+    const config: RetentionTableConfig = {
+      table: "graph_sanity_vetoes",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "ended_at",
+      protected: false,
+      closedRowsOnly: true,
+    };
+    const cutoff = new Date("2026-01-01T00:00:00.000Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "2" }], rowCount: 1 };
+      }
+      if (
+        text.includes("SELECT ended_at AS cutoff") &&
+        text.includes("FROM graph_sanity_vetoes")
+      ) {
+        return { rows: [{ cutoff }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM graph_sanity_vetoes")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      maxQuotaIterations: 1,
+    });
+
+    await job.runOnce();
+
+    const cutoffQuery = pool.captured.find((query) =>
+      query.text.includes("SELECT ended_at AS cutoff"),
+    );
+    expect(cutoffQuery?.text).toContain("WHERE ended_at IS NOT NULL");
+    const deletion = pool.captured.find((query) =>
+      query.text.includes("DELETE FROM graph_sanity_vetoes"),
+    );
+    expect(deletion?.text).toContain("ended_at < $1");
+    expect(deletion?.text).toContain("ended_at IS NOT NULL");
   });
 
   it("allows pruning sparse tokens when every minute that has deltas has a bucket", async () => {
