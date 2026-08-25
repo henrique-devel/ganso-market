@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_FUNDAMENTAL_CONFIG } from "../../../src/polymarket/fundamental/config.js";
-import { RETENTION_TABLES } from "../../../src/polymarket/retention.js";
+import {
+  DEFAULT_BUDGET_BYTES,
+  RETENTION_TABLES,
+} from "../../../src/polymarket/retention.js";
 
 // Measured, not guessed: 200 000 representative rows inserted into a real
 // PostgreSQL 18 instance with this migration's columns and indexes, then
@@ -123,7 +126,7 @@ describe("estimate volumetry", () => {
     expect(daysWithinQuota).toBeGreaterThan(EVIDENCE_CHAIN_DAYS * 7);
   });
 
-  it("keeps the whole module inside the RFC-007 40 GB budget", () => {
+  it("keeps the whole module inside the RFC-007 budget (110 GB after the 2026-08-25 amendment)", () => {
     // The protected polymarket_* metadata tables SHARE one 0.5 GB monitored
     // quota (RFC-007's retention table has a single line for the whole group);
     // retention.ts stamps that same 0.5 GB on each member, so a naive sum
@@ -137,7 +140,17 @@ describe("estimate volumetry", () => {
     const individual = RETENTION_TABLES.filter(
       (table) => !(table.protected && table.table.startsWith("polymarket_")),
     ).reduce((sum, table) => sum + table.quotaBytes, 0);
-    expect(individual + metadataShared).toBeLessThan(40 * GB);
+    // The owner raised the global budget from 40 to 110 GB on 2026-08-25 after
+    // production showed the recorded L2 stream is ~15.3 GB/day, not the ~1
+    // GB/day the original quotas assumed. Assert against the constant the
+    // pruning actually uses so the two can never drift.
+    expect(individual + metadataShared).toBeLessThan(DEFAULT_BUDGET_BYTES);
+    expect(DEFAULT_BUDGET_BYTES).toBe(110 * GB);
+    // And the sum must still leave real headroom, not merely fit: the alarm
+    // fires at 90% of the budget, so the declared quotas have to stay under it.
+    expect(individual + metadataShared).toBeLessThan(
+      DEFAULT_BUDGET_BYTES * 0.9,
+    );
   });
 
   it("keeps the RFC-010..013 tables inside their 6 GB reserve", () => {

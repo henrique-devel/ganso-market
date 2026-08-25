@@ -445,7 +445,7 @@ mudança de regra/param ignora o histórico.
 - A poda é executada pelo **job de retenção do recorder** (RFC-007, diário), não
   pelo estimador. Recorder parado significa retenção parada.
 - Ao atingir 90% da quota de um tipo, a poda vai até 80% e registra linha em
-  `polymarket_retention_log`; 90% dos 40 GB globais dispara
+  `polymarket_retention_log`; 90% dos 110 GB globais dispara
   `QUOTA_GLOBAL_ALARM`. `GET /polymarket/data-quality` (endpoint da RFC-007)
   mostra bytes por tabela e % do orçamento.
 - Taxa: no máximo 1 **avaliação** por token a cada `estimate_cadence_ms[bucket]`,
@@ -477,7 +477,8 @@ mudança de regra/param ignora o histórico.
   para menos que isso apaga a evidência antes de ela ser pontuada — é o teste
   `budget.test.ts` que segura essa invariante.
 - Memória: `mem_limit` 384 MiB com `--max-old-space-size=320`. O orçamento do
-  módulo (RFC-007) é de 40 GB de PostgreSQL e 3 GB de RAM para as aplicações.
+  módulo (RFC-007) é de 110 GB de PostgreSQL (emenda de 2026-08-25) e 3 GB de
+  RAM para as aplicações.
 
 ```bash
 docker compose exec postgres psql -U ganso_market -d ganso_market -c \

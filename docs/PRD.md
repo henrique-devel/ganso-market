@@ -385,7 +385,8 @@ Orçamento local:
 - reserva livre: mínimo de 75 GB.
 
 TTL inicial (os valores vigentes são os das RFCs 007 e 011, que detalham
-retenção por tipo de dado dentro da quota de 40 GB):
+retenção por tipo de dado dentro da quota de 110 GB — 40 GB até a emenda de
+2026-08-25, elevada após a medição de ~15,3 GB/dia de book L2 em produção):
 
 - snapshots de livro brutos: 30 dias;
 - registry de mercados: sem TTL (upsert versionado);

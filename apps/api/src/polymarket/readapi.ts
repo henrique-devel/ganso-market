@@ -6,6 +6,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { DatabasePool } from "../database.js";
+import { DEFAULT_BUDGET_BYTES } from "./retention.js";
 import type { PriceLevel } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -126,7 +127,9 @@ export interface PolymarketReadRoutesDeps {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-const STORAGE_BUDGET_BYTES = 40 * 1024 ** 3;
+// RFC-007 budget, amended by the owner on 2026-08-25 (40 -> 110 GB). Imported
+// so the reported budget and the pruning quota are the same number.
+const STORAGE_BUDGET_BYTES = DEFAULT_BUDGET_BYTES;
 const MARKETS_LIMIT = 500;
 const SERIES_LIMIT = 10_000;
 const RESOLUTION_EVENTS_LIMIT = 1_000;

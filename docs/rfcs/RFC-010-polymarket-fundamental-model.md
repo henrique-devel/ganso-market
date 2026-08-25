@@ -82,7 +82,7 @@ de volta ao preço, deterministicamente, quando não provar.
 
 ### Orçamento
 
-- Dentro do orçamento do módulo (RFC-007): até 40 GB de PostgreSQL no total do
+- Dentro do orçamento do módulo (RFC-007): até 110 GB de PostgreSQL no total do
   módulo e até 3 GB de RAM em carga para as aplicações. As tabelas desta RFC
   usam a reserva compartilhada de 6 GB das RFCs 010–013 definida na RFC-007.
 - `fundamental_estimates`: no máximo 1 estimativa por token a cada 60 s em

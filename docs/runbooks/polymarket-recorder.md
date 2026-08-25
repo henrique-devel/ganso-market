@@ -72,7 +72,7 @@ docker compose exec postgres psql -U ganso_market -d ganso_market -c \
 ```
 
 A API autenticada expõe `GET /polymarket/data-quality` (gaps, lag p50/p99,
-bytes por tabela e % do orçamento de 40 GB) e os demais endpoints de leitura
+bytes por tabela e % do orçamento de 110 GB) e os demais endpoints de leitura
 da RFC-007.
 
 ## Incidentes conhecidos e resposta
@@ -87,7 +87,7 @@ da RFC-007.
 - **RTDS sem replay:** desconexão vira gap `rtds/ws_disconnect`; o buraco é
   real e permanente (não há como repor).
 - **Quota:** ao atingir 90% da quota de um tipo, poda até 80% com linha em
-  `polymarket_retention_log`; 90% dos 40 GB globais → alarme
+  `polymarket_retention_log`; 90% dos 110 GB globais → alarme
   `QUOTA_GLOBAL_ALARM` nos logs. Tabelas de metadados nunca são podadas.
 - **Formato de frame RTDS/Data API mudou:** frames desconhecidos são contados
   (`rtds_unknown_frames` no STATUS) e não derrubam o processo; verificar a

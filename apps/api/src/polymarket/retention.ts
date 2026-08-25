@@ -10,7 +10,14 @@ export type RetentionQueryPool = { query: SqlExecutor["query"] };
 
 const GB = 1024 ** 3;
 
-export const DEFAULT_BUDGET_BYTES = 40 * GB;
+// Owner decision (2026-08-25): raised from 40 GB after production measurement
+// showed the recorded L2 stream is far denser than the RFC-007 estimate
+// (~15.3 GB/day of book deltas over 198 tokens, not the assumed ~1 GB/day).
+// The alternative was pruning the delta history down to ~0.6 day, which would
+// have gutted the microstructure record the RFC-011/013 gates read. The host
+// has 301 GB total with 192 GB free, so 110 GB stays well inside the disk.
+// Amendment recorded in docs/rfcs/RFC-007-polymarket-data-foundation.md.
+export const DEFAULT_BUDGET_BYTES = 110 * GB;
 export const DEFAULT_BATCH_SIZE = 50_000;
 export const QUOTA_TRIGGER_RATIO = 0.9;
 export const QUOTA_TARGET_RATIO = 0.8;
@@ -36,10 +43,14 @@ export interface RetentionTableConfig {
 // ttlDays null but a quota may still be pruned oldest-first when the quota
 // trips (quota beats TTL). Protected tables are never touched.
 export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
+  // 60 GB, not the original 12 GB: the measured stream is ~15.3 GB/day, so
+  // 12 GB retained under 20 hours of book depth — less than the 14-day TTL by
+  // two orders of magnitude, and not enough for any book-walk replay. At 60 GB
+  // the quota (not the TTL) still binds, at ~3.9 days.
   {
     table: "polymarket_book_deltas",
     ttlDays: 14,
-    quotaBytes: 12 * GB,
+    quotaBytes: 60 * GB,
     timeColumn: "received_at",
     protected: false,
     requiresSeriesCoverage: true,
@@ -51,10 +62,12 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "received_at",
     protected: false,
   },
+  // 8 GB: measured 8.2 GB in 5 days of top-10 snapshots (~1.6 GB/day), so the
+  // 90-day TTL was never reachable at 4 GB either.
   {
     table: "polymarket_book_snapshots",
     ttlDays: 90,
-    quotaBytes: 4 * GB,
+    quotaBytes: 8 * GB,
     timeColumn: "received_at",
     protected: false,
   },
@@ -65,10 +78,14 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "received_at",
     protected: false,
   },
+  // 10 GB: the 1-minute aggregates are the only long-horizon microstructure
+  // record (~100 MB/day measured), and the RFC-013 G2 gate needs >= 60 days of
+  // continuous paper evidence. At 3 GB the window capped at ~30 days, which
+  // would have made that gate unmeasurable — an RFC-013 stop condition.
   {
     table: "polymarket_series_1m",
     ttlDays: null,
-    quotaBytes: 3 * GB,
+    quotaBytes: 10 * GB,
     timeColumn: "bucket_start",
     protected: false,
   },
@@ -386,8 +403,13 @@ function log(
 }
 
 interface TableSize {
+  /** Physical bytes on disk (pg_total_relation_size): never shrinks on DELETE. */
   readonly bytes: number;
+  /** Live bytes: physical discounted by the dead-tuple fraction. */
+  readonly liveBytes: number;
   readonly reltuples: number;
+  /** Best available live row count (pg_stat, falling back to reltuples). */
+  readonly liveRows: number;
 }
 
 function toDate(value: unknown): Date | null {
@@ -408,15 +430,35 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
   const maxQuotaIterations = deps.maxQuotaIterations ?? MAX_QUOTA_ITERATIONS;
 
+  // Two different sizes, because they answer two different questions.
+  //
+  // `bytes` is physical (pg_total_relation_size) and answers "how much disk is
+  // this costing right now" — the global budget alarm. It does NOT shrink on
+  // DELETE: dead tuples keep their pages until VACUUM returns them to the free
+  // space map, and even then the file does not give space back to the OS.
+  //
+  // `liveBytes` discounts that bloat by the dead-tuple fraction and answers
+  // "how much data is actually retained" — the per-table quota. Using the
+  // physical size for the quota is a data-destroying bug: a table pruned from
+  // 76 GB to 48 GB of live rows still measures 76 GB, so the next run would
+  // delete another 28 GB of LIVE rows, and the run after that another 28 GB,
+  // until the table was empty. n_live_tup/n_dead_tup come from the stats
+  // collector and move immediately on DELETE, unlike pg_class.reltuples which
+  // only refreshes on VACUUM/ANALYZE.
   async function tableSize(table: string): Promise<TableSize | null> {
     const result = await pool.query<{
       bytes: string | number | null;
       reltuples: string | number | null;
+      live_tup: string | number | null;
+      dead_tup: string | number | null;
     }>(
       `SELECT pg_total_relation_size(c.oid)::bigint AS bytes,
-              c.reltuples::float8 AS reltuples
+              c.reltuples::float8 AS reltuples,
+              s.n_live_tup::bigint AS live_tup,
+              s.n_dead_tup::bigint AS dead_tup
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
+         LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
         WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = $1`,
       [table],
     );
@@ -424,10 +466,19 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     if (row === undefined) {
       return null;
     }
-    return {
-      bytes: Number(row.bytes ?? 0),
-      reltuples: Math.max(Number(row.reltuples ?? 0), 0),
-    };
+    const bytes = Number(row.bytes ?? 0);
+    const reltuples = Math.max(Number(row.reltuples ?? 0), 0);
+    const liveTup = Math.max(Number(row.live_tup ?? 0), 0);
+    const deadTup = Math.max(Number(row.dead_tup ?? 0), 0);
+    const totalTup = liveTup + deadTup;
+    // No stats row (or a table the collector has never seen): fall back to the
+    // physical size, i.e. exactly the pre-fix behaviour.
+    const liveBytes =
+      Number.isFinite(totalTup) && totalTup > 0
+        ? (bytes * liveTup) / totalTup
+        : bytes;
+    const liveRows = liveTup > 0 ? liveTup : reltuples;
+    return { bytes, liveBytes, reltuples, liveRows };
   }
 
   // Batched delete (50k per statement via ctid) so a prune never holds a
@@ -617,13 +668,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   // overshoot into a time cutoff (oldest rows first), delete, and iterate
   // until the table is back under the 80% target.
   //
-  // Progress is tracked LOGICALLY: pg_total_relation_size does not shrink
-  // after DELETE (dead tuples stay until VACUUM reclaims the space), so the
-  // physical size is measured exactly once per run and the stop condition is
-  // estimated live bytes = initial bytes - rowsDeleted * bytesPerRow.
-  // Re-measuring inside the loop would report constant size and keep
-  // deleting until the table was empty. The 80% target is therefore a
-  // logical target; the physical space only comes back after vacuum.
+  // Progress is tracked LOGICALLY: neither the physical size nor the stats
+  // counters settle inside a single run, so the size is measured exactly once
+  // and the stop condition is estimated live bytes = initial live bytes -
+  // rowsDeleted * bytesPerRow. Re-measuring inside the loop would report a
+  // near-constant size and keep deleting until the table was empty. The 80%
+  // target is therefore a logical target; the physical file only shrinks on a
+  // rewrite, and until then the freed pages are reused by new inserts.
   async function pruneQuota(
     config: RetentionTableConfig,
     report: RetentionRunReport,
@@ -634,11 +685,26 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     }
     const trigger = config.quotaBytes * QUOTA_TRIGGER_RATIO;
     const target = config.quotaBytes * QUOTA_TARGET_RATIO;
-    if (size.bytes < trigger) {
+    // Quota is measured against LIVE bytes, never physical: see tableSize.
+    if (size.liveBytes < trigger) {
+      if (size.bytes >= trigger) {
+        // Retained data is inside the quota but the file is not: bloat that
+        // new inserts will reuse. Surfaced so the disk footprint is never
+        // silently different from the retained window.
+        log("info", "RETENTION_BLOAT", "polymarket_retention_bloat", {
+          table: config.table,
+          physical_bytes: size.bytes,
+          live_bytes: Math.round(size.liveBytes),
+          quota_bytes: config.quotaBytes,
+        });
+      }
       return;
     }
-    const bytesPerRow = Math.max(size.bytes / Math.max(size.reltuples, 1), 1);
-    let estimatedLiveBytes = size.bytes;
+    const bytesPerRow = Math.max(
+      size.liveBytes / Math.max(size.liveRows, 1),
+      1,
+    );
+    let estimatedLiveBytes = size.liveBytes;
     for (let iteration = 0; iteration < maxQuotaIterations; iteration += 1) {
       if (estimatedLiveBytes < target) {
         return;
@@ -665,6 +731,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           {
             table: config.table,
             bytes: size.bytes,
+            live_bytes: Math.round(size.liveBytes),
             quota_bytes: config.quotaBytes,
           },
         );

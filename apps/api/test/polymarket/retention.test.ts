@@ -75,9 +75,12 @@ describe("retention config", () => {
       expect(byName.get(name)?.protected, name).toBe(true);
       expect(byName.get(name)?.ttlDays, name).toBeNull();
     }
+    // Quotas amended by the owner on 2026-08-25 after production measurement
+    // (~15.3 GB/day of deltas, ~1.6 GB/day of snapshots, ~100 MB/day of 1m
+    // aggregates): 12 -> 60 GB, 4 -> 8 GB and 3 -> 10 GB respectively.
     expect(byName.get("polymarket_book_deltas")?.ttlDays).toBe(14);
     expect(byName.get("polymarket_book_deltas")?.quotaBytes).toBe(
-      12 * 1024 ** 3,
+      60 * 1024 ** 3,
     );
     expect(byName.get("polymarket_book_deltas")?.requiresSeriesCoverage).toBe(
       true,
@@ -86,7 +89,10 @@ describe("retention config", () => {
     expect(byName.get("polymarket_book_snapshots")?.ttlDays).toBe(90);
     expect(byName.get("polymarket_trades")?.ttlDays).toBe(365);
     expect(byName.get("polymarket_series_1m")?.ttlDays).toBeNull();
-    expect(byName.get("polymarket_series_1m")?.quotaBytes).toBe(3 * 1024 ** 3);
+    expect(byName.get("polymarket_series_1m")?.quotaBytes).toBe(10 * 1024 ** 3);
+    expect(byName.get("polymarket_book_snapshots")?.quotaBytes).toBe(
+      8 * 1024 ** 3,
+    );
     expect(byName.get("polymarket_rtds_prices")?.ttlDays).toBe(90);
     expect(byName.get("resolution_scores")).toMatchObject({
       ttlDays: 180,
@@ -460,6 +466,177 @@ describe("retention job", () => {
     );
     expect(logInserts).toHaveLength(2);
     expect(logInserts[0]?.params?.[1]).toBe("quota");
+  });
+
+  it("measures the quota against LIVE bytes, so bloat never drives a second prune", async () => {
+    // Production shape after a large prune: the file still measures 1000 bytes
+    // but 52% of the tuples are dead, so only 480 bytes are actually retained.
+    // Using the physical size here is the data-destroying bug: it would prune
+    // another 20% of the LIVE rows on every run until the table was empty.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            {
+              bytes: "1000",
+              reltuples: "100",
+              live_tup: "48",
+              dead_tup: "52",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    expect(pool.captured.some((q) => q.text.includes("DELETE FROM"))).toBe(
+      false,
+    );
+    expect(pool.captured.some((q) => q.text.includes("OFFSET"))).toBe(false);
+    expect(report.actions).toHaveLength(0);
+    // The disk footprint is still reported, never silently swallowed.
+    const bloat = stderrLines().filter((line) =>
+      line.includes("RETENTION_BLOAT"),
+    );
+    expect(bloat).toHaveLength(1);
+    expect(bloat[0]).toContain('"physical_bytes":1000');
+    expect(bloat[0]).toContain('"live_bytes":480');
+    // The global budget still counts the physical bytes: the disk is really
+    // holding them.
+    expect(report.totalBytes).toBe(1000);
+  });
+
+  it("sizes the quota cutoff from live bytes and live rows, not from the bloated file", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const cutoff = new Date("2026-05-01T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // 2000 physical, half the tuples dead => 1000 live bytes over 50 live
+        // rows => 20 bytes/row. Target 800 => delete 10 rows => OFFSET 9.
+        // Reading the physical 2000 with the stale reltuples of 200 would have
+        // asked for 60 rows at OFFSET 59.
+        return {
+          rows: [
+            {
+              bytes: "2000",
+              reltuples: "200",
+              live_tup: "50",
+              dead_tup: "50",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET 9")) {
+        return { rows: [{ cutoff }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        // 15 rows removed for the 10 requested (partial batch), so the
+        // estimate lands at 700 and the loop stops.
+        return { rows: [], rowCount: 15 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    const offsets = pool.captured.filter((q) => q.text.includes("OFFSET"));
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]?.text).toContain("OFFSET 9");
+    expect(report.actions).toHaveLength(1);
+    expect(report.actions[0]).toMatchObject({
+      table: "polymarket_rtds_prices",
+      cause: "quota",
+      prunedBefore: cutoff,
+    });
+  });
+
+  it("falls back to the physical size when the stats collector has no row for the table", async () => {
+    // Freshly created table (or a stats reset): live/dead are unavailable, so
+    // the quota must behave exactly as it did before live-byte accounting.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const cutoff = new Date("2026-05-01T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            { bytes: "1000", reltuples: "100", live_tup: null, dead_tup: null },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET 19")) {
+        return { rows: [{ cutoff }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 20 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    // 1000 bytes / 100 rows = 10 bytes/row, target 800 => 20 rows.
+    expect(pool.captured.some((q) => q.text.includes("OFFSET 19"))).toBe(true);
+    expect(report.actions).toHaveLength(1);
+  });
+
+  it("reads live and dead tuple counts from the stats collector", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const pool = fakePool(() => null);
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const sizeQuery = pool.captured.find((q) =>
+      q.text.includes("pg_total_relation_size"),
+    );
+    expect(sizeQuery?.text).toContain("pg_stat_all_tables");
+    expect(sizeQuery?.text).toContain("n_live_tup");
+    expect(sizeQuery?.text).toContain("n_dead_tup");
   });
 
   it("aborts the quota pass (no DELETE, never cutoff=now) when the OFFSET probe and COUNT find no rows", async () => {
