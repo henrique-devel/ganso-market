@@ -5,7 +5,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { QueryResult, SqlExecutor } from "../../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../../src/database.js";
 import { registerPaperRoutes } from "../../../src/polymarket/paper/api.js";
 import type {
   ResolutionGateFn,
@@ -44,10 +48,12 @@ function gateResult(
 }
 
 /** World enough for the manual-order happy path with a fresh book. */
+type RoutePool = Pick<DatabasePool, "query" | "transaction">;
+
 function worldPool(record: {
   ledger: Array<{ text: string; params: readonly unknown[] }>;
-}): SqlExecutor {
-  return {
+}): RoutePool {
+  const executor: SqlExecutor = {
     query<R extends Row>(
       text: string,
       params: readonly unknown[] = [],
@@ -83,6 +89,28 @@ function worldPool(record: {
           },
         ]);
       }
+      if (text.includes("FROM resolution_runtime_state r")) {
+        return respond([
+          {
+            generation: "11111111-1111-4111-8111-111111111111",
+            ready: true,
+            stopped_at: null,
+            lease_expires_at: new Date("2026-08-24T12:10:00.000Z"),
+            graph_evaluated_at: new Date("2026-08-24T11:59:00.000Z"),
+            graph_valid_until: new Date("2026-08-24T12:10:00.000Z"),
+            checked_at: NOW,
+            processed_resolution_event_id: 0,
+            processed_rule_version_id: 0,
+            processed_input_change_id: 0,
+            event_head: 0,
+            rule_head: 0,
+            input_head: 0,
+          },
+        ]);
+      }
+      if (text.includes("FROM resolution_market_state")) {
+        return respond([{ effective_action: "NONE" }]);
+      }
       if (text.includes("INSERT INTO paper_orders")) {
         return respond([]);
       }
@@ -96,10 +124,16 @@ function worldPool(record: {
       return respond([]);
     },
   };
+  return {
+    query: executor.query,
+    transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+      return run(executor);
+    },
+  };
 }
 
 async function buildApp(
-  pool: SqlExecutor,
+  pool: RoutePool,
   gate: ResolutionGateFn,
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });

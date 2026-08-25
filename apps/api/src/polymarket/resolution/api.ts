@@ -7,7 +7,7 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import type { DatabasePool } from "../../database.js";
+import type { DatabasePool, SqlExecutor } from "../../database.js";
 import { edgeKeyOf } from "./graph.js";
 import { parseCuratedEdges } from "./curated.js";
 import type { GraphEdgeKind } from "./types.js";
@@ -17,7 +17,7 @@ export interface AuthSessionService {
 }
 
 export interface ResolutionRoutesDeps {
-  readonly pool: Pick<DatabasePool, "query">;
+  readonly pool: Pick<DatabasePool, "query" | "transaction">;
   readonly authService: AuthSessionService;
   readonly clock?: () => Date;
 }
@@ -114,6 +114,37 @@ export function registerResolutionRoutes(
         return jsonError(reply, 500, "RESOLUTION_API_FAILED");
       }
     };
+  }
+
+  async function lockCuratedMutation(tx: SqlExecutor): Promise<void> {
+    // Match the runtime's global lock order. The journal lock also waits for
+    // already-running source writers before this graph revision is published.
+    await tx.query(
+      "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE",
+    );
+    await tx.query(
+      `SELECT generation
+         FROM resolution_runtime_state
+        WHERE runtime_id = 1
+        FOR UPDATE`,
+    );
+  }
+
+  async function invalidateRuntimeAfterCuratedMutation(
+    tx: SqlExecutor,
+    changedAt: Date,
+  ): Promise<void> {
+    await tx.query(
+      `UPDATE resolution_runtime_state
+          SET ready = FALSE,
+              graph_evaluated_at = NULL,
+              graph_valid_until = NULL,
+              failure_reason = 'CURATED_EDGE_CHANGED',
+              lease_expires_at = LEAST(lease_expires_at, $1),
+              updated_at = $1
+        WHERE runtime_id = 1 AND stopped_at IS NULL`,
+      [changedAt],
+    );
   }
 
   // Scores correntes do universo: score, ação, versão, features principais.
@@ -379,17 +410,24 @@ export function registerResolutionRoutes(
         if (edgeKey === null || author === null || justification === null) {
           return jsonError(reply, 422, "INVALID_EDGE_REVOCATION");
         }
-        const revoked = await pool.query(
-          `UPDATE graph_edges
-              SET revoked_at = CURRENT_TIMESTAMP,
-                  updated_at = CURRENT_TIMESTAMP,
-                  author = $2,
-                  justification = $3
-            WHERE edge_key = $1
-              AND origin = 'curated'
-              AND revoked_at IS NULL`,
-          [edgeKey, author, justification],
-        );
+        const revoked = await pool.transaction(async (tx) => {
+          await lockCuratedMutation(tx);
+          const result = await tx.query(
+            `UPDATE graph_edges
+                SET revoked_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP,
+                    author = $2,
+                    justification = $3
+              WHERE edge_key = $1
+                AND origin = 'curated'
+                AND revoked_at IS NULL`,
+            [edgeKey, author, justification],
+          );
+          if (result.rowCount > 0) {
+            await invalidateRuntimeAfterCuratedMutation(tx, clock());
+          }
+          return result;
+        });
         if (revoked.rowCount === 0) {
           return jsonError(reply, 404, "EDGE_NOT_FOUND");
         }
@@ -414,31 +452,35 @@ export function registerResolutionRoutes(
         eventId: null,
         members: edge.members,
       });
-      await pool.query(
-        `INSERT INTO graph_edges
-           (edge_key, kind, from_condition_id, to_condition_id, event_id,
-            members_json, origin, confidence, author, justification,
-            params_json)
-         VALUES ($1,$2,$3,$4,NULL,$5::jsonb,'curated',$6,$7,$8,$9::jsonb)
-         ON CONFLICT (edge_key) DO UPDATE SET
-           confidence = EXCLUDED.confidence,
-           author = EXCLUDED.author,
-           justification = EXCLUDED.justification,
-           params_json = EXCLUDED.params_json,
-           revoked_at = NULL,
-           updated_at = CURRENT_TIMESTAMP`,
-        [
-          edgeKey,
-          edge.kind,
-          edge.fromConditionId,
-          edge.toConditionId,
-          JSON.stringify(edge.members),
-          edge.confidence,
-          edge.author,
-          edge.justification,
-          JSON.stringify({ ...edge.params, source: "api" }),
-        ],
-      );
+      await pool.transaction(async (tx) => {
+        await lockCuratedMutation(tx);
+        await tx.query(
+          `INSERT INTO graph_edges
+             (edge_key, kind, from_condition_id, to_condition_id, event_id,
+              members_json, origin, confidence, author, justification,
+              params_json)
+           VALUES ($1,$2,$3,$4,NULL,$5::jsonb,'curated',$6,$7,$8,$9::jsonb)
+           ON CONFLICT (edge_key) DO UPDATE SET
+             confidence = EXCLUDED.confidence,
+             author = EXCLUDED.author,
+             justification = EXCLUDED.justification,
+             params_json = EXCLUDED.params_json,
+             revoked_at = NULL,
+             updated_at = CURRENT_TIMESTAMP`,
+          [
+            edgeKey,
+            edge.kind,
+            edge.fromConditionId,
+            edge.toConditionId,
+            JSON.stringify(edge.members),
+            edge.confidence,
+            edge.author,
+            edge.justification,
+            JSON.stringify({ ...edge.params, source: "api" }),
+          ],
+        );
+        await invalidateRuntimeAfterCuratedMutation(tx, clock());
+      });
       return reply.code(201).send({ edge_key: edgeKey });
     }),
   );

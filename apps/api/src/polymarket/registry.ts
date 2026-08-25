@@ -328,6 +328,136 @@ async function insertDataGap(
   );
 }
 
+interface OpenMetadataVersion {
+  readonly version: number;
+  readonly question: string;
+  readonly category: string | null;
+  readonly clob_token_ids: unknown;
+  readonly affirmative_token_id: string | null;
+  readonly valid_from: Date;
+}
+
+function metadataTokenIds(value: unknown): string[] | null {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((token): token is string => typeof token === "string")
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+function metadataMatches(
+  open: OpenMetadataVersion,
+  record: MarketMetadataObservation,
+): boolean {
+  const previousTokens = metadataTokenIds(open.clob_token_ids);
+  return (
+    open.question === record.question &&
+    open.category === record.category &&
+    previousTokens !== null &&
+    previousTokens.length === record.clobTokenIds.length &&
+    previousTokens.every(
+      (token, index) => token === record.clobTokenIds[index],
+    ) &&
+    open.affirmative_token_id === record.affirmativeTokenId
+  );
+}
+
+export interface MarketMetadataObservation {
+  readonly conditionId: string;
+  readonly question: string;
+  readonly category: string | null;
+  readonly clobTokenIds: readonly string[];
+  readonly affirmativeTokenId: string | null;
+  readonly sourceTs: Date | null;
+}
+
+/**
+ * Record one prospective metadata observation after the mutable registry row
+ * has been upserted in the same transaction. Locking the source row before the
+ * transaction-scoped advisory lock matches the database compatibility trigger;
+ * direct comparison makes identical polls idempotent.
+ */
+export async function applyMarketMetadataObservation(
+  db: SqlExecutor,
+  record: MarketMetadataObservation,
+  observedAt: Date,
+): Promise<void> {
+  await db.query(
+    `SELECT condition_id
+       FROM polymarket_markets
+      WHERE condition_id = $1
+      FOR UPDATE`,
+    [record.conditionId],
+  );
+  await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+    record.conditionId,
+  ]);
+  const current = await db.query<OpenMetadataVersion>(
+    `SELECT version, question, category, clob_token_ids,
+            affirmative_token_id, valid_from
+       FROM polymarket_market_metadata_versions
+      WHERE condition_id = $1 AND valid_to IS NULL
+      ORDER BY version DESC
+      LIMIT 1
+      FOR UPDATE`,
+    [record.conditionId],
+  );
+  const open = current.rows[0];
+  if (open !== undefined && metadataMatches(open, record)) {
+    return;
+  }
+
+  let version = 1;
+  if (open !== undefined) {
+    if (observedAt.getTime() <= open.valid_from.getTime()) {
+      throw new Error("MARKET_METADATA_OBSERVATION_TIME_NOT_MONOTONIC");
+    }
+    version = open.version + 1;
+    await db.query(
+      `UPDATE polymarket_market_metadata_versions
+          SET valid_to = $2
+        WHERE condition_id = $1 AND valid_to IS NULL`,
+      [record.conditionId, observedAt],
+    );
+  } else {
+    const maximum = await db.query<{ max_version: number | string | null }>(
+      `SELECT COALESCE(MAX(version), 0) AS max_version
+         FROM polymarket_market_metadata_versions
+        WHERE condition_id = $1`,
+      [record.conditionId],
+    );
+    const maxVersion = Number(maximum.rows[0]?.max_version ?? 0);
+    version = (Number.isFinite(maxVersion) ? maxVersion : 0) + 1;
+  }
+
+  await db.query(
+    `INSERT INTO polymarket_market_metadata_versions
+       (condition_id, version, question, category, clob_token_ids,
+        affirmative_token_id, valid_from, source_ts, received_at)
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$7)`,
+    [
+      record.conditionId,
+      version,
+      record.question,
+      record.category,
+      JSON.stringify(record.clobTokenIds),
+      record.affirmativeTokenId,
+      observedAt,
+      record.sourceTs,
+    ],
+  );
+}
+
 // Same registry upsert the recorder used, adapted to the extended record and
 // carrying source_ts (Gamma updatedAt). The orchestrator migrates to this one.
 async function upsertMarket(
@@ -337,16 +467,18 @@ async function upsertMarket(
 ): Promise<void> {
   await db.query(
     `INSERT INTO polymarket_markets
-       (condition_id, question, slug, category, neg_risk, clob_token_ids, rules,
-        tick_size, min_order_size, rewards_min_size, rewards_max_spread, fee_type,
-        end_date_iso, active, closed, question_id, source_ts, received_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
+       (condition_id, question, slug, category, neg_risk, clob_token_ids,
+        affirmative_token_id, rules, tick_size, min_order_size,
+        rewards_min_size, rewards_max_spread, fee_type, end_date_iso, active,
+        closed, question_id, source_ts, received_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19)
      ON CONFLICT (condition_id) DO UPDATE SET
        question = EXCLUDED.question,
        slug = EXCLUDED.slug,
        category = EXCLUDED.category,
        neg_risk = EXCLUDED.neg_risk,
        clob_token_ids = EXCLUDED.clob_token_ids,
+       affirmative_token_id = EXCLUDED.affirmative_token_id,
        rules = EXCLUDED.rules,
        rules_version = polymarket_markets.rules_version
          + CASE WHEN polymarket_markets.rules IS DISTINCT FROM EXCLUDED.rules THEN 1 ELSE 0 END,
@@ -368,6 +500,7 @@ async function upsertMarket(
       record.category,
       record.negRisk,
       JSON.stringify(record.clobTokenIds),
+      record.affirmativeTokenId,
       record.rules,
       record.tickSize,
       record.minOrderSize,
@@ -589,9 +722,24 @@ export async function runGammaCycle(
       category: record.category ?? "unknown",
     });
     try {
-      await upsertMarket(pool, record, now());
-      await upsertEvents(pool, record, now());
-      await applyRuleObservation(pool, ruleObservationFrom(record), now());
+      const observedAt = now();
+      await pool.transaction(async (tx) => {
+        await upsertMarket(tx, record, observedAt);
+        await applyMarketMetadataObservation(
+          tx,
+          {
+            conditionId: record.conditionId,
+            question: record.question,
+            category: record.category,
+            clobTokenIds: record.clobTokenIds,
+            affirmativeTokenId: record.affirmativeTokenId,
+            sourceTs: parseIsoDate(record.updatedAt),
+          },
+          observedAt,
+        );
+      });
+      await upsertEvents(pool, record, observedAt);
+      await applyRuleObservation(pool, ruleObservationFrom(record), observedAt);
       await applyParamFields(
         pool,
         record.conditionId,
@@ -600,7 +748,7 @@ export async function runGammaCycle(
           minOrderSize: record.minOrderSize,
           negRisk: record.negRisk,
         },
-        now(),
+        observedAt,
         parseIsoDate(record.updatedAt),
       );
     } catch (error: unknown) {
@@ -720,6 +868,7 @@ export async function refreshParams(
   const pool = deps.pool;
 
   for (const member of universe) {
+    // Fee rates are market-wide; either token is a valid lookup key.
     const tokenId = member.tokenIds[0];
     if (tokenId === undefined) {
       continue;

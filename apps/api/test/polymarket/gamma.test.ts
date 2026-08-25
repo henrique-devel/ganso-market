@@ -11,6 +11,7 @@ function cryptoMarket(): MarketRegistryEntry {
     category: "crypto",
     negRisk: false,
     clobTokenIds: '["111", "222"]',
+    outcomes: '["Yes", "No"]',
     description: "Resolves YES if the price is higher at the close.",
     orderPriceMinTickSize: 0.001,
     orderMinSize: 5,
@@ -33,6 +34,7 @@ describe("gamma market parsing", () => {
     const entry = cryptoMarket();
     expect(entry.conditionId).toBe("0xabc");
     expect(entry.clobTokenIds).toEqual(["111", "222"]);
+    expect(entry.affirmativeTokenId).toBe("111");
     expect(entry.tickSize).toBe("0.001");
     expect(entry.minOrderSize).toBe("5");
     expect(entry.negRisk).toBe(false);
@@ -47,6 +49,38 @@ describe("gamma market parsing", () => {
     const entry = cryptoMarket();
     expect(typeof entry.rewardsMaxSpread).toBe("string");
     expect(entry.rewardsMaxSpread).toBe("3.5");
+  });
+
+  it("maps the explicit affirmative outcome by parallel array position", () => {
+    const reversed = parseMarket({
+      ...cryptoMarket(),
+      conditionId: "0xreversed",
+      clobTokenIds: '["no-token", "yes-token"]',
+      outcomes: '["No", "Yes"]',
+    });
+    expect(reversed?.affirmativeTokenId).toBe("yes-token");
+  });
+
+  it("fails closed for ambiguous, non-binary or missing outcomes", () => {
+    const raw = {
+      conditionId: "0xambiguous",
+      question: "Will BTC be up?",
+      clobTokenIds: '["one", "two"]',
+    };
+    expect(parseMarket(raw)?.affirmativeTokenId).toBeNull();
+    expect(
+      parseMarket({ ...raw, outcomes: '["Yes", "Up"]' })?.affirmativeTokenId,
+    ).toBeNull();
+    expect(
+      parseMarket({ ...raw, outcomes: '[null, "Yes"]' })?.affirmativeTokenId,
+    ).toBeNull();
+    expect(
+      parseMarket({
+        ...raw,
+        clobTokenIds: '["one", "two", "three"]',
+        outcomes: '["Yes", "No", "Other"]',
+      })?.affirmativeTokenId,
+    ).toBeNull();
   });
 });
 

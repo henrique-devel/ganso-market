@@ -52,18 +52,50 @@ async function upsertEdge(
   pool: ResolutionPool,
   edge: EdgeUpsert,
 ): Promise<void> {
+  // The file is reconciled on every build, so a removed file-curated edge may
+  // fall back to its structural derivation. API-curated rows are different:
+  // only the authenticated API may change or reactivate them.
   await pool.query(
     `INSERT INTO graph_edges
        (edge_key, kind, from_condition_id, to_condition_id, event_id,
         members_json, origin, confidence, author, justification, params_json)
      VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb)
      ON CONFLICT (edge_key) DO UPDATE SET
-       members_json = EXCLUDED.members_json,
-       confidence = EXCLUDED.confidence,
-       author = EXCLUDED.author,
-       justification = EXCLUDED.justification,
-       params_json = EXCLUDED.params_json,
-       revoked_at = NULL,
+       members_json = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.members_json
+         ELSE EXCLUDED.members_json
+       END,
+       origin = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.origin
+         ELSE EXCLUDED.origin
+       END,
+       confidence = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.confidence
+         ELSE EXCLUDED.confidence
+       END,
+       author = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.author
+         ELSE EXCLUDED.author
+       END,
+       justification = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.justification
+         ELSE EXCLUDED.justification
+       END,
+       params_json = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.params_json
+         ELSE EXCLUDED.params_json
+       END,
+       revoked_at = CASE
+         WHEN graph_edges.params_json->>'source' = 'api'
+           THEN graph_edges.revoked_at
+         ELSE NULL
+       END,
        updated_at = CURRENT_TIMESTAMP`,
     [
       edge.edgeKey,
@@ -89,9 +121,9 @@ export interface GraphBuildSummary {
 }
 
 /**
- * Rebuild the graph as of `asOf`. Nodes are the current universe's markets.
- * In augmented negRisk groups only named outcomes participate — placeholders
- * never reach the registry, so membership is intersected with the node set.
+ * Rebuild the graph as of `asOf`. Nodes are the current universe's markets;
+ * a structural group's edge retains every named member recorded for its event
+ * so completeness-sensitive constraints never mistake a subset for the whole.
  */
 export async function buildGraph(
   pool: ResolutionPool,
@@ -106,23 +138,42 @@ export async function buildGraph(
 
   // Structural NEGRISK groups: the Gamma event is the group.
   const groups = await pool.query<Record<string, unknown>>(
-    `SELECT e.event_id,
-            jsonb_agg(em.condition_id ORDER BY em.condition_id) AS members
-       FROM polymarket_events e
-       JOIN polymarket_event_markets em ON em.event_id = e.event_id
-      WHERE e.neg_risk = TRUE
-      GROUP BY e.event_id`,
+    `WITH membership AS (
+       SELECT em.event_id, em.condition_id,
+              (SELECT pv.neg_risk
+                 FROM polymarket_param_versions pv
+                WHERE pv.condition_id = em.condition_id
+                  AND pv.valid_from <= $1
+                  AND (pv.valid_to IS NULL OR pv.valid_to > $1)
+                ORDER BY pv.version DESC
+                LIMIT 1) AS neg_risk_as_of
+         FROM polymarket_event_markets em
+        WHERE em.received_at <= $1
+     )
+     SELECT event_id,
+            jsonb_agg(condition_id ORDER BY condition_id) AS members
+       FROM membership
+      GROUP BY event_id
+     HAVING bool_and(neg_risk_as_of IS TRUE)`,
+    [asOf],
   );
   for (const row of groups.rows) {
     const eventId = typeof row.event_id === "string" ? row.event_id : null;
     if (eventId === null || !Array.isArray(row.members)) {
       continue;
     }
+    // Membership is the full set known at asOf (placeholders never reach the
+    // registry), not just the current universe. The event row is mutable and
+    // cannot support an as-of claim, so structural eligibility comes from the
+    // versioned neg_risk parameter of every member. Missing evidence omits the
+    // group instead of inventing history. At least one live node must matter.
     const members = (row.members as unknown[])
       .filter((item): item is string => typeof item === "string")
-      .filter((conditionId) => nodeIds.has(conditionId))
       .sort();
-    if (members.length < 2) {
+    if (
+      members.length < 2 ||
+      !members.some((conditionId) => nodeIds.has(conditionId))
+    ) {
       continue;
     }
     desired.push({
@@ -201,13 +252,19 @@ export async function buildGraph(
     });
   }
 
-  for (const edge of desired) {
+  // Structural inference is appended first and file curation second. Keeping
+  // the last row per stable key makes curation win only while it is present in
+  // the current file, and avoids exposing an intermediate demotion.
+  const reconciled = [
+    ...new Map(desired.map((edge) => [edge.edgeKey, edge])).values(),
+  ];
+  for (const edge of reconciled) {
     await upsertEdge(pool, edge);
   }
 
   // Revoke edges this build no longer derives. API-curated edges
   // (params_json.source = 'api') are the operator's: only the API touches them.
-  const keys = desired.map((edge) => edge.edgeKey);
+  const keys = reconciled.map((edge) => edge.edgeKey);
   const revoked = await pool.query(
     `UPDATE graph_edges
         SET revoked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
@@ -219,8 +276,9 @@ export async function buildGraph(
 
   return {
     nodes: nodes.length,
-    structural: desired.filter((edge) => edge.origin === "structural").length,
-    curated: desired.filter((edge) => edge.origin === "curated").length,
+    structural: reconciled.filter((edge) => edge.origin === "structural")
+      .length,
+    curated: reconciled.filter((edge) => edge.origin === "curated").length,
     revoked: revoked.rowCount,
   };
 }

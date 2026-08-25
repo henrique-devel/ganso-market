@@ -200,9 +200,12 @@ export type EdgeVerdict =
       readonly details: Readonly<Record<string, unknown>>;
     };
 
-export interface MarketLeg {
+export interface MarketRef {
   readonly conditionId: string;
   readonly tokenId: string;
+}
+
+export interface MarketLeg extends MarketRef {
   readonly books: EdgeBooks;
   readonly feeRate: bigint;
 }
@@ -234,7 +237,15 @@ export function evaluateEdge(
       directions.push({ sell: to, buy: from, label: "to_over_from" });
     }
     let best: EdgeVerdict = { kind: "inside" };
+    let everyDirectionEvaluable = true;
     for (const direction of directions) {
+      if (
+        direction.sell.books.bids.length === 0 ||
+        direction.buy.books.asks.length === 0
+      ) {
+        everyDirectionEvaluable = false;
+        continue;
+      }
       const walk = pairArbWalk(
         direction.sell.books.bids,
         direction.buy.books.asks,
@@ -261,45 +272,52 @@ export function evaluateEdge(
         }
       }
     }
-    return best;
+    if (best.kind === "beyond") {
+      return best;
+    }
+    return everyDirectionEvaluable
+      ? best
+      : { kind: "skipped", reason: "missing_book_side" };
   }
 
-  // Group kinds (MUTEX / NEGRISK).
-  const memberLegs: MarketLeg[] = [];
-  for (const member of edge.members) {
-    const leg = legs.get(member);
-    if (leg === undefined) {
-      return { kind: "skipped", reason: "missing_member_book" };
+  // Group kinds (MUTEX / NEGRISK). The sell-all test is subset-valid — a
+  // SUBSET of exclusive outcomes whose bids sum above $1 is already
+  // incoherent — so it walks whatever members are priced. The buy-all test
+  // is NOT: a subset's asks can legitimately sum below 1, so it only runs
+  // when EVERY recorded member of the group is priced.
+  const memberLegs = edge.members
+    .map((member) => legs.get(member))
+    .filter((leg): leg is MarketLeg => leg !== undefined);
+  const sellLegs = memberLegs.filter((leg) => leg.books.bids.length > 0);
+  if (sellLegs.length >= 2) {
+    const sell = groupArbWalk(
+      sellLegs.map((leg) => leg.books.bids),
+      sellLegs.map((leg) => leg.feeRate),
+      "sell",
+      epsilon,
+      capShares,
+    );
+    if (sell.execSize > 0n) {
+      return {
+        kind: "beyond",
+        unitNet: sell.unitNet,
+        execSize: sell.execSize,
+        execNotional: sell.execNotional,
+        tolerance: epsilon,
+        details: {
+          test: "sum_bids_gt_1",
+          members: edge.members.length,
+          members_priced: sellLegs.length,
+        },
+      };
     }
-    memberLegs.push(leg);
   }
-  if (memberLegs.length < 2) {
-    return { kind: "skipped", reason: "group_too_small" };
-  }
-  const feeRates = memberLegs.map((leg) => leg.feeRate);
-  const sell = groupArbWalk(
-    memberLegs.map((leg) => leg.books.bids),
-    feeRates,
-    "sell",
-    epsilon,
-    capShares,
-  );
-  if (sell.execSize > 0n) {
-    return {
-      kind: "beyond",
-      unitNet: sell.unitNet,
-      execSize: sell.execSize,
-      execNotional: sell.execNotional,
-      tolerance: epsilon,
-      details: { test: "sum_bids_gt_1", members: edge.members.length },
-    };
-  }
-  // The buy-all test (Σ asks < 1) is only meaningful when every member of
-  // the group is priced: a subset can legitimately sum below 1.
-  if (fullMembership) {
+
+  const buyLegs = memberLegs.filter((leg) => leg.books.asks.length > 0);
+  if (fullMembership && buyLegs.length === edge.members.length) {
     const buy = groupArbWalk(
-      memberLegs.map((leg) => leg.books.asks),
-      feeRates,
+      buyLegs.map((leg) => leg.books.asks),
+      buyLegs.map((leg) => leg.feeRate),
       "buy",
       epsilon,
       capShares,
@@ -311,11 +329,19 @@ export function evaluateEdge(
         execSize: buy.execSize,
         execNotional: buy.execNotional,
         tolerance: epsilon,
-        details: { test: "sum_asks_lt_1", members: edge.members.length },
+        details: {
+          test: "sum_asks_lt_1",
+          members: edge.members.length,
+          members_priced: buyLegs.length,
+        },
       };
     }
   }
-  return { kind: "inside" };
+  const sellEvaluable = sellLegs.length === edge.members.length;
+  const buyEvaluable = fullMembership && buyLegs.length === edge.members.length;
+  return sellEvaluable && buyEvaluable
+    ? { kind: "inside" }
+    : { kind: "skipped", reason: "group_incomplete" };
 }
 
 export interface EvaluateSummary {
@@ -352,6 +378,13 @@ export async function evaluateGraph(
     skipped: 0,
     suppressed: 0,
   };
+  const activeKeys = new Set(edges.map((edge) => edge.edgeKey));
+  summary.closed += await closeInactiveViolations(pool, activeKeys, asOf);
+  for (const edgeKey of streaks.keys()) {
+    if (!activeKeys.has(edgeKey)) {
+      streaks.delete(edgeKey);
+    }
+  }
   if (edges.length === 0) {
     return summary;
   }
@@ -448,21 +481,8 @@ export async function loadMarketLeg(
   asOf: Date,
   config: ResolutionConfig,
 ): Promise<MarketLeg | null> {
-  const market = await pool.query<Record<string, unknown>>(
-    `SELECT clob_token_ids FROM polymarket_markets WHERE condition_id = $1`,
-    [conditionId],
-  );
-  const tokens = market.rows[0]?.clob_token_ids;
-  const tokenList = Array.isArray(tokens)
-    ? (tokens as unknown[]).filter(
-        (item): item is string => typeof item === "string",
-      )
-    : [];
-  // Node = the market's affirmative outcome: Gamma's clobTokenIds are
-  // parallel to outcomes, and outcome 0 is the Yes/Up side in every recorded
-  // binary market.
-  const tokenId = tokenList[0];
-  if (tokenId === undefined) {
+  const ref = await loadMarketRef(pool, conditionId, asOf);
+  if (ref === null) {
     return null;
   }
   const params = await paramsAsOf(pool, conditionId, asOf);
@@ -475,23 +495,93 @@ export async function loadMarketLeg(
     return null;
   }
   const feeRate = divRound(feeRateBps, 10_000n);
-  const book = await bookAsOf(pool, tokenId, asOf);
+  const book = await bookAsOf(pool, ref.tokenId, asOf);
   if (book === null) {
     return null;
   }
   const reference = book.sourceTs ?? book.receivedAt;
-  if (asOf.getTime() - reference.getTime() > config.graph.maxBookAgeMs) {
+  const ageMs = asOf.getTime() - reference.getTime();
+  if (ageMs < 0 || ageMs > config.graph.maxBookAgeMs) {
     return null;
   }
   return {
-    conditionId,
-    tokenId,
+    ...ref,
     books: {
       bids: toScaledLevels(book.bids),
       asks: toScaledLevels(book.asks),
     },
     feeRate,
   };
+}
+
+async function closeInactiveViolations(
+  pool: ResolutionPool,
+  activeKeys: ReadonlySet<string>,
+  asOf: Date,
+): Promise<number> {
+  const result = await pool.query(
+    `UPDATE graph_violations
+        SET ended_at = $2,
+            details_json = details_json ||
+              jsonb_build_object(
+                'half_life_s',
+                GREATEST(EXTRACT(EPOCH FROM ($2 - started_at)), 0)::bigint,
+                'close_reason', 'edge_inactive'
+              )
+      WHERE ended_at IS NULL
+        AND NOT (edge_key = ANY($1::text[]))`,
+    [[...activeKeys], asOf],
+  );
+  return result.rowCount;
+}
+
+/** Resolve the affirmative token without requiring params or book liquidity. */
+export async function loadMarketRef(
+  pool: ResolutionPool,
+  conditionId: string,
+  asOf: Date,
+): Promise<MarketRef | null> {
+  const market = await pool.query<Record<string, unknown>>(
+    `SELECT metadata_version_id, clob_token_ids, affirmative_token_id
+       FROM polymarket_market_metadata_versions
+      WHERE condition_id = $1
+        AND valid_from <= $2
+        AND (valid_to IS NULL OR valid_to > $2)
+      ORDER BY version DESC
+      LIMIT 1`,
+    [conditionId, asOf],
+  );
+  const row = market.rows[0];
+  if (
+    row?.metadata_version_id === null ||
+    row?.metadata_version_id === undefined
+  ) {
+    return null;
+  }
+  let tokens = row.clob_token_ids;
+  if (typeof tokens === "string") {
+    try {
+      tokens = JSON.parse(tokens) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  const tokenId = row.affirmative_token_id;
+  if (
+    typeof tokenId !== "string" ||
+    tokenId.trim().length === 0 ||
+    !Array.isArray(tokens) ||
+    tokens.length !== 2 ||
+    !tokens.every(
+      (candidate) =>
+        typeof candidate === "string" && candidate.trim().length > 0,
+    ) ||
+    new Set(tokens).size !== 2 ||
+    !tokens.includes(tokenId)
+  ) {
+    return null;
+  }
+  return { conditionId, tokenId };
 }
 
 async function closeViolation(

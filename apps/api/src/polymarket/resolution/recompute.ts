@@ -13,6 +13,7 @@ import {
   holdersAsOf,
   insertScore,
   loadScoreableMarkets,
+  marketsByIds,
   measuredCategoryStats,
   midCloseAt,
   ruleAsOf,
@@ -169,8 +170,8 @@ async function sampleAdjudicationPremium(
   maxBookAgeMs: number,
   persistSample = true,
 ): Promise<AdjudicationSampleResult> {
-  const tokenId = market.tokenIds[0];
-  if (tokenId === undefined) {
+  const tokenId = market.affirmativeTokenId;
+  if (tokenId === null) {
     return { premium: null };
   }
   const book = await bookAsOf(pool, tokenId, asOf);
@@ -228,8 +229,8 @@ async function detectSuspectJump(
   if (!market.inUniverse) {
     return false;
   }
-  const tokenId = market.tokenIds[0];
-  if (tokenId === undefined) {
+  const tokenId = market.affirmativeTokenId;
+  if (tokenId === null) {
     return false;
   }
   const nowMid = await midCloseAt(pool, tokenId, asOf);
@@ -276,10 +277,31 @@ export async function recomputeMarkets(
 ): Promise<RecomputeSummary> {
   const { pool } = deps;
   const all = await loadScoreableMarkets(pool, asOf);
-  const targets =
-    onlyConditionIds === null
-      ? all
-      : all.filter((market) => onlyConditionIds.includes(market.conditionId));
+  const known = new Set(all.map((market) => market.conditionId));
+  let targets: ScoreableMarket[];
+  if (onlyConditionIds === null) {
+    // Full sweep: also pick up markets whose CURRENT state still bites
+    // (anything above NONE) but that left the scoreable set — e.g. resolved
+    // after exiting the universe. Recomputing them is what releases the
+    // market AND its event group ("liberação só após settle + recomputação").
+    const stale = await pool.query<Record<string, unknown>>(
+      `SELECT condition_id FROM resolution_market_state
+        WHERE effective_action <> 'NONE'`,
+    );
+    const missing = stale.rows
+      .map((row) => String(row.condition_id))
+      .filter((conditionId) => !known.has(conditionId));
+    targets = [...all, ...(await marketsByIds(pool, missing, asOf))];
+  } else {
+    // Targeted recompute never filters a named market away: a terminal
+    // status event on an exited market MUST still reach recomputeOne.
+    const wanted = new Set(onlyConditionIds);
+    const inSet = all.filter((market) => wanted.has(market.conditionId));
+    const missing = onlyConditionIds.filter(
+      (conditionId) => !known.has(conditionId),
+    );
+    targets = [...inSet, ...(await marketsByIds(pool, missing, asOf))];
+  }
   if (targets.length === 0) {
     return { scored: 0, failed: 0 };
   }
@@ -313,11 +335,16 @@ export async function recomputeMarkets(
     await groupCouplingPass(
       pool,
       targets.map((market) => market.conditionId),
+      asOf,
     );
   } catch (error: unknown) {
     logJson("error", "GROUP_COUPLING_FAILED", {
       error_name: error instanceof Error ? error.name : "UnknownError",
     });
+    // Coupling updates effective_action, which is the broker-facing safety
+    // state. A partially applied pass must invalidate and roll back the whole
+    // runtime transaction rather than publishing a successful watermark.
+    throw error;
   }
   return { scored, failed };
 }
@@ -339,6 +366,8 @@ export interface ComposedForMarket {
   readonly rule: RuleAsOf | null;
   readonly disputeActive: boolean;
   readonly suspectJump: boolean;
+  /** The market settled (resolved/market_resolved) at or before the instant. */
+  readonly terminal: boolean;
 }
 
 /**
@@ -408,7 +437,7 @@ export async function composeForMarket(
     {
       conditionId: market.conditionId,
       category: market.category,
-      negRisk: market.negRisk,
+      negRisk: market.negRisk === true,
       precision,
       materialClarificationAgeMs: clarificationAge,
       umaBond: rule?.umaBond ?? null,
@@ -432,6 +461,7 @@ export async function composeForMarket(
     rule,
     disputeActive: status.status === "disputed",
     suspectJump,
+    terminal: status.status === "resolved",
   };
 }
 
@@ -443,20 +473,23 @@ async function recomputeOne(
   asOf: Date,
 ): Promise<void> {
   const { pool } = deps;
-  const { composed, rule, disputeActive, suspectJump } = await composeForMarket(
-    deps,
-    market,
-    statsByCategory,
-    asOf,
-    true,
-  );
+  const { composed, rule, disputeActive, suspectJump, terminal } =
+    await composeForMarket(deps, market, statsByCategory, asOf, true);
+
+  // A settled market has nothing left to protect: the RFC's release rule is
+  // settle + recompute. Overriding to NONE also stops the terminal market
+  // from freezing its event group through the worst-of coupling forever.
+  const action = terminal ? "NONE" : composed.action;
+  const justification = terminal
+    ? `resolvido (terminal); ${composed.justification}`
+    : composed.justification;
 
   const scoreId = await insertScore(pool, {
     conditionId: market.conditionId,
     scoreVersion: deps.scoreVersion,
     ruleVersion: rule?.ruleVersion ?? null,
     score: composed.scoreText,
-    action: composed.action,
+    action,
     resolutionBuffer: composed.bufferBase,
     p5050: composed.p5050Text,
     expectedLockupS: composed.expectedLockupS,
@@ -464,7 +497,7 @@ async function recomputeOne(
     priorKind: composed.priorKind,
     features: composed.features as unknown as Record<string, unknown>,
     hardFlags: composed.hardFlags,
-    justification: composed.justification,
+    justification,
     trigger,
     computedAt: asOf,
   });
@@ -474,9 +507,9 @@ async function recomputeOne(
     scoreId,
     score: composed.scoreText,
     scoreVersion: deps.scoreVersion,
-    action: composed.action,
+    action,
     // The group pass may raise this; a market's own action is the floor.
-    effectiveAction: composed.action,
+    effectiveAction: action,
     resolutionBuffer: composed.bufferBase,
     p5050: composed.p5050Text,
     expectedLockupS: composed.expectedLockupS,
@@ -486,7 +519,7 @@ async function recomputeOne(
     hardFlags: composed.hardFlags,
     eventIds: [],
     groupWorstScore: null,
-    justification: composed.justification,
+    justification,
     priorKind: composed.priorKind,
     computedAt: asOf,
   });
@@ -500,14 +533,18 @@ async function recomputeOne(
 export async function groupCouplingPass(
   pool: ResolutionPool,
   touchedConditionIds: readonly string[],
+  asOf: Date,
 ): Promise<void> {
   if (touchedConditionIds.length === 0) {
     return;
   }
-  const groups = await eventGroupsFor(pool, touchedConditionIds);
+  const groups = await eventGroupsFor(pool, touchedConditionIds, asOf);
   const byEvent = new Map<string, { members: readonly string[] }>();
   for (const entries of groups.values()) {
     for (const entry of entries) {
+      if (!entry.negRisk) {
+        continue;
+      }
       if (!byEvent.has(entry.eventId)) {
         byEvent.set(entry.eventId, { members: entry.members });
       }
@@ -517,14 +554,26 @@ export async function groupCouplingPass(
     if (group.members.length === 0) {
       continue;
     }
+    const expectedMembers = new Set(group.members);
+    if (expectedMembers.size !== group.members.length) {
+      throw new Error(`GROUP_COUPLING_MEMBERS_DUPLICATE:${eventId}`);
+    }
     const states = await pool.query<Record<string, unknown>>(
       `SELECT condition_id, action, score, event_ids_json
          FROM resolution_market_state
         WHERE condition_id = ANY($1)`,
       [[...group.members]],
     );
-    if (states.rows.length === 0) {
-      continue;
+    const stateIds = states.rows.map((row) =>
+      typeof row.condition_id === "string" ? row.condition_id : "",
+    );
+    const uniqueStateIds = new Set(stateIds);
+    if (
+      states.rows.length !== group.members.length ||
+      uniqueStateIds.size !== states.rows.length ||
+      stateIds.some((conditionId) => !expectedMembers.has(conditionId))
+    ) {
+      throw new Error(`GROUP_COUPLING_STATE_SET_MISMATCH:${eventId}`);
     }
     let worst: ResolutionAction = "NONE";
     let worstScore: string | null = null;

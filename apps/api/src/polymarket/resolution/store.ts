@@ -16,9 +16,67 @@ export interface ScoreableMarket {
   readonly conditionId: string;
   readonly question: string;
   readonly category: string | null;
-  readonly negRisk: boolean;
+  readonly negRisk: boolean | null;
   readonly tokenIds: readonly string[];
+  readonly affirmativeTokenId: string | null;
   readonly inUniverse: boolean;
+  /** Set only by the historical loader after every required input is proven. */
+  readonly historicalInputsAvailable?: boolean;
+}
+
+function requiredVersionedMarket(
+  row: Record<string, unknown>,
+  inUniverse: boolean,
+): ScoreableMarket {
+  const conditionId = asString(row.condition_id);
+  if (conditionId === null || conditionId.length === 0) {
+    throw new Error("RESOLUTION_MARKET_CONDITION_ID_MISSING");
+  }
+  if (
+    row.metadata_version_id === null ||
+    row.metadata_version_id === undefined
+  ) {
+    throw new Error(
+      `RESOLUTION_MARKET_METADATA_VERSION_MISSING:${conditionId}`,
+    );
+  }
+  const question = asString(row.question);
+  if (question === null || question.trim().length === 0) {
+    throw new Error(`RESOLUTION_MARKET_QUESTION_MISSING:${conditionId}`);
+  }
+  const tokenIds = parseTokenIds(row.clob_token_ids);
+  if (
+    tokenIds.length !== 2 ||
+    tokenIds.some((tokenId) => tokenId.trim().length === 0) ||
+    new Set(tokenIds).size !== 2
+  ) {
+    throw new Error(`RESOLUTION_MARKET_TOKEN_IDS_MISSING:${conditionId}`);
+  }
+  const affirmativeTokenId = asString(row.affirmative_token_id);
+  if (
+    affirmativeTokenId === null ||
+    affirmativeTokenId.trim().length === 0 ||
+    !tokenIds.includes(affirmativeTokenId)
+  ) {
+    throw new Error(
+      `RESOLUTION_MARKET_AFFIRMATIVE_TOKEN_MISSING:${conditionId}`,
+    );
+  }
+  if (row.param_version_id === null || row.param_version_id === undefined) {
+    throw new Error(`RESOLUTION_MARKET_PARAM_VERSION_MISSING:${conditionId}`);
+  }
+  if (typeof row.neg_risk !== "boolean") {
+    throw new Error(`RESOLUTION_MARKET_NEG_RISK_MISSING:${conditionId}`);
+  }
+  return {
+    conditionId,
+    question,
+    category: asString(row.category),
+    negRisk: row.neg_risk,
+    tokenIds,
+    affirmativeTokenId,
+    inUniverse,
+  };
 }
 
 /**
@@ -33,14 +91,7 @@ export async function loadScoreableMarkets(
   pendingLookbackMs: number = 7 * 24 * 3_600_000,
 ): Promise<ScoreableMarket[]> {
   const since = new Date(asOf.getTime() - pendingLookbackMs);
-  const result = await pool.query<{
-    condition_id: string;
-    question: string;
-    category: string | null;
-    neg_risk: boolean;
-    clob_token_ids: unknown;
-    in_universe: boolean;
-  }>(
+  const result = await pool.query<Record<string, unknown>>(
     `WITH membership AS (
        SELECT DISTINCT ON (condition_id) condition_id, action, at
          FROM polymarket_universe_log
@@ -60,21 +111,198 @@ export async function loadScoreableMarkets(
         WHERE m.action = 'enter'
            OR (m.action = 'exit' AND t.condition_id IS NULL AND m.at > $2)
      )
-     SELECT p.condition_id, p.question, p.category, p.neg_risk,
-            p.clob_token_ids, s.in_universe
+     SELECT s.condition_id, h.metadata_version_id, p.param_version_id,
+            h.question, h.category, p.neg_risk, h.clob_token_ids,
+            h.affirmative_token_id, s.in_universe
        FROM scoreable s
-       JOIN polymarket_markets p ON p.condition_id = s.condition_id
-      ORDER BY p.condition_id`,
+       LEFT JOIN LATERAL (
+         SELECT metadata.metadata_version_id, metadata.question,
+                metadata.category, metadata.clob_token_ids,
+                metadata.affirmative_token_id
+           FROM polymarket_market_metadata_versions metadata
+          WHERE metadata.condition_id = s.condition_id
+            AND metadata.valid_from <= $1
+            AND (metadata.valid_to IS NULL OR metadata.valid_to > $1)
+          ORDER BY metadata.version DESC
+          LIMIT 1
+       ) h ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT params.param_version_id, params.neg_risk
+           FROM polymarket_param_versions params
+          WHERE params.condition_id = s.condition_id
+            AND params.valid_from <= $1
+            AND (params.valid_to IS NULL OR params.valid_to > $1)
+          ORDER BY params.version DESC
+          LIMIT 1
+       ) p ON TRUE
+      ORDER BY s.condition_id`,
     [asOf, since],
   );
-  return result.rows.map((row) => ({
-    conditionId: row.condition_id,
-    question: row.question,
-    category: row.category,
-    negRisk: row.neg_risk === true,
-    tokenIds: parseTokenIds(row.clob_token_ids),
-    inUniverse: row.in_universe === true,
-  }));
+  return result.rows.map((row) =>
+    requiredVersionedMarket(row, row.in_universe === true),
+  );
+}
+
+/**
+ * Load specific markets by id regardless of universe membership or terminal
+ * state — the task-10 backtest re-scores RESOLVED markets, and a targeted
+ * recompute must be able to RELEASE a market that resolved after exiting the
+ * universe (its stale VETO/CIRCUIT_BREAKER would otherwise freeze its event
+ * group forever).
+ */
+export async function marketsByIds(
+  pool: ResolutionPool,
+  conditionIds: readonly string[],
+  asOf: Date,
+): Promise<ScoreableMarket[]> {
+  if (conditionIds.length === 0) {
+    return [];
+  }
+  const result = await pool.query<Record<string, unknown>>(
+    `WITH requested AS (
+       SELECT unnest($1::text[]) AS condition_id
+     )
+     SELECT r.condition_id, h.metadata_version_id, p.param_version_id,
+            h.question, h.category, p.neg_risk, h.clob_token_ids,
+            h.affirmative_token_id
+       FROM requested r
+       LEFT JOIN LATERAL (
+         SELECT metadata.metadata_version_id, metadata.question,
+                metadata.category, metadata.clob_token_ids,
+                metadata.affirmative_token_id
+           FROM polymarket_market_metadata_versions metadata
+          WHERE metadata.condition_id = r.condition_id
+            AND metadata.valid_from <= $2
+            AND (metadata.valid_to IS NULL OR metadata.valid_to > $2)
+          ORDER BY metadata.version DESC
+          LIMIT 1
+       ) h ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT params.param_version_id, params.neg_risk
+           FROM polymarket_param_versions params
+          WHERE params.condition_id = r.condition_id
+            AND params.valid_from <= $2
+            AND (params.valid_to IS NULL OR params.valid_to > $2)
+          ORDER BY params.version DESC
+          LIMIT 1
+       ) p ON TRUE
+      ORDER BY r.condition_id`,
+    [[...conditionIds], asOf],
+  );
+  return result.rows.map((row) => requiredVersionedMarket(row, false));
+}
+
+export interface HistoricalMarketRequest {
+  readonly conditionId: string;
+  readonly asOf: Date;
+}
+
+/**
+ * Reconstruct the metadata that was actually observable at each historical
+ * decision instant. Question/category/token mappings come exclusively from
+ * the prospective metadata history; the mutable registry is never projected
+ * backward. Membership and negRisk retain their own versioned sources.
+ */
+export async function historicalMarketsAsOf(
+  pool: ResolutionPool,
+  requests: readonly HistoricalMarketRequest[],
+): Promise<Map<string, ScoreableMarket>> {
+  const markets = new Map<string, ScoreableMarket>();
+  if (requests.length === 0) {
+    return markets;
+  }
+  if (
+    new Set(requests.map((request) => request.conditionId)).size !==
+    requests.length
+  ) {
+    throw new Error("HISTORICAL_MARKET_REQUEST_DUPLICATE_CONDITION");
+  }
+  const result = await pool.query<Record<string, unknown>>(
+    `WITH requested AS (
+       SELECT condition_id, decision_at
+         FROM unnest($1::text[], $2::timestamptz[])
+              AS request(condition_id, decision_at)
+     ),
+     membership AS (
+       SELECT DISTINCT ON (r.condition_id)
+              r.condition_id, u.action
+         FROM requested r
+         LEFT JOIN polymarket_universe_log u
+           ON u.condition_id = r.condition_id
+          AND u.at <= r.decision_at
+          AND u.action IN ('enter', 'exit')
+        ORDER BY r.condition_id, u.at DESC NULLS LAST,
+                 u.universe_log_id DESC NULLS LAST
+     ),
+     params AS (
+       SELECT DISTINCT ON (r.condition_id)
+              r.condition_id, p.neg_risk
+         FROM requested r
+         LEFT JOIN polymarket_param_versions p
+           ON p.condition_id = r.condition_id
+          AND p.valid_from <= r.decision_at
+          AND (p.valid_to IS NULL OR p.valid_to > r.decision_at)
+        ORDER BY r.condition_id, p.version DESC NULLS LAST
+     ),
+     metadata AS (
+       SELECT DISTINCT ON (r.condition_id)
+              r.condition_id, h.question, h.category, h.clob_token_ids,
+              h.affirmative_token_id
+         FROM requested r
+         LEFT JOIN polymarket_market_metadata_versions h
+           ON h.condition_id = r.condition_id
+          AND h.valid_from <= r.decision_at
+          AND (h.valid_to IS NULL OR h.valid_to > r.decision_at)
+        ORDER BY r.condition_id, h.version DESC NULLS LAST
+     )
+     SELECT r.condition_id, m.action, p.neg_risk,
+            h.question, h.category, h.affirmative_token_id,
+            COALESCE(h.clob_token_ids, '[]'::jsonb) AS token_ids
+       FROM requested r
+       LEFT JOIN membership m ON m.condition_id = r.condition_id
+       LEFT JOIN params p ON p.condition_id = r.condition_id
+       LEFT JOIN metadata h ON h.condition_id = r.condition_id
+      ORDER BY r.condition_id`,
+    [
+      requests.map((request) => request.conditionId),
+      requests.map((request) => request.asOf),
+    ],
+  );
+  for (const row of result.rows) {
+    const conditionId = asString(row.condition_id);
+    if (conditionId === null) {
+      continue;
+    }
+    const question = asString(row.question) ?? "";
+    const category = asString(row.category);
+    const negRisk = typeof row.neg_risk === "boolean" ? row.neg_risk : null;
+    const tokenIds = parseTokenIds(row.token_ids);
+    const affirmativeTokenId = asString(row.affirmative_token_id);
+    const affirmativeMappingAvailable =
+      tokenIds.length === 2 &&
+      tokenIds.every((tokenId) => tokenId.trim().length > 0) &&
+      new Set(tokenIds).size === 2 &&
+      affirmativeTokenId !== null &&
+      affirmativeTokenId.trim().length > 0 &&
+      tokenIds.includes(affirmativeTokenId);
+    markets.set(conditionId, {
+      conditionId,
+      question,
+      category,
+      negRisk,
+      tokenIds,
+      affirmativeTokenId: affirmativeMappingAvailable
+        ? affirmativeTokenId
+        : null,
+      inUniverse: row.action === "enter",
+      historicalInputsAvailable:
+        question.length > 0 &&
+        category !== null &&
+        negRisk !== null &&
+        affirmativeMappingAvailable,
+    });
+  }
+  return markets;
 }
 
 function parseTokenIds(value: unknown): string[] {
@@ -193,7 +421,11 @@ export interface StatusAsOf {
   readonly disputeCount: number;
 }
 
-/** Latest UMA status at the instant, from the immutable Gamma timeline. */
+/**
+ * UMA status at the instant. Settlement is monotonic: once any resolved or
+ * market_resolved event has been observed, a delayed non-terminal event can
+ * no longer reopen the market.
+ */
 export async function statusAsOf(
   pool: ResolutionPool,
   conditionId: string,
@@ -211,6 +443,7 @@ export async function statusAsOf(
   let status: UmaStatus = null;
   let statusAt: Date | null = null;
   let proposedAt: Date | null = null;
+  let terminalAt: Date | null = null;
   let disputeCount = 0;
   for (const row of result.rows) {
     const eventType = asString(row.event_type);
@@ -224,9 +457,19 @@ export async function statusAsOf(
     if (eventType === "disputed") {
       disputeCount += 1;
     }
+    if (
+      terminalAt === null &&
+      (eventType === "resolved" || eventType === "market_resolved")
+    ) {
+      terminalAt = at;
+    }
     status =
       eventType === "market_resolved" ? "resolved" : (eventType as UmaStatus);
     statusAt = at;
+  }
+  if (terminalAt !== null) {
+    status = "resolved";
+    statusAt = terminalAt;
   }
   return { status, statusAt, proposedAt, disputeCount };
 }
@@ -350,19 +593,25 @@ function levelPrice(
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** Mid closes of the 1-minute series around the jump window. */
+/**
+ * Mid close of the newest FULLY CLOSED 1-minute bucket at the instant. The
+ * bucket containing asOf aggregates data up to bucket_start+60s — reading it
+ * would leak up to 59s of post-asOf data, so only buckets whose window ended
+ * at or before asOf qualify.
+ */
 export async function midCloseAt(
   pool: ResolutionPool,
   tokenId: string,
   asOf: Date,
 ): Promise<number | null> {
+  const closedBefore = new Date(asOf.getTime() - 60_000);
   const result = await pool.query<Record<string, unknown>>(
     `SELECT mid_close
        FROM polymarket_series_1m
       WHERE token_id = $1 AND bucket_start <= $2
       ORDER BY bucket_start DESC
       LIMIT 1`,
-    [tokenId, asOf],
+    [tokenId, closedBefore],
   );
   const value = result.rows[0]?.mid_close;
   if (typeof value !== "string") {
@@ -382,20 +631,38 @@ export interface EventGroup {
 export async function eventGroupsFor(
   pool: ResolutionPool,
   conditionIds: readonly string[],
+  asOf: Date,
 ): Promise<Map<string, EventGroup[]>> {
   const groups = new Map<string, EventGroup[]>();
   if (conditionIds.length === 0) {
     return groups;
   }
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT em.condition_id, em.event_id, e.neg_risk,
-            (SELECT jsonb_agg(m2.condition_id ORDER BY m2.condition_id)
-               FROM polymarket_event_markets m2
-              WHERE m2.event_id = em.event_id) AS members
-       FROM polymarket_event_markets em
-       JOIN polymarket_events e ON e.event_id = em.event_id
-      WHERE em.condition_id = ANY($1)`,
-    [[...conditionIds]],
+    `WITH touched AS (
+       SELECT em.condition_id, em.event_id
+         FROM polymarket_event_markets em
+        WHERE em.condition_id = ANY($1)
+          AND em.received_at <= $2
+     ),
+     membership AS (
+       SELECT t.condition_id, t.event_id, m.condition_id AS member_condition_id,
+              (SELECT pv.neg_risk
+                 FROM polymarket_param_versions pv
+                WHERE pv.condition_id = m.condition_id
+                  AND pv.valid_from <= $2
+                  AND (pv.valid_to IS NULL OR pv.valid_to > $2)
+                ORDER BY pv.version DESC
+                LIMIT 1) AS neg_risk_as_of
+         FROM touched t
+         JOIN polymarket_event_markets m ON m.event_id = t.event_id
+                                      AND m.received_at <= $2
+     )
+     SELECT condition_id, event_id,
+            bool_and(neg_risk_as_of IS TRUE) AS neg_risk,
+            jsonb_agg(member_condition_id ORDER BY member_condition_id) AS members
+       FROM membership
+      GROUP BY condition_id, event_id`,
+    [[...conditionIds], asOf],
   );
   for (const row of result.rows) {
     const conditionId = asString(row.condition_id);
@@ -441,11 +708,12 @@ export async function measuredCategoryStats(
 ): Promise<MeasuredCategoryStats[]> {
   const result = await pool.query<Record<string, unknown>>(
     `WITH terminal AS (
-       SELECT DISTINCT ON (e.condition_id) e.condition_id, e.payload_json
+       SELECT DISTINCT ON (e.condition_id)
+              e.condition_id, e.received_at AS terminal_at, e.payload_json
          FROM polymarket_resolution_events e
         WHERE e.event_type IN ('resolved', 'market_resolved')
           AND e.received_at <= $1
-        ORDER BY e.condition_id, e.received_at DESC, e.resolution_event_id DESC
+        ORDER BY e.condition_id, e.received_at ASC, e.resolution_event_id ASC
      ),
      disputes AS (
        SELECT DISTINCT condition_id
@@ -461,7 +729,15 @@ export async function measuredCategoryStats(
             )::bigint AS p5050
        FROM terminal t
        LEFT JOIN disputes d ON d.condition_id = t.condition_id
-       LEFT JOIN polymarket_markets m ON m.condition_id = t.condition_id
+       LEFT JOIN LATERAL (
+         SELECT metadata.category
+           FROM polymarket_market_metadata_versions metadata
+          WHERE metadata.condition_id = t.condition_id
+            AND metadata.valid_from <= t.terminal_at
+            AND (metadata.valid_to IS NULL OR metadata.valid_to > t.terminal_at)
+          ORDER BY metadata.version DESC
+          LIMIT 1
+       ) m ON TRUE
       GROUP BY COALESCE(m.category, 'unknown')`,
     [asOf],
   );
@@ -471,6 +747,147 @@ export async function measuredCategoryStats(
     disputed: Number(row.disputed ?? 0),
     p5050: Number(row.p5050 ?? 0),
   }));
+}
+
+/**
+ * Historical priors for many decision instants in one database read. Terminal
+ * facts are loaded once up to the newest instant, then accumulated in memory
+ * in chronological order. Category comes from the immutable universe-entry
+ * observation rather than today's mutable market registry.
+ */
+export async function measuredCategoryStatsBatch(
+  pool: ResolutionPool,
+  asOfInstants: readonly Date[],
+): Promise<Map<number, MeasuredCategoryStats[]>> {
+  const snapshots = new Map<number, MeasuredCategoryStats[]>();
+  const instants = [...new Set(asOfInstants.map((asOf) => asOf.getTime()))]
+    .filter((instant) => Number.isFinite(instant))
+    .sort((a, b) => a - b);
+  const newest = instants.at(-1);
+  if (newest === undefined) {
+    return snapshots;
+  }
+
+  const result = await pool.query<Record<string, unknown>>(
+    `WITH terminal AS (
+       SELECT DISTINCT ON (e.condition_id)
+              e.condition_id, e.received_at AS terminal_at, e.payload_json
+         FROM polymarket_resolution_events e
+        WHERE e.event_type IN ('resolved', 'market_resolved')
+          AND e.received_at <= $1
+        ORDER BY e.condition_id, e.received_at ASC,
+                 e.resolution_event_id ASC
+     ),
+     disputes AS (
+       SELECT condition_id, MIN(received_at) AS disputed_at
+         FROM polymarket_resolution_events
+        WHERE event_type = 'disputed' AND received_at <= $1
+        GROUP BY condition_id
+     )
+     SELECT t.condition_id, t.terminal_at, d.disputed_at,
+            COALESCE(c.category, 'unknown') AS category,
+            COALESCE(
+              t.payload_json->'raw'->'outcomePrices' @> '["0.5"]'::jsonb
+              OR t.payload_json->'outcomePrices' @> '["0.5"]'::jsonb,
+              FALSE
+            ) AS is_p5050
+       FROM terminal t
+       LEFT JOIN disputes d ON d.condition_id = t.condition_id
+       LEFT JOIN LATERAL (
+         SELECT h.category
+           FROM polymarket_market_metadata_versions h
+          WHERE h.condition_id = t.condition_id
+            AND h.valid_from <= t.terminal_at
+            AND (h.valid_to IS NULL OR h.valid_to > t.terminal_at)
+          ORDER BY h.version DESC
+          LIMIT 1
+       ) c ON TRUE
+      ORDER BY t.terminal_at ASC, t.condition_id`,
+    [new Date(newest)],
+  );
+
+  interface HistoricalFact {
+    readonly category: string;
+    readonly terminalAt: number;
+    readonly disputedAt: number | null;
+    readonly p5050: boolean;
+  }
+  const facts: HistoricalFact[] = [];
+  for (const row of result.rows) {
+    const terminalAt = toDate(row.terminal_at)?.getTime();
+    if (terminalAt === undefined || !Number.isFinite(terminalAt)) {
+      continue;
+    }
+    const disputedAt = toDate(row.disputed_at)?.getTime() ?? null;
+    facts.push({
+      category: asString(row.category) ?? "unknown",
+      terminalAt,
+      disputedAt,
+      p5050: row.is_p5050 === true,
+    });
+  }
+  facts.sort((left, right) => left.terminalAt - right.terminalAt);
+  const disputeActivations = facts
+    .filter(
+      (fact): fact is HistoricalFact & { readonly disputedAt: number } =>
+        fact.disputedAt !== null,
+    )
+    .map((fact) => ({
+      category: fact.category,
+      at: Math.max(fact.terminalAt, fact.disputedAt),
+    }))
+    .sort((left, right) => left.at - right.at);
+
+  const totals = new Map<
+    string,
+    { resolved: number; disputed: number; p5050: number }
+  >();
+  const totalFor = (
+    category: string,
+  ): { resolved: number; disputed: number; p5050: number } => {
+    const current = totals.get(category);
+    if (current !== undefined) {
+      return current;
+    }
+    const created = { resolved: 0, disputed: 0, p5050: 0 };
+    totals.set(category, created);
+    return created;
+  };
+
+  let terminalIndex = 0;
+  let disputeIndex = 0;
+  for (const instant of instants) {
+    while (
+      terminalIndex < facts.length &&
+      (facts[terminalIndex]?.terminalAt ?? Number.POSITIVE_INFINITY) <= instant
+    ) {
+      const fact = facts[terminalIndex];
+      if (fact !== undefined) {
+        const total = totalFor(fact.category);
+        total.resolved += 1;
+        total.p5050 += fact.p5050 ? 1 : 0;
+      }
+      terminalIndex += 1;
+    }
+    while (
+      disputeIndex < disputeActivations.length &&
+      (disputeActivations[disputeIndex]?.at ?? Number.POSITIVE_INFINITY) <=
+        instant
+    ) {
+      const activation = disputeActivations[disputeIndex];
+      if (activation !== undefined) {
+        totalFor(activation.category).disputed += 1;
+      }
+      disputeIndex += 1;
+    }
+    snapshots.set(
+      instant,
+      [...totals.entries()]
+        .map(([category, total]) => ({ category, ...total }))
+        .sort((left, right) => left.category.localeCompare(right.category)),
+    );
+  }
+  return snapshots;
 }
 
 export interface ScoreRowInput {

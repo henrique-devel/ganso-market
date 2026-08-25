@@ -8,7 +8,9 @@
 // SIMULAÇÃO — SEM EXECUÇÃO REAL: reads recorded public data, writes only to
 // the paper_* tables.
 
-import type { SqlExecutor } from "../../database.js";
+import { randomUUID } from "node:crypto";
+
+import type { DatabasePool, SqlExecutor } from "../../database.js";
 import type { PriceLevel } from "../types.js";
 import {
   SCALE,
@@ -32,14 +34,19 @@ import {
   type LedgerEventType,
 } from "./ledger.js";
 import { validateOrder, type OrderDraft } from "./validator.js";
+import type { ResolutionAction } from "../resolution/types.js";
 
-export type PaperPool = { query: SqlExecutor["query"] };
+export type PaperPool = Pick<SqlExecutor, "query"> &
+  Partial<Pick<DatabasePool, "transaction">>;
 
 /** A book older than this at its use instant freezes the mark (D2). */
 export const MARK_MAX_BOOK_AGE_MS = 30_000;
 
 /** Recorder silence beyond this engages the kill switch (D4). */
 export const RECORDER_STALE_MS = 5 * 60_000;
+
+/** A competing tick may reclaim a broker claim only after this gap. */
+export const RESOLUTION_RISK_CLAIM_STALE_MS = 5_000;
 
 /** Default daily paper loss (USD) that engages the kill switch (D4). */
 export const DEFAULT_DAILY_LOSS_LIMIT_USD = "100";
@@ -203,13 +210,9 @@ export interface KillSwitchState {
   readonly frozenMarkets: readonly string[];
 }
 
-export async function loadKillSwitch(
-  pool: PaperPool,
-): Promise<KillSwitchState> {
-  const result = await pool.query(
-    "SELECT engaged, reason, frozen_markets_json FROM paper_kill_switch WHERE kill_switch_id = 1",
-  );
-  const row = result.rows[0];
+function parseKillSwitchState(
+  row: Record<string, unknown> | undefined,
+): KillSwitchState {
   const frozen = Array.isArray(row?.["frozen_markets_json"])
     ? (row["frozen_markets_json"] as unknown[]).filter(
         (item): item is string => typeof item === "string",
@@ -222,6 +225,26 @@ export async function loadKillSwitch(
   };
 }
 
+export async function loadKillSwitch(
+  pool: PaperPool,
+): Promise<KillSwitchState> {
+  const result = await pool.query(
+    "SELECT engaged, reason, frozen_markets_json FROM paper_kill_switch WHERE kill_switch_id = 1",
+  );
+  return parseKillSwitchState(result.rows[0]);
+}
+
+async function loadLockedKillSwitch(pool: PaperPool): Promise<KillSwitchState> {
+  const result = await pool.query(
+    "SELECT engaged, reason, frozen_markets_json FROM paper_kill_switch " +
+      "WHERE kill_switch_id = 1 FOR SHARE",
+  );
+  if (result.rows.length !== 1) {
+    throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
+  }
+  return parseKillSwitchState(result.rows[0]);
+}
+
 export async function engageKillSwitch(
   pool: PaperPool,
   reason: string,
@@ -229,42 +252,53 @@ export async function engageKillSwitch(
   deps: BrokerDeps = {},
 ): Promise<void> {
   const log = makeLog(deps.logSink);
-  await pool.query(
-    "UPDATE paper_kill_switch SET engaged = TRUE, reason = $1, engaged_at = $2, updated_at = $2 WHERE kill_switch_id = 1",
-    [reason, now],
-  );
-  await appendLedgerEvent(pool, {
-    idempotencyKey: `kill:${now.getTime()}`,
-    eventType: "kill_switch_engaged",
-    payload: { reason },
-    eventTs: now,
-  });
-  // Cancel every open order immediately: the switch is the hard stop.
-  const open = await pool.query(
-    "SELECT order_id, token_id, condition_id FROM paper_orders WHERE status = 'open'",
-  );
-  for (const row of open.rows) {
-    const orderId = asString(row["order_id"]);
-    if (orderId === null) {
-      continue;
+  if (!hasTransaction(pool)) {
+    throw new Error("PAPER_BROKER_TRANSACTION_UNAVAILABLE");
+  }
+  const ordersCanceled = await pool.transaction(async (tx: SqlExecutor) => {
+    // Lock order shared with acceptance/fill: kill -> orders. Holding the kill
+    // row until every audit and cancellation commits makes engage linearizable
+    // with both rearm and a concurrent acceptance.
+    const engaged = await tx.query(
+      "UPDATE paper_kill_switch SET engaged = TRUE, reason = $1, engaged_at = $2, updated_at = $2 WHERE kill_switch_id = 1",
+      [reason, now],
+    );
+    if (engaged.rowCount !== 1) {
+      throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
     }
-    await appendLedgerEvent(pool, {
-      idempotencyKey: `${orderId}:cancel_effective`,
-      eventType: "cancel_effective",
-      orderId,
-      tokenId: asString(row["token_id"]),
-      conditionId: asString(row["condition_id"]),
-      payload: { reason: "KILL_SWITCH" },
+    await appendLedgerEvent(tx, {
+      idempotencyKey: `kill:${now.getTime()}`,
+      eventType: "kill_switch_engaged",
+      payload: { reason },
       eventTs: now,
     });
-    await pool.query(
-      "UPDATE paper_orders SET status = 'canceled', cancel_requested_at = COALESCE(cancel_requested_at, $2), cancel_effective_at = $2, closed_at = $2 WHERE order_id = $1 AND status = 'open'",
-      [orderId, now],
+    const open = await tx.query(
+      "SELECT order_id, token_id, condition_id FROM paper_orders WHERE status = 'open' FOR UPDATE",
     );
-  }
+    for (const row of open.rows) {
+      const orderId = asString(row["order_id"]);
+      if (orderId === null) {
+        continue;
+      }
+      await appendLedgerEvent(tx, {
+        idempotencyKey: `${orderId}:cancel_effective`,
+        eventType: "cancel_effective",
+        orderId,
+        tokenId: asString(row["token_id"]),
+        conditionId: asString(row["condition_id"]),
+        payload: { reason: "KILL_SWITCH" },
+        eventTs: now,
+      });
+      await tx.query(
+        "UPDATE paper_orders SET status = 'canceled', cancel_requested_at = COALESCE(cancel_requested_at, $2), cancel_effective_at = $2, closed_at = $2 WHERE order_id = $1 AND status = 'open'",
+        [orderId, now],
+      );
+    }
+    return open.rows.length;
+  });
   log("error", "PAPER_KILL_SWITCH_ENGAGED", {
     reason,
-    orders_canceled: open.rows.length,
+    orders_canceled: ordersCanceled,
   });
 }
 
@@ -272,15 +306,23 @@ export async function rearmKillSwitch(
   pool: PaperPool,
   now: Date,
 ): Promise<void> {
-  await pool.query(
-    "UPDATE paper_kill_switch SET engaged = FALSE, reason = NULL, rearmed_at = $1, updated_at = $1 WHERE kill_switch_id = 1",
-    [now],
-  );
-  await appendLedgerEvent(pool, {
-    idempotencyKey: `rearm:${now.getTime()}`,
-    eventType: "kill_switch_rearmed",
-    payload: {},
-    eventTs: now,
+  if (!hasTransaction(pool)) {
+    throw new Error("PAPER_BROKER_TRANSACTION_UNAVAILABLE");
+  }
+  await pool.transaction(async (tx: SqlExecutor) => {
+    const rearmed = await tx.query(
+      "UPDATE paper_kill_switch SET engaged = FALSE, reason = NULL, rearmed_at = $1, updated_at = $1 WHERE kill_switch_id = 1",
+      [now],
+    );
+    if (rearmed.rowCount !== 1) {
+      throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
+    }
+    await appendLedgerEvent(tx, {
+      idempotencyKey: `rearm:${now.getTime()}`,
+      eventType: "kill_switch_rearmed",
+      payload: {},
+      eventTs: now,
+    });
   });
 }
 
@@ -326,6 +368,37 @@ export type AcceptOutcome =
       readonly reason: string;
     };
 
+class PaperAcceptanceRejected extends Error {
+  public readonly httpStatus: number;
+  public readonly reason: string;
+
+  public constructor(httpStatus: number, reason: string) {
+    super(reason);
+    this.name = "PaperAcceptanceRejected";
+    this.httpStatus = httpStatus;
+    this.reason = reason;
+  }
+}
+
+function isAuditedVetoOverride(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const override = value as Record<string, unknown>;
+  const score = override["score"];
+  const scoreVersion = override["score_version"];
+  const justification = override["justification"];
+  return (
+    override["action"] === "VETO" &&
+    typeof score === "string" &&
+    /^(?:0\.[0-9]{6}|1\.000000)$/.test(score) &&
+    typeof scoreVersion === "string" &&
+    /^[0-9]+\.[0-9]+\.[0-9]+$/.test(scoreVersion) &&
+    typeof justification === "string" &&
+    justification.trim().length > 0
+  );
+}
+
 export async function acceptPaperOrder(
   pool: PaperPool,
   input: AcceptInput,
@@ -357,7 +430,8 @@ export async function acceptPaperOrder(
   if (input.conditionId === null) {
     return { status: "rejected", httpStatus: 422, reason: "UNKNOWN_MARKET" };
   }
-  const params = await paramsAtOrBefore(pool, input.conditionId, now);
+  const conditionId = input.conditionId;
+  const params = await paramsAtOrBefore(pool, conditionId, now);
   if (
     params === null ||
     params.tickSize === null ||
@@ -383,6 +457,19 @@ export async function acceptPaperOrder(
     return { status: "rejected", httpStatus: 422, reason: validated.reason };
   }
   const order = validated.value;
+
+  if (
+    input.resolutionOverride !== undefined &&
+    input.resolutionOverride !== null &&
+    (input.source !== "manual" ||
+      !isAuditedVetoOverride(input.resolutionOverride))
+  ) {
+    return {
+      status: "rejected",
+      httpStatus: 422,
+      reason: "INVALID_RESOLUTION_OVERRIDE",
+    };
+  }
 
   // post-only: an order that would cross the recorded spread is rejected, as
   // the venue's post-only flag would do.
@@ -415,54 +502,174 @@ export async function acceptPaperOrder(
     }
   }
 
+  if (!hasTransaction(pool)) {
+    return {
+      status: "rejected",
+      httpStatus: 503,
+      reason: "PAPER_BROKER_TRANSACTION_UNAVAILABLE",
+    };
+  }
+
   const acceptedAt = new Date(now.getTime() + latencyMs);
-  await pool.query(
-    "INSERT INTO paper_orders (order_id, token_id, condition_id, side, order_type, " +
-      "limit_price, size, amount_usd, post_only, worst_price, expiration_s, " +
-      "policy_reason, policy_version, source, status, decided_at, accepted_at) " +
-      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16)",
-    [
-      input.orderId,
-      order.tokenId,
-      input.conditionId,
-      order.side,
-      order.orderType,
-      order.limitPrice,
-      order.size,
-      order.amountUsd,
-      order.postOnly,
-      order.worstPrice,
-      order.expirationS,
-      input.policyReason ?? null,
-      input.policyVersion ?? null,
-      input.source,
-      now,
-      acceptedAt,
-    ],
-  );
-  await appendLedgerEvent(pool, {
-    idempotencyKey: `${input.orderId}:accepted`,
-    eventType: "order_accepted",
-    orderId: input.orderId,
-    tokenId: order.tokenId,
-    conditionId: input.conditionId,
-    payload: {
-      side: order.side,
-      order_type: order.orderType,
-      limit_price: order.limitPrice,
-      size: order.size,
-      post_only: order.postOnly,
-      worst_price: order.worstPrice,
-      expiration_s: order.expirationS,
-      simulated_latency_ms: latencyMs,
-      source: input.source,
-      policy_reason: input.policyReason ?? null,
-      intent: input.intent ?? null,
-      override_veto: input.resolutionOverride ?? null,
-    },
-    eventTs: now,
-  });
-  return { status: "accepted", acceptedAt };
+  try {
+    return await pool.transaction(async (tx: SqlExecutor) => {
+      // One authoritative acceptance revision: journal -> runtime -> derived
+      // policy -> kill -> order/ledger. Source writers and the resolution
+      // runner cannot publish a conflicting revision before this commit.
+      await lockResolutionInputs(tx);
+      try {
+        if (await hasTerminalResolution(tx, conditionId)) {
+          throw new PaperAcceptanceRejected(409, "MARKET_ALREADY_RESOLVED");
+        }
+      } catch (error: unknown) {
+        if (error instanceof PaperAcceptanceRejected) {
+          throw error;
+        }
+        throw new PaperAcceptanceRejected(503, "RESOLUTION_STATE_UNAVAILABLE");
+      }
+      let runtime: ResolutionRuntimeSnapshot | null;
+      try {
+        runtime = await loadLockedResolutionRuntime(tx);
+      } catch {
+        throw new PaperAcceptanceRejected(503, "RESOLUTION_STATE_UNAVAILABLE");
+      }
+      if (runtime === null) {
+        throw new PaperAcceptanceRejected(503, "RESOLUTION_RUNTIME_MISSING");
+      }
+      const runtimeFailure = resolutionRuntimeFailure(
+        runtime,
+        runtime.generation,
+      );
+      if (runtimeFailure !== null) {
+        throw new PaperAcceptanceRejected(503, runtimeFailure.reason);
+      }
+      await lockResolutionPolicyTables(tx);
+      const policySubject: ResolutionPolicySubject = {
+        conditionId,
+        tokenId: order.tokenId,
+        source: input.source,
+        resolutionVetoOverride: isAuditedVetoOverride(input.resolutionOverride),
+      };
+      let policyResult: ResolutionOrderPolicyResult;
+      try {
+        policyResult = await loadResolutionOrderPolicy(tx, policySubject);
+      } catch {
+        throw new PaperAcceptanceRejected(503, "RESOLUTION_STATE_UNAVAILABLE");
+      }
+      if (!policyResult.ok) {
+        throw new PaperAcceptanceRejected(503, policyResult.failure.reason);
+      }
+      const policyDenial = resolutionAcceptancePolicyDenial(
+        policySubject,
+        policyResult.policy,
+      );
+      if (policyDenial !== null) {
+        throw new PaperAcceptanceRejected(409, policyDenial.reason);
+      }
+
+      const lockedKillSwitch = await loadLockedKillSwitch(tx);
+      if (lockedKillSwitch.engaged) {
+        throw new PaperAcceptanceRejected(409, "KILL_SWITCH_ENGAGED");
+      }
+      if (lockedKillSwitch.frozenMarkets.includes(conditionId)) {
+        throw new PaperAcceptanceRejected(409, "MARKET_FROZEN_DISPUTE");
+      }
+
+      const resolutionGeneration = runtime.generation;
+      await tx.query(
+        "INSERT INTO paper_orders (order_id, token_id, condition_id, side, order_type, " +
+          "limit_price, size, amount_usd, post_only, worst_price, expiration_s, " +
+          "policy_reason, policy_version, source, status, decided_at, accepted_at, resolution_generation) " +
+          "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17::uuid)",
+        [
+          input.orderId,
+          order.tokenId,
+          conditionId,
+          order.side,
+          order.orderType,
+          order.limitPrice,
+          order.size,
+          order.amountUsd,
+          order.postOnly,
+          order.worstPrice,
+          order.expirationS,
+          input.policyReason ?? null,
+          input.policyVersion ?? null,
+          input.source,
+          now,
+          acceptedAt,
+          resolutionGeneration,
+        ],
+      );
+      const acceptedEventInserted = await appendLedgerEvent(tx, {
+        idempotencyKey: `${input.orderId}:accepted`,
+        eventType: "order_accepted",
+        orderId: input.orderId,
+        tokenId: order.tokenId,
+        conditionId,
+        payload: {
+          side: order.side,
+          order_type: order.orderType,
+          limit_price: order.limitPrice,
+          size: order.size,
+          post_only: order.postOnly,
+          worst_price: order.worstPrice,
+          expiration_s: order.expirationS,
+          simulated_latency_ms: latencyMs,
+          source: input.source,
+          policy_reason: input.policyReason ?? null,
+          resolution_generation: resolutionGeneration,
+          intent: input.intent ?? null,
+          override_veto: input.resolutionOverride ?? null,
+        },
+        eventTs: now,
+      });
+      if (!acceptedEventInserted) {
+        throw new Error("PAPER_ACCEPTANCE_LEDGER_CONFLICT");
+      }
+      // Locks prevent source/policy mutation, but time still advances. Re-read
+      // clock_timestamp after persistence so equality with either expiry rolls
+      // back both order and immutable acceptance audit.
+      let finalRuntime: ResolutionRuntimeSnapshot | null;
+      try {
+        finalRuntime = await loadLockedResolutionRuntime(tx);
+      } catch {
+        throw new PaperAcceptanceRejected(503, "RESOLUTION_STATE_UNAVAILABLE");
+      }
+      const finalRuntimeFailure = resolutionRuntimeFailure(
+        finalRuntime,
+        resolutionGeneration,
+      );
+      if (finalRuntimeFailure !== null) {
+        throw new PaperAcceptanceRejected(503, finalRuntimeFailure.reason);
+      }
+      try {
+        policyResult = await loadResolutionOrderPolicy(tx, policySubject);
+      } catch {
+        throw new PaperAcceptanceRejected(503, "RESOLUTION_STATE_UNAVAILABLE");
+      }
+      if (!policyResult.ok) {
+        throw new PaperAcceptanceRejected(503, policyResult.failure.reason);
+      }
+      const finalPolicyDenial = resolutionAcceptancePolicyDenial(
+        policySubject,
+        policyResult.policy,
+      );
+      if (finalPolicyDenial !== null) {
+        throw new PaperAcceptanceRejected(409, finalPolicyDenial.reason);
+      }
+      return { status: "accepted", acceptedAt };
+    });
+  } catch (error: unknown) {
+    if (error instanceof PaperAcceptanceRejected) {
+      return {
+        status: "rejected",
+        httpStatus: error.httpStatus,
+        reason: error.reason,
+      };
+    }
+    throw error;
+  }
 }
 
 export type CancelOutcome =
@@ -533,32 +740,7 @@ async function refreshPosition(
   tokenId: string,
   conditionId: string | null,
 ): Promise<void> {
-  const result = await pool.query(
-    "SELECT idempotency_key, event_type, order_id, token_id, condition_id, payload_json, event_ts " +
-      "FROM paper_ledger_events WHERE token_id = $1 ORDER BY event_id",
-    [tokenId],
-  );
-  const events: LedgerEventRecord[] = [];
-  for (const row of result.rows) {
-    const key = asString(row["idempotency_key"]);
-    const type = asString(row["event_type"]);
-    const ts = toDate(row["event_ts"]);
-    if (key === null || type === null || ts === null) {
-      continue;
-    }
-    events.push({
-      idempotencyKey: key,
-      eventType: type as LedgerEventType,
-      orderId: asString(row["order_id"]),
-      tokenId,
-      conditionId: asString(row["condition_id"]),
-      payload:
-        typeof row["payload_json"] === "object" && row["payload_json"] !== null
-          ? (row["payload_json"] as Record<string, unknown>)
-          : {},
-      eventTs: ts,
-    });
-  }
+  const events = await loadTokenLedger(pool, tokenId);
   const state = replayLedger(events);
   const position = state.positions.get(tokenId);
   if (position === undefined) {
@@ -587,6 +769,55 @@ async function refreshPosition(
   );
 }
 
+async function loadTokenLedger(
+  pool: PaperPool,
+  tokenId: string,
+): Promise<LedgerEventRecord[]> {
+  const result = await pool.query(
+    "SELECT idempotency_key, event_type, order_id, token_id, condition_id, payload_json, event_ts " +
+      "FROM paper_ledger_events WHERE token_id = $1 ORDER BY event_id",
+    [tokenId],
+  );
+  const events: LedgerEventRecord[] = [];
+  for (const row of result.rows) {
+    const key = asString(row["idempotency_key"]);
+    const type = asString(row["event_type"]);
+    const ts = toDate(row["event_ts"]);
+    if (key === null || type === null || ts === null) {
+      continue;
+    }
+    events.push({
+      idempotencyKey: key,
+      eventType: type as LedgerEventType,
+      orderId: asString(row["order_id"]),
+      tokenId,
+      conditionId: asString(row["condition_id"]),
+      payload:
+        typeof row["payload_json"] === "object" && row["payload_json"] !== null
+          ? (row["payload_json"] as Record<string, unknown>)
+          : {},
+      eventTs: ts,
+    });
+  }
+  return events;
+}
+
+async function loadPositionShares(
+  pool: PaperPool,
+  tokenId: string,
+): Promise<bigint> {
+  const state = replayLedger(await loadTokenLedger(pool, tokenId));
+  const position = state.positions.get(tokenId);
+  if (position === undefined) {
+    return 0n;
+  }
+  const shares = parseScaled(position.shares);
+  if (shares === null) {
+    throw new Error("INVALID_LEDGER_POSITION_SHARES");
+  }
+  return shares;
+}
+
 // ---------------------------------------------------------------------------
 // The processing tick.
 
@@ -598,64 +829,140 @@ interface OpenOrderRow {
   readonly orderType: "GTC" | "GTD" | "FAK" | "FOK";
   readonly limitPrice: string;
   readonly size: string;
+  readonly filledSize: string;
   readonly postOnly: boolean;
   readonly worstPrice: string | null;
   readonly expirationS: number | null;
   readonly queueAhead: string | null;
   readonly acceptedAt: Date | null;
   readonly cancelRequestedAt: Date | null;
+  readonly resolutionGeneration: string | null;
+  readonly resolutionRiskCheckPending: boolean;
+  readonly resolutionRiskClaim: string | null;
+  readonly resolutionRiskClaimedAt: Date | null;
+  readonly source: "manual" | "intent";
+  readonly resolutionVetoOverride: boolean;
+}
+
+function parseOpenOrder(row: Record<string, unknown>): OpenOrderRow | null {
+  const orderId = asString(row["order_id"]);
+  const tokenId = asString(row["token_id"]);
+  const side = row["side"];
+  const orderType = row["order_type"];
+  const source = row["source"];
+  const limitPrice = asString(row["limit_price"]);
+  const size = asString(row["size"]);
+  if (
+    orderId === null ||
+    tokenId === null ||
+    (side !== "BUY" && side !== "SELL") ||
+    (orderType !== "GTC" &&
+      orderType !== "GTD" &&
+      orderType !== "FAK" &&
+      orderType !== "FOK") ||
+    (source !== "manual" && source !== "intent") ||
+    limitPrice === null ||
+    size === null
+  ) {
+    return null;
+  }
+  const expirationRaw = row["expiration_s"];
+  return {
+    orderId,
+    tokenId,
+    conditionId: asString(row["condition_id"]),
+    side,
+    orderType,
+    limitPrice,
+    size,
+    filledSize: asString(row["filled_size"]) ?? "0",
+    postOnly: row["post_only"] === true,
+    worstPrice: asString(row["worst_price"]),
+    expirationS:
+      typeof expirationRaw === "number"
+        ? expirationRaw
+        : typeof expirationRaw === "string" && /^\d+$/.test(expirationRaw)
+          ? Number(expirationRaw)
+          : null,
+    queueAhead: asString(row["queue_ahead"]),
+    acceptedAt: toDate(row["accepted_at"]),
+    cancelRequestedAt: toDate(row["cancel_requested_at"]),
+    resolutionGeneration: asString(row["resolution_generation"]),
+    resolutionRiskCheckPending: row["resolution_risk_check_pending"] === true,
+    resolutionRiskClaim: asString(row["resolution_risk_claim"]),
+    resolutionRiskClaimedAt: toDate(row["resolution_risk_claimed_at"]),
+    source,
+    resolutionVetoOverride: row["resolution_veto_override"] === true,
+  };
 }
 
 async function loadOpenOrders(pool: PaperPool): Promise<OpenOrderRow[]> {
   const result = await pool.query(
-    "SELECT order_id, token_id, condition_id, side, order_type, limit_price, size, " +
-      "post_only, worst_price, expiration_s, queue_ahead, accepted_at, cancel_requested_at " +
-      "FROM paper_orders WHERE status = 'open' ORDER BY created_at",
+    "SELECT o.order_id, o.token_id, o.condition_id, o.side, o.order_type, o.limit_price, o.size, o.filled_size, " +
+      "o.post_only, o.worst_price, o.expiration_s, o.queue_ahead, o.accepted_at, o.cancel_requested_at, " +
+      "o.resolution_generation, o.resolution_risk_check_pending, " +
+      "o.resolution_risk_claim, o.resolution_risk_claimed_at, o.source, " +
+      "EXISTS (SELECT 1 FROM paper_ledger_events accepted " +
+      "WHERE accepted.order_id = o.order_id AND accepted.event_type = 'order_accepted' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto') = 'object' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'action') = 'string' " +
+      "AND accepted.payload_json->'override_veto'->>'action' = 'VETO' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'score') = 'string' " +
+      "AND accepted.payload_json->'override_veto'->>'score' ~ '^(0\\.[0-9]{6}|1\\.000000)$' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'score_version') = 'string' " +
+      "AND accepted.payload_json->'override_veto'->>'score_version' ~ '^[0-9]+\\.[0-9]+\\.[0-9]+$' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'justification') = 'string' " +
+      "AND btrim(accepted.payload_json->'override_veto'->>'justification') <> '') AS resolution_veto_override " +
+      "FROM paper_orders o WHERE o.status = 'open' ORDER BY o.created_at",
   );
   const orders: OpenOrderRow[] = [];
   for (const row of result.rows) {
-    const orderId = asString(row["order_id"]);
-    const tokenId = asString(row["token_id"]);
-    const side = row["side"];
-    const orderType = row["order_type"];
-    const limitPrice = asString(row["limit_price"]);
-    const size = asString(row["size"]);
-    if (
-      orderId === null ||
-      tokenId === null ||
-      (side !== "BUY" && side !== "SELL") ||
-      (orderType !== "GTC" &&
-        orderType !== "GTD" &&
-        orderType !== "FAK" &&
-        orderType !== "FOK") ||
-      limitPrice === null ||
-      size === null
-    ) {
-      continue;
+    const parsed = parseOpenOrder(row);
+    if (parsed !== null) {
+      orders.push(parsed);
     }
-    const expirationRaw = row["expiration_s"];
-    orders.push({
-      orderId,
-      tokenId,
-      conditionId: asString(row["condition_id"]),
-      side,
-      orderType,
-      limitPrice,
-      size,
-      postOnly: row["post_only"] === true,
-      worstPrice: asString(row["worst_price"]),
-      expirationS:
-        typeof expirationRaw === "number"
-          ? expirationRaw
-          : typeof expirationRaw === "string" && /^\d+$/.test(expirationRaw)
-            ? Number(expirationRaw)
-            : null,
-      queueAhead: asString(row["queue_ahead"]),
-      acceptedAt: toDate(row["accepted_at"]),
-      cancelRequestedAt: toDate(row["cancel_requested_at"]),
-    });
   }
   return orders;
+}
+
+async function loadLockedOpenOrder(
+  pool: PaperPool,
+  orderId: string,
+): Promise<OpenOrderRow | null> {
+  const result = await pool.query(
+    "SELECT o.order_id, o.token_id, o.condition_id, o.side, o.order_type, o.limit_price, o.size, o.filled_size, " +
+      "o.post_only, o.worst_price, o.expiration_s, o.queue_ahead, o.accepted_at, o.cancel_requested_at, " +
+      "o.resolution_generation, o.resolution_risk_check_pending, " +
+      "o.resolution_risk_claim, o.resolution_risk_claimed_at, o.source, " +
+      "EXISTS (SELECT 1 FROM paper_ledger_events accepted " +
+      "WHERE accepted.order_id = o.order_id AND accepted.event_type = 'order_accepted' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto') = 'object' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'action') = 'string' " +
+      "AND accepted.payload_json->'override_veto'->>'action' = 'VETO' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'score') = 'string' " +
+      "AND accepted.payload_json->'override_veto'->>'score' ~ '^(0\\.[0-9]{6}|1\\.000000)$' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'score_version') = 'string' " +
+      "AND accepted.payload_json->'override_veto'->>'score_version' ~ '^[0-9]+\\.[0-9]+\\.[0-9]+$' " +
+      "AND jsonb_typeof(accepted.payload_json->'override_veto'->'justification') = 'string' " +
+      "AND btrim(accepted.payload_json->'override_veto'->>'justification') <> '') AS resolution_veto_override " +
+      "FROM paper_orders o WHERE o.order_id = $1 AND o.status = 'open' FOR UPDATE OF o",
+    [orderId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : parseOpenOrder(row);
+}
+
+function exposureReductionCapacity(
+  positionShares: bigint,
+  side: "BUY" | "SELL",
+): bigint {
+  if (positionShares > 0n && side === "SELL") {
+    return positionShares;
+  }
+  if (positionShares < 0n && side === "BUY") {
+    return -positionShares;
+  }
+  return 0n;
 }
 
 /** Sum of visible size resting at exactly `price` on the order's own side. */
@@ -723,6 +1030,22 @@ async function tradesAtLevel(
   return trades;
 }
 
+async function persistedPassiveFillKeys(
+  pool: PaperPool,
+  orderId: string,
+): Promise<Set<string>> {
+  const result = await pool.query(
+    "SELECT idempotency_key FROM paper_ledger_events " +
+      "WHERE order_id = $1 AND event_type = 'fill'",
+    [orderId],
+  );
+  return new Set(
+    result.rows
+      .map((row) => asString(row["idempotency_key"]))
+      .filter((key): key is string => key !== null),
+  );
+}
+
 async function closeOrder(
   pool: PaperPool,
   orderId: string,
@@ -731,9 +1054,570 @@ async function closeOrder(
   at: Date,
 ): Promise<void> {
   await pool.query(
-    "UPDATE paper_orders SET status = $2, filled_size = $3, closed_at = $4 WHERE order_id = $1 AND status = 'open'",
+    "UPDATE paper_orders SET status = $2, filled_size = $3, closed_at = $4, " +
+      "resolution_risk_check_pending = FALSE, resolution_risk_claim = NULL, " +
+      "resolution_risk_claimed_at = NULL WHERE order_id = $1 AND status = 'open'",
     [orderId, status, filledSize, at],
   );
+}
+
+async function cancelForResolutionRisk(
+  pool: PaperPool,
+  order: OpenOrderRow,
+  reason: string,
+  at: Date,
+  details: Readonly<Record<string, unknown>> = {},
+): Promise<void> {
+  await pool.query(
+    "UPDATE paper_orders SET resolution_cancel_reason = $2, " +
+      "resolution_cancel_details_json = $3::jsonb " +
+      "WHERE order_id = $1 AND status = 'open'",
+    [order.orderId, reason, JSON.stringify(details)],
+  );
+  await appendLedgerEvent(pool, {
+    idempotencyKey: `${order.orderId}:resolution_circuit_breaker`,
+    eventType: "cancel_effective",
+    orderId: order.orderId,
+    tokenId: order.tokenId,
+    conditionId: order.conditionId,
+    payload: { reason, side: order.side, ...details },
+    eventTs: at,
+  });
+  await closeOrder(pool, order.orderId, "canceled", order.filledSize, at);
+}
+
+interface ResolutionRuntimeSnapshot {
+  readonly generation: string;
+  readonly ready: boolean;
+  readonly stoppedAt: Date | null;
+  readonly leaseExpiresAt: Date | null;
+  readonly graphEvaluatedAt: Date | null;
+  readonly graphValidUntil: Date | null;
+  readonly checkedAt: Date;
+  readonly processedEventId: bigint;
+  readonly processedRuleVersionId: bigint;
+  readonly processedInputChangeId: bigint;
+  readonly eventHead: bigint;
+  readonly ruleHead: bigint;
+  readonly inputHead: bigint;
+}
+
+class ResolutionRiskCheckError extends Error {
+  public readonly cancellationReason: string;
+  public readonly logReason: string;
+
+  public constructor(
+    cancellationReason: string,
+    logReason: string,
+    cause: unknown,
+  ) {
+    super(
+      cause instanceof Error ? cause.message : "resolution risk check failed",
+    );
+    this.name = "ResolutionRiskCheckError";
+    this.cancellationReason = cancellationReason;
+    this.logReason = logReason;
+  }
+}
+
+interface ResolutionOrderPolicy {
+  readonly effectiveAction: ResolutionAction;
+  readonly sanityVetoActive: boolean;
+}
+
+interface ResolutionPolicySubject {
+  readonly conditionId: string | null;
+  readonly tokenId: string;
+  readonly source: "manual" | "intent";
+  readonly resolutionVetoOverride: boolean;
+}
+
+interface ResolutionOrderPolicyFailure {
+  readonly reason: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+type ResolutionOrderPolicyResult =
+  | { readonly ok: true; readonly policy: ResolutionOrderPolicy }
+  | { readonly ok: false; readonly failure: ResolutionOrderPolicyFailure };
+
+async function loadResolutionOrderPolicy(
+  pool: PaperPool,
+  order: ResolutionPolicySubject,
+): Promise<ResolutionOrderPolicyResult> {
+  if (order.conditionId === null) {
+    return {
+      ok: false,
+      failure: {
+        reason: "RESOLUTION_MARKET_STATE_MISSING",
+        details: { condition_id: null },
+      },
+    };
+  }
+  let state;
+  try {
+    state = await pool.query(
+      `SELECT effective_action FROM resolution_market_state
+        WHERE condition_id = $1`,
+      [order.conditionId],
+    );
+  } catch (error: unknown) {
+    throw new ResolutionRiskCheckError(
+      "RESOLUTION_STATE_UNAVAILABLE",
+      "RESOLUTION_STATE_READ_FAILED",
+      error,
+    );
+  }
+  const effectiveAction = state.rows[0]?.["effective_action"];
+  if (effectiveAction === undefined) {
+    return {
+      ok: false,
+      failure: {
+        reason: "RESOLUTION_MARKET_STATE_MISSING",
+        details: { condition_id: order.conditionId },
+      },
+    };
+  }
+  if (
+    effectiveAction !== "NONE" &&
+    effectiveAction !== "BUFFER" &&
+    effectiveAction !== "VETO" &&
+    effectiveAction !== "CIRCUIT_BREAKER"
+  ) {
+    return {
+      ok: false,
+      failure: {
+        reason: "RESOLUTION_MARKET_STATE_INVALID",
+        details: {
+          condition_id: order.conditionId,
+          effective_action:
+            typeof effectiveAction === "string" ? effectiveAction : null,
+        },
+      },
+    };
+  }
+
+  let sanityVetoActive = false;
+  if (order.source === "intent") {
+    let veto;
+    try {
+      veto = await pool.query(
+        `SELECT veto_id FROM graph_sanity_vetoes
+          WHERE token_id = $1 AND ended_at IS NULL
+          LIMIT 1`,
+        [order.tokenId],
+      );
+    } catch (error: unknown) {
+      throw new ResolutionRiskCheckError(
+        "RESOLUTION_SANITY_VETO_UNAVAILABLE",
+        "RESOLUTION_SANITY_VETO_READ_FAILED",
+        error,
+      );
+    }
+    sanityVetoActive = veto.rows.length > 0;
+  }
+  return {
+    ok: true,
+    policy: { effectiveAction, sanityVetoActive },
+  };
+}
+
+function resolutionOrderPolicyDenial(
+  order: ResolutionPolicySubject,
+  policy: ResolutionOrderPolicy,
+): ResolutionOrderPolicyFailure | null {
+  if (
+    policy.effectiveAction === "VETO" &&
+    (order.source === "intent" || !order.resolutionVetoOverride)
+  ) {
+    return {
+      reason: "RESOLUTION_VETO",
+      details: {
+        source: order.source,
+        override_veto_audited: order.resolutionVetoOverride,
+      },
+    };
+  }
+  if (order.source === "intent" && policy.sanityVetoActive) {
+    return {
+      reason: "SANITY_VETO_ACTIVE",
+      details: { source: order.source, token_id: order.tokenId },
+    };
+  }
+  return null;
+}
+
+function resolutionAcceptancePolicyDenial(
+  order: ResolutionPolicySubject,
+  policy: ResolutionOrderPolicy,
+): ResolutionOrderPolicyFailure | null {
+  if (policy.effectiveAction === "CIRCUIT_BREAKER") {
+    return {
+      reason: "RESOLUTION_CIRCUIT_BREAKER",
+      details: { source: order.source, condition_id: order.conditionId },
+    };
+  }
+  return resolutionOrderPolicyDenial(order, policy);
+}
+
+async function assertResolutionPolicyForFill(
+  pool: PaperPool,
+  order: OpenOrderRow,
+  fillSize: string,
+): Promise<void> {
+  const result = await loadResolutionOrderPolicy(pool, order);
+  if (!result.ok) {
+    throw new ResolutionRiskCheckError(
+      result.failure.reason,
+      "RESOLUTION_POLICY_RECHECK_FAILED",
+      new Error(result.failure.reason),
+    );
+  }
+  const denial = resolutionOrderPolicyDenial(order, result.policy);
+  if (denial !== null) {
+    throw new ResolutionRiskCheckError(
+      denial.reason,
+      "RESOLUTION_POLICY_RECHECK_FAILED",
+      new Error(denial.reason),
+    );
+  }
+  if (result.policy.effectiveAction !== "CIRCUIT_BREAKER") {
+    return;
+  }
+  const parsedFillSize = parseScaled(fillSize);
+  let positionShares: bigint;
+  try {
+    positionShares = await loadPositionShares(pool, order.tokenId);
+  } catch (error: unknown) {
+    throw new ResolutionRiskCheckError(
+      "RESOLUTION_POSITION_UNAVAILABLE",
+      "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER",
+      error,
+    );
+  }
+  const capacity = exposureReductionCapacity(positionShares, order.side);
+  if (
+    parsedFillSize === null ||
+    parsedFillSize <= 0n ||
+    capacity < parsedFillSize
+  ) {
+    throw new ResolutionRiskCheckError(
+      "RESOLUTION_CIRCUIT_BREAKER_EXPOSURE_INCREASE",
+      "RESOLUTION_POLICY_RECHECK_FAILED",
+      new Error("circuit breaker forbids this fill"),
+    );
+  }
+}
+
+async function assertResolutionPolicyStillAuthorizesOrder(
+  pool: PaperPool,
+  order: OpenOrderRow,
+): Promise<void> {
+  const result = await loadResolutionOrderPolicy(pool, order);
+  if (!result.ok) {
+    throw new ResolutionRiskCheckError(
+      result.failure.reason,
+      "RESOLUTION_POLICY_RECHECK_FAILED",
+      new Error(result.failure.reason),
+    );
+  }
+  const denial = resolutionOrderPolicyDenial(order, result.policy);
+  if (denial !== null) {
+    throw new ResolutionRiskCheckError(
+      denial.reason,
+      "RESOLUTION_POLICY_RECHECK_FAILED",
+      new Error(denial.reason),
+    );
+  }
+}
+
+function parseBigInt(value: unknown): bigint | null {
+  try {
+    return BigInt(String(value));
+  } catch {
+    return null;
+  }
+}
+
+async function loadLockedResolutionRuntime(
+  pool: PaperPool,
+): Promise<ResolutionRuntimeSnapshot | null> {
+  const result = await pool.query(
+    `SELECT r.generation, r.ready, r.stopped_at, r.lease_expires_at,
+            r.graph_evaluated_at, r.graph_valid_until,
+            clock_timestamp() AS checked_at,
+            r.processed_resolution_event_id,
+            r.processed_rule_version_id,
+            r.processed_input_change_id,
+            (SELECT COALESCE(MAX(resolution_event_id), 0)
+               FROM polymarket_resolution_events) AS event_head,
+            (SELECT COALESCE(MAX(rule_version_id), 0)
+               FROM polymarket_rule_versions) AS rule_head,
+            (SELECT COALESCE(MAX(input_change_id), 0)
+               FROM polymarket_resolution_input_changes) AS input_head
+       FROM resolution_runtime_state r
+      WHERE r.runtime_id = 1
+      FOR SHARE OF r`,
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const generation = asString(row["generation"]);
+  const checkedAt = toDate(row["checked_at"]);
+  const processedEventId = parseBigInt(row["processed_resolution_event_id"]);
+  const processedRuleVersionId = parseBigInt(row["processed_rule_version_id"]);
+  const processedInputChangeId = parseBigInt(row["processed_input_change_id"]);
+  const eventHead = parseBigInt(row["event_head"]);
+  const ruleHead = parseBigInt(row["rule_head"]);
+  const inputHead = parseBigInt(row["input_head"]);
+  if (
+    generation === null ||
+    checkedAt === null ||
+    processedEventId === null ||
+    processedRuleVersionId === null ||
+    processedInputChangeId === null ||
+    eventHead === null ||
+    ruleHead === null ||
+    inputHead === null
+  ) {
+    return null;
+  }
+  return {
+    generation,
+    ready: row["ready"] === true,
+    stoppedAt: toDate(row["stopped_at"]),
+    leaseExpiresAt: toDate(row["lease_expires_at"]),
+    graphEvaluatedAt: toDate(row["graph_evaluated_at"]),
+    graphValidUntil: toDate(row["graph_valid_until"]),
+    checkedAt,
+    processedEventId,
+    processedRuleVersionId,
+    processedInputChangeId,
+    eventHead,
+    ruleHead,
+    inputHead,
+  };
+}
+
+function resolutionRuntimeFailure(
+  runtime: ResolutionRuntimeSnapshot | null,
+  expectedGeneration: string | null,
+): {
+  readonly reason: string;
+  readonly details: Record<string, unknown>;
+} | null {
+  if (runtime === null) {
+    return { reason: "RESOLUTION_RUNTIME_MISSING", details: {} };
+  }
+  if (!runtime.ready) {
+    return {
+      reason: "RESOLUTION_RUNTIME_NOT_READY",
+      details: { generation: runtime.generation },
+    };
+  }
+  if (runtime.stoppedAt !== null) {
+    return {
+      reason: "RESOLUTION_RUNTIME_STOPPED",
+      details: {
+        generation: runtime.generation,
+        stopped_at: runtime.stoppedAt.toISOString(),
+      },
+    };
+  }
+  if (
+    runtime.leaseExpiresAt === null ||
+    runtime.leaseExpiresAt.getTime() <= runtime.checkedAt.getTime()
+  ) {
+    return {
+      reason: "RESOLUTION_RUNTIME_STALE",
+      details: {
+        generation: runtime.generation,
+        lease_expires_at: runtime.leaseExpiresAt?.toISOString() ?? null,
+        checked_at: runtime.checkedAt.toISOString(),
+      },
+    };
+  }
+  if (runtime.graphEvaluatedAt === null || runtime.graphValidUntil === null) {
+    return {
+      reason: "RESOLUTION_GRAPH_NOT_READY",
+      details: {
+        generation: runtime.generation,
+        graph_evaluated_at: runtime.graphEvaluatedAt?.toISOString() ?? null,
+        graph_valid_until: runtime.graphValidUntil?.toISOString() ?? null,
+      },
+    };
+  }
+  if (runtime.graphValidUntil.getTime() <= runtime.checkedAt.getTime()) {
+    return {
+      reason: "RESOLUTION_GRAPH_STALE",
+      details: {
+        generation: runtime.generation,
+        graph_evaluated_at: runtime.graphEvaluatedAt.toISOString(),
+        graph_valid_until: runtime.graphValidUntil.toISOString(),
+        checked_at: runtime.checkedAt.toISOString(),
+      },
+    };
+  }
+  if (
+    runtime.processedEventId < runtime.eventHead ||
+    runtime.processedRuleVersionId < runtime.ruleHead ||
+    runtime.processedInputChangeId < runtime.inputHead
+  ) {
+    return {
+      reason: "RESOLUTION_RUNTIME_LAGGING",
+      details: {
+        processed_event_id: runtime.processedEventId.toString(),
+        event_head: runtime.eventHead.toString(),
+        processed_rule_version_id: runtime.processedRuleVersionId.toString(),
+        rule_head: runtime.ruleHead.toString(),
+        processed_input_change_id: runtime.processedInputChangeId.toString(),
+        input_head: runtime.inputHead.toString(),
+      },
+    };
+  }
+  if (expectedGeneration !== runtime.generation) {
+    return {
+      reason: "RESOLUTION_RUNTIME_GENERATION_MISMATCH",
+      details: {
+        order_generation: expectedGeneration,
+        runtime_generation: runtime.generation,
+      },
+    };
+  }
+  return null;
+}
+
+function hasTransaction(
+  pool: PaperPool,
+): pool is PaperPool & Pick<DatabasePool, "transaction"> {
+  return typeof pool.transaction === "function";
+}
+
+async function claimResolutionRiskCheck(
+  pool: PaperPool,
+  orderId: string,
+  at: Date,
+): Promise<string | null> {
+  const claim = randomUUID();
+  const result = await pool.query(
+    `UPDATE paper_orders
+        SET resolution_risk_check_pending = TRUE,
+            resolution_risk_claim = $2::uuid,
+            resolution_risk_claimed_at = $3
+      WHERE order_id = $1 AND status = 'open'
+        AND resolution_risk_check_pending = FALSE
+      RETURNING order_id`,
+    [orderId, claim, at],
+  );
+  return result.rowCount === 1 ? claim : null;
+}
+
+async function clearResolutionRiskCheck(
+  pool: PaperPool,
+  orderId: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE paper_orders
+        SET resolution_risk_check_pending = FALSE,
+            resolution_risk_claim = NULL,
+            resolution_risk_claimed_at = NULL
+      WHERE order_id = $1 AND status = 'open'`,
+    [orderId],
+  );
+}
+
+async function lockResolutionInputs(pool: PaperPool): Promise<void> {
+  // SHARE conflicts with the ROW EXCLUSIVE lock taken by INSERT/UPDATE. The
+  // journal trigger cannot advance between the watermark check and fill. It
+  // also avoids a cross-source lock cycle with versioning writers: their
+  // source changes are invisible until the trigger can append and commit.
+  await pool.query(
+    "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE",
+  );
+}
+
+async function hasTerminalResolution(
+  pool: PaperPool,
+  conditionId: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT resolution_event_id
+       FROM polymarket_resolution_events
+      WHERE condition_id = $1
+        AND event_type IN ('resolved', 'market_resolved')
+      ORDER BY received_at DESC, resolution_event_id DESC
+      LIMIT 1`,
+    [conditionId],
+  );
+  return result.rows.length > 0;
+}
+
+async function lockResolutionPolicyTables(pool: PaperPool): Promise<void> {
+  // Acquired after the runtime row. This closes the last policy-to-fill window:
+  // neither recompute nor graph sanity may UPDATE/INSERT policy rows before the
+  // execution transaction commits.
+  await pool.query(
+    "LOCK TABLE resolution_market_state, graph_sanity_vetoes IN SHARE MODE",
+  );
+}
+
+async function revalidateResolutionRuntimeForFill(
+  pool: PaperPool,
+  expectedGeneration: string | null,
+): Promise<void> {
+  let runtime: ResolutionRuntimeSnapshot | null;
+  try {
+    runtime = await loadLockedResolutionRuntime(pool);
+  } catch (error: unknown) {
+    throw new ResolutionRiskCheckError(
+      "RESOLUTION_STATE_UNAVAILABLE",
+      "RESOLUTION_RUNTIME_RECHECK_FAILED",
+      error,
+    );
+  }
+  const failure = resolutionRuntimeFailure(runtime, expectedGeneration);
+  if (failure !== null) {
+    throw new ResolutionRiskCheckError(
+      failure.reason,
+      "RESOLUTION_RUNTIME_RECHECK_FAILED",
+      new Error(failure.reason),
+    );
+  }
+}
+
+async function lockToken(pool: PaperPool, tokenId: string): Promise<void> {
+  await pool.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    tokenId,
+  ]);
+}
+
+async function finalizePendingRiskCancellation(
+  pool: PaperPool & Pick<DatabasePool, "transaction">,
+  orderId: string,
+  at: Date,
+  ownedClaim: string | null,
+  reason: string,
+): Promise<boolean> {
+  return pool.transaction(async (tx: SqlExecutor) => {
+    const order = await loadLockedOpenOrder(tx, orderId);
+    if (order === null || !order.resolutionRiskCheckPending) {
+      return false;
+    }
+    const owned =
+      ownedClaim !== null && order.resolutionRiskClaim === ownedClaim;
+    const abandoned =
+      ownedClaim === null &&
+      order.resolutionRiskClaimedAt !== null &&
+      at.getTime() - order.resolutionRiskClaimedAt.getTime() >=
+        RESOLUTION_RISK_CLAIM_STALE_MS;
+    if (!owned && !abandoned) {
+      return false;
+    }
+    await lockToken(tx, order.tokenId);
+    await cancelForResolutionRisk(tx, order, reason, at);
+    return true;
+  });
 }
 
 /** One full processing tick. Idempotent: safe to re-run over the same data. */
@@ -744,202 +1628,490 @@ export async function brokerTick(
   const clock = deps.clock ?? ((): Date => new Date());
   const latencyMs = deps.latencyMs ?? DEFAULT_LATENCY_MS;
   const log = makeLog(deps.logSink);
-  const now = clock();
   const orders = await loadOpenOrders(pool);
+  if (!hasTransaction(pool)) {
+    // Executing without a single PostgreSQL transaction would reopen the
+    // runtime/head and position TOCTOU windows. Fail closed before claiming or
+    // touching an order; production always supplies DatabasePool.
+    log("error", "PAPER_BROKER_TRANSACTION_UNAVAILABLE", {
+      open_orders: orders.length,
+    });
+    return;
+  }
+  let ordersCanceled = 0;
 
-  for (const order of orders) {
-    try {
-      if (
-        order.acceptedAt === null ||
-        now.getTime() < order.acceptedAt.getTime()
-      ) {
-        continue;
-      }
-
-      // --- Marketable orders: execute against the book of accept + delay. ---
-      if (order.orderType === "FAK" || order.orderType === "FOK") {
-        const execTs = new Date(order.acceptedAt.getTime() + TAKER_DELAY_MS);
-        if (now.getTime() < execTs.getTime()) {
-          continue;
-        }
-        const book = await bookAtOrBefore(pool, order.tokenId, execTs);
-        if (book === null) {
-          await appendLedgerEvent(pool, {
-            idempotencyKey: `${order.orderId}:cancel_effective`,
-            eventType: "cancel_effective",
-            orderId: order.orderId,
-            tokenId: order.tokenId,
-            conditionId: order.conditionId,
-            payload: { reason: "NO_BOOK_AT_EXEC" },
-            eventTs: execTs,
-          });
-          await closeOrder(pool, order.orderId, "canceled", "0", execTs);
-          continue;
-        }
-        const params =
-          order.conditionId === null
-            ? null
-            : await paramsAtOrBefore(pool, order.conditionId, execTs);
-        const feeRate = feeRateFromBps(params?.takerFeeBps ?? null);
-        const opposing = order.side === "BUY" ? book.asks : book.bids;
-        const execution = executeTaker(
-          order.side,
-          order.size,
-          order.worstPrice ?? order.limitPrice,
-          opposing,
-          feeRate,
-          order.orderType === "FOK",
-        );
+  for (const snapshot of orders) {
+    // A tick may contain many orders. Lease validity is checked against a
+    // fresh instant per order so an early tick timestamp cannot outlive the
+    // resolution runtime while later orders are still being processed.
+    const now = clock();
+    const claim = await claimResolutionRiskCheck(pool, snapshot.orderId, now);
+    if (claim === null) {
+      try {
         if (
-          execution === null ||
-          execution.killed ||
-          execution.fills.length === 0
+          await finalizePendingRiskCancellation(
+            pool,
+            snapshot.orderId,
+            now,
+            null,
+            "RESOLUTION_RISK_CHECK_INCOMPLETE",
+          )
         ) {
-          await appendLedgerEvent(pool, {
-            idempotencyKey: `${order.orderId}:cancel_effective`,
-            eventType: "cancel_effective",
-            orderId: order.orderId,
-            tokenId: order.tokenId,
-            conditionId: order.conditionId,
-            payload: {
-              reason:
-                execution !== null && execution.killed
-                  ? "FOK_KILLED"
-                  : "NO_FILL_WITHIN_WORST",
-            },
-            eventTs: execTs,
-          });
-          await closeOrder(pool, order.orderId, "canceled", "0", execTs);
-          continue;
+          ordersCanceled += 1;
         }
-        let inserted = false;
-        for (const [index, fill] of execution.fills.entries()) {
-          const isNew = await appendLedgerEvent(pool, {
-            idempotencyKey: `${order.orderId}:taker:${index}`,
-            eventType: "fill",
-            orderId: order.orderId,
-            tokenId: order.tokenId,
-            conditionId: order.conditionId,
-            payload: {
-              side: order.side,
-              price: fill.price,
-              size: fill.size,
-              fee: fill.feeUsd,
-              taker: true,
-              fee_param_version_id: params?.paramVersionId ?? null,
-              tick_size: params?.tickSize ?? null,
-              book_slice: execution.consumedSlice,
-              exec_ts: execTs.toISOString(),
-            },
-            eventTs: execTs,
-          });
-          inserted = inserted || isNew;
-        }
-        const status =
-          parseScaled(execution.filledSize) !== null &&
-          (parseScaled(execution.filledSize) ?? 0n) > 0n
-            ? "filled"
-            : "canceled";
-        await closeOrder(
-          pool,
-          order.orderId,
-          status,
-          execution.filledSize,
-          execTs,
-        );
-        if (inserted) {
-          await refreshPosition(pool, order.tokenId, order.conditionId);
-        }
-        continue;
+      } catch (error: unknown) {
+        log("error", "PAPER_RISK_CANCEL_RETRY_FAILED", {
+          order_id: snapshot.orderId,
+          error_name: error instanceof Error ? error.name : "UnknownError",
+        });
       }
+      continue;
+    }
+    try {
+      await pool.transaction(async (tx: SqlExecutor) => {
+        // Freeze new resolution inputs, then freeze the runtime generation.
+        // Recorder INSERTs take ROW EXCLUSIVE and wait until this short
+        // execution transaction commits.
+        await lockResolutionInputs(tx);
+        let runtime: ResolutionRuntimeSnapshot | null;
+        try {
+          runtime = await loadLockedResolutionRuntime(tx);
+        } catch (error: unknown) {
+          throw new ResolutionRiskCheckError(
+            "RESOLUTION_STATE_UNAVAILABLE",
+            "RESOLUTION_STATE_READ_FAILED",
+            error,
+          );
+        }
+        await lockResolutionPolicyTables(tx);
+        // Keep the global order journal -> runtime -> policy -> kill -> order
+        // -> token. engage/freeze update this row before touching orders, so a
+        // committed hard stop is either observed here or waits until this
+        // transaction has fully completed.
+        const killSwitch = await loadLockedKillSwitch(tx);
+        const order = await loadLockedOpenOrder(tx, snapshot.orderId);
+        if (order === null) {
+          return;
+        }
+        await lockToken(tx, order.tokenId);
 
-      // --- Passive orders. ---
-      // Queue at accept: BEHIND all visible depth at the level (C2).
-      let queueAhead = order.queueAhead;
-      if (queueAhead === null) {
-        const book = await bookAtOrBefore(
-          pool,
+        if (order.conditionId !== null) {
+          let terminal: boolean;
+          try {
+            terminal = await hasTerminalResolution(tx, order.conditionId);
+          } catch (error: unknown) {
+            throw new ResolutionRiskCheckError(
+              "RESOLUTION_STATE_UNAVAILABLE",
+              "RESOLUTION_TERMINAL_READ_FAILED",
+              error,
+            );
+          }
+          if (terminal) {
+            await cancelForResolutionRisk(
+              tx,
+              order,
+              "MARKET_ALREADY_RESOLVED",
+              now,
+            );
+            ordersCanceled += 1;
+            return;
+          }
+        }
+
+        if (killSwitch.engaged) {
+          await cancelForResolutionRisk(tx, order, "KILL_SWITCH_ENGAGED", now, {
+            kill_switch_reason: killSwitch.reason,
+          });
+          ordersCanceled += 1;
+          return;
+        }
+        if (
+          order.conditionId !== null &&
+          killSwitch.frozenMarkets.includes(order.conditionId)
+        ) {
+          await cancelForResolutionRisk(
+            tx,
+            order,
+            "MARKET_FROZEN_DISPUTE",
+            now,
+          );
+          ordersCanceled += 1;
+          return;
+        }
+
+        const runtimeFailure = resolutionRuntimeFailure(
+          runtime,
+          order.resolutionGeneration,
+        );
+        if (runtimeFailure !== null) {
+          await cancelForResolutionRisk(
+            tx,
+            order,
+            runtimeFailure.reason,
+            now,
+            runtimeFailure.details,
+          );
+          ordersCanceled += 1;
+          return;
+        }
+
+        const policyResult = await loadResolutionOrderPolicy(tx, order);
+        if (!policyResult.ok) {
+          await cancelForResolutionRisk(
+            tx,
+            order,
+            policyResult.failure.reason,
+            now,
+            policyResult.failure.details,
+          );
+          ordersCanceled += 1;
+          return;
+        }
+        const policyDenial = resolutionOrderPolicyDenial(
+          order,
+          policyResult.policy,
+        );
+        if (policyDenial !== null) {
+          await cancelForResolutionRisk(
+            tx,
+            order,
+            policyDenial.reason,
+            now,
+            policyDenial.details,
+          );
+          ordersCanceled += 1;
+          return;
+        }
+        const underBreaker =
+          policyResult.policy.effectiveAction === "CIRCUIT_BREAKER";
+
+        // RFC-012 runtime invariant: a dispute never coexists with a position
+        // increase. The acceptance gate stops new orders; this tick also
+        // cancels already-open orders unless their whole remaining quantity
+        // strictly reduces the signed ledger position without crossing zero.
+        let reduceOnlyCap: bigint | null = null;
+        if (
+          order.acceptedAt === null ||
+          now.getTime() < order.acceptedAt.getTime()
+        ) {
+          await clearResolutionRiskCheck(tx, order.orderId);
+          return;
+        }
+        if (underBreaker) {
+          const size = parseScaled(order.size);
+          const alreadyFilled = parseScaled(order.filledSize);
+          const remaining =
+            size === null || alreadyFilled === null
+              ? null
+              : size - alreadyFilled;
+          let positionShares: bigint;
+          try {
+            positionShares = await loadPositionShares(tx, order.tokenId);
+          } catch (error: unknown) {
+            log("error", "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER", {
+              order_id: order.orderId,
+              token_id: order.tokenId,
+              error_name: error instanceof Error ? error.name : "UnknownError",
+              order_canceled: false,
+            });
+            throw new ResolutionRiskCheckError(
+              "RESOLUTION_POSITION_UNAVAILABLE",
+              "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER",
+              error,
+            );
+          }
+          const capacity = exposureReductionCapacity(
+            positionShares,
+            order.side,
+          );
+          const crossesZero = remaining !== null && remaining > capacity;
+          const canClipTaker =
+            order.orderType === "FAK" && capacity > 0n && crossesZero;
+          if (
+            remaining === null ||
+            remaining <= 0n ||
+            capacity === 0n ||
+            (crossesZero && !canClipTaker)
+          ) {
+            await cancelForResolutionRisk(
+              tx,
+              order,
+              "RESOLUTION_CIRCUIT_BREAKER_EXPOSURE_INCREASE",
+              now,
+              {
+                position_shares: formatScaled(positionShares, 6),
+                remaining_size:
+                  remaining === null ? null : formatScaled(remaining, 6),
+              },
+            );
+            ordersCanceled += 1;
+            return;
+          }
+          if (canClipTaker) {
+            reduceOnlyCap = capacity;
+          }
+        }
+
+        // --- Marketable orders: execute against the book of accept + delay. ---
+        if (order.orderType === "FAK" || order.orderType === "FOK") {
+          const execTs = new Date(order.acceptedAt.getTime() + TAKER_DELAY_MS);
+          if (now.getTime() < execTs.getTime()) {
+            await clearResolutionRiskCheck(tx, order.orderId);
+            return;
+          }
+          const book = await bookAtOrBefore(tx, order.tokenId, execTs);
+          if (book === null) {
+            await appendLedgerEvent(tx, {
+              idempotencyKey: `${order.orderId}:cancel_effective`,
+              eventType: "cancel_effective",
+              orderId: order.orderId,
+              tokenId: order.tokenId,
+              conditionId: order.conditionId,
+              payload: { reason: "NO_BOOK_AT_EXEC" },
+              eventTs: execTs,
+            });
+            await closeOrder(tx, order.orderId, "canceled", "0", execTs);
+            return;
+          }
+          const params =
+            order.conditionId === null
+              ? null
+              : await paramsAtOrBefore(tx, order.conditionId, execTs);
+          const feeRate = feeRateFromBps(params?.takerFeeBps ?? null);
+          const opposing = order.side === "BUY" ? book.asks : book.bids;
+          const executionSize =
+            reduceOnlyCap === null
+              ? order.size
+              : formatScaled(reduceOnlyCap, 6);
+          const execution = executeTaker(
+            order.side,
+            executionSize,
+            order.worstPrice ?? order.limitPrice,
+            opposing,
+            feeRate,
+            order.orderType === "FOK",
+          );
+          if (
+            execution === null ||
+            execution.killed ||
+            execution.fills.length === 0
+          ) {
+            await appendLedgerEvent(tx, {
+              idempotencyKey: `${order.orderId}:cancel_effective`,
+              eventType: "cancel_effective",
+              orderId: order.orderId,
+              tokenId: order.tokenId,
+              conditionId: order.conditionId,
+              payload: {
+                reason:
+                  execution !== null && execution.killed
+                    ? "FOK_KILLED"
+                    : "NO_FILL_WITHIN_WORST",
+              },
+              eventTs: execTs,
+            });
+            await closeOrder(tx, order.orderId, "canceled", "0", execTs);
+            return;
+          }
+          let inserted = false;
+          for (const [index, fill] of execution.fills.entries()) {
+            await revalidateResolutionRuntimeForFill(
+              tx,
+              order.resolutionGeneration,
+            );
+            await assertResolutionPolicyForFill(tx, order, fill.size);
+            const isNew = await appendLedgerEvent(tx, {
+              idempotencyKey: `${order.orderId}:taker:${index}`,
+              eventType: "fill",
+              orderId: order.orderId,
+              tokenId: order.tokenId,
+              conditionId: order.conditionId,
+              payload: {
+                side: order.side,
+                price: fill.price,
+                size: fill.size,
+                fee: fill.feeUsd,
+                taker: true,
+                fee_param_version_id: params?.paramVersionId ?? null,
+                tick_size: params?.tickSize ?? null,
+                book_slice: execution.consumedSlice,
+                exec_ts: execTs.toISOString(),
+              },
+              eventTs: execTs,
+            });
+            await revalidateResolutionRuntimeForFill(
+              tx,
+              order.resolutionGeneration,
+            );
+            await assertResolutionPolicyStillAuthorizesOrder(tx, order);
+            inserted = inserted || isNew;
+          }
+          if (reduceOnlyCap !== null) {
+            await appendLedgerEvent(tx, {
+              idempotencyKey: `${order.orderId}:resolution_circuit_breaker`,
+              eventType: "cancel_effective",
+              orderId: order.orderId,
+              tokenId: order.tokenId,
+              conditionId: order.conditionId,
+              payload: {
+                reason: "RESOLUTION_CIRCUIT_BREAKER_CROSS_ZERO_REMAINDER",
+                side: order.side,
+                max_reducible_size: executionSize,
+                filled_size: execution.filledSize,
+              },
+              eventTs: execTs,
+            });
+            ordersCanceled += 1;
+          }
+          const status =
+            reduceOnlyCap !== null
+              ? "canceled"
+              : parseScaled(execution.filledSize) !== null &&
+                  (parseScaled(execution.filledSize) ?? 0n) > 0n
+                ? "filled"
+                : "canceled";
+          await closeOrder(
+            tx,
+            order.orderId,
+            status,
+            execution.filledSize,
+            execTs,
+          );
+          if (inserted) {
+            await refreshPosition(tx, order.tokenId, order.conditionId);
+            await revalidateResolutionRuntimeForFill(
+              tx,
+              order.resolutionGeneration,
+            );
+          }
+          await assertResolutionPolicyStillAuthorizesOrder(tx, order);
+          return;
+        }
+
+        // --- Passive orders. ---
+        // Queue at accept: BEHIND all visible depth at the level (C2).
+        let queueAhead = order.queueAhead;
+        if (queueAhead === null) {
+          const book = await bookAtOrBefore(
+            tx,
+            order.tokenId,
+            order.acceptedAt,
+          );
+          queueAhead =
+            book === null
+              ? "0"
+              : visibleSizeAtLevel(book, order.side, order.limitPrice);
+          await tx.query(
+            "UPDATE paper_orders SET queue_ahead = $2 WHERE order_id = $1 AND queue_ahead IS NULL",
+            [order.orderId, queueAhead],
+          );
+        }
+
+        // Effective processing bound: cancels take latency to land (C3) and GTD
+        // expires one minute BEFORE the declared expiration (B2). Trades inside
+        // the bound still fill — realistic adverse selection.
+        const cancelEffective =
+          order.cancelRequestedAt === null
+            ? null
+            : new Date(order.cancelRequestedAt.getTime() + latencyMs);
+        const expiryEffective =
+          order.expirationS === null
+            ? null
+            : new Date((order.expirationS - 60) * 1_000);
+        let bound = now;
+        if (
+          cancelEffective !== null &&
+          cancelEffective.getTime() < bound.getTime()
+        ) {
+          bound = cancelEffective;
+        }
+        if (
+          expiryEffective !== null &&
+          expiryEffective.getTime() < bound.getTime()
+        ) {
+          bound = expiryEffective;
+        }
+
+        const trades = await tradesAtLevel(
+          tx,
           order.tokenId,
+          order.limitPrice,
           order.acceptedAt,
+          bound,
         );
-        queueAhead =
-          book === null
-            ? "0"
-            : visibleSizeAtLevel(book, order.side, order.limitPrice);
-        await pool.query(
-          "UPDATE paper_orders SET queue_ahead = $2 WHERE order_id = $1 AND queue_ahead IS NULL",
-          [order.orderId, queueAhead],
+        const persistedFills = await persistedPassiveFillKeys(
+          tx,
+          order.orderId,
         );
-      }
-
-      // Effective processing bound: cancels take latency to land (C3) and GTD
-      // expires one minute BEFORE the declared expiration (B2). Trades inside
-      // the bound still fill — realistic adverse selection.
-      const cancelEffective =
-        order.cancelRequestedAt === null
-          ? null
-          : new Date(order.cancelRequestedAt.getTime() + latencyMs);
-      const expiryEffective =
-        order.expirationS === null
-          ? null
-          : new Date((order.expirationS - 60) * 1_000);
-      let bound = now;
-      if (
-        cancelEffective !== null &&
-        cancelEffective.getTime() < bound.getTime()
-      ) {
-        bound = cancelEffective;
-      }
-      if (
-        expiryEffective !== null &&
-        expiryEffective.getTime() < bound.getTime()
-      ) {
-        bound = expiryEffective;
-      }
-
-      const trades = await tradesAtLevel(
-        pool,
-        order.tokenId,
-        order.limitPrice,
-        order.acceptedAt,
-        bound,
-      );
-      let cumulative = 0n;
-      let filled = 0n;
-      const size = parseScaled(order.size) ?? 0n;
-      let newEvents = false;
-      for (const trade of trades) {
-        const tradeSize = parseScaled(trade.size);
-        if (tradeSize === null || tradeSize <= 0n) {
-          continue;
-        }
-        const beforeTotal =
-          parseScaled(
-            passiveFilledFromVolume(
-              queueAhead,
-              order.size,
-              formatScaled(cumulative, 6),
-            ),
-          ) ?? 0n;
-        cumulative += tradeSize;
-        const afterTotal =
-          parseScaled(
-            passiveFilledFromVolume(
-              queueAhead,
-              order.size,
-              formatScaled(cumulative, 6),
-            ),
-          ) ?? 0n;
-        const delta = afterTotal - beforeTotal;
-        if (delta <= 0n) {
-          continue;
-        }
-        if (isFillDegraded(order.orderId, trade.tradeId)) {
-          // C6: a denied fill is a diagnostic event only — the liquidity is
-          // gone (someone else took it), the order keeps waiting.
-          const isNew = await appendLedgerEvent(pool, {
-            idempotencyKey: `${order.orderId}:deny:${trade.tradeId}`,
-            eventType: "fill_denied_degradation",
+        let cumulative = 0n;
+        let filled = 0n;
+        const size = parseScaled(order.size) ?? 0n;
+        let newEvents = false;
+        for (const trade of trades) {
+          const tradeSize = parseScaled(trade.size);
+          if (tradeSize === null || tradeSize <= 0n) {
+            continue;
+          }
+          const beforeTotal =
+            parseScaled(
+              passiveFilledFromVolume(
+                queueAhead,
+                order.size,
+                formatScaled(cumulative, 6),
+              ),
+            ) ?? 0n;
+          cumulative += tradeSize;
+          const afterTotal =
+            parseScaled(
+              passiveFilledFromVolume(
+                queueAhead,
+                order.size,
+                formatScaled(cumulative, 6),
+              ),
+            ) ?? 0n;
+          const delta = afterTotal - beforeTotal;
+          if (delta <= 0n) {
+            continue;
+          }
+          if (isFillDegraded(order.orderId, trade.tradeId)) {
+            // C6: a denied fill is a diagnostic event only — the liquidity is
+            // gone (someone else took it), the order keeps waiting.
+            const isNew = await appendLedgerEvent(tx, {
+              idempotencyKey: `${order.orderId}:deny:${trade.tradeId}`,
+              eventType: "fill_denied_degradation",
+              orderId: order.orderId,
+              tokenId: order.tokenId,
+              conditionId: order.conditionId,
+              payload: {
+                side: order.side,
+                price: order.limitPrice,
+                size: formatScaled(delta, 6),
+                trade_id: trade.tradeId,
+              },
+              eventTs: trade.ts,
+            });
+            newEvents = newEvents || isNew;
+            continue;
+          }
+          filled += delta;
+          const fillKey = `${order.orderId}:fill:${trade.tradeId}`;
+          if (persistedFills.has(fillKey)) {
+            // Historical volume still contributes to cumulative filled size,
+            // but its already-committed fill is not a new risk decision.
+            continue;
+          }
+          await revalidateResolutionRuntimeForFill(
+            tx,
+            order.resolutionGeneration,
+          );
+          await assertResolutionPolicyForFill(
+            tx,
+            order,
+            formatScaled(delta, 6),
+          );
+          const isNew = await appendLedgerEvent(tx, {
+            idempotencyKey: fillKey,
+            eventType: "fill",
             orderId: order.orderId,
             tokenId: order.tokenId,
             conditionId: order.conditionId,
@@ -947,96 +2119,127 @@ export async function brokerTick(
               side: order.side,
               price: order.limitPrice,
               size: formatScaled(delta, 6),
+              fee: "0.000000",
+              taker: false,
+              queue_ahead_at_accept: queueAhead,
               trade_id: trade.tradeId,
             },
             eventTs: trade.ts,
           });
+          await revalidateResolutionRuntimeForFill(
+            tx,
+            order.resolutionGeneration,
+          );
+          await assertResolutionPolicyStillAuthorizesOrder(tx, order);
           newEvents = newEvents || isNew;
-          continue;
+          if (isNew) {
+            persistedFills.add(fillKey);
+          }
+          if (filled >= size) {
+            break;
+          }
         }
-        filled += delta;
-        const isNew = await appendLedgerEvent(pool, {
-          idempotencyKey: `${order.orderId}:fill:${trade.tradeId}`,
-          eventType: "fill",
-          orderId: order.orderId,
-          tokenId: order.tokenId,
-          conditionId: order.conditionId,
-          payload: {
-            side: order.side,
-            price: order.limitPrice,
-            size: formatScaled(delta, 6),
-            fee: "0.000000",
-            taker: false,
-            queue_ahead_at_accept: queueAhead,
-            trade_id: trade.tradeId,
-          },
-          eventTs: trade.ts,
-        });
-        newEvents = newEvents || isNew;
-        if (filled >= size) {
-          break;
-        }
-      }
 
-      const filledStr = formatScaled(filled, 6);
-      if (filled >= size && size > 0n) {
-        // The filled portion is NOT cancelable (C2): full fill closes filled.
-        await closeOrder(pool, order.orderId, "filled", filledStr, bound);
-      } else if (
-        cancelEffective !== null &&
-        now.getTime() >= cancelEffective.getTime()
-      ) {
-        await appendLedgerEvent(pool, {
-          idempotencyKey: `${order.orderId}:cancel_effective`,
-          eventType: "cancel_effective",
-          orderId: order.orderId,
-          tokenId: order.tokenId,
-          conditionId: order.conditionId,
-          payload: { filled_before_cancel: filledStr },
-          eventTs: cancelEffective,
-        });
-        await closeOrder(
-          pool,
-          order.orderId,
-          "canceled",
-          filledStr,
-          cancelEffective,
-        );
-      } else if (
-        expiryEffective !== null &&
-        now.getTime() >= expiryEffective.getTime()
-      ) {
-        await appendLedgerEvent(pool, {
-          idempotencyKey: `${order.orderId}:expired`,
-          eventType: "expired",
-          orderId: order.orderId,
-          tokenId: order.tokenId,
-          conditionId: order.conditionId,
-          payload: { filled_before_expiry: filledStr },
-          eventTs: expiryEffective,
-        });
-        await closeOrder(
-          pool,
-          order.orderId,
-          "expired",
-          filledStr,
-          expiryEffective,
-        );
-      } else {
-        await pool.query(
-          "UPDATE paper_orders SET filled_size = $2 WHERE order_id = $1 AND status = 'open'",
-          [order.orderId, filledStr],
-        );
-      }
-      if (newEvents) {
-        await refreshPosition(pool, order.tokenId, order.conditionId);
-      }
+        const filledStr = formatScaled(filled, 6);
+        if (filled >= size && size > 0n) {
+          // The filled portion is NOT cancelable (C2): full fill closes filled.
+          await closeOrder(tx, order.orderId, "filled", filledStr, bound);
+        } else if (
+          cancelEffective !== null &&
+          now.getTime() >= cancelEffective.getTime()
+        ) {
+          await appendLedgerEvent(tx, {
+            idempotencyKey: `${order.orderId}:cancel_effective`,
+            eventType: "cancel_effective",
+            orderId: order.orderId,
+            tokenId: order.tokenId,
+            conditionId: order.conditionId,
+            payload: { filled_before_cancel: filledStr },
+            eventTs: cancelEffective,
+          });
+          await closeOrder(
+            tx,
+            order.orderId,
+            "canceled",
+            filledStr,
+            cancelEffective,
+          );
+        } else if (
+          expiryEffective !== null &&
+          now.getTime() >= expiryEffective.getTime()
+        ) {
+          await appendLedgerEvent(tx, {
+            idempotencyKey: `${order.orderId}:expired`,
+            eventType: "expired",
+            orderId: order.orderId,
+            tokenId: order.tokenId,
+            conditionId: order.conditionId,
+            payload: { filled_before_expiry: filledStr },
+            eventTs: expiryEffective,
+          });
+          await closeOrder(
+            tx,
+            order.orderId,
+            "expired",
+            filledStr,
+            expiryEffective,
+          );
+        } else {
+          await tx.query(
+            "UPDATE paper_orders SET filled_size = $2 WHERE order_id = $1 AND status = 'open'",
+            [order.orderId, filledStr],
+          );
+        }
+        if (newEvents) {
+          await refreshPosition(tx, order.tokenId, order.conditionId);
+        }
+        await clearResolutionRiskCheck(tx, order.orderId);
+        if (newEvents) {
+          await revalidateResolutionRuntimeForFill(
+            tx,
+            order.resolutionGeneration,
+          );
+        }
+        await assertResolutionPolicyStillAuthorizesOrder(tx, order);
+      });
     } catch (error: unknown) {
+      if (error instanceof ResolutionRiskCheckError) {
+        log("error", error.logReason, {
+          order_id: snapshot.orderId,
+          error_name: error.name,
+        });
+      }
       log("error", "PAPER_ORDER_TICK_FAILED", {
-        order_id: order.orderId,
+        order_id: snapshot.orderId,
         error_name: error instanceof Error ? error.name : "UnknownError",
       });
+      try {
+        if (
+          await finalizePendingRiskCancellation(
+            pool,
+            snapshot.orderId,
+            now,
+            claim,
+            error instanceof ResolutionRiskCheckError
+              ? error.cancellationReason
+              : "RESOLUTION_RISK_CHECK_INCOMPLETE",
+          )
+        ) {
+          ordersCanceled += 1;
+        }
+      } catch (cancelError: unknown) {
+        log("error", "PAPER_RISK_CANCEL_RETRY_FAILED", {
+          order_id: snapshot.orderId,
+          error_name:
+            cancelError instanceof Error ? cancelError.name : "UnknownError",
+        });
+      }
     }
+  }
+  if (ordersCanceled > 0) {
+    log("warn", "PAPER_ORDERS_CANCELED_RESOLUTION_RISK", {
+      orders_canceled: ordersCanceled,
+    });
   }
 }
 
@@ -1051,6 +2254,11 @@ export async function settlementTick(
   const clock = deps.clock ?? ((): Date => new Date());
   const now = clock();
 
+  if (!hasTransaction(pool)) {
+    log("error", "PAPER_SETTLEMENT_TRANSACTION_UNAVAILABLE");
+    return;
+  }
+
   const holdings = await pool.query(
     "SELECT p.token_id, p.condition_id FROM paper_positions p " +
       "WHERE p.shares::numeric <> 0 AND p.condition_id IS NOT NULL",
@@ -1062,68 +2270,128 @@ export async function settlementTick(
       continue;
     }
     try {
-      const resolution = await pool.query(
-        "SELECT resolution_event_id, payload_json FROM polymarket_resolution_events " +
-          "WHERE condition_id = $1 AND event_type IN ('resolved', 'market_resolved') " +
-          "ORDER BY received_at DESC LIMIT 1",
-        [conditionId],
+      const resolutionError = await pool.transaction(
+        async (tx: SqlExecutor): Promise<string | null> => {
+          // Freeze terminal input first. Lock every affected open order in a
+          // deterministic order before the token advisory lock, matching the
+          // broker's order -> token path and avoiding an inversion deadlock.
+          await lockResolutionInputs(tx);
+          const resolution = await tx.query(
+            "SELECT resolution_event_id, payload_json FROM polymarket_resolution_events " +
+              "WHERE condition_id = $1 AND event_type IN ('resolved', 'market_resolved') " +
+              "ORDER BY received_at DESC, resolution_event_id DESC LIMIT 1",
+            [conditionId],
+          );
+          const event = resolution.rows[0];
+          if (event === undefined) {
+            return null;
+          }
+          const openOrders = await tx.query(
+            `SELECT order_id, token_id, condition_id, filled_size
+               FROM paper_orders
+              WHERE status = 'open'
+                AND (token_id = $1 OR condition_id = $2)
+              ORDER BY order_id
+              FOR UPDATE`,
+            [tokenId, conditionId],
+          );
+          await lockToken(tx, tokenId);
+
+          const eventIdRaw = event["resolution_event_id"];
+          const resolutionEventId =
+            typeof eventIdRaw === "number"
+              ? String(eventIdRaw)
+              : (asString(eventIdRaw) ?? "0");
+          for (const openOrder of openOrders.rows) {
+            const orderId = asString(openOrder["order_id"]);
+            if (orderId === null) {
+              continue;
+            }
+            await appendLedgerEvent(tx, {
+              idempotencyKey: `${orderId}:market_resolved:${resolutionEventId}`,
+              eventType: "cancel_effective",
+              orderId,
+              tokenId: asString(openOrder["token_id"]),
+              conditionId: asString(openOrder["condition_id"]),
+              payload: {
+                reason: "MARKET_ALREADY_RESOLVED",
+                resolution_event_id: resolutionEventId,
+              },
+              eventTs: now,
+            });
+            await closeOrder(
+              tx,
+              orderId,
+              "canceled",
+              asString(openOrder["filled_size"]) ?? "0",
+              now,
+            );
+          }
+
+          // The advisory key protects fills and settlement. Re-read the
+          // canonical ledger under it: paper_positions is discovery/cache only.
+          const positionShares = await loadPositionShares(tx, tokenId);
+          if (positionShares === 0n) {
+            return null;
+          }
+          const payload =
+            typeof event["payload_json"] === "object" &&
+            event["payload_json"] !== null
+              ? (event["payload_json"] as Record<string, unknown>)
+              : {};
+          const pricesRaw = payload["outcomePrices"];
+          const prices = Array.isArray(pricesRaw)
+            ? pricesRaw.filter(
+                (item): item is string => typeof item === "string",
+              )
+            : [];
+          const market = await tx.query(
+            "SELECT clob_token_ids, neg_risk FROM polymarket_markets WHERE condition_id = $1",
+            [conditionId],
+          );
+          const tokenIdsRaw = market.rows[0]?.["clob_token_ids"];
+          const clobTokenIds = Array.isArray(tokenIdsRaw)
+            ? tokenIdsRaw.filter(
+                (item): item is string => typeof item === "string",
+              )
+            : [];
+          const negRisk = market.rows[0]?.["neg_risk"] === true;
+          const outcome = resolveOutcomeForToken(
+            tokenId,
+            clobTokenIds,
+            prices,
+            negRisk,
+          );
+          if (!outcome.ok) {
+            return outcome.reason;
+          }
+          const inserted = await appendLedgerEvent(tx, {
+            idempotencyKey: `resolution:${tokenId}:${resolutionEventId}`,
+            eventType: "resolution",
+            tokenId,
+            conditionId,
+            payload: {
+              outcome_price: outcome.value.outcomePrice,
+              resolution_event_id: resolutionEventId,
+            },
+            eventTs: now,
+          });
+          if (inserted) {
+            await refreshPosition(tx, tokenId, conditionId);
+          }
+          return null;
+        },
       );
-      const event = resolution.rows[0];
-      if (event === undefined) {
-        continue;
-      }
-      const payload =
-        typeof event["payload_json"] === "object" &&
-        event["payload_json"] !== null
-          ? (event["payload_json"] as Record<string, unknown>)
-          : {};
-      const pricesRaw = payload["outcomePrices"];
-      const prices = Array.isArray(pricesRaw)
-        ? pricesRaw.filter((item): item is string => typeof item === "string")
-        : [];
-      const market = await pool.query(
-        "SELECT clob_token_ids, neg_risk FROM polymarket_markets WHERE condition_id = $1",
-        [conditionId],
-      );
-      const tokenIdsRaw = market.rows[0]?.["clob_token_ids"];
-      const clobTokenIds = Array.isArray(tokenIdsRaw)
-        ? tokenIdsRaw.filter((item): item is string => typeof item === "string")
-        : [];
-      const negRisk = market.rows[0]?.["neg_risk"] === true;
-      const outcome = resolveOutcomeForToken(
-        tokenId,
-        clobTokenIds,
-        prices,
-        negRisk,
-      );
-      if (!outcome.ok) {
-        // Never a silent liquidation: freeze the market and scream.
+      if (resolutionError !== null) {
+        // Freeze after releasing the token advisory lock. Taking kill-switch
+        // UPDATE while holding token would invert the broker's kill -> token
+        // order and create a deadlock cycle.
         log("error", "PAPER_RESOLUTION_DATA_ERROR", {
           condition_id: conditionId,
           token_id: tokenId,
-          reason: outcome.reason,
+          reason: resolutionError,
         });
         await freezeMarket(pool, conditionId, now);
-        continue;
-      }
-      const eventIdRaw = event["resolution_event_id"];
-      const resolutionEventId =
-        typeof eventIdRaw === "number"
-          ? String(eventIdRaw)
-          : (asString(eventIdRaw) ?? "0");
-      const inserted = await appendLedgerEvent(pool, {
-        idempotencyKey: `resolution:${tokenId}:${resolutionEventId}`,
-        eventType: "resolution",
-        tokenId,
-        conditionId,
-        payload: {
-          outcome_price: outcome.value.outcomePrice,
-          resolution_event_id: resolutionEventId,
-        },
-        eventTs: now,
-      });
-      if (inserted) {
-        await refreshPosition(pool, tokenId, conditionId);
       }
     } catch (error: unknown) {
       log("error", "PAPER_SETTLEMENT_FAILED", {

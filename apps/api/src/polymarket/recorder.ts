@@ -4,6 +4,7 @@ import type { DatabasePool } from "../database.js";
 import { OrderBook } from "./book.js";
 import { isInUniverse, parseMarket } from "./gamma.js";
 import { parseMarketFrame } from "./messages.js";
+import { applyMarketMetadataObservation } from "./registry.js";
 import type {
   MarketMessage,
   MarketRegistryEntry,
@@ -226,18 +227,22 @@ export function sourceTsToDate(sourceTs: string | null): Date | null {
 export function createPostgresRecorderStore(pool: DatabasePool): RecorderStore {
   return {
     async upsertMarket(entry: MarketRegistryEntry): Promise<void> {
-      await pool.query(
-        `INSERT INTO polymarket_markets
-           (condition_id, question, slug, category, neg_risk, clob_token_ids, rules,
-            tick_size, min_order_size, rewards_min_size, rewards_max_spread, fee_type,
-            end_date_iso, active, closed, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,CURRENT_TIMESTAMP)
+      const observedAt = new Date();
+      await pool.transaction(async (tx) => {
+        await tx.query(
+          `INSERT INTO polymarket_markets
+           (condition_id, question, slug, category, neg_risk, clob_token_ids,
+            affirmative_token_id, rules, tick_size, min_order_size,
+            rewards_min_size, rewards_max_spread, fee_type, end_date_iso,
+            active, closed, received_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)
          ON CONFLICT (condition_id) DO UPDATE SET
            question = EXCLUDED.question,
            slug = EXCLUDED.slug,
            category = EXCLUDED.category,
            neg_risk = EXCLUDED.neg_risk,
            clob_token_ids = EXCLUDED.clob_token_ids,
+           affirmative_token_id = EXCLUDED.affirmative_token_id,
            rules = EXCLUDED.rules,
            rules_version = polymarket_markets.rules_version
              + CASE WHEN polymarket_markets.rules IS DISTINCT FROM EXCLUDED.rules THEN 1 ELSE 0 END,
@@ -249,25 +254,40 @@ export function createPostgresRecorderStore(pool: DatabasePool): RecorderStore {
            end_date_iso = EXCLUDED.end_date_iso,
            active = EXCLUDED.active,
            closed = EXCLUDED.closed,
-           updated_at = CURRENT_TIMESTAMP`,
-        [
-          entry.conditionId,
-          entry.question,
-          entry.slug,
-          entry.category,
-          entry.negRisk,
-          JSON.stringify(entry.clobTokenIds),
-          entry.rules,
-          entry.tickSize,
-          entry.minOrderSize,
-          entry.rewardsMinSize,
-          entry.rewardsMaxSpread,
-          entry.feeType,
-          entry.endDateIso,
-          entry.active,
-          entry.closed,
-        ],
-      );
+           updated_at = EXCLUDED.updated_at`,
+          [
+            entry.conditionId,
+            entry.question,
+            entry.slug,
+            entry.category,
+            entry.negRisk,
+            JSON.stringify(entry.clobTokenIds),
+            entry.affirmativeTokenId,
+            entry.rules,
+            entry.tickSize,
+            entry.minOrderSize,
+            entry.rewardsMinSize,
+            entry.rewardsMaxSpread,
+            entry.feeType,
+            entry.endDateIso,
+            entry.active,
+            entry.closed,
+            observedAt,
+          ],
+        );
+        await applyMarketMetadataObservation(
+          tx,
+          {
+            conditionId: entry.conditionId,
+            question: entry.question,
+            category: entry.category,
+            clobTokenIds: entry.clobTokenIds,
+            affirmativeTokenId: entry.affirmativeTokenId,
+            sourceTs: null,
+          },
+          observedAt,
+        );
+      });
     },
     async insertSnapshot(snapshot: BookSnapshot): Promise<void> {
       await pool.query(

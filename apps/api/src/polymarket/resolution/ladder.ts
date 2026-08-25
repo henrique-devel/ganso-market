@@ -109,8 +109,6 @@ export interface InferredImplication {
   readonly params: Readonly<Record<string, unknown>>;
 }
 
-const SAME_DATE_TOLERANCE_MS = 3_600_000;
-
 /**
  * Infer LADDER implications over a set of markets:
  *  - threshold ladder (same asset+direction+date): for "up" the higher
@@ -143,13 +141,15 @@ export function inferLadders(
       const sameDate =
         a.market.endDate !== null &&
         b.market.endDate !== null &&
-        Math.abs(a.market.endDate.getTime() - b.market.endDate.getTime()) <=
-          SAME_DATE_TOLERANCE_MS;
+        a.market.endDate.getTime() === b.market.endDate.getTime();
       const sameThreshold = a.key.threshold === b.key.threshold;
 
-      if (sameDate && !sameThreshold) {
+      if (sameDate && !sameThreshold && a.key.barrier === b.key.barrier) {
         // Threshold ladder. "up": P(>= high) <= P(>= low); "down": P(<= low)
         // <= P(<= high). The implying side is the strictly harder event.
+        // Mixed payoff forms never join: a barrier "reach $120k by X" does
+        // NOT imply a terminal "above $100k on X" — the path can touch and
+        // come back.
         const [harder, easier] =
           a.key.direction === "up"
             ? a.key.threshold > b.key.threshold

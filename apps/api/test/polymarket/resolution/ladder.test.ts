@@ -178,6 +178,39 @@ describe("inferLadders", () => {
     expect(edges).toHaveLength(0);
   });
 
+  it("does not mix barrier and terminal payoffs in a threshold ladder", () => {
+    const edges = inferLadders([
+      {
+        conditionId: "0xbarrier",
+        question: "Will Bitcoin reach $120,000 by August 25?",
+        endDate: END,
+      },
+      {
+        conditionId: "0xterminal",
+        question: "Will Bitcoin be above $100,000 on August 25?",
+        endDate: new Date(END),
+      },
+    ]);
+    expect(edges).toHaveLength(0);
+  });
+
+  it("does not join different thresholds whose exact deadlines differ", () => {
+    const edges = inferLadders([
+      {
+        conditionId: "0xhigh",
+        question: "Will Bitcoin be above $120,000 on August 25?",
+        endDate: END,
+      },
+      {
+        conditionId: "0xlow",
+        question: "Will Bitcoin be above $100,000 on August 25?",
+        endDate: new Date(END.getTime() + 30 * 60_000),
+      },
+    ]);
+
+    expect(edges).toHaveLength(0);
+  });
+
   it("a null endDate never joins a date ladder", () => {
     const edges = inferLadders([
       {

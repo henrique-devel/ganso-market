@@ -6,7 +6,11 @@
 // the report says so. No profit target anywhere: the metric is veto quality.
 
 import { composeForMarket, type RecomputeDeps } from "./recompute.js";
-import { loadScoreableMarkets, measuredCategoryStats } from "./store.js";
+import {
+  historicalMarketsAsOf,
+  measuredCategoryStats,
+  measuredCategoryStatsBatch,
+} from "./store.js";
 import type { ResolutionPool } from "./types.js";
 
 const Z_95 = 1.959964;
@@ -55,23 +59,36 @@ async function categoryReports(
   const timeline = await pool.query<Record<string, unknown>>(
     `WITH settled AS (
        SELECT DISTINCT ON (t.condition_id)
-              t.condition_id, t.result, t.occurred_at
+              t.condition_id, t.result, t.occurred_at AS terminal_at
          FROM resolution_uma_timeline t
-        WHERE t.state = 'settled' AND t.occurred_at <= $1
-        ORDER BY t.condition_id, t.occurred_at ASC
+        WHERE t.state = 'settled'
+          AND t.occurred_at <= $1
+          AND t.received_at <= $1
+        ORDER BY t.condition_id, t.occurred_at ASC,
+                 t.received_at ASC, t.timeline_id ASC
      ),
      proposed AS (
-       SELECT condition_id, MIN(occurred_at) AS proposed_at
-         FROM resolution_uma_timeline
-        WHERE state = 'proposed' AND occurred_at <= $1
-        GROUP BY condition_id
+       SELECT t.condition_id, MIN(t.occurred_at) AS proposed_at
+         FROM resolution_uma_timeline t
+        WHERE t.state = 'proposed'
+          AND t.occurred_at <= $1
+          AND t.received_at <= $1
+        GROUP BY t.condition_id
      )
-     SELECT COALESCE(m.category, 'unknown') AS category,
-            s.result,
-            EXTRACT(EPOCH FROM (s.occurred_at - p.proposed_at)) AS lockup_s
+     SELECT s.condition_id, m.metadata_version_id,
+            COALESCE(m.category, 'unknown') AS category, s.result,
+            EXTRACT(EPOCH FROM (s.terminal_at - p.proposed_at)) AS lockup_s
        FROM settled s
        LEFT JOIN proposed p ON p.condition_id = s.condition_id
-       LEFT JOIN polymarket_markets m ON m.condition_id = s.condition_id`,
+       LEFT JOIN LATERAL (
+         SELECT h.metadata_version_id, h.category
+           FROM polymarket_market_metadata_versions h
+          WHERE h.condition_id = s.condition_id
+            AND h.valid_from <= s.terminal_at
+            AND (h.valid_to IS NULL OR h.valid_to > s.terminal_at)
+          ORDER BY h.version DESC
+          LIMIT 1
+       ) m ON TRUE`,
     [asOf],
   );
   const byCategory = new Map<
@@ -79,6 +96,8 @@ async function categoryReports(
     { results: Record<string, number>; lockups: number[] }
   >();
   for (const row of timeline.rows) {
+    // Metadata history is prospective. A terminal observed before migration
+    // 0012 belongs to unknown; borrowing a later version would be look-ahead.
     const category = String(row.category ?? "unknown");
     const entry = byCategory.get(category) ?? { results: {}, lockups: [] };
     const result = typeof row.result === "string" ? row.result : "unknown";
@@ -126,6 +145,8 @@ export interface BacktestReport {
   readonly n_resolved: number;
   readonly n_scored: number;
   readonly n_skipped_no_proposal: number;
+  readonly n_skipped_no_historical_inputs: number;
+  readonly n_skipped_outside_universe: number;
   readonly disputed: number;
   readonly vetoed_disputed: number;
   readonly coverage: number | null;
@@ -179,28 +200,13 @@ export async function backtestVeto(
     [asOf, limit],
   );
 
-  const stats = await measuredCategoryStats(pool, asOf);
-  const statsByCategory = new Map(
-    stats.map((row) => [
-      row.category,
-      { resolved: row.resolved, disputed: row.disputed, p5050: row.p5050 },
-    ]),
-  );
-
-  // Markets that already left the recorder's scoreable window still count in
-  // n_resolved; only those we can identify get re-scored.
-  const markets = await loadScoreableMarkets(pool, asOf, 365 * 24 * 3_600_000);
-  const marketById = new Map(markets.map((m) => [m.conditionId, m]));
-
-  let scored = 0;
+  const candidates: Array<{
+    conditionId: string;
+    decisionInstant: Date;
+    wasDisputed: boolean;
+  }> = [];
   let skippedNoProposal = 0;
-  let disputed = 0;
-  let vetoedDisputed = 0;
-  let clean = 0;
-  let vetoedClean = 0;
-
   for (const row of resolved.rows) {
-    const conditionId = String(row.condition_id);
     const proposedAt =
       row.proposed_at instanceof Date
         ? row.proposed_at
@@ -211,17 +217,62 @@ export async function backtestVeto(
       skippedNoProposal += 1;
       continue;
     }
-    const market = marketById.get(conditionId);
-    if (market === undefined) {
-      skippedNoProposal += 1;
+    candidates.push({
+      conditionId: String(row.condition_id),
+      decisionInstant: new Date(proposedAt.getTime() - 60_000),
+      wasDisputed: row.was_disputed === true,
+    });
+  }
+
+  const marketById = await historicalMarketsAsOf(
+    pool,
+    candidates.map((candidate) => ({
+      conditionId: candidate.conditionId,
+      asOf: candidate.decisionInstant,
+    })),
+  );
+  const statsByInstant = await measuredCategoryStatsBatch(
+    pool,
+    candidates.map((candidate) => candidate.decisionInstant),
+  );
+
+  let scored = 0;
+  let skippedNoHistoricalInputs = 0;
+  let skippedOutsideUniverse = 0;
+  let disputed = 0;
+  let vetoedDisputed = 0;
+  let clean = 0;
+  let vetoedClean = 0;
+
+  for (const candidate of candidates) {
+    const market = marketById.get(candidate.conditionId);
+    if (market !== undefined && !market.inUniverse) {
+      skippedOutsideUniverse += 1;
       continue;
     }
-    const decisionInstant = new Date(proposedAt.getTime() - 60_000);
+    if (market?.historicalInputsAvailable !== true) {
+      skippedNoHistoricalInputs += 1;
+      continue;
+    }
+    // One batched fact load produced every as-of prior above. This market's
+    // own terminal/dispute events occur later, so they cannot enter its prior.
+    const statsThen =
+      statsByInstant.get(candidate.decisionInstant.getTime()) ?? [];
+    const statsByCategory = new Map(
+      statsThen.map((stat) => [
+        stat.category,
+        {
+          resolved: stat.resolved,
+          disputed: stat.disputed,
+          p5050: stat.p5050,
+        },
+      ]),
+    );
     const { composed } = await composeForMarket(
       deps,
       market,
       statsByCategory,
-      decisionInstant,
+      candidate.decisionInstant,
       false,
     );
     scored += 1;
@@ -229,7 +280,7 @@ export async function backtestVeto(
     // CIRCUIT_BREAKER at the instant would mean the dispute already started,
     // which is exactly what "antecedência mensurável" excludes.
     const vetoed = composed.action === "VETO";
-    if (row.was_disputed === true) {
+    if (candidate.wasDisputed) {
       disputed += 1;
       if (vetoed) {
         vetoedDisputed += 1;
@@ -246,6 +297,8 @@ export async function backtestVeto(
     n_resolved: resolved.rows.length,
     n_scored: scored,
     n_skipped_no_proposal: skippedNoProposal,
+    n_skipped_no_historical_inputs: skippedNoHistoricalInputs,
+    n_skipped_outside_universe: skippedOutsideUniverse,
     disputed,
     vetoed_disputed: vetoedDisputed,
     coverage: disputed > 0 ? vetoedDisputed / disputed : null,

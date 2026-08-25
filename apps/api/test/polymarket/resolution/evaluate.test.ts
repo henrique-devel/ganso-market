@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
 
+import type { QueryResult } from "../../../src/database.js";
 import {
   formatScaled,
   parseScaled,
 } from "../../../src/polymarket/fundamental/fixed.js";
+import { DEFAULT_RESOLUTION_CONFIG } from "../../../src/polymarket/resolution/config.js";
 import {
   evaluateEdge,
   groupArbWalk,
+  loadMarketLeg,
   pairArbWalk,
   toScaledLevels,
   type MarketLeg,
   type ScaledLevel,
 } from "../../../src/polymarket/resolution/evaluate.js";
 import type { ActiveEdge } from "../../../src/polymarket/resolution/graph.js";
+import type { ResolutionPool } from "../../../src/polymarket/resolution/types.js";
+
+type Row = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
 // RFC-012 tasks 12-13: the walks price EXECUTABLE depth, never a midpoint.
@@ -35,6 +41,173 @@ function lvl(price: string, size: string): ScaledLevel {
 const FEE_7PCT = scaled("0.07");
 const EPSILON = scaled("0.005");
 const CAP = scaled("1000");
+
+describe("loadMarketLeg as-of metadata", () => {
+  it("switches token order and book only when the metadata version changes", async () => {
+    const v1AsOf = new Date("2026-08-24T10:59:59.000Z");
+    const v2AsOf = new Date("2026-08-24T11:00:00.000Z");
+    const metadataSql: string[] = [];
+    const bookTokens: string[] = [];
+    const pool: ResolutionPool = {
+      query<R extends Row>(
+        text: string,
+        params: readonly unknown[] = [],
+      ): Promise<QueryResult<R>> {
+        if (text.includes("FROM polymarket_market_metadata_versions")) {
+          metadataSql.push(text);
+          const asOf = params[1] as Date;
+          const isV2 = asOf.getTime() >= v2AsOf.getTime();
+          return Promise.resolve({
+            rows: [
+              {
+                metadata_version_id: isV2 ? "2" : "1",
+                clob_token_ids: isV2
+                  ? ["new-no", "new-yes"]
+                  : ["old-yes", "old-no"],
+                affirmative_token_id: isV2 ? "new-yes" : "old-yes",
+              },
+            ] as unknown as R[],
+            rowCount: 1,
+          });
+        }
+        if (text.includes("FROM polymarket_param_versions")) {
+          return Promise.resolve({
+            rows: [
+              { taker_fee_bps: "0", tick_size: "0.01", neg_risk: false },
+            ] as unknown as R[],
+            rowCount: 1,
+          });
+        }
+        if (text.includes("FROM polymarket_book_snapshots")) {
+          const tokenId = String(params[0]);
+          const asOf = params[1] as Date;
+          bookTokens.push(tokenId);
+          return Promise.resolve({
+            rows: [
+              {
+                bids_json: [
+                  {
+                    price: tokenId === "old-yes" ? "0.40" : "0.70",
+                    size: "10",
+                  },
+                ],
+                asks_json: [],
+                source_ts: asOf,
+                received_at: asOf,
+              },
+            ] as unknown as R[],
+            rowCount: 1,
+          });
+        }
+        throw new Error(`unexpected query: ${text}`);
+      },
+    };
+
+    const v1 = await loadMarketLeg(
+      pool,
+      "0xchanging",
+      v1AsOf,
+      DEFAULT_RESOLUTION_CONFIG,
+    );
+    const v2 = await loadMarketLeg(
+      pool,
+      "0xchanging",
+      v2AsOf,
+      DEFAULT_RESOLUTION_CONFIG,
+    );
+
+    expect(v1?.tokenId).toBe("old-yes");
+    expect(v1?.books.bids[0]?.price).toBe(scaled("0.40"));
+    expect(v2?.tokenId).toBe("new-yes");
+    expect(v2?.books.bids[0]?.price).toBe(scaled("0.70"));
+    expect(bookTokens).toEqual(["old-yes", "new-yes"]);
+    expect(metadataSql).toHaveLength(2);
+    expect(metadataSql[0]).toContain("valid_from <= $2");
+    expect(metadataSql[0]).toContain("valid_to > $2");
+    expect(metadataSql[0]).not.toContain("polymarket_markets");
+  });
+
+  it("fails closed when the metadata has no explicit affirmative token", async () => {
+    const pool: ResolutionPool = {
+      query<R extends Row>(text: string): Promise<QueryResult<R>> {
+        expect(text).toContain("polymarket_market_metadata_versions");
+        return Promise.resolve({
+          rows: [
+            {
+              metadata_version_id: "1",
+              clob_token_ids: ["possible-yes", "possible-no"],
+              affirmative_token_id: null,
+            },
+          ] as unknown as R[],
+          rowCount: 1,
+        });
+      },
+    };
+
+    await expect(
+      loadMarketLeg(
+        pool,
+        "0xunknown-outcomes",
+        new Date("2026-08-24T10:00:00.000Z"),
+        DEFAULT_RESOLUTION_CONFIG,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it.each([
+    [["only-one"], "only-one"],
+    [["same", "same"], "same"],
+    [["yes", ""], "yes"],
+    [["yes", "no", "other"], "yes"],
+    [["yes", "no"], "outside"],
+  ])(
+    "fails closed for a non-binary metadata token mapping %#",
+    async (tokens, affirmativeTokenId) => {
+      const pool: ResolutionPool = {
+        query<R extends Row>(text: string): Promise<QueryResult<R>> {
+          expect(text).toContain("polymarket_market_metadata_versions");
+          return Promise.resolve({
+            rows: [
+              {
+                metadata_version_id: "1",
+                clob_token_ids: tokens,
+                affirmative_token_id: affirmativeTokenId,
+              },
+            ] as unknown as R[],
+            rowCount: 1,
+          });
+        },
+      };
+
+      await expect(
+        loadMarketLeg(
+          pool,
+          "0xinvalid-mapping",
+          new Date("2026-08-24T10:00:00.000Z"),
+          DEFAULT_RESOLUTION_CONFIG,
+        ),
+      ).resolves.toBeNull();
+    },
+  );
+
+  it("is unpriceable when no metadata version exists at asOf", async () => {
+    const pool: ResolutionPool = {
+      query<R extends Row>(text: string): Promise<QueryResult<R>> {
+        expect(text).toContain("polymarket_market_metadata_versions");
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+
+    await expect(
+      loadMarketLeg(
+        pool,
+        "0xmissing",
+        new Date("2026-08-24T10:00:00.000Z"),
+        DEFAULT_RESOLUTION_CONFIG,
+      ),
+    ).resolves.toBeNull();
+  });
+});
 
 function leg(
   conditionId: string,
@@ -206,6 +379,17 @@ describe("evaluateEdge", () => {
     });
   });
 
+  it("(e) IMPLIES with an empty required side is inconclusive", () => {
+    const legs = new Map<string, MarketLeg>([
+      ["0xa", leg("0xa", SELL_BIDS_A, [], FEE_7PCT)],
+      ["0xb", leg("0xb", [], [], FEE_7PCT)],
+    ]);
+    expect(evaluateEdge(impliesEdge(), legs, EPSILON, CAP, true)).toEqual({
+      kind: "skipped",
+      reason: "missing_book_side",
+    });
+  });
+
   it("(f) EQUIV picks the profitable direction", () => {
     const edge: ActiveEdge = { ...impliesEdge(), kind: "EQUIV" };
     // from is cheap, to is expensive: only selling `to` / buying `from` pays.
@@ -242,7 +426,8 @@ describe("evaluateEdge", () => {
       ["0xm3", leg("0xm3", [lvl("0.25", "5")], [lvl("0.30", "5")], 0n)],
     ]);
     expect(evaluateEdge(groupEdge(), legs, EPSILON, CAP, false)).toEqual({
-      kind: "inside",
+      kind: "skipped",
+      reason: "group_incomplete",
     });
     const full = evaluateEdge(groupEdge(), legs, EPSILON, CAP, true);
     expect(full.kind).toBe("beyond");
@@ -267,5 +452,45 @@ describe("evaluateEdge", () => {
       expect(verdict.execSize).toBe(scaled("2"));
       expect(verdict.execNotional).toBe(scaled("2"));
     }
+  });
+
+  it("sell-all remains valid when only a priced subset exceeds one", () => {
+    const legs = new Map<string, MarketLeg>([
+      ["0xm1", leg("0xm1", [lvl("0.60", "4")], [], 0n)],
+      ["0xm2", leg("0xm2", [lvl("0.50", "4")], [], 0n)],
+    ]);
+    const verdict = evaluateEdge(groupEdge(), legs, EPSILON, CAP, false);
+    expect(verdict.kind).toBe("beyond");
+    if (verdict.kind === "beyond") {
+      expect(verdict.details).toMatchObject({
+        test: "sum_bids_gt_1",
+        members: 3,
+        members_priced: 2,
+      });
+      expect(verdict.unitNet).toBe(scaled("0.10"));
+      expect(verdict.execSize).toBe(scaled("4"));
+    }
+  });
+
+  it("buy-all does not infer a violation from a cheap priced subset", () => {
+    const legs = new Map<string, MarketLeg>([
+      ["0xm1", leg("0xm1", [], [lvl("0.30", "5")], 0n)],
+      ["0xm2", leg("0xm2", [], [lvl("0.30", "5")], 0n)],
+    ]);
+    expect(evaluateEdge(groupEdge(), legs, EPSILON, CAP, true)).toEqual({
+      kind: "skipped",
+      reason: "group_incomplete",
+    });
+  });
+
+  it("a coherent sell subset is inconclusive while a member is missing", () => {
+    const legs = new Map<string, MarketLeg>([
+      ["0xm1", leg("0xm1", [lvl("0.40", "5")], [lvl("0.45", "5")], 0n)],
+      ["0xm2", leg("0xm2", [lvl("0.35", "5")], [lvl("0.40", "5")], 0n)],
+    ]);
+    expect(evaluateEdge(groupEdge(), legs, EPSILON, CAP, false)).toEqual({
+      kind: "skipped",
+      reason: "group_incomplete",
+    });
   });
 });

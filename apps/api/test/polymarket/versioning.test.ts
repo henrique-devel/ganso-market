@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { SqlExecutor } from "../../src/database.js";
 import {
   applyParamFields,
   applyParamObservation,
@@ -46,6 +47,38 @@ function paramObs(overrides: Partial<ParamObservation> = {}): ParamObservation {
     sourceTs: null,
     ...overrides,
   };
+}
+
+class AtomicParamFakeDb extends FakeDb {
+  public transactionCalls = 0;
+  public failParamInsert = false;
+
+  public override async transaction<T>(
+    run: (tx: SqlExecutor) => Promise<T>,
+  ): Promise<T> {
+    this.transactionCalls += 1;
+    const before = this.paramVersions.map((row) => ({ ...row }));
+    const tx: SqlExecutor = {
+      query: <R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ) => {
+        if (
+          this.failParamInsert &&
+          text.includes("INSERT INTO polymarket_param_versions")
+        ) {
+          return Promise.reject(new Error("simulated param insert failure"));
+        }
+        return this.query<R>(text, params);
+      },
+    };
+    try {
+      return await run(tx);
+    } catch (error: unknown) {
+      this.paramVersions.splice(0, this.paramVersions.length, ...before);
+      throw error;
+    }
+  }
 }
 
 describe("rule versioning", () => {
@@ -104,6 +137,34 @@ describe("rule versioning", () => {
     expect(payload.previous_hash).not.toBe(payload.new_hash);
   });
 
+  it("rejects a changed complete rule observation older than the head", async () => {
+    const db = new FakeDb();
+    await applyRuleObservation(db, ruleObs(), T0);
+    await applyRuleObservation(
+      db,
+      ruleObs({ description: "Newest rule text." }),
+      T2,
+    );
+
+    for (const delayedAt of [T1, T2]) {
+      await expect(
+        applyRuleObservation(
+          db,
+          ruleObs({ description: "Delayed obsolete rule text." }),
+          delayedAt,
+        ),
+      ).rejects.toThrow("RULE_OBSERVATION_TIME_NOT_MONOTONIC");
+    }
+
+    expect(db.ruleVersions).toHaveLength(2);
+    expect(db.ruleVersions[1]).toMatchObject({
+      description: "Newest rule text.",
+      valid_from: T2,
+      valid_to: null,
+    });
+    expect(db.resolutionEvents).toHaveLength(1);
+  });
+
   it("ruleAt returns the version in force at the boundaries", async () => {
     const db = new FakeDb();
     await applyRuleObservation(db, ruleObs(), T0);
@@ -130,6 +191,24 @@ describe("rule versioning", () => {
 });
 
 describe("param versioning", () => {
+  it("rolls back the close when inserting the replacement version fails", async () => {
+    const db = new AtomicParamFakeDb();
+    await applyParamObservation(db, paramObs(), T0);
+    db.transactionCalls = 0;
+    db.failParamInsert = true;
+
+    await expect(
+      applyParamObservation(db, paramObs({ feeBaseBps: "25" }), T1),
+    ).rejects.toThrow("simulated param insert failure");
+
+    expect(db.transactionCalls).toBe(1);
+    expect(db.paramVersions).toHaveLength(1);
+    expect(db.paramVersions[0]).toMatchObject({
+      version: 1,
+      valid_to: null,
+    });
+  });
+
   it("versions parameter changes and answers as-of queries", async () => {
     const db = new FakeDb();
     await applyParamObservation(db, paramObs(), T0);
@@ -152,6 +231,43 @@ describe("param versioning", () => {
       (await paramsAt(db, "0xcond", new Date(T1.getTime() - 1)))?.feeBaseBps,
     ).toBe("0");
     expect((await paramsAt(db, "0xcond", T1))?.feeBaseBps).toBe("25");
+  });
+
+  it("rejects a changed complete parameter observation older than the head", async () => {
+    const db = new FakeDb();
+    await applyParamObservation(db, paramObs(), T0);
+    await applyParamObservation(db, paramObs({ feeBaseBps: "25" }), T2);
+
+    for (const delayedAt of [T1, T2]) {
+      await expect(
+        applyParamObservation(db, paramObs({ feeBaseBps: "10" }), delayedAt),
+      ).rejects.toThrow("PARAM_OBSERVATION_TIME_NOT_MONOTONIC");
+    }
+
+    expect(db.paramVersions).toHaveLength(2);
+    expect(db.paramVersions[1]).toMatchObject({
+      fee_base_bps: "25",
+      valid_from: T2,
+      valid_to: null,
+    });
+  });
+
+  it("does not version a semantically identical fee curve with reordered keys", async () => {
+    const db = new FakeDb();
+    await applyParamObservation(
+      db,
+      paramObs({ feeCurveJson: { z: 3, nested: { b: 2, a: 1 } } }),
+      T0,
+    );
+
+    const reordered = await applyParamObservation(
+      db,
+      paramObs({ feeCurveJson: { nested: { a: 1, b: 2 }, z: 3 } }),
+      T1,
+    );
+
+    expect(reordered).toMatchObject({ version: 1, changed: false });
+    expect(db.paramVersions).toHaveLength(1);
   });
 
   it("tick_size_change opens a new version carrying the other fields", async () => {
@@ -232,5 +348,56 @@ describe("param versioning", () => {
     );
     expect(again.changed).toBe(false);
     expect(db.paramVersions).toHaveLength(2);
+  });
+
+  it("merges a delayed disjoint patch but rejects a delayed same-field revert", async () => {
+    const db = new FakeDb();
+    await applyParamObservation(db, paramObs(), T0);
+    await applyParamFields(db, "0xcond", { tickSize: "0.01" }, T2);
+
+    const delayedFee = await applyParamFields(
+      db,
+      "0xcond",
+      { feeBaseBps: "40", takerFeeBps: "40" },
+      T1,
+    );
+    expect(delayedFee).toMatchObject({
+      version: 3,
+      changed: true,
+      changedFields: ["fee_base_bps", "taker_fee_bps"],
+    });
+    expect(db.paramVersions[2]).toMatchObject({
+      fee_base_bps: "40",
+      taker_fee_bps: "40",
+      tick_size: "0.01",
+      valid_from: new Date(T2.getTime() + 1),
+      received_at: T1,
+      valid_to: null,
+    });
+
+    const between = new Date(T1.getTime() + 30 * 60_000);
+    await expect(
+      applyParamFields(db, "0xcond", { tickSize: "0.005" }, between),
+    ).rejects.toThrow("PARAM_PATCH_CAUSAL_CONFLICT:tick_size");
+    expect(db.paramVersions).toHaveLength(3);
+    expect(db.paramVersions[2]).toMatchObject({
+      tick_size: "0.01",
+      valid_to: null,
+    });
+  });
+
+  it("uses serialization order to break a partial-patch timestamp tie", async () => {
+    const db = new FakeDb();
+    await applyParamFields(db, "0xnew", { tickSize: "0.01" }, T0);
+
+    const tied = await applyParamFields(db, "0xnew", { tickSize: "0.005" }, T0);
+    expect(tied).toMatchObject({ version: 2, changed: true });
+    expect(db.paramVersions).toHaveLength(2);
+    expect(db.paramVersions[1]).toMatchObject({
+      tick_size: "0.005",
+      valid_from: new Date(T0.getTime() + 1),
+      received_at: T0,
+      valid_to: null,
+    });
   });
 });

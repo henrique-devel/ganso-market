@@ -10,6 +10,7 @@ import {
   markTick,
   requestCancel,
   settlementTick,
+  type PaperPool,
 } from "../../../src/polymarket/paper/brokerstore.js";
 
 type Row = Record<string, unknown>;
@@ -21,10 +22,12 @@ type Row = Record<string, unknown>;
 // expiry, fees, settlement, marks and the kill switch.
 
 interface World {
+  queries: string[];
   orders: Row[];
   ledger: Row[];
   positions: Row[];
   kill: Row;
+  killRowPresent: boolean;
   snapshots: Array<{
     token_id: string;
     received_at: Date;
@@ -61,10 +64,48 @@ interface World {
     clob_token_ids: string[];
     neg_risk: boolean;
   }>;
+  /** RFC-012 markets under an effective CIRCUIT_BREAKER. */
+  breakers: string[];
+  resolutionActionReads: Array<"NONE" | "BUFFER" | "VETO" | "CIRCUIT_BREAKER">;
+  resolutionStateReadErrors: Array<Error | null>;
+  resolutionActionAfterNextFillAppend:
+    "NONE" | "BUFFER" | "VETO" | "CIRCUIT_BREAKER" | null;
+  sanityVetoes: string[];
+  sanityVetoReads: boolean[];
+  sanityVetoReadErrors: Array<Error | null>;
+  sanityVetoAfterNextFillAppend: boolean | null;
+  resolutionMarketStateMode: "present" | "missing" | "invalid";
+  resolutionStateError: Error | null;
+  ledgerReadError: Error | null;
+  acceptedEventFailures: number;
+  cancelEventFailures: number;
+  positionRefreshFailures: number;
+  killEngagedAfterPolicyLock: boolean;
+  runtime: {
+    generation: string;
+    ready: boolean;
+    lease_expires_at: Date;
+    processed_resolution_event_id: number;
+    processed_rule_version_id: number;
+    processed_input_change_id: number;
+    event_head: number;
+    rule_head: number;
+    input_head: number;
+    stopped_at: Date | null;
+    graph_evaluated_at: Date | null;
+    graph_valid_until: Date | null;
+  } | null;
+  databaseNow: Date;
+  runtimeCheckedAt: Date[];
+  databaseTimeAfterNextAcceptanceAppend: Date | null;
+  databaseTimeAfterNextFillAppend: Date | null;
 }
+
+const RUNTIME_GENERATION = "11111111-1111-4111-8111-111111111111";
 
 function emptyWorld(): World {
   return {
+    queries: [],
     orders: [],
     ledger: [],
     positions: [],
@@ -75,11 +116,45 @@ function emptyWorld(): World {
       daily_anchor_date: null,
       daily_anchor_equity_usd: null,
     },
+    killRowPresent: true,
     snapshots: [],
     params: [],
     trades: [],
     resolutions: [],
     markets: [],
+    breakers: [],
+    resolutionActionReads: [],
+    resolutionStateReadErrors: [],
+    resolutionActionAfterNextFillAppend: null,
+    sanityVetoes: [],
+    sanityVetoReads: [],
+    sanityVetoReadErrors: [],
+    sanityVetoAfterNextFillAppend: null,
+    resolutionMarketStateMode: "present",
+    resolutionStateError: null,
+    ledgerReadError: null,
+    acceptedEventFailures: 0,
+    cancelEventFailures: 0,
+    positionRefreshFailures: 0,
+    killEngagedAfterPolicyLock: false,
+    runtime: {
+      generation: RUNTIME_GENERATION,
+      ready: true,
+      lease_expires_at: new Date("2026-08-25T12:00:00.000Z"),
+      processed_resolution_event_id: 0,
+      processed_rule_version_id: 0,
+      processed_input_change_id: 0,
+      event_head: 0,
+      rule_head: 0,
+      input_head: 0,
+      stopped_at: null,
+      graph_evaluated_at: new Date("2026-08-24T11:59:00.000Z"),
+      graph_valid_until: new Date("2026-08-25T12:00:00.000Z"),
+    },
+    databaseNow: new Date("2026-08-24T12:00:00.000Z"),
+    runtimeCheckedAt: [],
+    databaseTimeAfterNextAcceptanceAppend: null,
+    databaseTimeAfterNextFillAppend: null,
   };
 }
 
@@ -87,15 +162,48 @@ function num(value: unknown): number {
   return typeof value === "string" ? Number(value) : (value as number);
 }
 
-function worldPool(world: World): SqlExecutor {
-  return {
+function hasAuditedVetoOverride(world: World, orderId: unknown): boolean {
+  return world.ledger.some((event) => {
+    if (
+      event["order_id"] !== orderId ||
+      event["event_type"] !== "order_accepted"
+    ) {
+      return false;
+    }
+    const override = (event["payload_json"] as Row)["override_veto"];
+    const score = (override as Row | null)?.["score"];
+    const scoreVersion = (override as Row | null)?.["score_version"];
+    const justification = (override as Row | null)?.["justification"];
+    return (
+      typeof override === "object" &&
+      override !== null &&
+      !Array.isArray(override) &&
+      (override as Row)["action"] === "VETO" &&
+      typeof score === "string" &&
+      /^(?:0\.[0-9]{6}|1\.000000)$/.test(score) &&
+      typeof scoreVersion === "string" &&
+      /^[0-9]+\.[0-9]+\.[0-9]+$/.test(scoreVersion) &&
+      typeof justification === "string" &&
+      justification.trim().length > 0
+    );
+  });
+}
+
+function worldPool(world: World): PaperPool {
+  let acceptedEventFailures = world.acceptedEventFailures;
+  let cancelEventFailures = world.cancelEventFailures;
+  let positionRefreshFailures = world.positionRefreshFailures;
+  let transactionTail: Promise<void> = Promise.resolve();
+  const pool: PaperPool = {
     query<R extends Row>(
       text: string,
       params: readonly unknown[] = [],
     ): Promise<QueryResult<R>> {
+      world.queries.push(text);
       const rows = ((): Row[] => {
         // --- paper_orders ---
         if (text.startsWith("INSERT INTO paper_orders")) {
+          const acceptedGeneration = params[16];
           world.orders.push({
             order_id: params[0],
             token_id: params[1],
@@ -120,15 +228,43 @@ function worldPool(world: World): SqlExecutor {
             cancel_effective_at: null,
             closed_at: null,
             created_at: params[14],
+            resolution_generation: acceptedGeneration,
+            resolution_risk_check_pending: false,
+            resolution_risk_claim: null,
+            resolution_risk_claimed_at: null,
+            resolution_cancel_reason: null,
+            resolution_cancel_details_json: {},
           });
-          return [];
+          return [{ resolution_generation: acceptedGeneration }];
+        }
+        if (text.includes("FROM paper_orders o WHERE o.status = 'open'")) {
+          return world.orders
+            .filter((order) => order["status"] === "open")
+            .map((order) => ({
+              ...order,
+              resolution_veto_override: hasAuditedVetoOverride(
+                world,
+                order["order_id"],
+              ),
+            }));
         }
         if (
-          text.startsWith(
-            "SELECT order_id, token_id, condition_id, side, order_type, limit_price",
+          text.includes(
+            "FROM paper_orders o WHERE o.order_id = $1 AND o.status = 'open'",
           )
         ) {
-          return world.orders.filter((o) => o["status"] === "open");
+          return world.orders
+            .filter(
+              (order) =>
+                order["order_id"] === params[0] && order["status"] === "open",
+            )
+            .map((order) => ({
+              ...order,
+              resolution_veto_override: hasAuditedVetoOverride(
+                world,
+                order["order_id"],
+              ),
+            }));
         }
         if (
           text.startsWith(
@@ -145,6 +281,9 @@ function worldPool(world: World): SqlExecutor {
               order["status"] = params[1];
               order["filled_size"] = params[2];
               order["closed_at"] = params[3];
+              order["resolution_risk_check_pending"] = false;
+              order["resolution_risk_claim"] = null;
+              order["resolution_risk_claimed_at"] = null;
             }
           }
           return [];
@@ -177,6 +316,45 @@ function worldPool(world: World): SqlExecutor {
           return [];
         }
         if (
+          text.includes("SET resolution_risk_check_pending = TRUE") &&
+          text.includes("RETURNING order_id")
+        ) {
+          const order = world.orders.find(
+            (item) =>
+              item["order_id"] === params[0] &&
+              item["status"] === "open" &&
+              item["resolution_risk_check_pending"] === false,
+          );
+          if (order === undefined) {
+            return [];
+          }
+          order["resolution_risk_check_pending"] = true;
+          order["resolution_risk_claim"] = params[1];
+          order["resolution_risk_claimed_at"] = params[2];
+          return [{ order_id: params[0] }];
+        }
+        if (text.includes("SET resolution_risk_check_pending = FALSE")) {
+          for (const order of world.orders) {
+            if (order["order_id"] === params[0] && order["status"] === "open") {
+              order["resolution_risk_check_pending"] = false;
+              order["resolution_risk_claim"] = null;
+              order["resolution_risk_claimed_at"] = null;
+            }
+          }
+          return [];
+        }
+        if (text.includes("SET resolution_cancel_reason = $2")) {
+          for (const order of world.orders) {
+            if (order["order_id"] === params[0] && order["status"] === "open") {
+              order["resolution_cancel_reason"] = params[1];
+              order["resolution_cancel_details_json"] = JSON.parse(
+                params[2] as string,
+              ) as Row;
+            }
+          }
+          return [];
+        }
+        if (
           text.includes(
             "SET status = 'canceled', cancel_requested_at = COALESCE",
           )
@@ -196,9 +374,31 @@ function worldPool(world: World): SqlExecutor {
         ) {
           return world.orders.filter((o) => o["status"] === "open");
         }
+        if (
+          text.includes(
+            "SELECT order_id, token_id, condition_id, filled_size",
+          ) &&
+          text.includes("ORDER BY order_id") &&
+          text.includes("FOR UPDATE")
+        ) {
+          return world.orders.filter(
+            (order) =>
+              order["status"] === "open" &&
+              (order["token_id"] === params[0] ||
+                order["condition_id"] === params[1]),
+          );
+        }
 
         // --- ledger ---
         if (text.startsWith("INSERT INTO paper_ledger_events")) {
+          if (params[1] === "order_accepted" && acceptedEventFailures > 0) {
+            acceptedEventFailures -= 1;
+            throw new Error("acceptance audit unavailable");
+          }
+          if (params[1] === "cancel_effective" && cancelEventFailures > 0) {
+            cancelEventFailures -= 1;
+            throw new Error("cancel audit unavailable");
+          }
           const key = params[0] as string;
           if (world.ledger.some((e) => e["idempotency_key"] === key)) {
             return []; // duplicate absorbed; rowCount 0 via marker below
@@ -213,14 +413,60 @@ function worldPool(world: World): SqlExecutor {
             event_ts: params[6],
             inserted: true,
           });
+          if (
+            params[1] === "order_accepted" &&
+            world.databaseTimeAfterNextAcceptanceAppend !== null
+          ) {
+            world.databaseNow = world.databaseTimeAfterNextAcceptanceAppend;
+            world.databaseTimeAfterNextAcceptanceAppend = null;
+          }
+          if (
+            params[1] === "fill" &&
+            world.databaseTimeAfterNextFillAppend !== null
+          ) {
+            world.databaseNow = world.databaseTimeAfterNextFillAppend;
+            world.databaseTimeAfterNextFillAppend = null;
+          }
+          if (
+            params[1] === "fill" &&
+            world.resolutionActionAfterNextFillAppend !== null
+          ) {
+            world.resolutionActionReads.unshift(
+              world.resolutionActionAfterNextFillAppend,
+            );
+            world.resolutionActionAfterNextFillAppend = null;
+          }
+          if (
+            params[1] === "fill" &&
+            world.sanityVetoAfterNextFillAppend !== null
+          ) {
+            world.sanityVetoReads.unshift(world.sanityVetoAfterNextFillAppend);
+            world.sanityVetoAfterNextFillAppend = null;
+          }
           return [{ inserted: true }];
         }
+        if (
+          text.startsWith("SELECT idempotency_key FROM paper_ledger_events") &&
+          text.includes("event_type = 'fill'")
+        ) {
+          return world.ledger.filter(
+            (event) =>
+              event["order_id"] === params[0] && event["event_type"] === "fill",
+          );
+        }
         if (text.includes("FROM paper_ledger_events WHERE token_id = $1")) {
+          if (world.ledgerReadError !== null) {
+            throw world.ledgerReadError;
+          }
           return world.ledger.filter((e) => e["token_id"] === params[0]);
         }
 
         // --- positions ---
         if (text.startsWith("INSERT INTO paper_positions")) {
+          if (positionRefreshFailures > 0) {
+            positionRefreshFailures -= 1;
+            throw new Error("position cache unavailable");
+          }
           const existing = world.positions.find(
             (p) => p["token_id"] === params[0],
           );
@@ -300,20 +546,26 @@ function worldPool(world: World): SqlExecutor {
 
         // --- kill switch ---
         if (text.startsWith("SELECT engaged, reason, frozen_markets_json")) {
-          return [world.kill];
+          return world.killRowPresent ? [world.kill] : [];
         }
         if (text.startsWith("SELECT daily_anchor_date")) {
           return [world.kill];
         }
         if (text.includes("SET engaged = TRUE")) {
+          if (!world.killRowPresent) {
+            return [];
+          }
           world.kill["engaged"] = true;
           world.kill["reason"] = params[0];
-          return [];
+          return [{ kill_switch_id: 1 }];
         }
         if (text.includes("SET engaged = FALSE")) {
+          if (!world.killRowPresent) {
+            return [];
+          }
           world.kill["engaged"] = false;
           world.kill["reason"] = null;
-          return [];
+          return [{ kill_switch_id: 1 }];
         }
         if (text.includes("SET frozen_markets_json")) {
           const frozen = world.kill["frozen_markets_json"] as string[];
@@ -325,6 +577,69 @@ function worldPool(world: World): SqlExecutor {
         if (text.includes("SET daily_anchor_date = $1")) {
           world.kill["daily_anchor_date"] = params[0];
           world.kill["daily_anchor_equity_usd"] = params[1];
+          return [];
+        }
+
+        // --- RFC-012 resolution state (read-only) ---
+        if (text.includes("FROM resolution_runtime_state r")) {
+          if (world.resolutionStateError !== null) {
+            throw world.resolutionStateError;
+          }
+          const checkedAt = world.runtimeCheckedAt.shift();
+          if (checkedAt !== undefined) {
+            world.databaseNow = checkedAt;
+          }
+          return world.runtime === null
+            ? []
+            : [{ ...world.runtime, checked_at: world.databaseNow }];
+        }
+        if (text.includes("FROM resolution_market_state")) {
+          const scheduledError = world.resolutionStateReadErrors.shift();
+          if (scheduledError) {
+            throw scheduledError;
+          }
+          if (world.resolutionStateError !== null) {
+            throw world.resolutionStateError;
+          }
+          if (world.resolutionMarketStateMode === "missing") {
+            return [];
+          }
+          if (world.resolutionMarketStateMode === "invalid") {
+            return [{ effective_action: "UNKNOWN_ACTION" }];
+          }
+          const scheduledAction = world.resolutionActionReads.shift();
+          return [
+            {
+              effective_action:
+                scheduledAction ??
+                (world.breakers.includes(params[0] as string)
+                  ? "CIRCUIT_BREAKER"
+                  : "NONE"),
+            },
+          ];
+        }
+        if (text.includes("FROM graph_sanity_vetoes")) {
+          const scheduledError = world.sanityVetoReadErrors.shift();
+          if (scheduledError) {
+            throw scheduledError;
+          }
+          const scheduledVeto = world.sanityVetoReads.shift();
+          const active =
+            scheduledVeto ?? world.sanityVetoes.includes(params[0] as string);
+          return active ? [{ veto_id: 1 }] : [];
+        }
+        if (text.startsWith("LOCK TABLE resolution_market_state")) {
+          if (world.killEngagedAfterPolicyLock) {
+            world.kill["engaged"] = true;
+            world.kill["reason"] = "operator stop";
+            world.killEngagedAfterPolicyLock = false;
+          }
+          return [];
+        }
+        if (
+          text.startsWith("LOCK TABLE polymarket_resolution_input_changes") ||
+          text.includes("pg_advisory_xact_lock")
+        ) {
           return [];
         }
 
@@ -423,7 +738,27 @@ function worldPool(world: World): SqlExecutor {
         rowCount: rows.length,
       });
     },
+    transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+      const execute = async (): Promise<T> => {
+        const snapshot = structuredClone(world);
+        try {
+          return await run({ query: pool.query });
+        } catch (error) {
+          const attemptedQueries = [...world.queries];
+          Object.assign(world, snapshot);
+          world.queries = attemptedQueries;
+          throw error;
+        }
+      };
+      const result = transactionTail.then(execute, execute);
+      transactionTail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
   };
+  return pool;
 }
 
 const T0 = new Date("2026-08-24T12:00:00.000Z");
@@ -475,6 +810,8 @@ async function acceptOrder(
     worstPrice: string | null;
     ttlS: number | null;
     clockMs: number;
+    source: "manual" | "intent";
+    resolutionOverride: Record<string, unknown> | null;
   }> = {},
 ): Promise<ReturnType<typeof acceptPaperOrder>> {
   const pool = worldPool(world);
@@ -492,13 +829,52 @@ async function acceptOrder(
         ttlS: overrides.ttlS ?? null,
       },
       conditionId: "0xcond",
-      source: "manual",
+      source: overrides.source ?? "manual",
+      resolutionOverride: overrides.resolutionOverride ?? null,
     },
     {
       clock: () => at(overrides.clockMs ?? 0),
       latencyMs: 1_000,
       logSink: silentSink,
     },
+  );
+}
+
+function seedSignedPosition(world: World, shares: string): void {
+  const signed = Number(shares);
+  if (!Number.isFinite(signed) || signed === 0) {
+    throw new Error("seedSignedPosition requires a non-zero position");
+  }
+  const size = String(Math.abs(signed));
+  const side = signed > 0 ? "BUY" : "SELL";
+  world.positions.push({
+    token_id: "tok-yes",
+    condition_id: "0xcond",
+    shares,
+    cost_usd: String(Math.abs(signed) * 0.5),
+    realized_pnl_usd: "0",
+    fees_paid_usd: "0",
+    opened_at: at(-3_600_000),
+    resolved_at: null,
+    lockup_s: null,
+    mark_value_usd: null,
+    mark_stale: null,
+  });
+  world.ledger.push({
+    idempotency_key: `seed:${side}:${size}`,
+    event_type: "fill",
+    order_id: "seed",
+    token_id: "tok-yes",
+    condition_id: "0xcond",
+    payload_json: { side, price: "0.50", size, fee: "0" },
+    event_ts: at(-3_600_000),
+  });
+}
+
+function fillsForOrder(world: World): Row[] {
+  return world.ledger.filter(
+    (event) =>
+      event["event_type"] === "fill" && event["order_id"] === "order-1",
   );
 }
 
@@ -513,6 +889,89 @@ describe("acceptance", () => {
     expect(
       world.ledger.filter((e) => e["event_type"] === "order_accepted"),
     ).toHaveLength(1);
+  });
+
+  it("rolls back the order when its immutable acceptance audit fails", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    world.acceptedEventFailures = 1;
+
+    await expect(acceptOrder(world)).rejects.toThrow(
+      "acceptance audit unavailable",
+    );
+
+    expect(world.orders).toHaveLength(0);
+    expect(
+      world.ledger.filter((event) => event["event_type"] === "order_accepted"),
+    ).toHaveLength(0);
+  });
+
+  it("rejects an orphaned acceptance ledger-key collision", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    world.ledger.push({
+      idempotency_key: "order-1:accepted",
+      event_type: "order_accepted",
+      order_id: "orphan",
+      token_id: "tok-yes",
+      condition_id: "0xcond",
+      payload_json: {},
+      event_ts: at(-10_000),
+    });
+
+    await expect(acceptOrder(world)).rejects.toThrow(
+      "PAPER_ACCEPTANCE_LEDGER_CONFLICT",
+    );
+
+    expect(world.orders).toHaveLength(0);
+    expect(world.ledger).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "non-canonical score",
+      override: {
+        action: "VETO",
+        score: "0.75",
+        score_version: "1.0.0",
+        justification: "operator override",
+      },
+    },
+    {
+      name: "non-version score version",
+      override: {
+        action: "VETO",
+        score: "0.750000",
+        score_version: "latest",
+        justification: "operator override",
+      },
+    },
+    {
+      name: "blank justification",
+      override: {
+        action: "VETO",
+        score: "0.750000",
+        score_version: "1.0.0",
+        justification: "   ",
+      },
+    },
+  ])("rejects a $name override before persistence", async (testCase) => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+
+    const outcome = await acceptOrder(world, {
+      resolutionOverride: testCase.override,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "rejected",
+      httpStatus: 422,
+      reason: "INVALID_RESOLUTION_OVERRIDE",
+    });
+    expect(world.orders).toHaveLength(0);
   });
 
   it("post-only that would cross is rejected with a ledger event", async () => {
@@ -540,6 +999,137 @@ describe("acceptance", () => {
       httpStatus: 422,
       reason: "SIZE_BELOW_MIN",
     });
+  });
+
+  it("does not bind an order to a runtime whose lease expires at decision time", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    if (world.runtime !== null) {
+      world.runtime.lease_expires_at = at(0);
+    }
+
+    const outcome = await acceptOrder(world);
+
+    expect(outcome).toMatchObject({
+      status: "rejected",
+      httpStatus: 503,
+      reason: "RESOLUTION_RUNTIME_STALE",
+    });
+    expect(world.orders).toHaveLength(0);
+  });
+
+  it.each(["missing", "expired"] as const)(
+    "does not bind an order when graph freshness is %s",
+    async (testCase) => {
+      const world = emptyWorld();
+      seedMarket(world);
+      seedBook(world, -2_000, "0.48", "0.52");
+      if (world.runtime !== null) {
+        if (testCase === "missing") {
+          world.runtime.graph_evaluated_at = null;
+        } else {
+          world.runtime.graph_valid_until = at(0);
+        }
+      }
+
+      const outcome = await acceptOrder(world);
+
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        httpStatus: 503,
+        reason:
+          testCase === "missing"
+            ? "RESOLUTION_GRAPH_NOT_READY"
+            : "RESOLUTION_GRAPH_STALE",
+      });
+      expect(world.orders).toHaveLength(0);
+    },
+  );
+
+  it("rolls back when the runtime expires while acceptance is persisted", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    if (world.runtime !== null) {
+      world.runtime.lease_expires_at = at(500);
+    }
+    world.databaseTimeAfterNextAcceptanceAppend = at(500);
+
+    const outcome = await acceptOrder(world);
+
+    expect(outcome).toMatchObject({
+      status: "rejected",
+      httpStatus: 503,
+      reason: "RESOLUTION_RUNTIME_STALE",
+    });
+    expect(world.orders).toHaveLength(0);
+    expect(world.ledger).toHaveLength(0);
+  });
+
+  it("rejects CIRCUIT_BREAKER inside the authoritative transaction", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    world.breakers.push("0xcond");
+
+    const outcome = await acceptOrder(world);
+
+    expect(outcome).toMatchObject({
+      status: "rejected",
+      httpStatus: 409,
+      reason: "RESOLUTION_CIRCUIT_BREAKER",
+    });
+    expect(world.orders).toHaveLength(0);
+  });
+
+  it("rejects a terminal market under the input-journal lock", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    world.resolutions.push({
+      resolution_event_id: 99,
+      condition_id: "0xcond",
+      event_type: "resolved",
+      payload_json: { outcomePrices: ["1", "0"] },
+      received_at: at(0),
+    });
+
+    const outcome = await acceptOrder(world);
+
+    expect(outcome).toMatchObject({
+      status: "rejected",
+      httpStatus: 409,
+      reason: "MARKET_ALREADY_RESOLVED",
+    });
+    expect(world.orders).toHaveLength(0);
+    const journalLock = world.queries.findIndex((query) =>
+      query.startsWith("LOCK TABLE polymarket_resolution_input_changes"),
+    );
+    const settlementStart = world.queries.findIndex((query) =>
+      query.startsWith(
+        "SELECT p.token_id, p.condition_id FROM paper_positions p",
+      ),
+    );
+    const terminalRead = world.queries.findIndex(
+      (query, index) =>
+        index > settlementStart &&
+        query.includes("FROM polymarket_resolution_events"),
+    );
+    expect(journalLock).toBeGreaterThanOrEqual(0);
+    expect(terminalRead).toBeGreaterThan(journalLock);
+  });
+
+  it("fails closed when the singleton kill row is missing", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    world.killRowPresent = false;
+
+    await expect(acceptOrder(world)).rejects.toThrow(
+      "PAPER_KILL_SWITCH_STATE_MISSING",
+    );
+    expect(world.orders).toHaveLength(0);
   });
 });
 
@@ -577,6 +1167,43 @@ describe("taker execution (C1 + B5)", () => {
     expect(world.orders[0]?.["status"]).toBe("filled");
     // Position cache refreshed from the ledger replay.
     expect(world.positions[0]?.["shares"]).toBe("20.000000");
+  });
+
+  it("cancels an accepted order when resolution wins the race to fill", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.resolutions.push({
+      resolution_event_id: 99,
+      condition_id: "0xcond",
+      event_type: "resolved",
+      payload_json: { outcomePrices: ["1", "0"] },
+      received_at: at(1_500),
+    });
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    const cancel = world.ledger.find(
+      (event) =>
+        event["order_id"] === "order-1" &&
+        event["event_type"] === "cancel_effective",
+    );
+    expect((cancel?.["payload_json"] as Row)["reason"]).toBe(
+      "MARKET_ALREADY_RESOLVED",
+    );
   });
 
   it("cancel is BLOCKED during the taker delay", async () => {
@@ -622,6 +1249,957 @@ describe("taker execution (C1 + B5)", () => {
   });
 });
 
+describe("RFC-012 policy revalidation at fill", () => {
+  async function prepareTaker(
+    world: World,
+    source: "manual" | "intent" = "manual",
+    resolutionOverride: Record<string, unknown> | null = null,
+  ): Promise<void> {
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      source,
+      resolutionOverride,
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+  }
+
+  const auditedOverride = {
+    score: "0.750000",
+    score_version: "1.0.0",
+    action: "VETO",
+    justification: "manual operator override for r_veto",
+  };
+
+  it.each(["manual", "intent"] as const)(
+    "cancels a %s order when VETO appears after acceptance",
+    async (source) => {
+      const world = emptyWorld();
+      await prepareTaker(world, source);
+      world.resolutionActionReads = ["NONE", "VETO"];
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      expect(fillsForOrder(world)).toHaveLength(0);
+      expect(world.orders[0]?.["status"]).toBe("canceled");
+      expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+        "RESOLUTION_VETO",
+      );
+    },
+  );
+
+  it("cancels an intent when a sanity veto appears after acceptance", async () => {
+    const world = emptyWorld();
+    await prepareTaker(world, "intent");
+    world.resolutionActionReads = ["NONE", "NONE"];
+    world.sanityVetoReads = [false, true];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "SANITY_VETO_ACTIVE",
+    );
+  });
+
+  it("does not increase exposure when a circuit breaker appears before fill", async () => {
+    const world = emptyWorld();
+    await prepareTaker(world);
+    world.resolutionActionReads = ["NONE", "CIRCUIT_BREAKER"];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_CIRCUIT_BREAKER_EXPOSURE_INCREASE",
+    );
+  });
+
+  it("cancels when the hard kill switch commits before its locked recheck", async () => {
+    const world = emptyWorld();
+    await prepareTaker(world);
+    world.killEngagedAfterPolicyLock = true;
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "KILL_SWITCH_ENGAGED",
+    );
+  });
+
+  it("allows manual VETO only with the immutable audited override object", async () => {
+    const world = emptyWorld();
+    await prepareTaker(world, "manual", auditedOverride);
+    world.resolutionActionReads = ["VETO", "VETO", "VETO", "VETO"];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(1);
+    expect(world.orders[0]?.["status"]).toBe("filled");
+    const accepted = world.ledger.find(
+      (event) => event["event_type"] === "order_accepted",
+    );
+    expect((accepted?.["payload_json"] as Row)["override_veto"]).toEqual(
+      auditedOverride,
+    );
+    const lockedOrderQuery = world.queries.find((query) =>
+      query.includes("FOR UPDATE OF o"),
+    );
+    expect(lockedOrderQuery).toContain(
+      "jsonb_typeof(accepted.payload_json->'override_veto') = 'object'",
+    );
+    expect(lockedOrderQuery).toContain(
+      "accepted.payload_json->'override_veto'->>'action' = 'VETO'",
+    );
+    expect(lockedOrderQuery).toContain(
+      "jsonb_typeof(accepted.payload_json->'override_veto'->'score') = 'string'",
+    );
+    expect(lockedOrderQuery).toContain(
+      "btrim(accepted.payload_json->'override_veto'->>'justification') <> ''",
+    );
+  });
+
+  it.each([
+    { name: "null", override: null },
+    { name: "boolean", override: true },
+    { name: "empty object", override: {} },
+    {
+      name: "null score",
+      override: { ...auditedOverride, score: null },
+    },
+    {
+      name: "out-of-range score",
+      override: { ...auditedOverride, score: "1.000001" },
+    },
+    {
+      name: "blank score version",
+      override: { ...auditedOverride, score_version: "" },
+    },
+    {
+      name: "blank justification",
+      override: { ...auditedOverride, justification: "   " },
+    },
+  ])("does not treat a $name override payload as audited", async (testCase) => {
+    const world = emptyWorld();
+    await prepareTaker(world, "manual", auditedOverride);
+    const accepted = world.ledger.find(
+      (event) => event["event_type"] === "order_accepted",
+    );
+    if (accepted === undefined) throw new Error("missing accepted event");
+    (accepted["payload_json"] as Row)["override_veto"] = testCase.override;
+    world.resolutionActionReads = ["VETO"];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_VETO",
+    );
+  });
+
+  it.each(["state", "sanity"] as const)(
+    "fails closed when the %s policy read fails immediately before fill",
+    async (kind) => {
+      const world = emptyWorld();
+      await prepareTaker(world, kind === "sanity" ? "intent" : "manual");
+      world.resolutionActionReads = ["NONE", "NONE"];
+      if (kind === "state") {
+        world.resolutionStateReadErrors = [
+          null,
+          new Error("state read unavailable"),
+        ];
+      } else {
+        world.sanityVetoReadErrors = [
+          null,
+          new Error("sanity read unavailable"),
+        ];
+      }
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      expect(fillsForOrder(world)).toHaveLength(0);
+      expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+        kind === "state"
+          ? "RESOLUTION_STATE_UNAVAILABLE"
+          : "RESOLUTION_SANITY_VETO_UNAVAILABLE",
+      );
+    },
+  );
+
+  it.each(["VETO", "sanity"] as const)(
+    "rolls back a fill when %s appears during its append",
+    async (kind) => {
+      const world = emptyWorld();
+      await prepareTaker(world, "intent");
+      world.resolutionActionReads = ["NONE", "NONE"];
+      world.sanityVetoReads = [false, false];
+      if (kind === "VETO") {
+        world.resolutionActionAfterNextFillAppend = "VETO";
+      } else {
+        world.sanityVetoAfterNextFillAppend = true;
+      }
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      expect(fillsForOrder(world)).toHaveLength(0);
+      expect(world.positions).toHaveLength(0);
+      expect(world.orders[0]?.["status"]).toBe("canceled");
+      expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+        kind === "VETO" ? "RESOLUTION_VETO" : "SANITY_VETO_ACTIVE",
+      );
+    },
+  );
+
+  it.each(["VETO", "sanity"] as const)(
+    "rolls back a fill when %s appears after close and position refresh",
+    async (kind) => {
+      const world = emptyWorld();
+      await prepareTaker(world, "intent");
+      world.resolutionActionReads =
+        kind === "VETO"
+          ? ["NONE", "NONE", "NONE", "VETO"]
+          : ["NONE", "NONE", "NONE", "NONE"];
+      world.sanityVetoReads =
+        kind === "sanity" ? [false, false, false, true] : [];
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      expect(fillsForOrder(world)).toHaveLength(0);
+      expect(world.positions).toHaveLength(0);
+      expect(world.orders[0]?.["status"]).toBe("canceled");
+      expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+        kind === "VETO" ? "RESOLUTION_VETO" : "SANITY_VETO_ACTIVE",
+      );
+    },
+  );
+
+  it("locks journal, runtime and derived policy in deadlock-safe order", async () => {
+    const world = emptyWorld();
+    await prepareTaker(world);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    const journalSql =
+      "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE";
+    const journal = world.queries.findIndex((query) => query === journalSql);
+    const runtime = world.queries.findIndex(
+      (query, index) =>
+        index > journal && query.startsWith("SELECT r.generation"),
+    );
+    const derived = world.queries.findIndex((query) =>
+      query.startsWith("LOCK TABLE resolution_market_state"),
+    );
+    const kill = world.queries.findIndex(
+      (query, index) =>
+        index > derived &&
+        query.includes("FROM paper_kill_switch") &&
+        query.includes("FOR SHARE"),
+    );
+    const order = world.queries.findIndex(
+      (query, index) => index > kill && query.includes("FOR UPDATE OF o"),
+    );
+    const token = world.queries.findIndex(
+      (query, index) =>
+        index > order && query.includes("pg_advisory_xact_lock"),
+    );
+    const policy = world.queries.findIndex(
+      (query, index) =>
+        index > token && query.includes("FROM resolution_market_state"),
+    );
+    const fill = world.queries.findLastIndex((query) =>
+      query.startsWith("INSERT INTO paper_ledger_events"),
+    );
+    expect([
+      journal,
+      runtime,
+      derived,
+      kill,
+      order,
+      token,
+      policy,
+      fill,
+    ]).toEqual(
+      [...[journal, runtime, derived, kill, order, token, policy, fill]].sort(
+        (a, b) => a - b,
+      ),
+    );
+    expect(journal).toBeGreaterThanOrEqual(0);
+    expect(
+      world.queries.some((query) =>
+        query.startsWith("LOCK TABLE polymarket_resolution_events"),
+      ),
+    ).toBe(false);
+    expect(
+      world.queries.some((query) =>
+        query.startsWith("LOCK TABLE polymarket_rule_versions"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("RFC-012 circuit breaker over resting orders", () => {
+  const directionCases = [
+    {
+      name: "SELL reduces a long",
+      position: "20",
+      side: "SELL" as const,
+      size: "20",
+      expectedStatus: "filled",
+      expectedPosition: 0,
+      expectedFills: 1,
+    },
+    {
+      name: "BUY cannot increase a long",
+      position: "20",
+      side: "BUY" as const,
+      size: "5",
+      expectedStatus: "canceled",
+      expectedPosition: 20,
+      expectedFills: 0,
+    },
+    {
+      name: "BUY reduces a short",
+      position: "-20",
+      side: "BUY" as const,
+      size: "20",
+      expectedStatus: "filled",
+      expectedPosition: 0,
+      expectedFills: 1,
+    },
+    {
+      name: "SELL cannot increase a short",
+      position: "-20",
+      side: "SELL" as const,
+      size: "5",
+      expectedStatus: "canceled",
+      expectedPosition: -20,
+      expectedFills: 0,
+    },
+  ];
+
+  it.each(directionCases)("$name under the breaker", async (testCase) => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedSignedPosition(world, testCase.position);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      side: testCase.side,
+      orderType: "FAK",
+      limitPrice: testCase.side === "BUY" ? "0.60" : "0.30",
+      worstPrice: testCase.side === "BUY" ? "0.60" : "0.30",
+      size: testCase.size,
+    });
+    world.breakers = ["0xcond"];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(testCase.expectedFills);
+    expect(world.orders[0]?.["status"]).toBe(testCase.expectedStatus);
+    expect(Number(world.positions[0]?.["shares"])).toBe(
+      testCase.expectedPosition,
+    );
+  });
+
+  it.each(["BUY", "SELL"] as const)(
+    "cancels %s from a flat position",
+    async (side) => {
+      const world = emptyWorld();
+      seedMarket(world);
+      seedBook(world, -2_000, "0.40", "0.50");
+      seedBook(world, 1_100, "0.40", "0.50");
+      await acceptOrder(world, {
+        side,
+        orderType: "FAK",
+        limitPrice: side === "BUY" ? "0.60" : "0.30",
+        worstPrice: side === "BUY" ? "0.60" : "0.30",
+        size: "5",
+      });
+      world.breakers = ["0xcond"];
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      expect(fillsForOrder(world)).toHaveLength(0);
+      expect(world.orders[0]?.["status"]).toBe("canceled");
+    },
+  );
+
+  it.each([
+    { position: "10", side: "SELL" as const },
+    { position: "-10", side: "BUY" as const },
+  ])(
+    "$side clips position $position at zero and cancels the remainder",
+    async ({ position, side }) => {
+      const world = emptyWorld();
+      seedMarket(world);
+      seedSignedPosition(world, position);
+      seedBook(world, -2_000, "0.40", "0.50");
+      seedBook(world, 1_100, "0.40", "0.50");
+      await acceptOrder(world, {
+        side,
+        orderType: "FAK",
+        limitPrice: side === "BUY" ? "0.60" : "0.30",
+        worstPrice: side === "BUY" ? "0.60" : "0.30",
+        size: "20",
+      });
+      world.breakers = ["0xcond"];
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      const fills = fillsForOrder(world);
+      expect(fills).toHaveLength(1);
+      expect((fills[0]?.["payload_json"] as Row)["size"]).toBe("10.000000");
+      expect(world.orders[0]?.["status"]).toBe("canceled");
+      expect(Number(world.positions[0]?.["shares"])).toBe(0);
+      const cancel = world.ledger.find(
+        (event) =>
+          event["order_id"] === "order-1" &&
+          event["event_type"] === "cancel_effective",
+      );
+      expect((cancel?.["payload_json"] as Row)["reason"]).toBe(
+        "RESOLUTION_CIRCUIT_BREAKER_CROSS_ZERO_REMAINDER",
+      );
+    },
+  );
+
+  it.each(["FOK", "GTC", "GTD"] as const)(
+    "cancels a cross-zero %s without a partial fill",
+    async (orderType) => {
+      const world = emptyWorld();
+      seedMarket(world);
+      seedSignedPosition(world, "10");
+      seedBook(world, -2_000, "0.40", "0.50");
+      seedBook(world, 1_100, "0.40", "0.50");
+      await acceptOrder(world, {
+        side: "SELL",
+        orderType,
+        limitPrice: orderType === "FOK" ? "0.30" : "0.41",
+        worstPrice: orderType === "FOK" ? "0.30" : null,
+        size: "20",
+        ttlS: orderType === "GTD" ? 120 : null,
+      });
+      world.breakers = ["0xcond"];
+
+      await brokerTick(worldPool(world), {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      });
+
+      expect(fillsForOrder(world)).toHaveLength(0);
+      expect(world.orders[0]?.["status"]).toBe("canceled");
+      expect(Number(world.positions[0]?.["shares"])).toBe(10);
+    },
+  );
+
+  it("does not let two reducing orders consume the same exposure", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedSignedPosition(world, "10");
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    for (const orderId of ["order-1", "order-2"]) {
+      await acceptOrder(world, {
+        orderId,
+        side: "SELL",
+        orderType: "FAK",
+        limitPrice: "0.30",
+        worstPrice: "0.30",
+        size: "6",
+      });
+    }
+    world.breakers = ["0xcond"];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    const fills = world.ledger.filter(
+      (event) => event["event_type"] === "fill" && event["order_id"] !== "seed",
+    );
+    expect(
+      fills.map((event) => (event["payload_json"] as Row)["size"]),
+    ).toEqual(["6.000000", "4.000000"]);
+    expect(Number(world.positions[0]?.["shares"])).toBe(0);
+    expect(world.orders.map((order) => order["status"])).toEqual([
+      "filled",
+      "canceled",
+    ]);
+  });
+
+  it("fails closed when the authoritative resolution state cannot be read", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.resolutionStateError = new Error("database unavailable");
+    const logs: string[] = [];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: (line) => logs.push(line),
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(logs.join("\n")).toContain("RESOLUTION_STATE_READ_FAILED");
+    const cancel = world.ledger.find(
+      (event) =>
+        event["order_id"] === "order-1" &&
+        event["event_type"] === "cancel_effective",
+    );
+    expect((cancel?.["payload_json"] as Row)["reason"]).toBe(
+      "RESOLUTION_STATE_UNAVAILABLE",
+    );
+  });
+
+  it.each([
+    {
+      mode: "missing" as const,
+      reason: "RESOLUTION_MARKET_STATE_MISSING",
+    },
+    {
+      mode: "invalid" as const,
+      reason: "RESOLUTION_MARKET_STATE_INVALID",
+    },
+  ])("fails closed when the market state is $mode", async (testCase) => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.resolutionMarketStateMode = testCase.mode;
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(testCase.reason);
+  });
+
+  it("fails closed when the canonical ledger position cannot be read", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedSignedPosition(world, "10");
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      side: "SELL",
+      orderType: "FAK",
+      limitPrice: "0.30",
+      worstPrice: "0.30",
+      size: "5",
+    });
+    world.breakers = ["0xcond"];
+    world.ledgerReadError = new Error("ledger unavailable");
+    const logs: string[] = [];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: (line) => logs.push(line),
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(logs.join("\n")).toContain(
+      "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER",
+    );
+    const cancel = world.ledger.find(
+      (event) =>
+        event["order_id"] === "order-1" &&
+        event["event_type"] === "cancel_effective",
+    );
+    expect((cancel?.["payload_json"] as Row)["reason"]).toBe(
+      "RESOLUTION_POSITION_UNAVAILABLE",
+    );
+  });
+
+  it.each([
+    {
+      name: "missing",
+      mutate(world: World): void {
+        world.runtime = null;
+      },
+      reason: "RESOLUTION_RUNTIME_MISSING",
+    },
+    {
+      name: "not ready",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.ready = false;
+      },
+      reason: "RESOLUTION_RUNTIME_NOT_READY",
+    },
+    {
+      name: "stale",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.lease_expires_at = at(-1);
+      },
+      reason: "RESOLUTION_RUNTIME_STALE",
+    },
+    {
+      name: "missing graph freshness",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.graph_evaluated_at = null;
+      },
+      reason: "RESOLUTION_GRAPH_NOT_READY",
+    },
+    {
+      name: "expired graph freshness",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.graph_valid_until = at(0);
+      },
+      reason: "RESOLUTION_GRAPH_STALE",
+    },
+    {
+      name: "behind the event head",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.event_head = 1;
+      },
+      reason: "RESOLUTION_RUNTIME_LAGGING",
+    },
+    {
+      name: "behind the input journal",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.input_head = 1;
+      },
+      reason: "RESOLUTION_RUNTIME_LAGGING",
+    },
+  ])("cancels without a fill when the runtime is $name", async (testCase) => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    testCase.mutate(world);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    const cancel = world.ledger.find(
+      (event) =>
+        event["order_id"] === "order-1" &&
+        event["event_type"] === "cancel_effective",
+    );
+    expect((cancel?.["payload_json"] as Row)["reason"]).toBe(testCase.reason);
+  });
+
+  it("cancels an order accepted by a previous runtime generation", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    if (world.runtime !== null) {
+      world.runtime.generation = "22222222-2222-4222-8222-222222222222";
+    }
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_GENERATION_MISMATCH",
+    );
+  });
+
+  it("cancels when the runtime lease expires immediately before a fill", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    if (world.runtime !== null) {
+      world.runtime.lease_expires_at = at(2_500);
+    }
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.runtimeCheckedAt = [at(1_500), at(3_000)];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_STALE",
+    );
+  });
+
+  it("rolls back a taker fill when the lease expires during its append", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    if (world.runtime !== null) {
+      world.runtime.lease_expires_at = at(2_500);
+    }
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.databaseNow = at(2_000);
+    world.databaseTimeAfterNextFillAppend = at(2_500);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_STALE",
+    );
+  });
+
+  it("rolls back a taker fill when graph freshness expires during its append", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    if (world.runtime !== null) {
+      world.runtime.graph_valid_until = at(2_500);
+    }
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.databaseNow = at(2_000);
+    world.databaseTimeAfterNextFillAppend = at(2_500);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_GRAPH_STALE",
+    );
+  });
+
+  it("keeps a failed risk check quarantined across recovery in the same generation", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.resolutionStateError = new Error("runtime read unavailable");
+    world.cancelEventFailures = 1;
+    const pool = worldPool(world);
+
+    await brokerTick(pool, {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+    expect(world.orders[0]?.["status"]).toBe("open");
+    expect(world.orders[0]?.["resolution_risk_check_pending"]).toBe(true);
+    expect(fillsForOrder(world)).toHaveLength(0);
+
+    // The runtime recovers without rotating generation. The old claim is
+    // still cancel-only; it must not get a second chance to fill.
+    world.resolutionStateError = null;
+    await brokerTick(pool, {
+      clock: () => at(8_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RISK_CHECK_INCOMPLETE",
+    );
+  });
+
+  it("rolls back fill, remainder cancel, close and cache when refresh fails", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedSignedPosition(world, "10");
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      side: "SELL",
+      orderType: "FAK",
+      limitPrice: "0.30",
+      worstPrice: "0.30",
+      size: "20",
+    });
+    world.breakers = ["0xcond"];
+    world.positionRefreshFailures = 1;
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(Number(world.positions[0]?.["shares"])).toBe(10);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+  });
+
+  it("serializes concurrent ticks so two orders cannot cross zero", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedSignedPosition(world, "10");
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    for (const orderId of ["order-1", "order-2"]) {
+      await acceptOrder(world, {
+        orderId,
+        side: "SELL",
+        orderType: "FAK",
+        limitPrice: "0.30",
+        worstPrice: "0.30",
+        size: "6",
+      });
+    }
+    world.breakers = ["0xcond"];
+    const pool = worldPool(world);
+
+    await Promise.all([
+      brokerTick(pool, {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      }),
+      brokerTick(pool, {
+        clock: () => at(2_000),
+        latencyMs: 1_000,
+        logSink: silentSink,
+      }),
+    ]);
+
+    expect(Number(world.positions[0]?.["shares"])).toBe(0);
+    const filled = world.ledger
+      .filter(
+        (event) =>
+          event["event_type"] === "fill" && event["order_id"] !== "seed",
+      )
+      .reduce(
+        (sum, event) => sum + Number((event["payload_json"] as Row)["size"]),
+        0,
+      );
+    expect(filled).toBe(10);
+  });
+});
+
 describe("conservative passive queue (C2 + C3)", () => {
   it("joins behind all visible depth and fills only beyond the queue", async () => {
     const world = emptyWorld();
@@ -632,7 +2210,7 @@ describe("conservative passive queue (C2 + C3)", () => {
     await acceptOrder(world, { size: "20" });
     // 60 traded: still behind the queue.
     world.trades.push({
-      trade_id: 1,
+      trade_id: 10,
       token_id: "tok-yes",
       price: "0.48",
       size: "60",
@@ -714,6 +2292,71 @@ describe("conservative passive queue (C2 + C3)", () => {
     expect(world.orders[0]?.["status"]).toBe("canceled");
   });
 
+  it("rolls back a passive fill when the lease expires during its append", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.47", "0.52", "0");
+    seedBook(world, 900, "0.47", "0.52", "0");
+    if (world.runtime !== null) {
+      world.runtime.lease_expires_at = at(3_500);
+    }
+    await acceptOrder(world, { limitPrice: "0.48", size: "5" });
+    world.trades.push({
+      trade_id: 10,
+      token_id: "tok-yes",
+      price: "0.48",
+      size: "10",
+      ts: at(2_000),
+    });
+    world.databaseNow = at(3_000);
+    world.databaseTimeAfterNextFillAppend = at(3_500);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(3_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_STALE",
+    );
+  });
+
+  it("fails closed when the sanity policy read fails before a passive fill", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.47", "0.52", "0");
+    seedBook(world, 900, "0.47", "0.52", "0");
+    await acceptOrder(world, {
+      source: "intent",
+      limitPrice: "0.48",
+      size: "5",
+    });
+    world.trades.push({
+      trade_id: 10,
+      token_id: "tok-yes",
+      price: "0.48",
+      size: "10",
+      ts: at(2_000),
+    });
+    world.resolutionActionReads = ["NONE", "NONE"];
+    world.sanityVetoReadErrors = [null, new Error("sanity policy unavailable")];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(3_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_SANITY_VETO_UNAVAILABLE",
+    );
+  });
+
   it("re-running the tick over the same data adds nothing (idempotent)", async () => {
     const world = emptyWorld();
     seedMarket(world);
@@ -737,6 +2380,52 @@ describe("conservative passive queue (C2 + C3)", () => {
     await brokerTick(worldPool(world), deps);
     await brokerTick(worldPool(world), deps);
     expect(world.ledger.length).toBe(after);
+  });
+
+  it("rechecks only the new passive fill after a partial fill", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedSignedPosition(world, "10");
+    seedBook(world, -2_000, "0.48", "0.52", "0");
+    seedBook(world, 900, "0.48", "0.52", "0");
+    await acceptOrder(world, {
+      side: "SELL",
+      limitPrice: "0.52",
+      size: "10",
+    });
+    world.trades.push({
+      trade_id: 10,
+      token_id: "tok-yes",
+      price: "0.52",
+      size: "6",
+      ts: at(2_000),
+    });
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(3_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+    expect(world.orders[0]?.["filled_size"]).toBe("6.000000");
+    expect(Number(world.positions[0]?.["shares"])).toBe(4);
+
+    world.breakers = ["0xcond"];
+    world.trades.push({
+      trade_id: 11,
+      token_id: "tok-yes",
+      price: "0.52",
+      size: "4",
+      ts: at(4_000),
+    });
+    await brokerTick(worldPool(world), {
+      clock: () => at(5_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(2);
+    expect(world.orders[0]?.["status"]).toBe("filled");
+    expect(Number(world.positions[0]?.["shares"])).toBe(0);
   });
 
   it("GTD expires one minute before the declared expiration", async () => {
@@ -792,6 +2481,8 @@ describe("settlement (C5)", () => {
   it("settles YES at 1.00 through the ledger and records the lockup", async () => {
     const world = emptyWorld();
     seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    await acceptOrder(world);
     seedPosition(world, "10", "5");
     world.resolutions.push({
       resolution_event_id: 99,
@@ -813,11 +2504,83 @@ describe("settlement (C5)", () => {
     expect(world.positions[0]?.["shares"]).toBe("0.000000");
     expect(world.positions[0]?.["realized_pnl_usd"]).toBe("5.000000");
     expect(world.positions[0]?.["lockup_s"]).toBe(3_600);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    const terminalRead = world.queries.findIndex((query) =>
+      query.includes("FROM polymarket_resolution_events"),
+    );
+    const orderLock = world.queries.findIndex(
+      (query, index) =>
+        index > terminalRead &&
+        query.includes("ORDER BY order_id") &&
+        query.includes("FOR UPDATE"),
+    );
+    const advisory = world.queries.findIndex((query) =>
+      query.includes("pg_advisory_xact_lock"),
+    );
+    const ledgerRead = world.queries.findIndex(
+      (query, index) =>
+        index > advisory &&
+        query.includes("FROM paper_ledger_events WHERE token_id = $1"),
+    );
+    const resolutionAppend = world.queries.findIndex(
+      (query, index) =>
+        index > ledgerRead &&
+        query.startsWith("INSERT INTO paper_ledger_events"),
+    );
+    const refresh = world.queries.findIndex(
+      (query, index) =>
+        index > resolutionAppend &&
+        query.startsWith("INSERT INTO paper_positions"),
+    );
+    expect([
+      terminalRead,
+      orderLock,
+      advisory,
+      ledgerRead,
+      resolutionAppend,
+      refresh,
+    ]).toEqual(
+      [
+        terminalRead,
+        orderLock,
+        advisory,
+        ledgerRead,
+        resolutionAppend,
+        refresh,
+      ].sort((a, b) => a - b),
+    );
+  });
+
+  it("rolls back the resolution event when the position refresh fails", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedPosition(world, "10", "5");
+    world.resolutions.push({
+      resolution_event_id: 99,
+      condition_id: "0xcond",
+      event_type: "resolved",
+      payload_json: { outcomePrices: ["1", "0"] },
+      received_at: at(0),
+    });
+    world.positionRefreshFailures = 1;
+
+    await settlementTick(worldPool(world), {
+      clock: () => at(0),
+      logSink: silentSink,
+    });
+
+    expect(
+      world.ledger.filter((event) => event["event_type"] === "resolution"),
+    ).toHaveLength(0);
+    expect(world.positions[0]?.["shares"]).toBe("10");
+    expect(world.positions[0]?.["realized_pnl_usd"]).toBe("0");
   });
 
   it("a 50/50 outcome in a negRisk market freezes the market, never settles", async () => {
     const world = emptyWorld();
     seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    await acceptOrder(world);
     const market = world.markets[0];
     if (market !== undefined) {
       market.neg_risk = true;
@@ -839,6 +2602,7 @@ describe("settlement (C5)", () => {
     ).toHaveLength(0);
     expect(world.kill["frozen_markets_json"]).toContain("0xcond");
     expect(world.positions[0]?.["shares"]).toBe("10");
+    expect(world.orders[0]?.["status"]).toBe("canceled");
   });
 });
 
@@ -888,6 +2652,28 @@ describe("mark to executable bid (D2)", () => {
 });
 
 describe("kill switch (D4)", () => {
+  it("rolls back engage, its audit and cancellations as one transaction", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    await acceptOrder(world);
+    world.cancelEventFailures = 1;
+
+    await expect(
+      engageKillSwitch(worldPool(world), "MANUAL", at(1_000), {
+        logSink: silentSink,
+      }),
+    ).rejects.toThrow("cancel audit unavailable");
+
+    expect(world.kill["engaged"]).toBe(false);
+    expect(world.orders[0]?.["status"]).toBe("open");
+    expect(
+      world.ledger.filter(
+        (event) => event["event_type"] === "kill_switch_engaged",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("engaging cancels every open order and blocks new ones until rearm", async () => {
     const world = emptyWorld();
     seedMarket(world);

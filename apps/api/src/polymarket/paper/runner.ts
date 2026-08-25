@@ -329,9 +329,15 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
           return;
         }
         brokering = true;
-        void brokerTick(pool, brokerDeps).finally(() => {
-          brokering = false;
-        });
+        void brokerTick(pool, brokerDeps)
+          .catch((error: unknown) => {
+            logJson("error", "PAPER_BROKER_TICK_FAILED", {
+              error_name: error instanceof Error ? error.name : "UnknownError",
+            });
+          })
+          .finally(() => {
+            brokering = false;
+          });
       }, deps.brokerTickMs ?? DEFAULT_BROKER_TICK_MS);
       settlementTimer = setInterval(() => {
         if (settling) {

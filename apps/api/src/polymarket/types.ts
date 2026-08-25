@@ -14,6 +14,8 @@ export interface MarketRegistryEntry {
   readonly category: string | null;
   readonly negRisk: boolean;
   readonly clobTokenIds: readonly string[];
+  /** Explicit Yes/Up token from Gamma's parallel outcomes array. */
+  readonly affirmativeTokenId: string | null;
   readonly rules: string | null;
   readonly tickSize: string | null;
   readonly minOrderSize: string | null;

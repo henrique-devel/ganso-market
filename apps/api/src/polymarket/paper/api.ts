@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import type { SqlExecutor } from "../../database.js";
+import type { DatabasePool } from "../../database.js";
 import {
   gateBufferAtPrice,
   resolutionGate,
@@ -32,7 +32,7 @@ import { SIMULATION_BANNER } from "./runner.js";
 import type { OrderDraft, OrderSide, OrderType } from "./validator.js";
 
 export interface PaperRoutesDeps {
-  readonly pool: { query: SqlExecutor["query"] };
+  readonly pool: Pick<DatabasePool, "query" | "transaction">;
   readonly authService: {
     session(token: string): Promise<{ status: string }>;
   };

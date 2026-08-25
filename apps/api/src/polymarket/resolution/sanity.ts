@@ -7,7 +7,12 @@
 
 import { SCALE, formatScaled, mul, parseScaled } from "../fundamental/fixed.js";
 import { loadActiveEdges, type ActiveEdge } from "./graph.js";
-import { loadMarketLeg, type MarketLeg } from "./evaluate.js";
+import {
+  loadMarketLeg,
+  loadMarketRef,
+  type MarketLeg,
+  type MarketRef,
+} from "./evaluate.js";
 import { freshModelEstimates, type FreshModelEstimate } from "./store.js";
 import type { ResolutionConfig } from "./config.js";
 import type { ResolutionPool } from "./types.js";
@@ -24,6 +29,25 @@ interface VetoFinding {
   readonly detail: Readonly<Record<string, unknown>>;
 }
 
+type SanityCheckName = "q_gt_ask" | "q_lt_bid" | "q_gt_group_ceiling";
+
+interface SanityNode extends MarketRef {
+  readonly pricing: MarketLeg | null;
+}
+
+interface SanityEvaluation {
+  readonly findings: readonly VetoFinding[];
+  readonly evaluatedChecks: ReadonlySet<string>;
+}
+
+function checkKey(
+  tokenId: string,
+  edgeKey: string,
+  check: SanityCheckName,
+): string {
+  return `${tokenId}::${edgeKey}::${check}`;
+}
+
 function takerFee(rateScaled: bigint, priceScaled: bigint): bigint {
   return mul(rateScaled, mul(priceScaled, SCALE - priceScaled));
 }
@@ -38,26 +62,27 @@ function touch(
  * Evaluate one pair edge (IMPLIES/LADDER: P(from) <= P(to); EQUIV: equality
  * within the band) against fresh estimates. Pure given the legs.
  */
-export function pairSanityFindings(
+function evaluatePairSanity(
   edge: ActiveEdge,
-  from: MarketLeg,
-  to: MarketLeg,
+  from: SanityNode,
+  to: SanityNode,
   estimates: ReadonlyMap<string, FreshModelEstimate>,
   epsilon: bigint,
-): VetoFinding[] {
+): SanityEvaluation {
   const findings: VetoFinding[] = [];
+  const evaluatedChecks = new Set<string>();
   const fromEstimate = estimates.get(from.tokenId);
   const toEstimate = estimates.get(to.tokenId);
 
-  const askTo = touch(to.books.asks);
-  const bidFrom = touch(from.books.bids);
-  const askFrom = touch(from.books.asks);
-  const bidTo = touch(to.books.bids);
+  const askTo = touch(to.pricing?.books.asks ?? []);
+  const bidFrom = touch(from.pricing?.books.bids ?? []);
+  const askFrom = touch(from.pricing?.books.asks ?? []);
+  const bidTo = touch(to.pricing?.books.bids ?? []);
 
   const push = (
-    leg: MarketLeg,
+    leg: SanityNode,
     estimate: FreshModelEstimate,
-    neighbor: MarketLeg,
+    neighbor: SanityNode,
     neighborPrice: bigint,
     tolerance: bigint,
     magnitude: bigint,
@@ -77,20 +102,22 @@ export function pairSanityFindings(
   };
 
   // q(from) must not exceed what the implied market can be bought for.
-  if (fromEstimate !== undefined && askTo !== null) {
+  if (fromEstimate !== undefined && askTo !== null && to.pricing !== null) {
     const q = parseScaled(fromEstimate.q);
     if (q !== null) {
-      const tolerance = epsilon + takerFee(to.feeRate, askTo);
+      evaluatedChecks.add(checkKey(from.tokenId, edge.edgeKey, "q_gt_ask"));
+      const tolerance = epsilon + takerFee(to.pricing.feeRate, askTo);
       if (q > askTo + tolerance) {
         push(from, fromEstimate, to, askTo, tolerance, q - askTo, "q_gt_ask");
       }
     }
   }
   // q(to) must not sit below what the implying market already sells for.
-  if (toEstimate !== undefined && bidFrom !== null) {
+  if (toEstimate !== undefined && bidFrom !== null && from.pricing !== null) {
     const q = parseScaled(toEstimate.q);
     if (q !== null) {
-      const tolerance = epsilon + takerFee(from.feeRate, bidFrom);
+      evaluatedChecks.add(checkKey(to.tokenId, edge.edgeKey, "q_lt_bid"));
+      const tolerance = epsilon + takerFee(from.pricing.feeRate, bidFrom);
       if (q < bidFrom - tolerance) {
         push(to, toEstimate, from, bidFrom, tolerance, bidFrom - q, "q_lt_bid");
       }
@@ -98,10 +125,11 @@ export function pairSanityFindings(
   }
   if (edge.kind === "EQUIV") {
     // Equivalence binds both ways: run the mirrored checks too.
-    if (toEstimate !== undefined && askFrom !== null) {
+    if (toEstimate !== undefined && askFrom !== null && from.pricing !== null) {
       const q = parseScaled(toEstimate.q);
       if (q !== null) {
-        const tolerance = epsilon + takerFee(from.feeRate, askFrom);
+        evaluatedChecks.add(checkKey(to.tokenId, edge.edgeKey, "q_gt_ask"));
+        const tolerance = epsilon + takerFee(from.pricing.feeRate, askFrom);
         if (q > askFrom + tolerance) {
           push(
             to,
@@ -115,32 +143,53 @@ export function pairSanityFindings(
         }
       }
     }
-    if (fromEstimate !== undefined && bidTo !== null) {
+    if (fromEstimate !== undefined && bidTo !== null && to.pricing !== null) {
       const q = parseScaled(fromEstimate.q);
       if (q !== null) {
-        const tolerance = epsilon + takerFee(to.feeRate, bidTo);
+        evaluatedChecks.add(checkKey(from.tokenId, edge.edgeKey, "q_lt_bid"));
+        const tolerance = epsilon + takerFee(to.pricing.feeRate, bidTo);
         if (q < bidTo - tolerance) {
           push(from, fromEstimate, to, bidTo, tolerance, bidTo - q, "q_lt_bid");
         }
       }
     }
   }
-  return findings;
+  return { findings, evaluatedChecks };
+}
+
+export function pairSanityFindings(
+  edge: ActiveEdge,
+  from: MarketLeg,
+  to: MarketLeg,
+  estimates: ReadonlyMap<string, FreshModelEstimate>,
+  epsilon: bigint,
+): VetoFinding[] {
+  return [
+    ...evaluatePairSanity(
+      edge,
+      { ...from, pricing: from },
+      { ...to, pricing: to },
+      estimates,
+      epsilon,
+    ).findings,
+  ];
 }
 
 /**
  * Group constraint: within a negRisk/mutex group, q_i cannot exceed 1 minus
  * what the OTHER outcomes already command as executable bids.
  */
-export function groupSanityFindings(
+function evaluateGroupSanity(
   edge: ActiveEdge,
-  legs: readonly MarketLeg[],
+  nodes: readonly SanityNode[],
   estimates: ReadonlyMap<string, FreshModelEstimate>,
   epsilon: bigint,
-): VetoFinding[] {
+): SanityEvaluation {
   const findings: VetoFinding[] = [];
-  for (const leg of legs) {
-    const estimate = estimates.get(leg.tokenId);
+  const evaluatedChecks = new Set<string>();
+  const byCondition = new Map(nodes.map((node) => [node.conditionId, node]));
+  for (const node of nodes) {
+    const estimate = estimates.get(node.tokenId);
     if (estimate === undefined) {
       continue;
     }
@@ -150,28 +199,33 @@ export function groupSanityFindings(
     }
     let othersBids = 0n;
     let fees = 0n;
-    let priced = true;
-    for (const other of legs) {
-      if (other.conditionId === leg.conditionId) {
+    let pricedOthers = 0;
+    let allOthersPriced = true;
+    for (const member of edge.members) {
+      if (member === node.conditionId) {
         continue;
       }
-      const bid = touch(other.books.bids);
-      if (bid === null) {
-        priced = false;
-        break;
+      const other = byCondition.get(member);
+      const bid = touch(other?.pricing?.books.bids ?? []);
+      if (bid === null || other?.pricing === null || other === undefined) {
+        allOthersPriced = false;
+        continue;
       }
       othersBids += bid;
-      fees += takerFee(other.feeRate, bid);
+      fees += takerFee(other.pricing.feeRate, bid);
+      pricedOthers += 1;
     }
-    if (!priced) {
-      continue;
+    if (allOthersPriced) {
+      evaluatedChecks.add(
+        checkKey(node.tokenId, edge.edgeKey, "q_gt_group_ceiling"),
+      );
     }
     const ceiling = SCALE - othersBids;
     const tolerance = epsilon + fees;
-    if (q > ceiling + tolerance) {
+    if (pricedOthers > 0 && q > ceiling + tolerance) {
       findings.push({
-        conditionId: leg.conditionId,
-        tokenId: leg.tokenId,
+        conditionId: node.conditionId,
+        tokenId: node.tokenId,
         estimate,
         edge,
         neighborConditionId: null,
@@ -183,11 +237,28 @@ export function groupSanityFindings(
           q: estimate.q,
           status: estimate.status,
           members: edge.members.length,
+          other_members_priced: pricedOthers,
         },
       });
     }
   }
-  return findings;
+  return { findings, evaluatedChecks };
+}
+
+export function groupSanityFindings(
+  edge: ActiveEdge,
+  legs: readonly MarketLeg[],
+  estimates: ReadonlyMap<string, FreshModelEstimate>,
+  epsilon: bigint,
+): VetoFinding[] {
+  return [
+    ...evaluateGroupSanity(
+      edge,
+      legs.map((leg) => ({ ...leg, pricing: leg })),
+      estimates,
+      epsilon,
+    ).findings,
+  ];
 }
 
 export interface SanitySummary {
@@ -205,6 +276,11 @@ export async function sanityCheck(
 ): Promise<SanitySummary> {
   const edges = await loadActiveEdges(pool, config.graph.minConfidence);
   const summary = { checked: 0, active: 0, opened: 0, closed: 0 };
+  const open = await pool.query<Record<string, unknown>>(
+    `SELECT veto_id, token_id, edge_key, details_json
+       FROM graph_sanity_vetoes
+      WHERE ended_at IS NULL`,
+  );
 
   const involved = new Set<string>();
   for (const edge of edges) {
@@ -218,16 +294,29 @@ export async function sanityCheck(
       involved.add(member);
     }
   }
+  const refs = new Map<string, MarketRef>();
   const legs = new Map<string, MarketLeg>();
   for (const conditionId of involved) {
+    const ref = await loadMarketRef(pool, conditionId, asOf);
+    if (ref !== null) {
+      refs.set(conditionId, ref);
+    }
     const leg = await loadMarketLeg(pool, conditionId, asOf, config);
     if (leg !== null) {
       legs.set(conditionId, leg);
     }
   }
+  const estimateTokenIds = new Set(
+    [...refs.values()].map((ref) => ref.tokenId),
+  );
+  for (const row of open.rows) {
+    if (typeof row.token_id === "string") {
+      estimateTokenIds.add(row.token_id);
+    }
+  }
   const estimatesList = await freshModelEstimates(
     pool,
-    [...legs.values()].map((leg) => leg.tokenId),
+    [...estimateTokenIds],
     asOf,
   );
   const estimates = new Map(
@@ -236,23 +325,42 @@ export async function sanityCheck(
 
   const epsilon = parseScaled(config.graph.epsilon.toFixed(9)) ?? 0n;
   const findings: VetoFinding[] = [];
+  // Closure evidence is directional and token-specific. A usable bid for one
+  // model or direction says nothing about another check on the same edge.
+  const evaluatedChecks = new Set<string>();
   for (const edge of edges) {
     summary.checked += 1;
     if (edge.kind === "MUTEX" || edge.kind === "NEGRISK") {
-      const memberLegs = edge.members
-        .map((member) => legs.get(member))
-        .filter((leg): leg is MarketLeg => leg !== undefined);
-      if (memberLegs.length === edge.members.length && memberLegs.length >= 2) {
-        findings.push(
-          ...groupSanityFindings(edge, memberLegs, estimates, epsilon),
-        );
+      const memberNodes = edge.members
+        .map((member) => refs.get(member))
+        .filter((ref): ref is MarketRef => ref !== undefined)
+        .map((ref) => ({ ...ref, pricing: legs.get(ref.conditionId) ?? null }));
+      const evaluated = evaluateGroupSanity(
+        edge,
+        memberNodes,
+        estimates,
+        epsilon,
+      );
+      findings.push(...evaluated.findings);
+      for (const key of evaluated.evaluatedChecks) {
+        evaluatedChecks.add(key);
       }
       continue;
     }
-    const from = legs.get(edge.fromConditionId ?? "");
-    const to = legs.get(edge.toConditionId ?? "");
-    if (from !== undefined && to !== undefined) {
-      findings.push(...pairSanityFindings(edge, from, to, estimates, epsilon));
+    const fromRef = refs.get(edge.fromConditionId ?? "");
+    const toRef = refs.get(edge.toConditionId ?? "");
+    if (fromRef !== undefined && toRef !== undefined) {
+      const evaluated = evaluatePairSanity(
+        edge,
+        { ...fromRef, pricing: legs.get(fromRef.conditionId) ?? null },
+        { ...toRef, pricing: legs.get(toRef.conditionId) ?? null },
+        estimates,
+        epsilon,
+      );
+      findings.push(...evaluated.findings);
+      for (const key of evaluated.evaluatedChecks) {
+        evaluatedChecks.add(key);
+      }
     }
   }
 
@@ -307,24 +415,54 @@ export async function sanityCheck(
       summary.opened += 1;
     }
   }
-  summary.active = activeKeys.size;
-
-  // Close every open veto not re-confirmed this cycle: either the estimate
-  // returned inside the band, or it went stale (absence = nothing to veto).
-  const open = await pool.query<Record<string, unknown>>(
-    `SELECT veto_id, token_id, edge_key
-       FROM graph_sanity_vetoes
-      WHERE ended_at IS NULL`,
-  );
+  // Close an open veto only on EVIDENCE: the edge was re-evaluated inside
+  // the band, or the estimate is gone/stale (absence = no model signal left
+  // to veto). An unpriceable edge with a still-fresh estimate keeps the veto
+  // open — no fresh neighbour prices is not proof the contradiction ended.
   for (const row of open.rows) {
-    const key = `${String(row.token_id)}::${String(row.edge_key)}`;
-    if (!activeKeys.has(key)) {
-      await pool.query(
-        `UPDATE graph_sanity_vetoes SET ended_at = $2 WHERE veto_id = $1`,
-        [row.veto_id, asOf],
-      );
-      summary.closed += 1;
+    const tokenId = String(row.token_id);
+    const edgeKey = String(row.edge_key);
+    const key = `${tokenId}::${edgeKey}`;
+    if (activeKeys.has(key)) {
+      continue;
+    }
+    const estimateGone = !estimates.has(tokenId);
+    const edgeGone = !edges.some((edge) => edge.edgeKey === edgeKey);
+    const check = detailCheck(row.details_json);
+    const wasEvaluated =
+      check !== null && evaluatedChecks.has(checkKey(tokenId, edgeKey, check));
+    if (!estimateGone && !edgeGone && !wasEvaluated) {
+      continue;
+    }
+    await pool.query(
+      `UPDATE graph_sanity_vetoes SET ended_at = $2 WHERE veto_id = $1`,
+      [row.veto_id, asOf],
+    );
+    summary.closed += 1;
+  }
+  summary.active = Math.max(
+    0,
+    open.rows.length + summary.opened - summary.closed,
+  );
+  return summary;
+}
+
+function detailCheck(value: unknown): SanityCheckName | null {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      return null;
     }
   }
-  return summary;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+  const check = (parsed as Record<string, unknown>)["check"];
+  return check === "q_gt_ask" ||
+    check === "q_lt_bid" ||
+    check === "q_gt_group_ceiling"
+    ? check
+    : null;
 }

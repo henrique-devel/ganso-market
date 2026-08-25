@@ -274,9 +274,9 @@ describe("groupSanityFindings", () => {
     expect(found).toHaveLength(0);
   });
 
-  it("skips a member when any other member has no executable bid", () => {
-    // C3 is unpriced: the ceiling against C1 cannot be computed, so C1 is
-    // skipped even though its q would violate a partial sum.
+  it("uses a conclusive subset when a historical member has no bid", () => {
+    // q(C1) + bid(C2) already exceeds one, so the absent C3 cannot make the
+    // contradiction disappear: probabilities are non-negative.
     const legs = [
       leg("C1", "tok1", [], []),
       leg("C2", "tok2", level("0.40"), []),
@@ -285,10 +285,17 @@ describe("groupSanityFindings", () => {
     const found = groupSanityFindings(
       groupEdge(["C1", "C2", "C3"]),
       legs,
-      estimatesOf(estimate("tok1", "0.990000")),
+      estimatesOf(estimate("tok1", "0.700000")),
       EPSILON,
     );
-    expect(found).toHaveLength(0);
+    const finding = only(found);
+    expect(finding.detail).toMatchObject({
+      check: "q_gt_group_ceiling",
+      members: 3,
+      other_members_priced: 1,
+    });
+    expect(finding.neighborPrice).toBe(scaled("0.40"));
+    expect(finding.magnitude).toBe(scaled("0.10"));
   });
 });
 
@@ -300,13 +307,21 @@ interface VetoRow {
   veto_id: number;
   token_id: string;
   edge_key: string;
+  details_json: unknown;
   ended_at: Date | null;
 }
 
 interface SanityWorld {
   pool: SqlExecutor;
   calls: Array<{ text: string; params: readonly unknown[] }>;
-  state: { estimateRows: Row[]; vetoes: VetoRow[] };
+  state: {
+    estimateRows: Row[];
+    vetoes: VetoRow[];
+    neighborBookAvailable: boolean;
+    neighborAskAvailable: boolean;
+    targetBookAvailable: boolean;
+    metadataCutover: Date | null;
+  };
 }
 
 /**
@@ -316,7 +331,14 @@ interface SanityWorld {
  */
 function createSanityWorld(): SanityWorld {
   const calls: Array<{ text: string; params: readonly unknown[] }> = [];
-  const state: SanityWorld["state"] = { estimateRows: [], vetoes: [] };
+  const state: SanityWorld["state"] = {
+    estimateRows: [],
+    vetoes: [],
+    neighborBookAvailable: true,
+    neighborAskAvailable: true,
+    targetBookAvailable: true,
+    metadataCutover: null,
+  };
   let nextVetoId = 1;
   const pool: SqlExecutor = {
     query<R extends Row>(
@@ -342,12 +364,23 @@ function createSanityWorld(): SanityWorld {
           },
         ]);
       }
-      if (text.includes("FROM polymarket_markets")) {
+      if (text.includes("FROM polymarket_market_metadata_versions")) {
         const conditionId = String(captured[0]);
+        const requestedAt = captured[1];
+        const beforeCutover =
+          state.metadataCutover !== null &&
+          requestedAt instanceof Date &&
+          requestedAt.getTime() < state.metadataCutover.getTime();
+        const tokenId = beforeCutover
+          ? `${conditionId}-v1`
+          : conditionId === "A"
+            ? "tokA"
+            : "tokB";
         return respond([
           {
-            clob_token_ids:
-              conditionId === "A" ? ["tokA", "tokA-no"] : ["tokB", "tokB-no"],
+            metadata_version_id: beforeCutover ? "1" : "2",
+            clob_token_ids: [tokenId, `${tokenId}-no`],
+            affirmative_token_id: tokenId,
           },
         ]);
       }
@@ -358,11 +391,20 @@ function createSanityWorld(): SanityWorld {
       }
       if (text.includes("FROM polymarket_book_snapshots")) {
         const tokenId = String(captured[0]);
+        if (tokenId === "tokA" && !state.targetBookAvailable) {
+          return respond([]);
+        }
+        if (tokenId === "tokB" && !state.neighborBookAvailable) {
+          return respond([]);
+        }
         return respond([
           {
-            bids_json: [],
+            bids_json:
+              tokenId === "tokA" ? [{ price: "0.40", size: "100" }] : [],
             asks_json:
-              tokenId === "tokB" ? [{ price: "0.50", size: "100" }] : [],
+              tokenId === "tokB" && state.neighborAskAvailable
+                ? [{ price: "0.50", size: "100" }]
+                : [],
             source_ts: ASOF,
             received_at: ASOF,
           },
@@ -390,6 +432,7 @@ function createSanityWorld(): SanityWorld {
           veto_id: nextVetoId,
           token_id: String(captured[1]),
           edge_key: String(captured[6]),
+          details_json: JSON.parse(String(captured[13])) as unknown,
           ended_at: null,
         });
         nextVetoId += 1;
@@ -403,6 +446,7 @@ function createSanityWorld(): SanityWorld {
               veto_id: veto.veto_id,
               token_id: veto.token_id,
               edge_key: veto.edge_key,
+              details_json: veto.details_json,
             })),
         );
       }
@@ -435,6 +479,32 @@ function violatingEstimateRow(): Row {
 }
 
 describe("sanityCheck lifecycle", () => {
+  it("uses the metadata token order and books valid at each asOf instant", async () => {
+    const world = createSanityWorld();
+    world.state.metadataCutover = ASOF;
+    const before = new Date(ASOF.getTime() - 1);
+
+    await sanityCheck(world.pool, DEFAULT_RESOLUTION_CONFIG, before);
+    await sanityCheck(world.pool, DEFAULT_RESOLUTION_CONFIG, ASOF);
+
+    const metadataCalls = world.calls.filter((call) =>
+      call.text.includes("FROM polymarket_market_metadata_versions"),
+    );
+    expect(metadataCalls).not.toHaveLength(0);
+    expect(
+      metadataCalls.every((call) => call.text.includes("valid_from <= $2")),
+    ).toBe(true);
+    expect(
+      metadataCalls.every((call) => !call.text.includes("polymarket_markets")),
+    ).toBe(true);
+    const bookTokens = world.calls
+      .filter((call) => call.text.includes("FROM polymarket_book_snapshots"))
+      .map((call) => call.params[0]);
+    expect(bookTokens).toEqual(
+      expect.arrayContaining(["A-v1", "B-v1", "tokA", "tokB"]),
+    );
+  });
+
   it("opens on violation, refreshes while it holds, closes when the estimate goes stale", async () => {
     const world = createSanityWorld();
     world.state.estimateRows = [violatingEstimateRow()];
@@ -494,5 +564,73 @@ describe("sanityCheck lifecycle", () => {
     expect(call?.params[0]).toEqual(expect.arrayContaining(["tokA", "tokB"]));
     expect(call?.params[1]).toEqual(new Date(ASOF.getTime() - 5 * 60_000));
     expect(call?.params[2]).toEqual(ASOF);
+  });
+
+  it("loads the target estimate and opens without the target's own book", async () => {
+    const world = createSanityWorld();
+    world.state.estimateRows = [violatingEstimateRow()];
+    world.state.targetBookAvailable = false;
+
+    const summary = await sanityCheck(
+      world.pool,
+      DEFAULT_RESOLUTION_CONFIG,
+      ASOF,
+    );
+
+    expect(summary).toEqual({ checked: 1, active: 1, opened: 1, closed: 0 });
+    const estimateCall = world.calls.find((call) =>
+      call.text.includes("FROM fundamental_estimates"),
+    );
+    expect(estimateCall?.params[0]).toEqual(
+      expect.arrayContaining(["tokA", "tokB"]),
+    );
+  });
+
+  it("keeps an open veto when the edge loses its executable price", async () => {
+    const world = createSanityWorld();
+    world.state.estimateRows = [violatingEstimateRow()];
+
+    const opened = await sanityCheck(
+      world.pool,
+      DEFAULT_RESOLUTION_CONFIG,
+      ASOF,
+    );
+    expect(opened).toEqual({ checked: 1, active: 1, opened: 1, closed: 0 });
+
+    world.state.neighborBookAvailable = false;
+    const unpriced = await sanityCheck(
+      world.pool,
+      DEFAULT_RESOLUTION_CONFIG,
+      ASOF,
+    );
+    expect(unpriced).toEqual({ checked: 1, active: 1, opened: 0, closed: 0 });
+    expect(world.state.vetoes[0]?.ended_at).toBeNull();
+  });
+
+  it("does not close q_gt_ask when only another token/direction is evaluable", async () => {
+    const world = createSanityWorld();
+    world.state.estimateRows = [violatingEstimateRow()];
+    await sanityCheck(world.pool, DEFAULT_RESOLUTION_CONFIG, ASOF);
+
+    world.state.neighborAskAvailable = false;
+    world.state.estimateRows = [
+      violatingEstimateRow(),
+      {
+        token_id: "tokB",
+        market_id: "B",
+        q: "0.500000",
+        model_id: "m@1",
+        status: "shadow",
+        decision_ts: ASOF,
+      },
+    ];
+    const partial = await sanityCheck(
+      world.pool,
+      DEFAULT_RESOLUTION_CONFIG,
+      ASOF,
+    );
+
+    expect(partial).toEqual({ checked: 1, active: 1, opened: 0, closed: 0 });
+    expect(world.state.vetoes[0]?.ended_at).toBeNull();
   });
 });

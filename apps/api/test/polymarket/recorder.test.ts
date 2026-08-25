@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { DatabasePool, QueryResult } from "../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../src/database.js";
 import {
   createPostgresRecorderStore,
   MarketBookTracker,
@@ -82,6 +86,71 @@ describe("postgres recorder store", () => {
     const params = captured[0];
     expect(params?.[2]).toBeInstanceOf(Date);
     expect((params?.[2] as Date).getTime()).toBe(1_787_098_643_398);
+  });
+
+  it("locks market, advisory and metadata in one transaction", async () => {
+    const statements: string[] = [];
+    let transactions = 0;
+    const query = <R extends Record<string, unknown>>(
+      text: string,
+    ): Promise<QueryResult<R>> => {
+      statements.push(text);
+      if (text.includes("MAX(version)")) {
+        return Promise.resolve({
+          rows: [{ max_version: 0 }] as unknown as R[],
+          rowCount: 1,
+        });
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    };
+    const pool: DatabasePool = {
+      query,
+      async transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+        transactions += 1;
+        return run({ query });
+      },
+      end: () => Promise.resolve(),
+    };
+    const entry: MarketRegistryEntry = {
+      conditionId: "0xlegacy",
+      question: "Will the legacy recorder stay versioned?",
+      slug: "legacy-versioned",
+      category: "crypto",
+      negRisk: false,
+      clobTokenIds: ["yes", "no"],
+      affirmativeTokenId: "yes",
+      rules: "objective rules",
+      tickSize: "0.01",
+      minOrderSize: "5",
+      rewardsMinSize: null,
+      rewardsMaxSpread: null,
+      feeType: null,
+      endDateIso: "2026-09-01T00:00:00Z",
+      active: true,
+      closed: false,
+      enableOrderBook: true,
+    };
+
+    await createPostgresRecorderStore(pool).upsertMarket(entry);
+
+    expect(transactions).toBe(1);
+    const metadataInsert = statements.findIndex((text) =>
+      text.includes("INSERT INTO polymarket_market_metadata_versions"),
+    );
+    const marketInsert = statements.findIndex((text) =>
+      text.includes("INSERT INTO polymarket_markets"),
+    );
+    const sourceLock = statements.findIndex(
+      (text) =>
+        text.includes("FROM polymarket_markets") && text.includes("FOR UPDATE"),
+    );
+    const advisoryLock = statements.findIndex((text) =>
+      text.includes("pg_advisory_xact_lock"),
+    );
+    expect(metadataInsert).toBeGreaterThanOrEqual(0);
+    expect(sourceLock).toBeGreaterThan(marketInsert);
+    expect(advisoryLock).toBeGreaterThan(sourceLock);
+    expect(metadataInsert).toBeGreaterThan(advisoryLock);
   });
 });
 

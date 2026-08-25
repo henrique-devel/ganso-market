@@ -115,22 +115,48 @@ function asDecimalString(value: unknown): string | null {
 
 function parseStringArray(value: unknown): string[] | null {
   if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string");
+    return value.every((item): item is string => typeof item === "string")
+      ? value
+      : null;
   }
   // Gamma encodes clobTokenIds/outcomes as a stringified JSON array.
   if (typeof value === "string") {
     try {
       const parsed: unknown = JSON.parse(value);
       if (Array.isArray(parsed)) {
-        return parsed.filter(
-          (item): item is string => typeof item === "string",
-        );
+        return parsed.every((item): item is string => typeof item === "string")
+          ? parsed
+          : null;
       }
     } catch {
       return null;
     }
   }
   return null;
+}
+
+function affirmativeTokenId(
+  tokenIds: readonly string[],
+  rawOutcomes: unknown,
+): string | null {
+  const outcomes = parseStringArray(rawOutcomes);
+  if (
+    tokenIds.length !== 2 ||
+    outcomes === null ||
+    outcomes.length !== tokenIds.length
+  ) {
+    return null;
+  }
+  const affirmativeIndexes = outcomes.flatMap((outcome, index) =>
+    /^(?:yes|up)$/i.test(outcome.trim()) ? [index] : [],
+  );
+  if (affirmativeIndexes.length !== 1) {
+    return null;
+  }
+  const tokenId = tokenIds[affirmativeIndexes[0] ?? -1];
+  return typeof tokenId === "string" && tokenId.trim().length > 0
+    ? tokenId
+    : null;
 }
 
 function parseTagSlugs(value: unknown): string[] {
@@ -223,6 +249,7 @@ export function parseMarket(raw: unknown): MarketRegistryEntry | null {
     category,
     negRisk: asBool(record.negRisk),
     clobTokenIds,
+    affirmativeTokenId: affirmativeTokenId(clobTokenIds, record.outcomes),
     rules,
     tickSize: asDecimalString(record.orderPriceMinTickSize),
     minOrderSize: asDecimalString(record.orderMinSize),

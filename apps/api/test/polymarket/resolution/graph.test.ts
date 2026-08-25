@@ -33,37 +33,70 @@ interface StoredEdge {
   revoked: boolean;
 }
 
-function buildPool(store: Map<string, StoredEdge>): ResolutionPool {
+interface EventMemberFixture {
+  readonly conditionId: string;
+  readonly receivedAt: Date;
+  readonly negRisk: boolean | null;
+}
+
+function buildPool(
+  store: Map<string, StoredEdge>,
+  eventMembers: ReadonlyArray<string | EventMemberFixture> = [
+    "0xhigh",
+    "0xlow",
+  ],
+  calls: Array<{ text: string; params: readonly unknown[] }> = [],
+): ResolutionPool {
   return {
     query<R extends Row>(
       text: string,
       params: readonly unknown[] = [],
     ): Promise<QueryResult<R>> {
+      calls.push({ text, params: [...params] });
       const result = ((): { rows: Row[]; rowCount: number } => {
-        if (text.startsWith("WITH membership AS")) {
+        if (text.includes("FROM polymarket_universe_log")) {
           const rows = [
             {
               condition_id: "0xhigh",
+              metadata_version_id: 1,
+              param_version_id: 1,
               question: "Will Bitcoin be above $120,000 on August 25?",
               category: "crypto",
               neg_risk: false,
               clob_token_ids: ["th-yes", "th-no"],
+              affirmative_token_id: "th-yes",
               in_universe: true,
             },
             {
               condition_id: "0xlow",
+              metadata_version_id: 2,
+              param_version_id: 2,
               question: "Will Bitcoin be above $100,000 on August 25?",
               category: "crypto",
               neg_risk: false,
               clob_token_ids: ["tl-yes", "tl-no"],
+              affirmative_token_id: "tl-yes",
               in_universe: true,
             },
           ];
           return { rows, rowCount: rows.length };
         }
-        if (text.includes("FROM polymarket_events e")) {
+        if (text.includes("FROM polymarket_event_markets em")) {
+          const asOf = params[0] as Date;
+          const known = eventMembers.filter(
+            (member) => typeof member === "string" || member.receivedAt <= asOf,
+          );
+          const eligible = known.every(
+            (member) => typeof member === "string" || member.negRisk === true,
+          );
+          const members = known.map((member) =>
+            typeof member === "string" ? member : member.conditionId,
+          );
+          if (!eligible || members.length === 0) {
+            return { rows: [], rowCount: 0 };
+          }
           return {
-            rows: [{ event_id: "ev1", members: ["0xhigh", "0xlow"] }],
+            rows: [{ event_id: "ev1", members }],
             rowCount: 1,
           };
         }
@@ -81,7 +114,8 @@ function buildPool(store: Map<string, StoredEdge>): ResolutionPool {
           };
         }
         if (text.startsWith("INSERT INTO graph_edges")) {
-          store.set(params[0] as string, {
+          const key = params[0] as string;
+          const incoming: StoredEdge = {
             kind: params[1],
             from: params[2],
             to: params[3],
@@ -93,7 +127,15 @@ function buildPool(store: Map<string, StoredEdge>): ResolutionPool {
             justification: params[9],
             params: JSON.parse(params[10] as string) as Record<string, unknown>,
             revoked: false,
-          });
+          };
+          const existing = store.get(key);
+          if (existing === undefined) {
+            store.set(key, incoming);
+          } else if (existing.params["source"] === "api") {
+            store.set(key, existing);
+          } else {
+            store.set(key, incoming);
+          }
           return { rows: [], rowCount: 1 };
         }
         if (
@@ -190,6 +232,179 @@ describe("buildGraph", () => {
     expect(store.size).toBe(3);
     expect([...store.values()].every((edge) => !edge.revoked)).toBe(true);
   });
+
+  it("keeps the full recorded group membership beyond the live universe", async () => {
+    const store = new Map<string, StoredEdge>();
+    await buildGraph(
+      buildPool(store, ["0xhigh", "0xlow", "0xexited"]),
+      curated,
+      T0,
+    );
+
+    expect(store.get("NEGRISK:event:ev1")?.members).toEqual([
+      "0xexited",
+      "0xhigh",
+      "0xlow",
+    ]);
+  });
+
+  it("builds structural membership only from facts available as of the cycle", async () => {
+    const store = new Map<string, StoredEdge>();
+    const calls: Array<{ text: string; params: readonly unknown[] }> = [];
+    await buildGraph(
+      buildPool(
+        store,
+        [
+          {
+            conditionId: "0xhigh",
+            receivedAt: new Date(T0.getTime() - 1_000),
+            negRisk: true,
+          },
+          {
+            conditionId: "0xlow",
+            receivedAt: new Date(T0.getTime() - 1_000),
+            negRisk: true,
+          },
+          {
+            conditionId: "0xfuture",
+            receivedAt: new Date(T0.getTime() + 1_000),
+            negRisk: true,
+          },
+        ],
+        calls,
+      ),
+      curated,
+      T0,
+    );
+
+    expect(store.get("NEGRISK:event:ev1")?.members).toEqual([
+      "0xhigh",
+      "0xlow",
+    ]);
+    const groupQuery = calls.find((call) =>
+      call.text.includes("FROM polymarket_event_markets em"),
+    );
+    expect(groupQuery?.params).toEqual([T0]);
+    expect(groupQuery?.text).toContain("em.received_at <= $1");
+    expect(groupQuery?.text).toContain("FROM polymarket_param_versions pv");
+    expect(groupQuery?.text).toContain("pv.valid_from <= $1");
+    expect(groupQuery?.text).toContain("bool_and(neg_risk_as_of IS TRUE)");
+    expect(groupQuery?.text).not.toContain("e.neg_risk");
+  });
+
+  it("omits a structural group without versioned negRisk evidence for every member", async () => {
+    const store = new Map<string, StoredEdge>();
+    await buildGraph(
+      buildPool(store, [
+        {
+          conditionId: "0xhigh",
+          receivedAt: new Date(T0.getTime() - 1_000),
+          negRisk: true,
+        },
+        {
+          conditionId: "0xlow",
+          receivedAt: new Date(T0.getTime() - 1_000),
+          negRisk: null,
+        },
+      ]),
+      curated,
+      T0,
+    );
+
+    expect(store.has("NEGRISK:event:ev1")).toBe(false);
+  });
+
+  it("uses current file curation on collision and demotes it when removed", async () => {
+    const store = new Map<string, StoredEdge>();
+    const colliding = parseCuratedEdges({
+      schema_version: 1,
+      edges: [
+        {
+          kind: "LADDER",
+          from_condition_id: "0xhigh",
+          to_condition_id: "0xlow",
+          author: "operator",
+          justification: "manually reviewed threshold relationship",
+          confidence: 0.95,
+          params: { source: "review" },
+        },
+      ],
+    });
+    const pool = buildPool(store);
+
+    await buildGraph(pool, colliding, T0);
+    expect(store.get("LADDER:0xhigh->0xlow")).toMatchObject({
+      origin: "curated",
+      confidence: "0.950000",
+      author: "operator",
+      justification: "manually reviewed threshold relationship",
+      params: { source: "file" },
+    });
+
+    await buildGraph(pool, [], T0);
+    expect(store.get("LADDER:0xhigh->0xlow")).toMatchObject({
+      origin: "structural",
+      confidence: "0.800000",
+      author: null,
+      justification: null,
+      params: { source: "structural" },
+      revoked: false,
+    });
+  });
+
+  it("leaves an API-curated collision under API ownership", async () => {
+    const store = new Map<string, StoredEdge>([
+      [
+        "LADDER:0xhigh->0xlow",
+        {
+          kind: "LADDER",
+          from: "0xhigh",
+          to: "0xlow",
+          eventId: null,
+          members: [],
+          origin: "curated",
+          confidence: "0.990000",
+          author: "api-operator",
+          justification: "explicit API override",
+          params: { source: "api" },
+          revoked: false,
+        },
+      ],
+    ]);
+
+    const summary = await buildGraph(buildPool(store), [], T0);
+
+    expect(store.get("LADDER:0xhigh->0xlow")).toMatchObject({
+      origin: "curated",
+      confidence: "0.990000",
+      author: "api-operator",
+      params: { source: "api" },
+      revoked: false,
+    });
+    expect(summary.structural).toBe(2);
+  });
+
+  it("counts a structural/file collision once in the reconciled summary", async () => {
+    const store = new Map<string, StoredEdge>();
+    const colliding = parseCuratedEdges({
+      schema_version: 1,
+      edges: [
+        {
+          kind: "LADDER",
+          from_condition_id: "0xhigh",
+          to_condition_id: "0xlow",
+          author: "operator",
+          justification: "current curated override",
+          confidence: 0.95,
+        },
+      ],
+    });
+
+    const summary = await buildGraph(buildPool(store), colliding, T0);
+
+    expect(summary).toMatchObject({ structural: 1, curated: 1 });
+    expect(store.size).toBe(2);
+  });
 });
 
 describe("loadActiveEdges", () => {
@@ -249,8 +464,12 @@ interface ViolationRow {
 }
 
 interface EvalWorld {
+  edges: Row[];
   states: Row[];
-  books: Map<string, { bids: unknown; asks: unknown; receivedAt: Date }>;
+  books: Map<
+    string,
+    { bids: unknown; asks: unknown; receivedAt: Date; sourceTs?: Date | null }
+  >;
   violations: ViolationRow[];
   closes: number;
 }
@@ -258,12 +477,32 @@ interface EvalWorld {
 const TOKENS: Record<string, string[]> = {
   "0xa": ["a-yes", "a-no"],
   "0xb": ["b-yes", "b-no"],
+  "0xm1": ["m1-yes", "m1-no"],
+  "0xm2": ["m2-yes", "m2-no"],
+  "0xm3": ["m3-yes", "m3-no"],
 };
 
 const EDGE_KEY = "IMPLIES:0xa->0xb";
 
 function emptyEvalWorld(): EvalWorld {
-  return { states: [], books: new Map(), violations: [], closes: 0 };
+  return {
+    edges: [
+      {
+        edge_id: 1,
+        edge_key: EDGE_KEY,
+        kind: "IMPLIES",
+        from_condition_id: "0xa",
+        to_condition_id: "0xb",
+        event_id: null,
+        members_json: [],
+        confidence: "0.800000",
+      },
+    ],
+    states: [],
+    books: new Map(),
+    violations: [],
+    closes: 0,
+  };
 }
 
 function setBeyond(world: EvalWorld, receivedAt: Date = T0): void {
@@ -301,28 +540,26 @@ function evalPool(world: EvalWorld): ResolutionPool {
       const result = ((): { rows: Row[]; rowCount: number } => {
         if (text.includes("FROM graph_edges")) {
           return {
-            rows: [
-              {
-                edge_id: 1,
-                edge_key: EDGE_KEY,
-                kind: "IMPLIES",
-                from_condition_id: "0xa",
-                to_condition_id: "0xb",
-                event_id: null,
-                members_json: [],
-                confidence: "0.800000",
-              },
-            ],
-            rowCount: 1,
+            rows: world.edges,
+            rowCount: world.edges.length,
           };
         }
         if (text.includes("FROM resolution_market_state")) {
           return { rows: world.states, rowCount: world.states.length };
         }
-        if (text.includes("FROM polymarket_markets")) {
+        if (text.includes("FROM polymarket_market_metadata_versions")) {
           const tokens = TOKENS[params[0] as string];
           return {
-            rows: tokens === undefined ? [] : [{ clob_token_ids: tokens }],
+            rows:
+              tokens === undefined
+                ? []
+                : [
+                    {
+                      metadata_version_id: "1",
+                      clob_token_ids: tokens,
+                      affirmative_token_id: tokens[0],
+                    },
+                  ],
             rowCount: tokens === undefined ? 0 : 1,
           };
         }
@@ -342,7 +579,7 @@ function evalPool(world: EvalWorld): ResolutionPool {
               {
                 bids_json: book.bids,
                 asks_json: book.asks,
-                source_ts: null,
+                source_ts: book.sourceTs ?? null,
                 received_at: book.receivedAt,
               },
             ],
@@ -372,6 +609,20 @@ function evalPool(world: EvalWorld): ResolutionPool {
             ended: false,
           });
           return { rows: [], rowCount: 1 };
+        }
+        if (
+          text.includes("UPDATE graph_violations") &&
+          text.includes("edge_key = ANY($1::text[])")
+        ) {
+          const active = new Set(params[0] as string[]);
+          let closed = 0;
+          for (const violation of world.violations) {
+            if (!active.has(violation.edgeKey) && !violation.ended) {
+              violation.ended = true;
+              closed += 1;
+            }
+          }
+          return { rows: [], rowCount: closed };
         }
         if (
           text.includes("UPDATE graph_violations") &&
@@ -492,5 +743,86 @@ describe("evaluateGraph k-persistence", () => {
     expect(third).toMatchObject({ beyond: 1, opened: 0 });
     expect(streaks.get(EDGE_KEY)).toBe(1);
     expect(world.violations).toHaveLength(0);
+  });
+
+  it("rejects a future source timestamp instead of treating it as fresh", async () => {
+    const world = emptyEvalWorld();
+    const pool = evalPool(world);
+    const streaks = new Map<string, number>();
+    setBeyond(world);
+    const future = new Date(T0.getTime() + 1);
+    const a = world.books.get("a-yes");
+    if (a !== undefined) {
+      a.sourceTs = future;
+    }
+
+    const summary = await evaluateGraph(pool, config, streaks, T0);
+
+    expect(summary).toMatchObject({ checked: 1, skipped: 1, beyond: 0 });
+    expect(streaks.get(EDGE_KEY)).toBe(0);
+  });
+
+  it("closes an open violation and clears its streak when the edge disappears", async () => {
+    const world = emptyEvalWorld();
+    const pool = evalPool(world);
+    const streaks = new Map<string, number>();
+    setBeyond(world);
+    await evaluateGraph(pool, config, streaks, T0);
+    await evaluateGraph(pool, config, streaks, T0);
+    await evaluateGraph(pool, config, streaks, T0);
+    expect(world.violations[0]?.ended).toBe(false);
+
+    world.edges = [];
+    const summary = await evaluateGraph(pool, config, streaks, T0);
+
+    expect(summary).toMatchObject({ checked: 0, closed: 1 });
+    expect(world.violations[0]?.ended).toBe(true);
+    expect(streaks.has(EDGE_KEY)).toBe(false);
+  });
+
+  it("does not close an open group violation when a stale member makes the subset inconclusive", async () => {
+    const world = emptyEvalWorld();
+    const groupKey = "NEGRISK:event:ev1";
+    world.edges = [
+      {
+        edge_id: 2,
+        edge_key: groupKey,
+        kind: "NEGRISK",
+        from_condition_id: null,
+        to_condition_id: null,
+        event_id: "ev1",
+        members_json: ["0xm1", "0xm2", "0xm3"],
+        confidence: "1.000000",
+      },
+    ];
+    world.books.set("m1-yes", {
+      bids: [{ price: "0.40", size: "10" }],
+      asks: [{ price: "0.45", size: "10" }],
+      receivedAt: T0,
+    });
+    world.books.set("m2-yes", {
+      bids: [{ price: "0.35", size: "10" }],
+      asks: [{ price: "0.40", size: "10" }],
+      receivedAt: T0,
+    });
+    world.books.set("m3-yes", {
+      bids: [{ price: "0.30", size: "10" }],
+      asks: [{ price: "0.35", size: "10" }],
+      receivedAt: T0,
+    });
+    const pool = evalPool(world);
+    const streaks = new Map<string, number>();
+
+    await evaluateGraph(pool, config, streaks, T0);
+    await evaluateGraph(pool, config, streaks, T0);
+    const opened = await evaluateGraph(pool, config, streaks, T0);
+    expect(opened.opened).toBe(1);
+    expect(world.violations[0]?.ended).toBe(false);
+
+    world.books.delete("m3-yes");
+    const inconclusive = await evaluateGraph(pool, config, streaks, T0);
+    expect(inconclusive).toMatchObject({ skipped: 1, closed: 0 });
+    expect(world.violations[0]?.ended).toBe(false);
+    expect(streaks.get(groupKey)).toBe(0);
   });
 });

@@ -28,6 +28,8 @@ export interface RetentionTableConfig {
   readonly protected: boolean;
   /** book_deltas only: require series_1m coverage before deleting. */
   readonly requiresSeriesCoverage?: boolean;
+  /** Lifecycle rows are eligible only after their ended_at is populated. */
+  readonly closedRowsOnly?: boolean;
 }
 
 // RFC-007 retention table, top-to-bottom in alarm-reduction order. Tables with
@@ -252,8 +254,9 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     table: "graph_sanity_vetoes",
     ttlDays: 180,
     quotaBytes: 0.05 * GB,
-    timeColumn: "received_at",
+    timeColumn: "ended_at",
     protected: false,
+    closedRowsOnly: true,
   },
   {
     table: "resolution_layer_divergences",
@@ -314,6 +317,8 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     "polymarket_event_markets",
     "polymarket_rule_versions",
     "polymarket_param_versions",
+    "polymarket_market_metadata_versions",
+    "polymarket_resolution_input_changes",
     "polymarket_resolution_events",
     "polymarket_data_gaps",
     "polymarket_universe_log",
@@ -435,6 +440,8 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   ): Promise<number> {
     let total = 0;
     for (let i = 0; i < MAX_DELETE_BATCHES; i += 1) {
+      const closedFilter =
+        config.closedRowsOnly === true ? " AND ended_at IS NOT NULL" : "";
       const filterSql = tokenFilter === null ? "" : " AND token_id = ANY($2)";
       const params: unknown[] =
         tokenFilter === null ? [cutoff] : [cutoff, [...tokenFilter]];
@@ -442,7 +449,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         `DELETE FROM ${config.table}
           WHERE ctid IN (
             SELECT ctid FROM ${config.table}
-             WHERE ${config.timeColumn} < $1${filterSql}
+             WHERE ${config.timeColumn} < $1${closedFilter}${filterSql}
              LIMIT ${batchSize}
           )`,
         params,
@@ -571,10 +578,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     config: RetentionTableConfig,
     rowsToDelete: number,
   ): Promise<Date | null> {
+    const eligibleWhere =
+      config.closedRowsOnly === true ? " WHERE ended_at IS NOT NULL" : "";
     const probe = async (offset: number): Promise<Date | null> => {
       const result = await pool.query<{ cutoff: Date | string }>(
         `SELECT ${config.timeColumn} AS cutoff
            FROM ${config.table}
+          ${eligibleWhere}
           ORDER BY ${config.timeColumn} ASC
          OFFSET ${Math.max(offset, 0)} LIMIT 1`,
         [],
@@ -584,7 +594,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     let cutoff = await probe(rowsToDelete - 1);
     if (cutoff === null) {
       const counted = await pool.query<{ live_rows: string | number }>(
-        `SELECT COUNT(*)::bigint AS live_rows FROM ${config.table}`,
+        `SELECT COUNT(*)::bigint AS live_rows FROM ${config.table}${eligibleWhere}`,
         [],
       );
       const liveRows = Number(counted.rows[0]?.live_rows ?? 0);

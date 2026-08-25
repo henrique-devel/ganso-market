@@ -6,7 +6,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { QueryResult, SqlExecutor } from "../../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../../src/database.js";
 import { registerResolutionRoutes } from "../../../src/polymarket/resolution/api.js";
 
 type Row = Record<string, unknown>;
@@ -35,8 +39,8 @@ interface WorldOptions {
 function worldPool(
   record: { writes: Recorded[] },
   options: WorldOptions = {},
-): SqlExecutor {
-  return {
+): DatabasePool {
+  const executor: SqlExecutor = {
     query<R extends Row>(
       text: string,
       params: readonly unknown[] = [],
@@ -46,6 +50,19 @@ function worldPool(
         rowCount = rows.length,
       ): Promise<QueryResult<R>> =>
         Promise.resolve({ rows: rows as R[], rowCount });
+      if (
+        text.startsWith(
+          "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE",
+        ) ||
+        (text.includes("FROM resolution_runtime_state") &&
+          text.includes("FOR UPDATE")) ||
+        text.includes("UPDATE resolution_runtime_state")
+      ) {
+        record.writes.push({ text, params });
+        return text.includes("FROM resolution_runtime_state")
+          ? respond([{ generation: "11111111-1111-4111-8111-111111111111" }])
+          : respond([], 1);
+      }
       if (text.includes("INSERT INTO graph_edges")) {
         record.writes.push({ text, params });
         return respond([], 1);
@@ -144,9 +161,18 @@ function worldPool(
       throw new Error(`unexpected query: ${text}`);
     },
   };
+  return {
+    query: executor.query,
+    async transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+      return run(executor);
+    },
+    end(): Promise<void> {
+      return Promise.resolve();
+    },
+  };
 }
 
-async function buildApp(pool: SqlExecutor): Promise<FastifyInstance> {
+async function buildApp(pool: DatabasePool): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   registerResolutionRoutes(app, { pool, authService, clock: () => NOW });
   await app.ready();
@@ -368,6 +394,29 @@ describe("POST /polymarket/graph/edges", () => {
     expect(insert?.params[6]).toBe("henrique");
     const paramsJson = JSON.parse(String(insert?.params[8])) as Row;
     expect(paramsJson.source).toBe("api");
+    const journalLock = record.writes.findIndex((entry) =>
+      entry.text.startsWith(
+        "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE",
+      ),
+    );
+    const runtimeLock = record.writes.findIndex(
+      (entry) =>
+        entry.text.includes("FROM resolution_runtime_state") &&
+        entry.text.includes("FOR UPDATE"),
+    );
+    const graphMutation = record.writes.findIndex((entry) =>
+      entry.text.includes("INSERT INTO graph_edges"),
+    );
+    const invalidation = record.writes.findIndex((entry) =>
+      entry.text.includes("UPDATE resolution_runtime_state"),
+    );
+    expect([journalLock, runtimeLock, graphMutation, invalidation]).toEqual([
+      0, 1, 2, 3,
+    ]);
+    expect(record.writes[invalidation]?.text).toContain(
+      "failure_reason = 'CURATED_EDGE_CHANGED'",
+    );
+    expect(record.writes[invalidation]?.params).toEqual([NOW]);
   });
 
   it("refuses an edge without an author", async () => {
@@ -415,6 +464,14 @@ describe("POST /polymarket/graph/edges", () => {
       "henrique",
       "aresta superada",
     ]);
+    const graphMutation = record.writes.findIndex((entry) =>
+      entry.text.includes("UPDATE graph_edges"),
+    );
+    const invalidation = record.writes.findIndex((entry) =>
+      entry.text.includes("UPDATE resolution_runtime_state"),
+    );
+    expect(graphMutation).toBe(2);
+    expect(invalidation).toBe(3);
   });
 
   it("returns 404 when the revocation matches no curated edge", async () => {
@@ -433,6 +490,11 @@ describe("POST /polymarket/graph/edges", () => {
     });
     expect(response.statusCode).toBe(404);
     expect((response.json() as Row).reason_code).toBe("EDGE_NOT_FOUND");
+    expect(
+      record.writes.some((entry) =>
+        entry.text.includes("UPDATE resolution_runtime_state"),
+      ),
+    ).toBe(false);
   });
 
   it("refuses a revocation without a justification", async () => {

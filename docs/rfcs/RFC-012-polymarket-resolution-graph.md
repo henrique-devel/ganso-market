@@ -1,6 +1,7 @@
 # RFC-012 — Polymarket: risco de resolução e grafo lógico de mercados
 
-**Status:** accepted (2026-08-24 — refinada após verificação de prontidão; decisões de disco, RAM, coletor onchain e dashboard aprovadas pelo proprietário)
+**Status:** accepted; fases A–D + hardening final verificados localmente
+(2026-08-24); revisão, merge, boot e soak em produção pendentes
 **Dependências:** RFC-007 (recorder, registry versionado, timeline UMA e eventos de regra)
 **Habilita:** RFC-013 (portfólio/sizing consome score, buffers e vetos do grafo); o veto de sanidade sobre `q` é aplicado à saída da RFC-010 na camada de sinais/portfólio
 
@@ -42,6 +43,24 @@ Verificação executada contra o código e a produção:
    faseamento do `OrderFilled` na RFC-007. A verificação de ABI/endereço
    contra a documentação atual é feita no início do desenvolvimento
    (condição de parada permanece).
+
+### Estado da implementação (2026-08-24)
+
+- As 18 tarefas das fases A–D e o hardening de concorrência/falha fechada
+  estão implementados na branch `claude/rfc-012-execucao-c254e1`.
+- `make verify` passou; a API completa contra PostgreSQL 18.4 passou com
+  **1.041/1.041 testes**, e o smoke Compose passou em volume novo.
+- A migration 0010 contém o schema funcional original e permaneceu
+  inalterada. As migrations aditivas 0011–0012 implementam o handshake
+  durável do runtime (journal, geração, lease, freshness) e o histórico as-of
+  de metadados/outcomes com token afirmativo explícito.
+- O aceite/fill paper, kill switch, settlement e release terminal foram
+  fechados transacionalmente. O circuit breaker só permite redução da
+  exposição assinada sem cruzar zero; falha de estado/posição cancela sem
+  fill.
+- Nenhuma execução real foi adicionada. Merge, ativação no profile
+  `polymarket`, boot do artefato final e soak de 24 h dependem de revisão e
+  aprovação do proprietário.
 
 ## Prompt a executar
 
@@ -88,9 +107,12 @@ edge — nunca a fonte primária de PnL.
 - Sem VPN/proxy/contorno de geoblock em nenhuma hipótese.
 - Nenhuma feature pode usar dado posterior à decisão (look-ahead): o score e o
   grafo em cada timestamp `t` usam somente versões de regra, snapshots e
-  status com `received_ts ≤ t`. Atenção ao leakage conhecido: `closedTime`
-  da UMA chega **depois** de o desfecho ser público — nunca usar como label
-  temporal de treino/avaliação.
+  status com `received_ts ≤ t`. Agregados de 1 min só podem ser usados quando
+  o bucket inteiro fechou até `t`; no backtest, inclusive o prior medido por
+  categoria é calculado no instante histórico da decisão, nunca no instante
+  de geração do relatório. Atenção ao leakage conhecido: `closedTime` da UMA
+  chega **depois** de o desfecho ser público — nunca usar como label temporal
+  de treino/avaliação.
 - O grafo **não** é fonte primária de PnL: `inconsistency_signal` só vira
   candidato a trade se sobreviver ao mesmo funil de custos/vetos da RFC-013
   (fees taker por categoria, spread efetivo, profundidade executável,
@@ -117,6 +139,15 @@ edge — nunca a fonte primária de PnL.
   `polymarket-resolution` com 192 MiB, financiado pelo estimador
   (384 → 192 MiB; uso medido 39 MiB). Quota vence TTL, como em toda a
   retenção do módulo.
+- Dentro dos 0,4 GB de scores, `resolution_scores` é uma série derivada com
+  TTL de 180 dias e quota de 0,35 GB. Append-only significa que uma linha
+  gravada não pode sofrer `UPDATE`; `DELETE` pelo job de retenção é permitido
+  e necessário para que quota vença TTL. `resolution_score_versions` e as
+  versões de regra ficam preservadas: podar a linha materializada não
+  autoriza mudar sua definição. O replay exato depende de os inputs as-of
+  ainda estarem na própria janela de retenção; depois dela, a decisão paper
+  continua auditável pela trilha do broker, mas o score bruto podado deixa de
+  ser consultável.
 - Recomputação do score: event-driven (nova versão de regra, mudança de
   `umaResolutionStatus`) + varredura horária. Grafo: reavaliação a cada
   snapshot agregado de 1 min do universo, não a cada delta.
@@ -195,8 +226,10 @@ settled`, com timestamps e resultado (P1=NO, P2=YES, P3=50/50,
    features 1–7 + delta `endDate` vs `umaEndDate` + flag de clarificação
    recente + concentração de holders (`/holders`, share dos top-N). Pesos em
    configuração versionada; toda mudança de peso gera nova `score_version` e
-   os scores antigos permanecem consultáveis (reprodutibilidade de decisões
-   paper).
+   os scores antigos permanecem consultáveis e reproduzíveis dentro da janela
+   de retenção. Depois do pruning, a versão continua imutável e a decisão
+   paper mantém sua trilha própria, mas o score materializado deixa de ser
+   consultável.
 9. **Mapeamento score → ação** (determinístico, configurável):
    - `R ≥ r_veto` (default 0,7) **ou** qualquer flag dura (fonte subjetiva,
      clarificação nas últimas 24h, inconsistência título-regra) ⇒ `VETO`:
@@ -217,11 +250,19 @@ resolution_buffer`), incluindo o cenário 50/50 como perda de cauda;
      não, em qualquer direção) é registrada como evento e exposta como
      métrica/painel para comparação do operador: a divergência é informação
      de decisão, não ruído a eliminar.
+   - **liberação terminal:** `resolved`/`market_resolved` só libera o mercado
+     e o grupo depois de nova recomputação. A recomputação deve carregar o
+     mercado pelo ID mesmo que ele já tenha saído do universo, gravar ação
+     própria `NONE` e refazer o acoplamento do evento para não deixar
+     `VETO`/`CIRCUIT_BREAKER` terminal congelando os irmãos indefinidamente.
 10. **Backtest de sanidade do buffer**: sobre os mercados já resolvidos no
-    recorder, verificar que o veto teria bloqueado os mercados que entraram
-    em disputa com antecedência mensurável, e reportar taxa de
-    falso-positivo (mercados vetados que resolveram limpos). Sem meta de
-    lucro — meta é cobertura/precisão do veto, reportada com intervalo.
+    recorder, inclusive os que já saíram do universo, verificar que o veto
+    teria bloqueado os mercados que entraram em disputa com antecedência
+    mensurável e reportar taxa de falso-positivo (mercados vetados que
+    resolveram limpos). Cada replay usa somente buckets totalmente fechados e
+    o prior medido disponível no instante histórico da decisão, nunca
+    estatísticas do instante do relatório. Sem meta de lucro — meta é
+    cobertura/precisão do veto, reportada com intervalo.
 
 **Escopo B — grafo lógico**
 
@@ -278,7 +319,16 @@ resolution_buffer`), incluindo o cenário 50/50 como perda de cauda;
     EV. Ordens manuais também são recusadas sob `CIRCUIT_BREAKER` (aumentar
     posição em disputa é proibido); sob `VETO` são aceitas apenas com flag
     explícita `override_veto` gravada no ledger (o operador pode discordar
-    do score, mas a discordância fica auditável).
+    do score, mas a discordância fica auditável). O mesmo invariante vale para
+    ordens que já estavam abertas quando o breaker disparou: o broker usa a
+    posição **assinada** reconstruída do ledger e só deixa executar reduce-only,
+    sem cruzar zero (`shares > 0`: `SELL`; `shares < 0`: `BUY`). Uma `FAK`
+    maior que a capacidade é recortada exatamente até zero e tem o restante
+    cancelado; `FOK`, `GTC` e `GTD` que atravessariam zero são canceladas sem
+    fill. Posição zero, lado que aumenta exposição ou restante inválido também
+    causam cancelamento efetivo e auditado. Falha ao ler o estado autoritativo
+    ou a posição canônica cancela as ordens afetadas e não permite fill com
+    base em estado desconhecido.
 18. **Dashboard visual do processo de resolução (decisão de 2026-08-24)**: o
     proprietário operará por interface gráfica, não por API. Página no web
     app (React/Vite existente, atrás do login da RFC-002) mostrando, de
@@ -350,7 +400,11 @@ Nenhum endpoint de trading/wallet/deposit.
   incluindo P4 e P3; máquina de estados nunca pula estados nem duplica
   eventos em replay/out-of-order.
 - Circuit breaker: disputa ativa bloqueia novo sinal e aumento de posição
-  paper no mercado e no grupo; liberação só após settle + recomputação.
+  paper no mercado e no grupo; ordem já aberta só executa até reduzir a
+  posição assinada sem cruzar zero, com clipping apenas para `FAK`, e as
+  demais são canceladas; falha de leitura autoritativa não produz fill.
+  Liberação só após
+  settle + recomputação, inclusive se o mercado já saiu do universo.
 - Buffer no EV: com `R` crescente, o EV líquido decresce monotonicamente;
   cenário 50/50 reduz EV de posições a preços altos (YES a 80¢ → payoff
   50¢) conforme esperado.
@@ -363,13 +417,23 @@ Nenhum endpoint de trading/wallet/deposit.
 - Veto de sanidade: `q` violando `IMPLIES`/`LADDER` bloqueia sinal do modelo
   e mantém baseline de mercado.
 - Look-ahead: recomputar score/grafo em timestamp passado usa somente dados
-  com `received_ts` anterior; teste automatizado com dado plantado no futuro
-  falha se vazar; `closedTime` da UMA ausente de qualquer label.
+  com `received_ts` anterior e buckets de 1 min totalmente fechados; o
+  backtest calcula priors no instante histórico. Teste automatizado com dado
+  plantado no futuro falha se vazar; `closedTime` da UMA ausente de qualquer
+  label.
 - Reprodutibilidade: decisão paper antiga referencia `score_version` e
-  versão de regra; recomputação com a mesma versão reproduz o mesmo score.
+  versão de regra; dentro das janelas retidas, recomputação com a mesma versão
+  e inputs as-of reproduz o mesmo score. Depois do pruning, a trilha paper e a
+  definição da versão permanecem auditáveis, mas o score bruto podado não.
+- Retenção: `UPDATE resolution_scores` é recusado; o job pode podar scores por
+  TTL/quota sem apagar `resolution_score_versions` nem as referências de
+  replay preservadas.
 - Enforcement (tarefa 17): intent sob `VETO`/`CIRCUIT_BREAKER` é recusado
   com justificativa; ordem manual sob `CIRCUIT_BREAKER` recusada; `VETO`
-  manual só com `override_veto` gravado no ledger.
+  manual só com `override_veto` gravado no ledger. Para ordens já abertas,
+  cobrir long/short, `FAK` recortada até zero, `FOK` sem partial, duas ordens
+  concorrendo pela mesma exposição, tentativa de cruzar zero, cancelamento
+  auditado e falha fechada de leitura.
 - Divergência de camadas (tarefa 9): cenário em que só uma das camadas de
   circuit breaker dispara gera o evento de divergência — nas duas direções.
 - Busca de código confirma ausência de auth/wallet/order real.
@@ -386,13 +450,20 @@ Nenhum endpoint de trading/wallet/deposit.
   feature, consultáveis via API, recomputados em ≤ 60 s após mudança de
   regra ou de status UMA.
 - Disputa ativa nunca coexiste com sinal novo ou aumento de posição no
-  mercado/grupo (invariante verificada em teste e em runtime).
+  mercado/grupo: ordens abertas só podem reduzir a posição assinada sem
+  cruzar zero, com clipping apenas de `FAK`; leitura autoritativa indisponível
+  cancela as ordens abertas e não permite fill
+  (invariante verificada em testes unitários e de integração PostgreSQL; a
+  observação operacional fica para o soak pós-aprovação).
 - Nenhum sinal do modelo fundamental é emitido violando restrição ativa do
   grafo além da banda de custos.
 - `inconsistency_signal` sempre reporta magnitude líquida de custos e
   tamanho executável por profundidade gravada; nunca usa midpoint.
 - Scores, pesos, léxico e arestas curadas são versionados; qualquer decisão
-  paper histórica é reproduzível.
+  paper histórica é reproduzível enquanto seus inputs as-of estiverem retidos.
+  Scores materializados podem ser podados por TTL/quota; suas versões não
+  podem ser mutadas nem podadas junto com a série, e a trilha paper permanece
+  auditável sem prometer consulta ao score bruto já podado.
 - Priors externos vs medidos são distinguíveis na API; a substituição por
   medição própria é automática ao atingir o limiar de amostra.
 - Sem promessa de lucro: o critério de sucesso do Escopo B é a taxa de

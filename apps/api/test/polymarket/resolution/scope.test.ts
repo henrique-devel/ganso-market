@@ -77,6 +77,7 @@ const WRITABLE_TABLES: readonly string[] = [
   "resolution_adjudication_samples",
   "resolution_layer_divergences",
   "resolution_reports",
+  "resolution_runtime_state",
   "graph_edges",
   "graph_violations",
   "graph_sanity_vetoes",
