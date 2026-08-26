@@ -24,6 +24,14 @@ export const QUOTA_TARGET_RATIO = 0.8;
 /** Effective-TTL reduction per step when the global 40 GB budget alarms. */
 export const GLOBAL_ALARM_TTL_FACTOR = 0.75;
 const MAX_QUOTA_ITERATIONS = 4;
+/**
+ * Above this live-row count the exact OFFSET cutoff probe stops being viable
+ * (measured: 42.7 s at 100 M rows, against a 30 s statement_timeout) and the
+ * pruner interpolates the cutoff from the time range instead.
+ */
+const INTERPOLATION_MIN_ROWS = 5_000_000;
+/** Hard clamp on the interpolated fraction: never "everything below newest". */
+const MAX_INTERPOLATED_FRACTION = 0.9;
 const MAX_DELETE_BATCHES = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -677,6 +685,66 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     return rowsDeleted;
   }
 
+  /**
+   * Time-interpolated cutoff for tables too large to probe by OFFSET.
+   *
+   * Assumes a roughly uniform arrival rate over the retained window, which is
+   * what a continuously running recorder produces. The fraction is capped well
+   * below 1 so the estimate can never collapse to "delete everything below the
+   * newest row" — the failure mode the exact probe's COUNT fallback exists to
+   * prevent, kept here as a hard clamp instead.
+   */
+  async function interpolatedCutoff(
+    config: RetentionTableConfig,
+    rowsToDelete: number,
+    liveRows: number,
+    eligibleWhere: string,
+  ): Promise<Date | null> {
+    const bounds = await pool.query<{
+      oldest: Date | string | null;
+      newest: Date | string | null;
+    }>(
+      `SELECT min(${config.timeColumn}) AS oldest,
+              max(${config.timeColumn}) AS newest
+         FROM ${config.table}${eligibleWhere}`,
+      [],
+    );
+    const oldest = toDate(bounds.rows[0]?.oldest ?? null);
+    const newest = toDate(bounds.rows[0]?.newest ?? null);
+    if (oldest === null || newest === null) {
+      log(
+        "warn",
+        "RETENTION_CUTOFF_UNAVAILABLE",
+        "polymarket_retention_cutoff_unavailable",
+        { table: config.table, rows_to_delete: rowsToDelete },
+      );
+      return null;
+    }
+    const spanMs = newest.getTime() - oldest.getTime();
+    if (spanMs <= 0 || liveRows <= 0) {
+      return null;
+    }
+    const rawFraction = rowsToDelete / liveRows;
+    const fraction = Math.min(
+      Math.max(rawFraction, 0),
+      MAX_INTERPOLATED_FRACTION,
+    );
+    const cutoff = new Date(oldest.getTime() + Math.floor(spanMs * fraction));
+    log(
+      "info",
+      "RETENTION_CUTOFF_INTERPOLATED",
+      "polymarket_retention_cutoff_interpolated",
+      {
+        table: config.table,
+        rows_to_delete: rowsToDelete,
+        live_rows: liveRows,
+        fraction,
+        cutoff: cutoff.toISOString(),
+      },
+    );
+    return cutoff;
+  }
+
   // Find the time cutoff that removes the oldest `rowsToDelete` rows. The
   // OFFSET probe can come back empty when pg_class.reltuples overestimates
   // the live row count (typical right after a TTL prune, before autovacuum
@@ -687,9 +755,20 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   async function quotaCutoff(
     config: RetentionTableConfig,
     rowsToDelete: number,
+    liveRows: number,
   ): Promise<Date | null> {
     const eligibleWhere =
       config.closedRowsOnly === true ? " WHERE ended_at IS NOT NULL" : "";
+    // The exact OFFSET probe is unusable on a large table: measured in
+    // production on polymarket_book_deltas at 42.7 s for OFFSET 100 000 000,
+    // against the recorder's 30 s statement_timeout. It threw, the quota step
+    // aborted, and the table kept growing. Above the threshold, interpolate the
+    // cutoff from the time range instead — both min() and max() are index
+    // lookups, and the quota loop re-measures what it actually deleted, so an
+    // imprecise first estimate self-corrects on the next iteration.
+    if (liveRows > INTERPOLATION_MIN_ROWS) {
+      return interpolatedCutoff(config, rowsToDelete, liveRows, eligibleWhere);
+    }
     const probe = async (offset: number): Promise<Date | null> => {
       const result = await pool.query<{ cutoff: Date | string }>(
         `SELECT ${config.timeColumn} AS cutoff
@@ -772,7 +851,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         Math.ceil((estimatedLiveBytes - target) / bytesPerRow),
         1,
       );
-      const cutoff = await quotaCutoff(config, rowsToDelete);
+      const cutoff = await quotaCutoff(config, rowsToDelete, size.liveRows);
       if (cutoff === null) {
         // No usable cutoff (stats overestimated the table): abort this
         // table's quota iteration — never fall back to `now`, which would

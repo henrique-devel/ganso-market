@@ -28,7 +28,7 @@ type JsonFetcher = (
 ) => Promise<{ ok: boolean; status?: number; json: () => Promise<unknown> }>;
 
 function logJson(
-  level: "error" | "warn",
+  level: "error" | "warn" | "info",
   reasonCode: string,
   message: string,
   extra: Record<string, unknown> = {},
@@ -651,10 +651,22 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
    * guess.
    */
   async function backfillMetadata(raw: readonly unknown[]): Promise<void> {
+    let parsed = 0;
+    let unparseable = 0;
+    let mapped = 0;
+    let unmappable = 0;
+    let failed = 0;
     for (const item of raw) {
       const record = parseExtendedMarket(item);
       if (record === null) {
+        unparseable += 1;
         continue;
+      }
+      parsed += 1;
+      if (record.affirmativeTokenId === null) {
+        unmappable += 1;
+      } else {
+        mapped += 1;
       }
       try {
         await applyMarketMetadataObservation(
@@ -672,6 +684,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
       } catch (error: unknown) {
         // One market never aborts the sweep: the UMA status transitions this
         // poller exists for matter more than the backfill.
+        failed += 1;
         logJson(
           "warn",
           "PENDING_METADATA_BACKFILL_FAILED",
@@ -683,6 +696,23 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         );
       }
     }
+    // Silence used to be indistinguishable between "the sweep ran and had
+    // nothing to do" and "the sweep never ran". `unmappable` is the number that
+    // matters operationally: those markets keep the RFC-012 resolution service
+    // failing closed until they resolve or leave the window.
+    logJson(
+      "info",
+      "PENDING_METADATA_BACKFILL",
+      "polymarket_pending_metadata_backfill",
+      {
+        fetched: raw.length,
+        parsed,
+        unparseable,
+        mapped,
+        unmappable,
+        failed,
+      },
+    );
   }
 
   return {
@@ -780,6 +810,16 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         const closed = await fetchStatuses(pending, true);
         // Closed last: a terminal status must be applied after any open-state
         // reading of the same market in this sweep.
+        logJson(
+          "info",
+          "PENDING_RESOLUTION_SWEEP",
+          "polymarket_pending_resolution_sweep",
+          {
+            pending: pending.length,
+            open_rows: open.rows.length,
+            closed_rows: closed.rows.length,
+          },
+        );
         await processRows([...open.rows, ...closed.rows]);
         await backfillMetadata([...open.raw, ...closed.raw]);
       } catch (error: unknown) {

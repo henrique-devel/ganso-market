@@ -560,6 +560,162 @@ describe("retention job", () => {
     ]);
   });
 
+  it("interpolates the quota cutoff on a large table instead of probing by OFFSET", async () => {
+    // Measured in production: OFFSET 100 000 000 on polymarket_book_deltas took
+    // 42.7 s against a 30 s statement_timeout. It threw, the quota step aborted
+    // on every run, and the table grew to 104 GB. Above the row threshold the
+    // cutoff comes from the time range, which is two index lookups.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 10_000_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const oldest = new Date("2026-08-01T00:00:00Z");
+    const newest = new Date("2026-08-11T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // 10 GB over 10 M rows = 1 kB/row; target is 80% of the 10 GB quota,
+        // so 2 M rows must go — 20% of the table.
+        return {
+          rows: [
+            {
+              bytes: "10000000000",
+              reltuples: "10000000",
+              live_tup: "10000000",
+              dead_tup: "0",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("min(received_at)")) {
+        return { rows: [{ oldest, newest }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 2_000_000 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      // One batch big enough to hold the whole prune, so the assertion below
+      // reads the interpolation and not the batching loop.
+      batchSize: 3_000_000,
+    });
+    const report = await job.runOnce();
+
+    // No OFFSET probe at all on a table this size.
+    expect(pool.captured.some((q) => q.text.includes("OFFSET"))).toBe(false);
+    const bounds = pool.captured.find((q) =>
+      q.text.includes("min(received_at)"),
+    );
+    expect(bounds?.text).toContain("max(received_at)");
+    // 20% of the rows must go, so the cutoff lands 20% into the 10-day span.
+    const deletion = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    expect(deletion?.params?.[0]).toEqual(new Date("2026-08-03T00:00:00Z"));
+    expect(report.actions[0]?.rowsDeleted).toBe(2_000_000);
+  });
+
+  it("clamps the interpolated cutoff so it can never reach the newest row", async () => {
+    // The clamp is what stops an over-estimate from becoming "delete
+    // everything below now" — the exact failure the COUNT fallback guards
+    // against on the small-table path.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const oldest = new Date("2026-08-01T00:00:00Z");
+    const newest = new Date("2026-08-11T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // 100x over quota: the naive fraction would be 0.992, and an even
+        // larger overshoot would exceed 1 outright.
+        return {
+          rows: [
+            {
+              bytes: "100000000000",
+              reltuples: "10000000",
+              live_tup: "10000000",
+              dead_tup: "0",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("min(received_at)")) {
+        return { rows: [{ oldest, newest }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const deletion = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    const cutoff = deletion?.params?.[0] as Date;
+    // 90% of the span, never 100%.
+    expect(cutoff.toISOString()).toBe("2026-08-10T00:00:00.000Z");
+    expect(cutoff.getTime()).toBeLessThan(newest.getTime());
+  });
+
+  it("keeps the exact OFFSET probe for tables small enough to afford it", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            { bytes: "1000", reltuples: "100", live_tup: "100", dead_tup: "0" },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET 19")) {
+        return {
+          rows: [{ cutoff: new Date("2026-05-01T00:00:00Z") }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 25 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    expect(pool.captured.some((q) => q.text.includes("OFFSET 19"))).toBe(true);
+    expect(pool.captured.some((q) => q.text.includes("min(received_at)"))).toBe(
+      false,
+    );
+  });
+
   it("measures the quota against LIVE bytes, so bloat never drives a second prune", async () => {
     // Production shape after a large prune: the file still measures 1000 bytes
     // but 52% of the tuples are dead, so only 480 bytes are actually retained.
