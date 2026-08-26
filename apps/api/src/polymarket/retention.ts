@@ -19,6 +19,16 @@ const GB = 1024 ** 3;
 // Amendment recorded in docs/rfcs/RFC-007-polymarket-data-foundation.md.
 export const DEFAULT_BUDGET_BYTES = 110 * GB;
 export const DEFAULT_BATCH_SIZE = 50_000;
+/**
+ * Smaller batches for coverage-gated tables (in practice: book_deltas).
+ *
+ * The cost of a DELETE there is dominated by index maintenance, not by finding
+ * the rows: polymarket_book_deltas carries three indexes and one of them is
+ * 39 GB. Measured in production on 2026-08-26, a 50 000-row batch on a heavy
+ * token could exceed the recorder's 30 s statement_timeout under live write
+ * load. Smaller batches finish, and the loop simply runs more of them.
+ */
+export const COVERAGE_BATCH_SIZE = 5_000;
 export const QUOTA_TRIGGER_RATIO = 0.9;
 export const QUOTA_TARGET_RATIO = 0.8;
 /** Effective-TTL reduction per step when the global 40 GB budget alarms. */
@@ -621,17 +631,21 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         config.closedRowsOnly === true ? " AND ended_at IS NOT NULL" : "";
       const filterSql = tokenId === null ? "" : " AND token_id = $2";
       const params: unknown[] = tokenId === null ? [cutoff] : [cutoff, tokenId];
+      const limit =
+        config.requiresSeriesCoverage === true
+          ? Math.min(batchSize, COVERAGE_BATCH_SIZE)
+          : batchSize;
       const result = await pool.query(
         `DELETE FROM ${config.table}
           WHERE ctid IN (
             SELECT ctid FROM ${config.table}
              WHERE ${config.timeColumn} < $1${closedFilter}${filterSql}
-             LIMIT ${batchSize}
+             LIMIT ${limit}
           )`,
         params,
       );
       total += result.rowCount;
-      if (result.rowCount < batchSize) {
+      if (result.rowCount < limit) {
         break;
       }
     }
@@ -803,7 +817,33 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
       if (sliceCutoff === null || sliceCutoff.getTime() <= 0) {
         return total;
       }
-      total += await batchedDelete(config, sliceCutoff, tokenId);
+      try {
+        total += await batchedDelete(config, sliceCutoff, tokenId);
+      } catch (error: unknown) {
+        // The DELETE has to be inside the per-slice guard too. Measured in
+        // production on 2026-08-26: a batch on a heavy token exceeded the 30 s
+        // statement_timeout (three indexes to maintain, one of them 39 GB,
+        // under live write load), the exception escaped past the coverage
+        // guard, and the WHOLE table's quota step aborted — losing the prune
+        // for all 1142 tokens, every run.
+        report.skipped.push({
+          table: config.table,
+          reason: "delete_failed",
+          tokenId,
+        });
+        log(
+          "error",
+          "RETENTION_STEP_FAILED",
+          "polymarket_retention_delete_failed",
+          {
+            table: config.table,
+            token_id: tokenId,
+            cutoff: sliceCutoff.toISOString(),
+            error_name: error instanceof Error ? error.name : "UnknownError",
+          },
+        );
+        return total;
+      }
       if (sliceCutoff.getTime() < sliceEnd.getTime()) {
         // A hole inside this slice: pruning stops here for this token, and the
         // hole is reported rather than silently stalling the table.
