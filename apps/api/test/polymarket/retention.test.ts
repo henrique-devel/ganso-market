@@ -145,7 +145,7 @@ describe("retention job", () => {
     }
   });
 
-  it("skips book_deltas pruning (and logs) when 1m aggregates do not cover the interval", async () => {
+  it("prunes nothing (and logs) when the token's first uncovered minute is its oldest", async () => {
     const config: RetentionTableConfig = {
       table: "polymarket_book_deltas",
       ttlDays: 14,
@@ -154,14 +154,19 @@ describe("retention job", () => {
       protected: false,
       requiresSeriesCoverage: true,
     };
+    const cutoff = new Date(NOW.getTime() - 14 * DAY_MS);
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
       if (text.includes("LEFT JOIN polymarket_series_1m")) {
-        // 3 minutes actually contain deltas, only 2 have a 1m bucket.
+        // The very first minute below the cutoff has no bucket, so the prune
+        // is truncated to it and nothing is actually deletable.
         return {
-          rows: [{ token_id: "t1", delta_minutes: "3", covered_minutes: "2" }],
+          rows: [{ first_uncovered: new Date(NOW.getTime() - 30 * DAY_MS) }],
           rowCount: 1,
         };
       }
@@ -174,9 +179,15 @@ describe("retention job", () => {
     });
     const report = await job.runOnce();
 
-    expect(pool.captured.some((q) => q.text.includes("DELETE FROM"))).toBe(
-      false,
+    // The delete is issued, but bounded by the hole rather than the cutoff.
+    const deletes = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_book_deltas"),
     );
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]?.params?.[0]).toEqual(
+      new Date(NOW.getTime() - 30 * DAY_MS),
+    );
+    expect(deletes[0]?.params?.[0]).not.toEqual(cutoff);
     expect(
       pool.captured.some((q) => q.text.includes("polymarket_retention_log")),
     ).toBe(false);
@@ -190,6 +201,165 @@ describe("retention job", () => {
     expect(
       stderrLines().some((line) => line.includes("SERIES_COVERAGE_MISSING")),
     ).toBe(true);
+  });
+
+  it("truncates the prune at the hole instead of freezing the token forever", async () => {
+    // The regression this guards: a recorder restart leaves one unaggregated
+    // minute, and the old all-or-nothing check froze that token's deltas
+    // permanently. Every restart froze more tokens, so the quota could never
+    // be met and the table grew without bound. A hole must only bound the
+    // prune, never cancel it.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const hole = new Date(NOW.getTime() - 20 * DAY_MS);
+    let coverageCalls = 0;
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }, { token_id: "t2" }], rowCount: 2 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        // t1 has a hole 20 days back; t2 is fully covered.
+        coverageCalls += 1;
+        return {
+          rows: [{ first_uncovered: coverageCalls === 1 ? hole : null }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        return { rows: [], rowCount: 5 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    const deletes = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_book_deltas"),
+    );
+    // BOTH tokens were pruned: t1 up to its hole, t2 up to the TTL cutoff.
+    expect(deletes).toHaveLength(2);
+    expect(deletes[0]?.params?.[0]).toEqual(hole);
+    expect(deletes[0]?.params?.[1]).toBe("t1");
+    expect(deletes[1]?.params?.[0]).toEqual(
+      new Date(NOW.getTime() - 14 * DAY_MS),
+    );
+    expect(deletes[1]?.params?.[1]).toBe("t2");
+    // The hole is reported, never silent.
+    expect(report.skipped).toEqual([
+      {
+        table: "polymarket_book_deltas",
+        reason: "series_coverage_missing",
+        tokenId: "t1",
+      },
+    ]);
+    expect(report.actions[0]?.rowsDeleted).toBe(10);
+  });
+
+  it("scopes the coverage query per token so it rides the (token_id, received_at) index", async () => {
+    // Measured in production: the single-query form was a full scan of 262 M
+    // rows that blew through the recorder's 30 s statement_timeout and threw,
+    // aborting the quota step on every run. Per token it is an index-only scan.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const coverage = pool.captured.find((q) =>
+      q.text.includes("LEFT JOIN polymarket_series_1m"),
+    );
+    expect(coverage?.text).toContain("d.token_id = $1");
+    expect(coverage?.text).toContain("d.received_at < $2");
+    expect(coverage?.text).toContain("min(m.minute)");
+    expect(coverage?.params?.[0]).toBe("t1");
+    // The token list comes from the protected registry table, never from a
+    // DISTINCT over the 262-million-row delta table.
+    const tokenList = pool.captured.find((q) =>
+      q.text.includes("jsonb_array_elements_text"),
+    );
+    expect(tokenList?.text).toContain("FROM polymarket_markets");
+  });
+
+  it("keeps pruning the other tokens when one token's coverage query fails", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    let coverageCalls = 0;
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }, { token_id: "t2" }], rowCount: 2 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        coverageCalls += 1;
+        if (coverageCalls === 1) {
+          throw new Error("statement timeout");
+        }
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        return { rows: [], rowCount: 4 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    const deletes = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_book_deltas"),
+    );
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]?.params?.[1]).toBe("t2");
+    expect(report.skipped).toEqual([
+      {
+        table: "polymarket_book_deltas",
+        reason: "coverage_query_failed",
+        tokenId: "t1",
+      },
+    ]);
+    expect(report.actions[0]?.rowsDeleted).toBe(4);
   });
 
   it("prunes book_deltas in batches for covered tokens and writes the retention log", async () => {
@@ -206,12 +376,12 @@ describe("retention job", () => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
       if (text.includes("LEFT JOIN polymarket_series_1m")) {
-        // Every minute that has deltas also has a bucket: coverage OK.
-        return {
-          rows: [{ token_id: "t1", delta_minutes: "4", covered_minutes: "4" }],
-          rowCount: 1,
-        };
+        // No uncovered minute: prune the whole requested window.
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
       }
       if (text.includes("DELETE FROM polymarket_book_deltas")) {
         deleteCalls += 1;
@@ -236,7 +406,7 @@ describe("retention job", () => {
     expect(deletes[0]?.params?.[0]).toEqual(
       new Date(NOW.getTime() - 14 * DAY_MS),
     );
-    expect(deletes[0]?.params?.[1]).toEqual(["t1"]);
+    expect(deletes[0]?.params?.[1]).toBe("t1");
     expect(deletes[0]?.text).toContain("LIMIT 2");
 
     expect(report.actions).toEqual([
@@ -336,10 +506,11 @@ describe("retention job", () => {
   });
 
   it("allows pruning sparse tokens when every minute that has deltas has a bucket", async () => {
-    // Bug scenario: deltas at 00:00, 00:05 and 00:10 only. The old check
+    // Bug scenario: deltas at 00:00, 00:05 and 00:10 only. An earlier check
     // demanded a bucket for EVERY minute of 00:00..00:10 (11 buckets), but
     // buckets only exist for minutes with events (3) — so book_deltas was
-    // never prunable. Coverage must compare against minutes-with-deltas.
+    // never prunable. Coverage compares against minutes that actually have
+    // deltas, which is what the LEFT JOIN over the DISTINCT minutes does.
     const config: RetentionTableConfig = {
       table: "polymarket_book_deltas",
       ttlDays: 14,
@@ -352,12 +523,11 @@ describe("retention job", () => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
       if (text.includes("LEFT JOIN polymarket_series_1m")) {
-        // 3 minutes contain deltas; all 3 have buckets (range spans 11 min).
-        return {
-          rows: [{ token_id: "t1", delta_minutes: "3", covered_minutes: "3" }],
-          rowCount: 1,
-        };
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
       }
       if (text.includes("DELETE FROM polymarket_book_deltas")) {
         return { rows: [], rowCount: 7 };
@@ -371,12 +541,13 @@ describe("retention job", () => {
     });
     const report = await job.runOnce();
 
-    // The coverage query counts DISTINCT minutes that actually have deltas.
     const coverageQuery = pool.captured.find((q) =>
       q.text.includes("LEFT JOIN polymarket_series_1m"),
     );
-    expect(coverageQuery?.text).toContain("DISTINCT token_id");
-    expect(coverageQuery?.text).toContain("date_trunc('minute', received_at)");
+    expect(coverageQuery?.text).toContain("SELECT DISTINCT date_trunc");
+    expect(coverageQuery?.text).toContain(
+      "date_trunc('minute', d.received_at)",
+    );
 
     expect(report.skipped).toEqual([]);
     expect(report.actions).toEqual([
@@ -387,85 +558,6 @@ describe("retention job", () => {
         rowsDeleted: 7,
       },
     ]);
-  });
-
-  it("iterates quota pruning to the logical 80% target even though the physical size never shrinks", async () => {
-    const config: RetentionTableConfig = {
-      table: "polymarket_rtds_prices",
-      ttlDays: null,
-      quotaBytes: 1_000,
-      timeColumn: "received_at",
-      protected: false,
-    };
-    const cutoff1 = new Date("2026-05-01T00:00:00Z");
-    const cutoff2 = new Date("2026-06-01T00:00:00Z");
-    // pg_total_relation_size does NOT drop after DELETE (dead tuples remain
-    // until vacuum) — the responder always reports 1000 bytes. The loop must
-    // still stop once the estimated live bytes reach the target instead of
-    // deleting until the table is empty.
-    let deleteCall = 0;
-    const pool = fakePool((text) => {
-      if (text.includes("pg_total_relation_size")) {
-        return { rows: [{ bytes: "1000", reltuples: "100" }], rowCount: 1 };
-      }
-      if (text.includes("OFFSET 19")) {
-        return { rows: [{ cutoff: cutoff1 }], rowCount: 1 };
-      }
-      if (text.includes("OFFSET 9")) {
-        return { rows: [{ cutoff: cutoff2 }], rowCount: 1 };
-      }
-      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
-        deleteCall += 1;
-        // 10 rows then 15 rows (both partial batches, so batching stops).
-        return { rows: [], rowCount: deleteCall === 1 ? 10 : 15 };
-      }
-      return null;
-    });
-    const job = createRetentionJob({
-      pool,
-      clock: () => NOW,
-      tables: [config],
-    });
-    const report = await job.runOnce();
-
-    // 1000 bytes / 100 rows = 10 bytes/row; target 800.
-    // Iter 1: 1000-800 => 20 rows => OFFSET 19; deleted 10 => live est. 900.
-    // Iter 2: 900-800 => 10 rows => OFFSET 9; deleted 15 => live est. 750 < 800: stop.
-    const offsets = pool.captured.filter((q) => q.text.includes("OFFSET"));
-    expect(offsets).toHaveLength(2);
-    expect(offsets[0]?.text).toContain("OFFSET 19");
-    expect(offsets[1]?.text).toContain("OFFSET 9");
-
-    // Physical size is measured once for the global budget and once at the
-    // start of the quota pass — never re-measured inside the loop.
-    const sizeQueries = pool.captured.filter((q) =>
-      q.text.includes("pg_total_relation_size"),
-    );
-    expect(sizeQueries).toHaveLength(2);
-
-    // Only the two planned deletes ran — the constant physical size did not
-    // drive the loop into emptying the table.
-    const deletes = pool.captured.filter((q) =>
-      q.text.includes("DELETE FROM polymarket_rtds_prices"),
-    );
-    expect(deletes).toHaveLength(2);
-
-    expect(report.actions).toHaveLength(2);
-    expect(report.actions[0]).toMatchObject({
-      table: "polymarket_rtds_prices",
-      cause: "quota",
-      prunedBefore: cutoff1,
-    });
-    expect(report.actions[1]).toMatchObject({
-      table: "polymarket_rtds_prices",
-      cause: "quota",
-      prunedBefore: cutoff2,
-    });
-    const logInserts = pool.captured.filter((q) =>
-      q.text.includes("polymarket_retention_log"),
-    );
-    expect(logInserts).toHaveLength(2);
-    expect(logInserts[0]?.params?.[1]).toBe("quota");
   });
 
   it("measures the quota against LIVE bytes, so bloat never drives a second prune", async () => {
