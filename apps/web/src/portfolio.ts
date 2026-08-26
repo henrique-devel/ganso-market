@@ -465,3 +465,117 @@ export function fetchDecisions(
     signal,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Espaço de consulta: histórico paginado das medições de gate.
+//
+// Substitui o relatório semanal da RFC (decisão do proprietário, 2026-08-26):
+// os mesmos números, consultados quando alguém quiser, em vez de um documento
+// gerado por timer. A paginação é por cursor (keyset) porque a tabela é
+// append-only e nunca é podada — uma página por OFFSET ficaria mais lenta a
+// cada semana e poderia repetir ou pular uma linha quando uma medição nova
+// entrasse no meio da listagem.
+// ---------------------------------------------------------------------------
+
+export interface GateMeasurement {
+  readonly measurement_id: number | null;
+  readonly gate: string;
+  readonly status: GateStatus | null;
+  readonly reason_code: string | null;
+  readonly metrics: Readonly<Record<string, unknown>>;
+  readonly config_version: string | null;
+  readonly window_from: string | null;
+  readonly window_to: string | null;
+  readonly measured_at: string | null;
+}
+
+export interface GateMeasurementPage {
+  readonly measurements: readonly GateMeasurement[];
+  readonly nextCursor: string | null;
+  readonly calibratedExpectation: string | null;
+}
+
+export interface GateMeasurementQuery {
+  readonly gate?: string;
+  readonly status?: string;
+  readonly from?: string;
+  readonly to?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/** Only the parameters the endpoint accepts, and only when actually set. */
+function measurementQueryString(query: GateMeasurementQuery): string {
+  const params = new URLSearchParams();
+  if (query.gate !== undefined && query.gate !== "") {
+    params.set("gate", query.gate);
+  }
+  if (query.status !== undefined && query.status !== "") {
+    params.set("status", query.status);
+  }
+  if (query.from !== undefined && query.from !== "") {
+    params.set("from", query.from);
+  }
+  if (query.to !== undefined && query.to !== "") {
+    params.set("to", query.to);
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  if (query.cursor !== undefined && query.cursor !== "") {
+    params.set("cursor", query.cursor);
+  }
+  const text = params.toString();
+  return text === "" ? "" : `?${text}`;
+}
+
+function parseGateMeasurement(row: unknown): GateMeasurement | null {
+  if (!isRecord(row)) {
+    return null;
+  }
+  const gate = asKey(row.gate);
+  if (gate === null) {
+    return null;
+  }
+  const status = row.status;
+  const metrics = asParsedJson(row.metrics_json);
+  return {
+    measurement_id: asNumeric(row.measurement_id),
+    gate,
+    status:
+      status === "PASS" || status === "FAIL" || status === "INSUFFICIENT_DATA"
+        ? status
+        : null,
+    reason_code: asString(row.reason_code),
+    metrics: isRecord(metrics) ? metrics : {},
+    config_version: asString(row.config_version),
+    window_from: asString(row.window_from),
+    window_to: asString(row.window_to),
+    measured_at: asString(row.measured_at),
+  };
+}
+
+export function fetchGateMeasurements(
+  accessToken: string,
+  query: GateMeasurementQuery = {},
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionGetResult<GateMeasurementPage>> {
+  return authorizedGet(
+    `/api/polymarket/gates/measurements${measurementQueryString(query)}`,
+    accessToken,
+    (body) => {
+      if (!isRecord(body)) {
+        return null;
+      }
+      const page = isRecord(body.page) ? body.page : {};
+      return {
+        measurements: mapRows(body.measurements, parseGateMeasurement),
+        nextCursor: asString(page.next_cursor),
+        calibratedExpectation: asString(body.calibrated_expectation),
+      };
+    },
+    fetcher,
+    signal,
+  );
+}

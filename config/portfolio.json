@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "bankrollUsd": 1000,
   "kelly": {
     "lambda": 0.25,
@@ -39,7 +39,8 @@
     "edgeResidualMin": 0.01,
     "modelMoveThreshold": 0.05,
     "depthFloorShares": 50,
-    "catalystBlackoutMin": 30
+    "catalystBlackoutMin": 30,
+    "unwindAlarmPctOpenPnl": 0.25
   },
   "staleness": {
     "bookMaxAgeMs": 30000,

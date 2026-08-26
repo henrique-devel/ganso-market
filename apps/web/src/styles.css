@@ -588,3 +588,86 @@ h1 {
   font-size: 0.88rem;
   line-height: 1.55;
 }
+
+/* --- Espaço de consulta (RFC-013) --------------------------------------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: #8eaa98;
+  font-size: 0.8rem;
+}
+
+.filters select,
+.filters input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #28372e;
+  border-radius: 0.4rem;
+  color: #dfe8e2;
+  background: #131e18;
+  font-size: 0.85rem;
+}
+
+.filters button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid #28372e;
+  border-radius: 999px;
+  color: #8eaa98;
+  background: transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.filters button:hover {
+  color: #dfe8e2;
+  background: #17231c;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  color: #8eaa98;
+  font-size: 0.85rem;
+}
+
+.pager button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid #28372e;
+  border-radius: 999px;
+  color: #dfe8e2;
+  background: transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.pager button:disabled {
+  color: #4a5a51;
+  cursor: not-allowed;
+}
+
+.pager button:not(:disabled):hover {
+  background: #17231c;
+}
+
+.grid details pre {
+  max-width: 32rem;
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem;
+  border-radius: 0.4rem;
+  background: #0f1813;
+  font-size: 0.75rem;
+}

@@ -91,6 +91,13 @@ export interface ExitConfig {
   readonly depthFloorShares: number;
   /** Blackout window before a known catalyst, in minutes, by category. */
   readonly catalystBlackoutMin: number;
+  /**
+   * Liquidity alarm: fraction of the OPEN PnL above which the estimated cost of
+   * unwinding the whole book counts as an alarm. The RFC states the control
+   * ("alarme quando unwind estimado > X% do PnL aberto") and leaves X to the
+   * config, which is why it is a versioned parameter and not a constant.
+   */
+  readonly unwindAlarmPctOpenPnl: number;
 }
 
 export interface StalenessConfig {
@@ -165,7 +172,7 @@ export interface PortfolioConfig {
  * new config version, never an edit in place.
  */
 export const DEFAULT_PORTFOLIO_CONFIG: PortfolioConfig = Object.freeze({
-  version: "1.0.0",
+  version: "1.1.0",
   bankrollUsd: 1_000,
   kelly: Object.freeze({
     lambda: 0.25,
@@ -201,6 +208,7 @@ export const DEFAULT_PORTFOLIO_CONFIG: PortfolioConfig = Object.freeze({
     modelMoveThreshold: 0.05,
     depthFloorShares: 50,
     catalystBlackoutMin: 30,
+    unwindAlarmPctOpenPnl: 0.25,
   }),
   staleness: Object.freeze({
     bookMaxAgeMs: 30_000,
@@ -514,6 +522,7 @@ export function parsePortfolioConfig(raw: unknown): PortfolioConfig {
       "modelMoveThreshold",
       "depthFloorShares",
       "catalystBlackoutMin",
+      "unwindAlarmPctOpenPnl",
     ],
     "portfolio.exits",
   );
@@ -544,6 +553,13 @@ export function parsePortfolioConfig(raw: unknown): PortfolioConfig {
       "catalystBlackoutMin",
       defaults.exits.catalystBlackoutMin,
       { min: 0, max: 1_440 },
+      "exits",
+    ),
+    unwindAlarmPctOpenPnl: num(
+      exitsRaw,
+      "unwindAlarmPctOpenPnl",
+      defaults.exits.unwindAlarmPctOpenPnl,
+      POSITIVE,
       "exits",
     ),
   };

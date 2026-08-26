@@ -1,10 +1,12 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-26 (madrugada — RFC-012 ATIVA em produção;
-  RFC-013 fases A–D mergeadas, ativação do serviço pendente)
+- Última atualização: 2026-08-26 (tarde — RFC-012 ATIVA em produção; RFC-013
+  com código completo das fases A–E, ativação do serviço pendente)
 - Branch principal: `main`
-- RFC ativa: RFC-013 (motor de portfólio) — fases A, B, C e D mergeadas
-  (PRs #30, #33, #34, #36); migration 0014 aplicada em produção; o serviço
+- RFC ativa: RFC-013 (motor de portfólio) — fases A, B, C, D mergeadas
+  (PRs #30, #33, #34, #36) e fase E aberta nesta sessão (medição contínua de
+  gates, ciclo de saída, replay determinístico, espaço de consulta); migration
+  0014 aplicada em produção e **não alterada** pela fase E; o serviço
   `polymarket-portfolio` ainda NÃO foi criado no servidor
 - RFC-012: **ativa em produção** desde 2026-08-26 01:15Z
 - Modo permitido no runtime atual: `paper`
@@ -420,7 +422,7 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 | RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
 | RFC-011 — Microestrutura e paper broker               | Código completo (2026-08-24); container ativo em produção, nenhuma ordem paper criada ainda            | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
 | RFC-012 — Risco de resolução e grafo lógico           | **Ativa em produção (2026-08-26 01:15Z)**, `score_version` 1.1.1; 220 mercados pontuados, todos `NONE` | [`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md)                       |
-| RFC-013 — Motor de portfólio e gates                  | **Fases A–D mergeadas (PRs #30/#33/#34/#36)**; migration 0014 aplicada; serviço não criado no servidor | Gates G1–G6 habilitam a RFC-009; medição contínua e replay ainda faltam                                           |
+| RFC-013 — Motor de portfólio e gates                  | **Código completo (fases A–E)**; migration 0014 aplicada; serviço não criado no servidor                | Gates G1–G6 habilitam a RFC-009; todos medidos e nenhum `PASS` — que é o resultado correto hoje                    |
 | RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
@@ -630,7 +632,7 @@ trigger de imutabilidade exercitados. Evidência completa:
   todo `make verify`; documento em
   [`docs/architecture/paper-broker-scope.md`](architecture/paper-broker-scope.md).
 
-## SESSÃO 2026-08-26 — RFC-012 ATIVADA, RFC-013 FASES A–D MERGEADAS
+## SESSÃO 2026-08-26 — RFC-012 ATIVADA, RFC-013 FASES A–E
 
 **FATO VERIFICADO:** dez PRs mergeados nesta sessão (#26–#36), todos com CI
 verde nos três jobs. Release em produção: `9da1215`. Migrations em **14**.
@@ -721,7 +723,7 @@ Procedimento de prevenção documentado em
 mudar ao mesmo tempo um arquivo de `config/` e o conteúdo que ele nomeia, o
 rebuild dos containers de profile tem que acontecer na mesma janela do merge.
 
-### RFC-013 — fases A a D mergeadas
+### RFC-013 — fases A a E
 
 | Fase | PR  | Conteúdo                                                                                                                                                                                         | Estado                                                 |
 | ---- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
@@ -729,8 +731,9 @@ rebuild dos containers de profile tem que acontecer na mesma janela do merge.
 | B    | #33 | Exposições em 8 dimensões, 7 critérios de saída, motor de decisão, painel de 14 campos, store, runner, serviço `polymarket-portfolio`                                                            | mergeada, **serviço não criado no servidor**           |
 | C    | #34 | Gates G1–G6, block-bootstrap reproduzível                                                                                                                                                        | mergeada                                               |
 | D    | #36 | API (9 endpoints), perímetro Nginx GET-only, aba "Portfólio" no painel                                                                                                                           | mergeada, **Nginx não recarregado com as rotas novas** |
+| E    | —   | Medição contínua dos gates (tarefa 8) + relógio G2 por categoria, ciclo de saída sobre posições abertas (tarefa 5 no runner), replay determinístico do decision log (tarefa 7), circuit breakers (tarefa 4), PnL realizado do ledger, campos 9/10/12 do painel, espaço de consulta paginado | **aberta nesta sessão**; migration 0014 intocada |
 
-**199 testes** no módulo `portfolio`.
+**199 → 290 testes** no módulo `portfolio` (mais 19 só-PostgreSQL).
 
 Decisões de implementação registradas:
 
@@ -763,6 +766,51 @@ dois)` — nunca na soma e nunca abaixo de qualquer um deles.
    reduzindo o recorder de 1024 → **832 MiB** (medido em produção: 230 MiB com
    o universo cheio, 3,6× de folga restante). O agregado do Compose fica
    exatamente onde estava: 4 261 412 864 bytes.
+
+### RFC-013 fase E — o que foi fechado nesta sessão
+
+**Tarefa 8 (medição contínua).** Job `gates` a cada 1 h e no boot: mede G1–G6
+sobre evidência gravada, grava uma linha imutável por gate em
+`portfolio_gate_measurements`, mantém o relógio G2 **por categoria** com
+fingerprint de regime, e audita o replay das 50 decisões mais novas no mesmo
+ciclo. Por decisão do proprietário o relatório semanal foi substituído por um
+**espaço de consulta paginado** (`GET /polymarket/gates/measurements`, aba
+"Consulta" no painel) — paginação por cursor, não por `OFFSET`, porque a tabela
+nunca é podada e só cresce.
+
+**Tarefa 5 no runner (saídas em shadow).** Job `exits` a cada 30 s sobre
+posições abertas. Grava `EXIT` no decision log **quando o veredito muda** — um
+hold é registrado (é evidência de que o motor olhou), mas não reescrito a cada
+30 s. O preço de saída é book-walk sobre a posição **inteira**, não o melhor bid.
+
+**Tarefa 7 (replay determinístico).** `inputs_json.replay` guarda todo escalar
+que o motor leu, em **nove** dígitos e não nos seis das colunas. Um único
+construtor de linha (`decisionrow.ts`) serve runner e replay, então o teste
+compara o motor e não dois mapeamentos. O replay lê só o decision log e
+`portfolio_config_versions` — nunca book snapshots, estimativas ou estado de
+resolução.
+
+**Três lacunas que eram pré-requisito.** Os 5 circuit breakers da tarefa 4
+nunca abriam (`breakerOpen: false` fixo), o PnL realizado era `0n` fixo (a
+máquina de estados era inerte) e `takerFeeRate`/`rulePrecisionMultiplier` eram
+fixos com os campos 9/10/12 do painel nulos. Todos fiados.
+
+**Bug encontrado e corrigido durante os testes.** O critério 6 de saída
+(capital bloqueado deixou de compensar o edge) cobrava só o **excedente** sobre
+o hurdle do buffer da RFC-012 — mas o edge residual da saída não subtrai buffer
+nenhum, então cobrava zero e o critério **nunca poderia disparar**. Na saída
+passou a cobrar o custo integral do lockup restante; na entrada o excedente
+continua correto, porque lá o edge líquido já subtrai o buffer.
+
+**Config 1.0.0 → 1.1.0.** Um parâmetro novo (`exits.unwindAlarmPctOpenPnl`,
+default 0,25 — o "X% do PnL aberto" do alarme de liquidez da tarefa 4) mudou o
+conteúdo hasheado, então a versão foi cunhada de novo, que é o mecanismo que a
+RFC exige. Seguro porque a 1.0.0 **nunca foi cunhada em produção**: o serviço
+não existe no servidor ainda. Se existisse, seria o incidente do `score_version`
+1.1.0 de novo.
+
+Evidência completa, com os números medidos:
+[`docs/test-results/RFC-013-portfolio-engine.md`](test-results/RFC-013-portfolio-engine.md).
 
 ### Achado aberto: coletor onchain falhando
 
@@ -844,9 +892,20 @@ do merge.
 
 ### 3. Observação pós-ativação
 
-- Log esperado no boot: `PORTFOLIO_BOOT` com `config_version`, `config_hash`,
-  `factor_map_version` e `factor_map_hash`; depois `PORTFOLIO_CYCLE` a cada
-  60 s com `evaluated`, `entrable`, `state` e `positions`.
+- Log esperado no boot: `PORTFOLIO_BOOT` com `config_version` **1.1.0**,
+  `config_hash`, `factor_map_version` e `factor_map_hash`; depois
+  `PORTFOLIO_CYCLE` a cada 60 s com `evaluated`, `entrable`, `state`,
+  `positions`, `open_breakers` e `stale_marks`.
+- Os outros dois jobs da fase E: `PORTFOLIO_EXIT_CYCLE` a cada 30 s (com zero
+  posições abertas hoje: `evaluated: 0`) e `PORTFOLIO_GATES_MEASURED` no boot e
+  a cada 1 h, com `overall: BLOCKED` e os seis gates. A auditoria de replay loga
+  `PORTFOLIO_REPLAY_OK` no mesmo ciclo — `PORTFOLIO_REPLAY_MISMATCH` seria
+  motivo para acordar alguém.
+- `portfolio_gate_measurements` deve ter **6 linhas por hora**;
+  `portfolio_g2_clock` uma linha por categoria com `clock_started`. Um
+  `PORTFOLIO_G2_CLOCK_RESET` com `regime_fingerprint_changed` significa que a
+  venue mudou fee/tick na categoria — o relógio de 60 dias do G2 voltou a zero
+  para ela, e isso é o comportamento correto.
 - Esperar `evaluated ≈ 98` (mercados elegíveis medidos) e `entrable` baixo ou
   zero: a RFC-010 não tem modelo promovido, então as estimativas são baseline de
   mercado e o critério de limite inferior raramente fecha. **Zero entradas é o
@@ -867,22 +926,26 @@ do merge.
 - **Cap de fonte de resolução**: decisão pendente do proprietário (item 4 da
   seção da sessão acima) — hoje capeia o livro inteiro em 25% da banca porque
   quase todo mercado resolve pelo mesmo adapter UMA.
-- **`docs/test-results/RFC-013-portfolio-engine.md`** não foi escrito. A
-  evidência desta sessão está nos corpos dos PRs #26–#37 e nesta seção do
-  handoff.
+- **`docs/test-results/RFC-013-portfolio-engine.md`**: escrito nesta sessão,
+  consolidando as fases A–E.
 - **Soak de 24 h** da RFC-012 e da RFC-013 em produção: não medido.
-- **Gates G1–G6**: nenhuma medição gravada ainda. O runner da fase B não chama
-  o medidor de gates — a fase C entregou o cálculo e a fase D o endpoint, mas
-  não há job periódico gravando em `portfolio_gate_measurements`. `GET
-/polymarket/gates` responde `rfc_009_status: BLOCKED` com lista vazia, que é o
-  fail-closed correto, mas o pipeline de medição contínua (tarefa 8 da RFC) e o
-  relatório semanal ainda faltam.
-- **Critérios de saída não estão no runner**: `exits.ts` está implementado e
-  testado, mas o ciclo do runner ainda não avalia saídas sobre posições
-  abertas — não há posição aberta em produção, então nada é perdido hoje.
-- **Replay determinístico do decision log** (tarefa 7 da RFC): as decisões já
-  persistem book, inputs, hash de config e limitador binding, mas o replay em si
-  e seu teste obrigatório não foram escritos.
+- **Gates G1–G6**: todos medidos, **nenhum `PASS`** — e esse é o resultado
+  correto: não há modelo promovido na RFC-010, nenhuma posição fechada em paper,
+  nenhum circuit breaker exercitado em produção e nenhuma revisão escrita do
+  proprietário. `rfc_009_status` permanece `BLOCKED`.
+- **Quota do decision log** (achado novo, decisão do proprietário): a linha média
+  de `portfolio_decisions` mede **2.038 bytes**; a um ciclo/minuto sobre 98
+  mercados são ~141 mil linhas/dia ≈ **288 MB/dia** contra uma quota de 0,9 GB,
+  então a quota vence o TTL de 180 dias em cerca de **3 dias**. Aumentar a quota,
+  reduzir a cadência do painel, ou aceitar ~3 dias de histórico.
+- **`custo_capital_anual` não afeta nenhuma decisão de entrada** (achado novo): o
+  hurdle diário do buffer da RFC-012 (~18,3% a.a.) é maior que os 12% a.a. deste
+  parâmetro em qualquer preço e lockup, então o excedente que o módulo cobra é
+  sempre zero. É o `max(os dois)` funcionando como documentado, mas o parâmetro
+  está inerte; torná-lo vinculante exigiria subir acima de ~18,3% a.a.
+- **PnL realizado por janela**: total exato; janelas diária/semanal atribuem pelo
+  `resolved_at`, então realização por fechamento antecipado entra tarde. Detalhe
+  e motivo em `docs/test-results/RFC-013-portfolio-engine.md` §9.
 - `consensus`/`nowcast` no `config/macro-calendar.json` continua pendente.
 
 Nenhum modelo é promovido antes de um gate PASS com os 100 mercados resolvidos
