@@ -1,10 +1,12 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-24 (noite — RFC-012 verificada localmente)
+- Última atualização: 2026-08-26 (madrugada — RFC-012 ATIVA em produção;
+  RFC-013 fases A–D mergeadas, ativação do serviço pendente)
 - Branch principal: `main`
-- RFC ativa: RFC-012 com fases A–D e hardening final verificados localmente;
-  revisão, merge e ativação pendentes; RFC-011 com código completo
-  aguardando ativação em produção
+- RFC ativa: RFC-013 (motor de portfólio) — fases A, B, C e D mergeadas
+  (PRs #30, #33, #34, #36); migration 0014 aplicada em produção; o serviço
+  `polymarket-portfolio` ainda NÃO foi criado no servidor
+- RFC-012: **ativa em produção** desde 2026-08-26 01:15Z
 - Modo permitido no runtime atual: `paper`
 
 Este documento registra o ponto de continuidade entre sessões. Ele não
@@ -416,9 +418,9 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 | RFC-002 — Auth e HTTP                                 | Implementada e publicada com perímetro (2026-08-18)                                                    | [`docs/test-results/RFC-002.md`](test-results/RFC-002.md)                                                         |
 | RFC-007 — Polymarket: fundação de dados e recorder V2 | Implementada (2026-08-20); aguardando merge/deploy; recorder básico ativo em produção desde 2026-08-18 | [`docs/test-results/RFC-007-recorder.md`](test-results/RFC-007-recorder.md); expansão de coleta é o próximo passo |
 | RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
-| RFC-011 — Microestrutura e paper broker               | **Código completo (2026-08-24)**, PRs #18–#23 mergeados com CI verde; ativação em produção pendente    | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
-| RFC-012 — Risco de resolução e grafo lógico           | Fases A–D + hardening final verificados localmente; revisão, merge e ativação pendentes                | [`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md)                       |
-| RFC-013 — Motor de portfólio e gates                  | Não iniciada (draft 2026-08-19)                                                                        | Gates G1–G6 habilitam a RFC-009                                                                                   |
+| RFC-011 — Microestrutura e paper broker               | Código completo (2026-08-24); container ativo em produção, nenhuma ordem paper criada ainda            | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
+| RFC-012 — Risco de resolução e grafo lógico           | **Ativa em produção (2026-08-26 01:15Z)**, `score_version` 1.1.1; 220 mercados pontuados, todos `NONE` | [`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md)                       |
+| RFC-013 — Motor de portfólio e gates                  | **Fases A–D mergeadas (PRs #30/#33/#34/#36)**; migration 0014 aplicada; serviço não criado no servidor | Gates G1–G6 habilitam a RFC-009; medição contínua e replay ainda faltam                                           |
 | RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
@@ -628,77 +630,265 @@ trigger de imutabilidade exercitados. Evidência completa:
   todo `make verify`; documento em
   [`docs/architecture/paper-broker-scope.md`](architecture/paper-broker-scope.md).
 
+## SESSÃO 2026-08-26 — RFC-012 ATIVADA, RFC-013 FASES A–D MERGEADAS
+
+**FATO VERIFICADO:** dez PRs mergeados nesta sessão (#26–#36), todos com CI
+verde nos três jobs. Release em produção: `9da1215`. Migrations em **14**.
+
+### A retenção nunca tinha funcionado — cinco causas somadas
+
+`polymarket_retention_log` tinha **uma única linha em toda a vida do projeto**.
+O banco chegou a **105 GB** contra um orçamento de 40 GB, com
+`polymarket_book_deltas` em **76 → 90 GB** contra uma quota de 12 GB, crescendo
+**~15,3 GB/dia** sobre 198 tokens. Restavam ~12 dias de disco.
+
+| #   | Causa (todas medidas em produção)                                                                                                                                             | Corrigida em                                   |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | Nenhuma tabela grande tinha índice na coluna de tempo da poda — só compostos liderados por `token_id`. O probe de corte planejava `Sort` sobre 232 M linhas.                  | #26 (migration 0013, 19 índices)               |
+| 2   | `setInterval` de 24 h **sem execução no boot**; o recorder reinicia mais que uma vez por dia, então o timer nunca vencia.                                                     | #26 (`createJobScheduler` + `runAtBoot`)       |
+| 3   | Quota comparada com `pg_total_relation_size`, que não encolhe com `DELETE`. Bug destrutivo: apagaria outros 28 GB de linhas **vivas** a cada execução, até esvaziar a tabela. | #26 (quota em bytes vivos)                     |
+| 4   | Precondição de cobertura de agregados em query única: scan de 262 M linhas, estourava o `statement_timeout` de 30 s e **abortava o passo de quota em toda execução**.         | #27 (checagem por token, index-only scan)      |
+| 5   | Probe exato de corte por `OFFSET`: **42,7 s medidos** contra timeout de 30 s.                                                                                                 | #28 (corte interpolado, fração limitada a 0,9) |
+
+Mais dois refinamentos sobre o mesmo caminho: a checagem por token passou a ser
+**fatiada em janelas de 12 h** (#32), porque seu custo cresce com a faixa — 14,3 s
+no token mais pesado a 2 dias de corte, acima de 30 s a ~3,5 dias; e o `DELETE`
+entrou na **guarda por fatia** com lotes de 5 000 em vez de 50 000 (#35), porque
+um lote grande num token pesado estourava o timeout (três índices a manter, um
+deles com **39 GB**) e a exceção escapava abortando a tabela inteira.
+
+Também foi corrigido um comportamento que travava a poda para sempre: um buraco
+de um minuto nos agregados — que **todo restart do recorder produz** — congelava
+aquele token permanentemente na checagem tudo-ou-nada. Agora o buraco apenas
+**trunca** a poda e é reportado como `SERIES_COVERAGE_MISSING`.
+
+**EMENDA DE ORÇAMENTO (decisão do proprietário, 2026-08-25):** global
+40 → **110 GB**; `book_deltas` 12 → 60 → **52 GB**; book top-10 4 → **8 GB**;
+agregados 1 min 3 → **10 GB** (sem isso o gate G2 da RFC-013 seria immensurável,
+que é condição de parada da própria RFC); reserva das RFC-010..013 6 → **8 GB**,
+financiada pelo corte dos deltas. Total declarado: **89 GB**. Registro na seção
+"Orçamento" da RFC-007.
+
+### RFC-012: dois bloqueadores permanentes de ativação
+
+**FATO VERIFICADO:** a RFC-012 estava mergeada (PR #25) mas **inativa**: os
+containers de profile rodavam imagem pré-RFC-012 e o `polymarket-resolution`
+nunca havia subido. O passo (2a) do handoff anterior nunca foi executado.
+
+1. **Token afirmativo inalcançável.** A migration 0012 é prospectiva e o
+   registry só re-observa o universo ATUAL — mas o serviço de resolução pontua
+   o universo **mais** os mercados que saíram sem resolver nos últimos 7 dias, e
+   falha fechado sem o mapeamento. Medido: **100 de 100** mercados do universo
+   mapeados, **99 de 99** recém-saídos sem mapeamento. Como todo mercado que sai
+   sem resolver entra nessa janela, esperar **nunca converge** — seria
+   crash-loop permanente, não transitório. Corrigido em #27: a varredura de
+   pendentes da RFC-010 já busca esses mercados no Gamma e o mesmo payload
+   carrega `outcomes`/`clobTokenIds`, então ela passou a persistir a observação
+   de metadados. Convergiu de 99/99 para **0 de 195**.
+
+2. **`TITLE_RULE_MISMATCH` vetando 67% do universo.** Primeira execução com o
+   universo real: **130 de 195 mercados sob VETO**, todos pelo mesmo flag duro,
+   com score máximo de **0,318** — muito abaixo do limiar de veto por score de
+   0,7. Causa: o template padrão da Polymarket **remete ao título** (_"the price
+   specified in the title"_) em vez de repetir os valores, então o check
+   comparava `{1.90, 28, agosto}` do título contra `{1, 12}` da regra — números
+   vindos de _"1 minute candle"_ e _"12:00"_. O check media a maquinaria da
+   própria regra. Corrigido em #29 (`titleDeferralTerms` no léxico, guarda
+   estreita: regra que nomeia valores próprios divergentes continua sendo
+   flagada). Resultado: **0 de 199 sob VETO**.
+
+### RFC-012 ATIVA EM PRODUÇÃO (2026-08-26 01:15Z)
+
+```
+SCORES_RECOMPUTED  trigger=boot  scored=195  failed=0
+GRAPH_BUILT        nodes=93  structural=257 (254 LADDER + 3 NEGRISK)
+RESOLUTION_BOOT    score_version=1.1.1  onchain_enabled=true
+```
+
+`polymarket-resolution` em **43,6 MiB de 192 MiB**. Estado atual: **220
+mercados, todos `NONE`**.
+
+**Janela de ordem de deploy que queimou uma versão de score.** `config/` é
+montado por bind e chega com o CD; o léxico que ele **nomeia** vive na imagem e
+só muda no rebuild de profile. Na janela entre as duas coisas o binário ANTIGO
+leu `score_version: 1.1.0` e gravou uma linha em `resolution_score_versions`
+fixando esse nome ao hash do léxico ANTERIOR. A imagem nova então divergiu e o
+serviço entrou em crash-loop com `SCORE_VERSION_CONTENT_MISMATCH` — fail-closed
+correto, e a linha é imutável por trigger, também corretamente. **O nome 1.1.0
+está queimado permanentemente**; a saída foi cunhar **1.1.1** (#31).
+Procedimento de prevenção documentado em
+[`docs/runbooks/single-server.md`](runbooks/single-server.md): quando um PR
+mudar ao mesmo tempo um arquivo de `config/` e o conteúdo que ele nomeia, o
+rebuild dos containers de profile tem que acontecer na mesma janela do merge.
+
+### RFC-013 — fases A a D mergeadas
+
+| Fase | PR  | Conteúdo                                                                                                                                                                                         | Estado                                                 |
+| ---- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| A    | #30 | Migration 0014 (12 tabelas), config versionada com hash, EV por share, sizing Kelly, máquina de estados, mapa de fatores, guard de escopo, documento de ausência de execução real e de stop-loss | migration **aplicada** (schema_versions = 14)          |
+| B    | #33 | Exposições em 8 dimensões, 7 critérios de saída, motor de decisão, painel de 14 campos, store, runner, serviço `polymarket-portfolio`                                                            | mergeada, **serviço não criado no servidor**           |
+| C    | #34 | Gates G1–G6, block-bootstrap reproduzível                                                                                                                                                        | mergeada                                               |
+| D    | #36 | API (9 endpoints), perímetro Nginx GET-only, aba "Portfólio" no painel                                                                                                                           | mergeada, **Nginx não recarregado com as rotas novas** |
+
+**199 testes** no módulo `portfolio`.
+
+Decisões de implementação registradas:
+
+1. **Dupla contagem de custo de capital.** A RFC-013 soma `custo_capital` ao
+   `buffer_resolucao` da RFC-012, mas o `bufferBase` implementado na RFC-012 já
+   cobra `capitalDailyHurdle × lockupDays`. Somar cobraria o mesmo lockup duas
+   vezes; o módulo cobra apenas o **excedente**, então o total fica em `max(os
+dois)` — nunca na soma e nunca abaixo de qualquer um deles.
+2. **Assimetria de lado no limite inferior.** Para NO o limite conservador é
+   `1 − q_hi`, não `1 − q_lo`. Trocar de lado troca qual ponta do intervalo é a
+   pessimista; usar a errada seria o limite otimista vestindo o nome do inferior.
+3. **Banca nocional.** Os caps da RFC são percentuais da banca, que não existia
+   em lugar nenhum do projeto. `bankrollUsd` (default **$1.000**) entrou na
+   config versionada, documentado como nocional de simulação.
+4. **Fonte de resolução pelo oráculo.** A RFC capeia por
+   `resolutionSource`/oráculo, mas o Gamma popula `resolutionSource` em **2 de
+   98** mercados elegíveis. Uso `COALESCE(resolution_source, resolved_by)`.
+   Consequência a calibrar: **460 de 570** rule versions resolvem pelo mesmo
+   adapter UMA, então o cap de 25% por fonte efetivamente capeia o livro inteiro
+   em 25% da banca. É o parâmetro fazendo o que sua justificativa diz
+   ("cláusulas fallback idênticas em massa = risco correlacionado"), mas é
+   **decisão pendente do proprietário** — afrouxar em silêncio seria a direção
+   proibida.
+5. **Configs completas.** `config/portfolio.json` e `config/factor-map.json`
+   declaram **cada** valor em vez de depender de defaults do código, para que o
+   hash seja propriedade do arquivo e a janela de ordem de deploy não possa
+   queimar um nome de versão como aconteceu com o `score_version`. Há teste que
+   falha se um arquivo ficar incompleto.
+6. **RAM do novo serviço.** `polymarket-portfolio` com 192 MiB, financiado
+   reduzindo o recorder de 1024 → **832 MiB** (medido em produção: 230 MiB com
+   o universo cheio, 3,6× de folga restante). O agregado do Compose fica
+   exatamente onde estava: 4 261 412 864 bytes.
+
+### Achado aberto: coletor onchain falhando
+
+**FATO VERIFICADO:** `JOB_FAILED job:"onchain"` se repete a cada ciclo — 12
+ocorrências em 60 min — com `ONCHAIN_POLLED` **zerado**. Sondando os RPCs da
+config a partir do servidor:
+
+| endpoint                                 | resposta                                              |
+| ---------------------------------------- | ----------------------------------------------------- |
+| `https://polygon-rpc.com`                | **403** — `API key disabled, reason: tenant disabled` |
+| `https://polygon-bor-rpc.publicnode.com` | OK, e `eth_getLogs` no adapter real também responde   |
+
+O endpoint público que a config lista primeiro **foi fechado** desde o
+desenvolvimento da RFC-012 (2026-08-24). O failover do coletor está correto
+(percorre todas as URLs, só lança se todas falharem) e a segunda URL funciona —
+então a causa do `JOB_FAILED` é outra. O PR #37 (aberto, CI verde) faz a
+mensagem do erro entrar no log dos jobs supervisionados, o que deve revelá-la no
+próximo ciclo.
+
+Padrão que custou tempo real duas vezes nesta sessão: falha logada apenas com
+`error_name: "Error"`. Diagnosticar o `SCORE_VERSION_CONTENT_MISMATCH` exigiu
+re-executar o boot à mão dentro do container; diagnosticar o onchain exigiu
+reproduzir suas chamadas RPC manualmente. #31 corrigiu no entrypoint da
+resolução, #37 corrige nos jobs supervisionados do recorder e da resolução.
+
+### Estado medido do disco (2026-08-26 ~09:50Z)
+
+| Métrica                    | Valor                                                                                                                        |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `pg_database_size`         | **104 GB** (orçamento 110 GB, alarme em 99 GB)                                                                               |
+| `polymarket_book_deltas`   | **249,4 M** linhas vivas                                                                                                     |
+| Disco                      | 111 GB de 301 GB (**39%**)                                                                                                   |
+| `polymarket_retention_log` | poda registrada em `book_snapshots` (7,08 M linhas) e `paper_feature_windows` (1,19 M) — **`book_deltas` ainda sem entrada** |
+
+**Por que `book_deltas` ainda não fecha:** as imagens dos containers de profile
+são de **02:18Z**, anteriores ao merge do #35 (guarda do `DELETE` por fatia).
+A correção que destrava a poda existe na `main` mas **não está rodando**. É
+preciso o rebuild de profile — o mesmo que criará o `polymarket-portfolio`.
+
 ## Próximo passo mínimo
 
-A RFC-012 tem as fases A–D e o hardening final verificados na branch
-`claude/rfc-012-execucao-c254e1`, ainda sem merge/ativação. A RFC-011 já está
-com código completo na `main`.
-Falta:
+A RFC-012 está **ativa em produção**. A RFC-013 tem as fases A–D mergeadas na
+`main` e a migration 0014 aplicada, mas o serviço `polymarket-portfolio`
+**ainda não existe no servidor** e a poda de `book_deltas` **ainda não roda**,
+porque as duas coisas dependem do mesmo rebuild.
 
-1. **Revisar e aprovar o PR da RFC-012:** não fazer merge antes da aprovação
-   explícita do proprietário. Depois do merge na `main`, o CD é disparado. As
-   migrations 0010–0012 são aditivas e retrocompatíveis (o rollback automático
-   não desfaz migrations — regra vigente).
-2. **No servidor (proprietário — SSH bloqueado nas sessões de
-   implementação):** rebuild dos containers de profile (o CD não troca a
-   imagem deles). A ativação tem **duas etapas obrigatórias, nesta ordem**:
+### 1. Mergear o PR #37 (aberto, CI verde nos três jobs)
 
-   **(2a) primeiro o recorder, o estimador e o paper:**
-   `cd /opt/ganso-market && docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-recorder polymarket-estimator polymarket-paper`
-   — o recorder precisa do rebuild por TRÊS motivos acumulados: o parser de
-   trades do PR #18, a captura de `question_id` e a captura do
-   `affirmative_token_id` desta RFC; o estimador precisa porque o limite de
-   RAM caiu para 192 MiB.
+Faz a mensagem do erro entrar no log dos jobs supervisionados. Sem isso o
+`JOB_FAILED job:"onchain"` continua dizendo apenas `error_name: "Error"`.
 
-   **(2b) só depois do primeiro ciclo gamma completo (até 10 min), o serviço
-   de resolução:**
-   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-resolution`
+### 2. Um único rebuild de profile no servidor
 
-   **Por que a ordem importa (verificado contra PostgreSQL real):** as colunas
-   `affirmative_token_id` nascem NULL para todo mercado já gravado — a
-   migration é prospectiva e nunca infere o outcome afirmativo por posição de
-   array. O serviço de resolução **falha fechado no boot** enquanto qualquer
-   mercado do universo estiver sem esse mapeamento
-   (`RESOLUTION_MARKET_AFFIRMATIVE_TOKEN_MISSING:<condition_id>`), reiniciando
-   em laço até que o recorder novo re-observe o universo e preencha o campo.
-   Subir os dois juntos funciona, mas gera minutos de crash-loop ruidoso sem
-   necessidade. Confirmar antes de (2b):
-   `docker compose --env-file deploy/server.env exec postgres psql -U ganso_market -d ganso_market -tAc "SELECT count(*) FILTER (WHERE affirmative_token_id IS NULL) AS pendentes, count(*) AS total FROM polymarket_markets WHERE closed IS NOT TRUE;"`
-   — seguir para (2b) quando `pendentes` for 0. Se algum mercado ficar
-   permanentemente pendente (outcomes fora de `Yes/No` e `Up/Down`), o serviço
-   não sobe: é o fail-closed correto (mapear o token errado inverteria a
-   semântica de preço do grafo inteiro), e a saída é excluir esse mercado do
-   universo ou estender o mapeamento de outcomes — nunca adivinhar.
+```sh
+cd /opt/ganso-market && docker compose --env-file deploy/server.env \
+  --profile polymarket up --build --detach \
+  polymarket-recorder polymarket-estimator polymarket-paper \
+  polymarket-resolution polymarket-portfolio
+```
 
-   **Esperado entre (2a) e (2b):** com o paper broker novo no ar e o serviço de
-   resolução ainda fora, o aceite de ordens/intents é recusado com
-   `RESOLUTION_RUNTIME_MISSING`/`RESOLUTION_RUNTIME_NOT_READY`. É o fail-closed
-   projetado — a camada de risco desta RFC é obrigatória no caminho de aceite —
-   e se resolve sozinho quando (2b) publica a primeira geração pronta. O mesmo
-   vale sempre que o serviço de resolução for parado: ordens em repouso deixam
-   de executar e novas são recusadas até ele voltar.
+Esse rebuild faz **três** coisas de uma vez:
 
-3. **Observação pós-ativação:** logs `RESOLUTION_BOOT` (com config/lexicon
-   hash), `SCORES_RECOMPUTED`, `GRAPH_BUILT`/`GRAPH_EVALUATED`,
-   `ONCHAIN_POLLED` (com `skipped_unmapped`), `LAYER_DIVERGENCE_ACTIVE`
-   quando houver; RAM dos dois serviços novos dentro de 192 MiB; soak de
-   24 h (recomputação horária + grafo a cada 1 min) registrado no
-   test-results — pendência declarada, como na RFC-011.
-4. **Operação:** painel "Resolução" no web app (o Nginx passou a publicar os
-   GET de `resolution-risk`/`graph`); ordens manuais sob VETO exigem
-   `override_veto` e ficam auditadas no ledger. Sob CIRCUIT_BREAKER, ordem
-   aberta só pode reduzir a posição assinada sem cruzar zero; `FAK` pode ser
-   recortada até zero, e as demais ordens inseguras são canceladas. Falha de
-   leitura autoritativa cancela as ordens abertas e não permite fill.
-5. Em paralelo: soak/ativação da RFC-011 (item anterior deste handoff);
-   evidência do gate da RFC-010 segue acumulando; `consensus`/`nowcast` no
-   `config/macro-calendar.json` continua pendente; próxima RFC do fluxo:
-   RFC-013 (portfólio), que consome score/ação/buffer/grupos/violações
-   desta RFC pela API e pelas tabelas.
+- **cria o `polymarket-portfolio`** (ativação da RFC-013);
+- leva ao recorder a guarda do `DELETE` por fatia do #35, que é o que destrava
+  a poda de `book_deltas` — sem ela o passo de quota aborta em toda execução;
+- leva a observabilidade do #37 aos jobs supervisionados.
 
-Nenhum modelo é promovido antes de um gate PASS com os 100 mercados
-resolvidos + ação manual do proprietário — nada nesta RFC muda essa
-invariante.
+`docker compose up` recria o `nginx` quando a config muda, publicando as rotas
+GET da RFC-013 (`opportunities`, `portfolio`, `gates`, `decisions`). Se o Nginx
+não for recriado, incluir `nginx` na lista.
+
+**Cuidado com a ordem (lição do `score_version` 1.1.0 queimado):**
+`config/portfolio.json` e `config/factor-map.json` já estão no servidor pelo CD,
+e o `polymarket-portfolio` vai cunhar as versões 1.0.0 de config e de mapa de
+fatores no primeiro boot. Os arquivos são completos de propósito, então o hash é
+propriedade do arquivo e não do binário — mas se um PR futuro mudar um default
+do código **e** o arquivo ao mesmo tempo, o rebuild tem que sair na mesma janela
+do merge.
+
+### 3. Observação pós-ativação
+
+- Log esperado no boot: `PORTFOLIO_BOOT` com `config_version`, `config_hash`,
+  `factor_map_version` e `factor_map_hash`; depois `PORTFOLIO_CYCLE` a cada
+  60 s com `evaluated`, `entrable`, `state` e `positions`.
+- Esperar `evaluated ≈ 98` (mercados elegíveis medidos) e `entrable` baixo ou
+  zero: a RFC-010 não tem modelo promovido, então as estimativas são baseline de
+  mercado e o critério de limite inferior raramente fecha. **Zero entradas é o
+  resultado correto nesse estado**, não uma falha.
+- `polymarket_decisions` e `portfolio_panel_snapshots` devem começar a crescer;
+  `portfolio_state` deve ter exatamente uma linha em `NORMAL`.
+- RAM dos dois serviços novos dentro de 192 MiB.
+- Confirmar que a poda de `book_deltas` finalmente registra em
+  `polymarket_retention_log` e que `n_live_tup` cai de forma sustentada.
+- Painel: aba "Portfólio" no web app, atrás do login.
+
+### 4. Pendências declaradas
+
+- **Coletor onchain** (`JOB_FAILED job:"onchain"`, `ONCHAIN_POLLED` zerado): o
+  `polygon-rpc.com` da config devolve 403 desde que a RFC-012 foi escrita; o
+  failover está correto e a segunda URL funciona, então a causa real é outra e o
+  #37 vai revelá-la. Considerar remover o endpoint morto da config.
+- **Cap de fonte de resolução**: decisão pendente do proprietário (item 4 da
+  seção da sessão acima) — hoje capeia o livro inteiro em 25% da banca porque
+  quase todo mercado resolve pelo mesmo adapter UMA.
+- **`docs/test-results/RFC-013-portfolio-engine.md`** não foi escrito. A
+  evidência desta sessão está nos corpos dos PRs #26–#37 e nesta seção do
+  handoff.
+- **Soak de 24 h** da RFC-012 e da RFC-013 em produção: não medido.
+- **Gates G1–G6**: nenhuma medição gravada ainda. O runner da fase B não chama
+  o medidor de gates — a fase C entregou o cálculo e a fase D o endpoint, mas
+  não há job periódico gravando em `portfolio_gate_measurements`. `GET
+/polymarket/gates` responde `rfc_009_status: BLOCKED` com lista vazia, que é o
+  fail-closed correto, mas o pipeline de medição contínua (tarefa 8 da RFC) e o
+  relatório semanal ainda faltam.
+- **Critérios de saída não estão no runner**: `exits.ts` está implementado e
+  testado, mas o ciclo do runner ainda não avalia saídas sobre posições
+  abertas — não há posição aberta em produção, então nada é perdido hoje.
+- **Replay determinístico do decision log** (tarefa 7 da RFC): as decisões já
+  persistem book, inputs, hash de config e limitador binding, mas o replay em si
+  e seu teste obrigatório não foram escritos.
+- `consensus`/`nowcast` no `config/macro-calendar.json` continua pendente.
+
+Nenhum modelo é promovido antes de um gate PASS com os 100 mercados resolvidos
+
+- ação manual do proprietário — nada nesta sessão muda essa invariante. A
+  RFC-009 permanece bloqueada.
 
 Operação do servidor: `cd /opt/ganso-market` seguido de `make server-status`,
 `make server-health` ou `make server-logs`.
