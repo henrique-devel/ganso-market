@@ -5,6 +5,7 @@ import Fastify, { LogController, type FastifyInstance } from "fastify";
 import { registerAuthRoutes } from "./auth/http.js";
 import { registerFundamentalRoutes } from "./polymarket/fundamental/api.js";
 import { registerPaperRoutes } from "./polymarket/paper/api.js";
+import { registerPortfolioRoutes } from "./polymarket/portfolio/api.js";
 import { registerResolutionRoutes } from "./polymarket/resolution/api.js";
 import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import type { AuthService } from "./auth/service.js";
@@ -198,6 +199,14 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     // violations, sanity vetoes and layer divergences, plus the curated-edge
     // POST. Analytics only — no route here creates an order or a signal.
     registerResolutionRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
+    });
+    // RFC-013 read surface: the opportunity panel, exposures, limits, the
+    // portfolio state machine, the RFC-009 gates and the decision log. The two
+    // manual state controls (halt/resume) live here too and are deliberately
+    // NOT published by the Nginx perimeter.
+    registerPortfolioRoutes(app, {
       pool: options.pool,
       authService: options.authService,
     });

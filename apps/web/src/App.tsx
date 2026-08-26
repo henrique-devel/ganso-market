@@ -12,6 +12,7 @@ import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
 // The explicit .tsx extension keeps module resolution unambiguous on
 // case-insensitive filesystems, where "./Resolution.js" (and Vite's
 // extension substitution) would match src/resolution.ts instead.
+import { PortfolioPanel } from "./Portfolio.tsx";
 import { ResolutionPanel } from "./Resolution.tsx";
 
 const REFRESH_INTERVAL_MS = 15_000;
@@ -203,7 +204,9 @@ function Dashboard({
   onUnauthorized: () => void;
 }>) {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
-  const [tab, setTab] = useState<"status" | "resolucao">("status");
+  const [tab, setTab] = useState<"status" | "resolucao" | "portfolio">(
+    "status",
+  );
   const mounted = useRef(true);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -266,6 +269,15 @@ function Dashboard({
         >
           Resolução
         </button>
+        <button
+          type="button"
+          className={tab === "portfolio" ? "tab tab--active" : "tab"}
+          onClick={() => {
+            setTab("portfolio");
+          }}
+        >
+          Portfólio
+        </button>
       </nav>
       {tab === "status" ? (
         <>
@@ -278,8 +290,13 @@ function Dashboard({
             Verificar novamente
           </button>
         </>
-      ) : (
+      ) : tab === "resolucao" ? (
         <ResolutionPanel
+          accessToken={session.accessToken}
+          onUnauthorized={onUnauthorized}
+        />
+      ) : (
+        <PortfolioPanel
           accessToken={session.accessToken}
           onUnauthorized={onUnauthorized}
         />
