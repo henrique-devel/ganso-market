@@ -220,6 +220,16 @@ export interface FillReconciliationRow {
 }
 
 /**
+ * How far from a fill a recorded trade may be and still be taken as evidence of
+ * the fee rate in force. A rate from a day away is not the rate that applied.
+ *
+ * It is also what keeps the query fast: bounded by the effective timestamp, the
+ * lookup is a range scan on `polymarket_trades_token_effective_ts_idx` instead
+ * of a scan of every trade the token ever had, once per fill.
+ */
+const FEE_MATCH_WINDOW = "1 hour";
+
+/**
  * Taker fills, newest first, each paired with the venue's own fee rate.
  *
  * Only taker fills: a maker quote pays no fee on V2, so a maker fill has nothing
@@ -240,7 +250,11 @@ export async function loadFillReconciliationRows(
                FROM polymarket_trades t
               WHERE t.token_id = e.token_id
                 AND t.fee_rate_bps IS NOT NULL
-              ORDER BY abs(extract(epoch FROM (t.received_at - e.event_ts)))
+                AND COALESCE(t.trade_ts, t.received_at) BETWEEN
+                      e.event_ts - interval '${FEE_MATCH_WINDOW}'
+                  AND e.event_ts + interval '${FEE_MATCH_WINDOW}'
+              ORDER BY abs(extract(epoch FROM (
+                        COALESCE(t.trade_ts, t.received_at) - e.event_ts)))
               LIMIT 1) AS venue_fee_rate_bps
        FROM paper_ledger_events e
       WHERE e.event_type = 'fill'
