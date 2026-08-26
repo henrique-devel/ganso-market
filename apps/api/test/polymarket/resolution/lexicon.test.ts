@@ -136,6 +136,38 @@ describe("title-rule mismatch", () => {
     expect(result.riskComponents["title_mismatch"]).toBe(0);
   });
 
+  it("does not flag a rule that DEFERS to the title instead of repeating it", () => {
+    // Polymarket's standard crypto template, verbatim from production. The
+    // rule never repeats the strike or the date — it points back at the title.
+    // Comparing extracted numbers then measures only the rule's own machinery
+    // ("1 minute candle", "12:00"), which is how this check vetoed 130 of the
+    // 195 live markets on 2026-08-26.
+    const result = score({
+      question: "Will the price of XRP be above $1.90 on August 28?",
+      description:
+        'This market will resolve to "Yes" if the Binance 1 minute candle for ' +
+        "XRP/USDT 12:00 in the ET timezone (noon) on the date specified in the " +
+        'title has a final "Close" price higher than the price specified in ' +
+        'the title. Otherwise, this market will resolve to "No".',
+      resolutionSource: null,
+    });
+    expect(result.hardFlags).not.toContain("TITLE_RULE_MISMATCH");
+    expect(result.riskComponents["title_mismatch"]).toBe(0);
+  });
+
+  it("still flags a genuine mismatch when the rule states its own values", () => {
+    // The guard must be narrow: only an explicit deferral suppresses the
+    // check. A rule that names a DIFFERENT strike is still a real mismatch.
+    const result = score({
+      question: "Will the price of XRP be above $1.90 on August 28?",
+      description:
+        'This market will resolve to "Yes" if the Binance 1 minute candle for ' +
+        'XRP/USDT on August 30 has a final "Close" price above $2.50.',
+      resolutionSource: null,
+    });
+    expect(result.hardFlags).toContain("TITLE_RULE_MISMATCH");
+  });
+
   it("expands k/m suffixes before comparing (100k equals 100,000)", () => {
     const result = score({
       question: "Will Bitcoin trade above $100k?",

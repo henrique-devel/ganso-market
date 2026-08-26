@@ -166,7 +166,10 @@ export interface ResolutionConfig {
 }
 
 export const DEFAULT_RESOLUTION_CONFIG: ResolutionConfig = Object.freeze({
-  scoreVersion: "1.0.0",
+  // 1.1.0: the lexicon gained titleDeferralTerms, which changes what a score
+  // MEANS, so it must be a new version — the boot gate refuses to reuse a
+  // version name whose content hash differs.
+  scoreVersion: "1.1.0",
   weights: Object.freeze({
     rulePrecision: 0.3,
     disputePrior: 0.15,
