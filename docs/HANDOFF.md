@@ -1,7 +1,7 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-26 (tarde — RFC-012 ATIVA em produção; RFC-013
-  com código completo das fases A–E, ativação do serviço pendente)
+- Última atualização: 2026-08-26 (noite — RFC-012 e **RFC-013 ATIVAS em
+  produção**; `polymarket-portfolio` criado às 19:53Z, corrigido às 23:49Z)
 - Branch principal: `main`
 - RFC ativa: RFC-013 (motor de portfólio) — fases A, B, C, D mergeadas
   (PRs #30, #33, #34, #36) e fase E aberta nesta sessão (medição contínua de
@@ -9,6 +9,9 @@
   0014 aplicada em produção e **não alterada** pela fase E; o serviço
   `polymarket-portfolio` ainda NÃO foi criado no servidor
 - RFC-012: **ativa em produção** desde 2026-08-26 01:15Z
+- RFC-013: **ativa em produção** desde 2026-08-26 19:53Z (config 1.1.0). Um
+  falso `PASS` no G1 ficou de pé por ~4 h e foi corrigido no PR #40; ver a seção
+  do incidente abaixo
 - Modo permitido no runtime atual: `paper`
 
 Este documento registra o ponto de continuidade entre sessões. Ele não
@@ -422,7 +425,7 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 | RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
 | RFC-011 — Microestrutura e paper broker               | Código completo (2026-08-24); container ativo em produção, nenhuma ordem paper criada ainda            | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
 | RFC-012 — Risco de resolução e grafo lógico           | **Ativa em produção (2026-08-26 01:15Z)**, `score_version` 1.1.1; 220 mercados pontuados, todos `NONE` | [`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md)                       |
-| RFC-013 — Motor de portfólio e gates                  | **Código completo (fases A–E)**; migration 0014 aplicada; serviço não criado no servidor                | Gates G1–G6 habilitam a RFC-009; todos medidos e nenhum `PASS` — que é o resultado correto hoje                    |
+| RFC-013 — Motor de portfólio e gates                  | **Ativa em produção** desde 2026-08-26 19:53Z (fases A–E, config 1.1.0)                                 | Gates G1–G6 habilitam a RFC-009; todos medidos e nenhum `PASS` — correto hoje. O G1 passou indevidamente por ~4 h |
 | RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
@@ -812,6 +815,62 @@ não existe no servidor ainda. Se existisse, seria o incidente do `score_version
 Evidência completa, com os números medidos:
 [`docs/test-results/RFC-013-portfolio-engine.md`](test-results/RFC-013-portfolio-engine.md).
 
+### INCIDENTE: o G1 passou sem evidência nenhuma (2026-08-26, ~4 h)
+
+**FATO VERIFICADO.** Primeiro ciclo de gates depois da ativação (19:53:19Z):
+`{"gate":"G1","status":"PASS","reason_code":null}`. Não havia modelo promovido na
+RFC-010, portanto não havia nada calibrado para medir.
+
+**Mecanismo.** `loadForecastRows` filtrava `status = 'active'` mas não `source`.
+Sem modelo promovido o estimador cai para baseline de mercado, e o `q` passa a
+ser derivado do MESMO book gravado que o `market_prob` com que seria comparado.
+`modelBrier ≈ marketBrier` e a barra é "não piora" — empate satisfaz; e
+`modelBrier < 0,20` também, porque o **preço** é bem calibrado.
+
+**Confirmação empírica**, na medição corrigida: `used_signal_brier =
+0.07451024201319072`. A RFC-013 cita "barra: preço tem Brier ~0,074". O sinal
+mediu exatamente o que a RFC diz que o preço mede — porque era o preço.
+
+**Correção (PR #40).** As duas barras da RFC foram separadas: (a) o modelo
+promovido vs o preço, tomada só sobre `source = 'MODEL'`; (b) o sinal usado vs o
+teto absoluto. Sem modelo promovido, (a) é **immensurável** e o gate responde
+`INSUFFICIENT_DATA` com o motivo escrito. Confirmado em produção às 23:49:19Z.
+
+**Lição operacional, e ela custou três tropeços nesta sessão.** Merge, CD e
+rebuild de profile são **três** passos e nenhum adivinha o outro:
+
+1. o primeiro rebuild pegou a janela 13 min antes do CD do #39 → subiu fase D
+   com config 1.1.0 no disco, uma bomba armada para o próximo restart;
+2. o segundo rebuild rodou com o #40 ainda **OPEN** → recompilou o mesmo bug;
+3. `git pull` foi tentado em `/opt/ganso-market`, que **não tem `.git`**, e
+   `gh` foi tentado no servidor, onde não está instalado.
+
+A guarda que resolve é rebuildar só depois de confirmar a correção no disco:
+
+```sh
+cd /opt/ganso-market && if grep -q modelForecasts apps/api/src/polymarket/portfolio/gates.ts; then docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-portfolio; else echo "PARE: o CD ainda nao entregou"; fi
+```
+
+**A linha `PASS` de 19:53 permanece** em `portfolio_gate_measurements`, imutável
+por trigger. É correto: é a trilha de evidência de que o falso verde existiu.
+
+### ACHADO: a ponte decisão → ordem de paper não existe
+
+**FATO VERIFICADO** por busca de código: fora do próprio módulo, o único código
+que toca `portfolio_decisions` é o worker de retenção, para podar. A coluna
+`paper_order_id` da migration 0014 existe para isso ("set once the paper broker
+accepted an order for this decision") e **nunca é preenchida**. O caminho de
+`intent` do paper broker é um endpoint HTTP em `paper/api.ts` que espera alguém
+chamar.
+
+Em produção já houve **2 entradas ACEITAS** que não geraram posição nenhuma.
+
+Isso **reordena o caminho crítico**: não é a RFC-010 sem modelo promovido. Mesmo
+com entradas aceitas, nenhuma posição nasce, nenhuma fecha, e o G2 fica em
+`INSUFFICIENT_DATA` para sempre. A ponte não pode viver dentro do módulo
+`portfolio` (o guard de escopo proíbe escrever fora de `portfolio_*`), então
+onde ela mora é decisão de projeto pendente.
+
 ### Achado aberto: coletor onchain falhando
 
 **FATO VERIFICADO:** `JOB_FAILED job:"onchain"` se repete a cada ciclo — 12
@@ -857,12 +916,38 @@ A RFC-012 está **ativa em produção**. A RFC-013 tem as fases A–D mergeadas 
 **ainda não existe no servidor** e a poda de `book_deltas` **ainda não roda**,
 porque as duas coisas dependem do mesmo rebuild.
 
-### 1. Mergear o PR #37 (aberto, CI verde nos três jobs)
+### 0. FEITO nesta sessão
 
-Faz a mensagem do erro entrar no log dos jobs supervisionados. Sem isso o
-`JOB_FAILED job:"onchain"` continua dizendo apenas `error_name: "Error"`.
+PRs #37, #39 e #40 mergeados e deployados; `polymarket-portfolio` criado no
+servidor (config 1.1.0) e corrigido; G1 confirmado em `INSUFFICIENT_DATA`. O que
+segue abaixo é o que **ainda não** foi feito.
 
-### 2. Um único rebuild de profile no servidor
+### 1. Rodar o segundo bloco de checagem pós-ativação
+
+Nunca rodou contra a fase E. Mede o que o primeiro bloco não vê: contagem de
+`PORTFOLIO_REPLAY_OK` versus `MISMATCH`, RAM dos containers contra os 192 MiB,
+idade das imagens, a poda de `book_deltas` em `polymarket_retention_log`, e um
+`curl` confirmando que o Nginx publica `/api/polymarket/gates/measurements`
+(esperado: **401**; um **404** significa que a borda não recarregou).
+
+O `PORTFOLIO_REPLAY_OK` é a primeira vez que o replay corre sobre decisões
+geradas contra books reais de 10 níveis, e não sobre os fixtures rasos dos
+testes.
+
+### 2. Auditar G2–G6 contra o modo de falha do G1
+
+O G1 passou porque comparava uma coisa com ela mesma. Os outros quatro em
+`INSUFFICIENT_DATA` estão nesse estado por falta de dado, então nenhum chegou
+perto de uma barra — mas nenhum foi reauditado sob a lente "passa por
+degeneração". O G4 é o mais suspeito: `reconcile([])` devolve nulos e o gate
+depende de contagens que podem estar vazias de um jeito parecido.
+
+### 3. Decidir onde mora a ponte decisão → ordem de paper
+
+Ver a seção do achado acima. É o gargalo real do G2, e é decisão de projeto
+antes de ser código.
+
+### 4. (histórico) Um único rebuild de profile no servidor
 
 ```sh
 cd /opt/ganso-market && docker compose --env-file deploy/server.env \

@@ -15,7 +15,9 @@
 - Ambiente: macOS (Darwin 25.3.0), Node 26.4.0, npm 11.17.0, Docker Desktop;
   PostgreSQL 18.4-bookworm descartável para as verificações de banco
 - **SIMULAÇÃO — SEM EXECUÇÃO REAL.** Nenhuma ordem real, wallet, signer ou
-  credencial de trading existe neste módulo, e nenhum gate passou.
+  credencial de trading existe neste módulo.
+- **Nenhum gate passa hoje** — mas o G1 passou indevidamente por ~4 h em
+  produção antes de ser corrigido. A seção 9 registra o incidente inteiro.
 
 Este documento registra somente comandos realmente executados e resultados
 reais. Ele consolida a evidência das fases A–D (cujos números vivem nos corpos
@@ -48,7 +50,7 @@ serem pré-requisito das três primeiras:
 | -------------------------------------------- | ---------------------------------------------------------------------------- |
 | `npm run format:check` (prettier)            | OK — "All matched files use Prettier code style!"                            |
 | `npm run lint` (tsc por workspace)           | OK — api, web e contracts sem erro                                          |
-| `npm test` — @ganso-market/api               | **93 arquivos aprovados + 4 pulados; 1.325 testes aprovados, 49 pulados**    |
+| `npm test` — @ganso-market/api               | **93 arquivos aprovados + 4 pulados; 1.327 testes aprovados, 49 pulados**    |
 | `npm test` — @ganso-market/web               | **6 arquivos, 41 testes aprovados**                                          |
 | `npm test` — contracts                       | 2 arquivos, 70 testes aprovados                                              |
 | `npm run build`                              | OK (api tsc, web vite 251,02 kB / gzip 74,45 kB, contracts tsc)              |
@@ -66,7 +68,7 @@ containers". A primeira metade (política estática do Compose) passou.
 `cargo` e as suítes Python não foram tocados por esta RFC e não foram
 reexecutados nesta sessão.
 
-## 3. Módulo `portfolio`: 199 → 290 testes
+## 3. Módulo `portfolio`: 199 → 292 testes
 
 | Suíte                    | Testes | O que cobre                                                                    |
 | ------------------------ | ------ | ------------------------------------------------------------------------------ |
@@ -74,14 +76,15 @@ reexecutados nesta sessão.
 | `exitcycle.test.ts`      | 23     | fiação dos sete critérios sobre uma posição real (novo)                        |
 | `breakers.test.ts`       | 16     | os 5 circuit breakers da tarefa 4 (novo)                                       |
 | `measure.test.ts`        | 22     | montagem da medição de gates, incluindo o reset do G2 (novo)                   |
+| `gates.test.ts`          | 37     | 35 → 37: +2 travando o G1 contra baseline de mercado (seção 9)                 |
 | `runner.test.ts`         | 11     | ciclos de saída e de gates pelo runner (novo)                                  |
 | `api.test.ts`            | 18     | 13 → 18: +5 no endpoint paginado de medições                                    |
-| demais (A–D)             | 186    | inalteradas                                                                    |
-| **total (gate de fonte)**| **290**|                                                                                |
+| demais (A–D)             | 151    | inalteradas                                                                    |
+| **total (gate de fonte)**| **292**|                                                                                |
 | `integration.pg.test.ts` | 19     | PostgreSQL real; pulados no gate de fonte (novo)                               |
 
 Comando: `npx vitest run test/polymarket/portfolio` →
-**16 arquivos, 290 aprovados, 19 pulados (309)**.
+**16 arquivos, 292 aprovados, 19 pulados (311)**.
 
 O guard de escopo (`scope.test.ts`, 7 testes) varre os **21** arquivos do
 módulo — 14 antes desta fase, mais `breakers.ts`, `decisionrow.ts`,
@@ -100,7 +103,7 @@ limpas em sequência com o protocolo do `apply.sh`
 esta fase não precisou de tabela nova.
 
 `GANSO_TEST_DATABASE_URL` apontando para esse banco, a suíte API integral e
-**serial** passou com **97/97 arquivos e 1.374/1.374 testes**.
+**serial** passou com **97/97 arquivos e 1.376/1.376 testes**.
 
 > Nota de protocolo, confirmada nesta sessão: as suítes de integração
 > compartilham um banco e **falham em paralelo** — não por causa desta fase.
@@ -132,7 +135,7 @@ real:
 | `ensureConfigVersion` com o mesmo nome e conteúdo diferente               | **recusado** com `PORTFOLIO_CONFIG_VERSION_CONTENT_MISMATCH`                                |
 | ciclo `panel` completo                                                    | estado, 7+ dimensões de exposição com custo de unwind real, painel e decisão gravados      |
 | ciclo `exits` completo                                                    | decisão `EXIT` gravada; **replay das linhas que passaram pelo PostgreSQL confere**          |
-| ciclo `gates` completo                                                    | 6 medições imutáveis; **nenhuma `PASS`**                                                   |
+| ciclo `gates` completo                                                    | 6 medições imutáveis; nenhuma `PASS` **nestas fixtures** (ver seção 9 para o que aconteceu em produção) |
 
 ### O que o ciclo `panel` decidiu, contra o banco real
 
@@ -271,7 +274,91 @@ Isto é seguro porque a 1.0.0 **nunca foi cunhada em produção**: o serviço
 `polymarket-portfolio` ainda não existe no servidor. Se já existisse, mudar o
 conteúdo de 1.0.0 repetiria o incidente do `score_version` 1.1.0.
 
-## 9. Não verificado / pendências
+## 9. Incidente em produção: o G1 passou sem evidência nenhuma
+
+Este é o achado mais importante da sessão, e ele só apareceu porque a checagem
+foi feita **contra produção** depois da ativação. Nenhum teste local o pegaria:
+o dado que o produziu não existe em fixture.
+
+### O que aconteceu
+
+| Instante (UTC) | Evento |
+| -------------- | ------ |
+| 2026-08-26 19:53:02 | `PORTFOLIO_BOOT` com `config_version 1.1.0` — fase E ativa |
+| 19:53:19 | primeiro `PORTFOLIO_GATES_MEASURED`: **`{"gate":"G1","status":"PASS","reason_code":null}`** |
+| 23:48:13 | última medição com o veredito errado ainda de pé |
+| 23:49:19 | após rebuild com a correção: `INSUFFICIENT_DATA` / `G1_CALIBRATION_NOT_MET` |
+
+O falso verde ficou de pé por **~4 horas**, em um dos seis sinais que
+destravariam a RFC-009.
+
+### O mecanismo
+
+`loadForecastRows` filtrava `status = 'active'` mas **não** filtrava `source`.
+Sem modelo promovido na RFC-010, o estimador cai para baseline de mercado — e aí
+o `q` da estimativa é derivado do MESMO book gravado que o `market_prob` com que
+ele seria comparado. Em cadeia:
+
+- `modelBrier ≈ marketBrier`, e a barra da RFC é "não piora": **empate satisfaz**;
+- `modelLogLoss ≈ marketLogLoss`: idem;
+- `modelBrier < 0,20`: verdadeiro, porque o **preço** é bem calibrado.
+
+Todas as condições passaram e nada foi medido.
+
+### A confirmação empírica
+
+A medição corrigida reporta a barra (b) separadamente, e o número fecha o
+diagnóstico sem depender de leitura de código:
+
+```
+brier_do_sinal_usado | 0.07451024201319072
+```
+
+A RFC-013 cita, como referência, *"barra: preço tem Brier ~0,074"*. O sinal
+usado nas entradas mediu **0,07451** — exatamente o que a RFC diz que o preço
+mede, porque era o preço.
+
+### A correção
+
+As duas barras que a RFC de fato enuncia foram separadas:
+
+- **(a)** "o modelo promovido não piora Brier/log-loss vs o próprio preço" —
+  tomada SOMENTE sobre `source = 'MODEL'`;
+- **(b)** "o sinal usado nas entradas tem Brier < 0,20" — tomada sobre o sinal
+  em uso, qualquer que seja a fonte.
+
+Sem modelo promovido, (a) é **immensurável**, e o gate responde
+`INSUFFICIENT_DATA` com o motivo em `metrics.detail`:
+
+> `no promoted model: the used signal is a market baseline, and scoring it`
+> `against the price would compare the price to itself`
+
+Ao corrigir, um segundo defeito apareceu: a guarda de leakage passou a varrer os
+dois conjuntos e contava cada linha **duas vezes** (o conjunto do modelo é
+normalmente subconjunto do usado) — 120 linhas vazando reportavam 240. O
+veredito estava certo, o número não. Deduplicado por identidade.
+
+Teste de regressão: 120 mercados, preço bem calibrado, baseline copiando o preço
+exatamente, `modelForecasts: []` → obrigado a responder `INSUFFICIENT_DATA`.
+Módulo `portfolio`: 290 → **292** testes.
+
+### O que este incidente ensina, além do bug
+
+Um gate que responde `PASS` sem dado é **pior** que um que falha: um `FAIL` é
+lido como problema e investigado, um `PASS` é lido como progresso e acumulado.
+`INSUFFICIENT_DATA` existe exatamente para esse caso, e colapsá-lo com `PASS`
+foi o erro.
+
+Consequência prática: os outros quatro gates em `INSUFFICIENT_DATA` estão nesse
+estado por falta de dado, então nenhum deles chegou perto de uma barra. Mas
+**nenhum deles foi verificado contra o modo de falha "passa por degeneração"** —
+o G4, em particular, depende de contagens que podem estar vazias de um jeito
+parecido. Está declarado como pendência.
+
+A linha `PASS` de 19:53 permanece em `portfolio_gate_measurements`, imutável por
+trigger. Isso é correto: é a trilha de evidência de que o falso verde existiu.
+
+## 10. Não verificado / pendências
 
 - **Ativação em produção**: o serviço `polymarket-portfolio` continua **não
   criado no servidor**, e o Nginx continua **não recarregado** com as rotas GET
@@ -282,7 +369,7 @@ conteúdo de 1.0.0 repetiria o incidente do `score_version` 1.1.0.
   ciclo a ciclo contra PostgreSQL real, não por 24 h.
 - **`make resource-check` completo**: a metade de runtime exige containers
   rodando.
-- **Gates G1–G6**: todos medidos, **nenhum PASS**, e isso é o resultado correto —
+- **Gates G1–G6**: todos medidos, **nenhum PASS** depois da correção da seção 9, e isso é o resultado correto —
   não há modelo promovido na RFC-010, não há posição fechada em paper, nenhum
   circuit breaker foi exercitado em produção e não há revisão escrita do
   proprietário. `rfc_009_status` permanece `BLOCKED`.
@@ -301,6 +388,17 @@ conteúdo de 1.0.0 repetiria o incidente do `score_version` 1.1.0.
   evento, que é papel do módulo da RFC-011. `updated_at` não serve de
   substituto: uma atualização de marca o move e reatribuiria uma perda antiga
   para hoje em todo ciclo.
+- **Os gates G2–G6 contra o modo de falha "passa por degeneração"**: o G1 passou
+  porque comparava uma coisa com ela mesma (seção 9). Os outros quatro não foram
+  reauditados sob essa lente. O G4 é o mais suspeito, porque `reconcile([])`
+  devolve nulos e o gate depende de contagens que podem estar vazias.
+- **Ponte decisão → ordem de paper NÃO existe**: verificado por busca de código —
+  fora do próprio módulo, o único código que toca `portfolio_decisions` é o
+  worker de retenção. A coluna `paper_order_id` da migration nunca é preenchida.
+  Em produção já houve **2 entradas ACEITAS** que não geraram posição nenhuma.
+  Sem essa ponte, o G2 nunca acumula posição fechada e fica em
+  `INSUFFICIENT_DATA` para sempre — é o gargalo real do gate, maior que a
+  ausência de modelo promovido na RFC-010.
 - **Breaker de salto sem catalisador**: "catalisador conhecido" é o instante de
   resolução do próprio mercado ou um evento/release do calendário macro dentro
   da janela. É uma aproximação declarada — um catalisador que o calendário não
