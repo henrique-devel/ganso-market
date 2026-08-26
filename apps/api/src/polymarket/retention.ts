@@ -32,6 +32,19 @@ const MAX_QUOTA_ITERATIONS = 4;
 const INTERPOLATION_MIN_ROWS = 5_000_000;
 /** Hard clamp on the interpolated fraction: never "everything below newest". */
 const MAX_INTERPOLATED_FRACTION = 0.9;
+/**
+ * Widest window a single coverage query may span for one token.
+ *
+ * The per-token check is an index-only scan, but its cost still grows with the
+ * range: measured in production at 14.3 s for the heaviest token over a 2-day
+ * cutoff, and past the 30 s statement_timeout once the quota prune pushed the
+ * cutoff to ~3.5 days. Slicing keeps every individual query small and lets the
+ * prune advance token by token, slice by slice, instead of losing the whole
+ * token to one timeout.
+ */
+const COVERAGE_SLICE_MS = 12 * 60 * 60 * 1_000;
+/** Bound on slices per token per run, so one token cannot monopolise a run. */
+const MAX_COVERAGE_SLICES = 32;
 const MAX_DELETE_BATCHES = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -567,6 +580,17 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     return firstUncovered;
   }
 
+  /** Oldest retained delta for one token; index-backed, so effectively free. */
+  async function oldestDeltaForToken(tokenId: string): Promise<Date | null> {
+    const result = await pool.query<{ oldest: Date | string | null }>(
+      `SELECT min(received_at) AS oldest
+         FROM polymarket_book_deltas
+        WHERE token_id = $1`,
+      [tokenId],
+    );
+    return toDate(result.rows[0]?.oldest ?? null);
+  }
+
   /**
    * Tokens the delta pruner may consider. Read from polymarket_markets, which
    * retention never prunes and which recorded every market the registry ever
@@ -608,12 +632,52 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     const tokenIds = await registryTokenIds();
     let total = 0;
     for (const tokenId of tokenIds) {
-      let tokenCutoff: Date | null;
+      total += await pruneCoveredToken(config, tokenId, cutoff, report);
+    }
+    return total;
+  }
+
+  /**
+   * Prune one token up to `cutoff`, in bounded time slices.
+   *
+   * Slicing exists because the coverage query's cost grows with the range it
+   * spans, and one token exceeding the statement timeout used to cost that
+   * token its entire prune. Each slice asks a small question, deletes what it
+   * cleared, and advances — so a token that cannot be checked in one shot is
+   * still pruned in pieces.
+   */
+  async function pruneCoveredToken(
+    config: RetentionTableConfig,
+    tokenId: string,
+    cutoff: Date,
+    report: RetentionRunReport,
+  ): Promise<number> {
+    let oldest: Date | null;
+    try {
+      oldest = await oldestDeltaForToken(tokenId);
+    } catch {
+      oldest = null;
+    }
+    if (oldest === null || oldest.getTime() >= cutoff.getTime()) {
+      return 0;
+    }
+
+    let total = 0;
+    let sliceStart = oldest.getTime();
+    for (let slice = 0; slice < MAX_COVERAGE_SLICES; slice += 1) {
+      if (sliceStart >= cutoff.getTime()) {
+        return total;
+      }
+      const sliceEnd = new Date(
+        Math.min(sliceStart + COVERAGE_SLICE_MS, cutoff.getTime()),
+      );
+      let sliceCutoff: Date | null;
       try {
-        tokenCutoff = await coverageCutoffForToken(tokenId, cutoff);
+        sliceCutoff = await coverageCutoffForToken(tokenId, sliceEnd);
       } catch (error: unknown) {
-        // One token's failure must not abort the table: the whole point of
-        // this rewrite is that a single bad token used to cost every token.
+        // One token's failure must not abort the table, and one slice's
+        // failure must not abort the token: a single bad query used to cost
+        // every token, then every slice.
         report.skipped.push({
           table: config.table,
           reason: "coverage_query_failed",
@@ -626,15 +690,19 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           {
             table: config.table,
             token_id: tokenId,
+            slice_end: sliceEnd.toISOString(),
             error_name: error instanceof Error ? error.name : "UnknownError",
           },
         );
-        continue;
+        return total;
       }
-      if (tokenCutoff === null || tokenCutoff.getTime() <= 0) {
-        continue;
+      if (sliceCutoff === null || sliceCutoff.getTime() <= 0) {
+        return total;
       }
-      if (tokenCutoff.getTime() < cutoff.getTime()) {
+      total += await batchedDelete(config, sliceCutoff, tokenId);
+      if (sliceCutoff.getTime() < sliceEnd.getTime()) {
+        // A hole inside this slice: pruning stops here for this token, and the
+        // hole is reported rather than silently stalling the table.
         report.skipped.push({
           table: config.table,
           reason: "series_coverage_missing",
@@ -646,12 +714,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           "polymarket_retention_series_coverage_missing",
           {
             token_id: tokenId,
-            first_uncovered: tokenCutoff.toISOString(),
+            first_uncovered: sliceCutoff.toISOString(),
             requested_cutoff: cutoff.toISOString(),
           },
         );
+        return total;
       }
-      total += await batchedDelete(config, tokenCutoff, tokenId);
+      sliceStart = sliceEnd.getTime();
     }
     return total;
   }
