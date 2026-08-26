@@ -85,12 +85,20 @@ void run().catch((error: unknown) => {
     error instanceof GraphEdgesConfigError
       ? error.reasonCode
       : "RESOLUTION_FAILED";
+  // Every fatal boot failure must say WHAT failed, not only that something did.
+  // Config errors carry a reason code; everything else used to be logged as a
+  // bare error_name of "Error", which says nothing at all — diagnosing
+  // SCORE_VERSION_CONTENT_MISMATCH in production on 2026-08-26 required
+  // re-running the boot by hand to see the message. The message of an Error
+  // raised by this module is a stable code, never user data or a secret.
   const detail =
     error instanceof ResolutionConfigError ||
     error instanceof ResolutionLexiconError ||
     error instanceof GraphEdgesConfigError
       ? { detail: error.message }
-      : {};
+      : error instanceof Error
+        ? { detail: error.message }
+        : {};
   process.stderr.write(
     `${JSON.stringify({
       level: "fatal",

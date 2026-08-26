@@ -66,6 +66,36 @@ primeiro deploy em `/opt/ganso-market` foi transferido como pacote do working
 tree e não possui histórico Git; nesse caso, sincronize primeiro a nova versão
 dos arquivos e só depois execute `make server-update`.
 
+### Containers de profile e a janela de ordem de deploy
+
+`make server-update` **não troca a imagem dos containers de profile**
+(`polymarket-*`). Toda mudança em código que eles executam exige rebuild
+explícito:
+
+```sh
+docker compose --env-file deploy/server.env --profile polymarket up --build --detach \
+  polymarket-recorder polymarket-estimator polymarket-paper polymarket-resolution
+```
+
+**Cuidado com configs versionadas que nomeiam conteúdo da imagem.** O diretório
+`config/` é montado por bind e chega junto com o CD; o conteúdo que ele nomeia
+(o léxico de resolução, por exemplo) vive **dentro da imagem** e só muda no
+rebuild. Entre uma coisa e outra existe uma janela em que o binário ANTIGO lê a
+config NOVA.
+
+Aconteceu em 2026-08-26: `config/resolution.json` passou a declarar
+`score_version: 1.1.0`, o `polymarket-resolution` antigo leu esse nome e gravou
+uma linha em `resolution_score_versions` fixando 1.1.0 ao hash do léxico
+**anterior**. Quando a imagem nova subiu, o hash calculado divergiu do gravado e
+o serviço passou a falhar fechado com `SCORE_VERSION_CONTENT_MISMATCH` — o
+comportamento correto, mas o nome de versão ficou queimado, porque a linha é
+imutável por trigger (e deve ser). A saída foi cunhar 1.1.1.
+
+Para evitar: quando um PR mudar **ao mesmo tempo** um arquivo de `config/` e o
+conteúdo que ele nomeia, faça o rebuild dos containers de profile na mesma
+janela do merge, antes de o serviço afetado reiniciar por qualquer outro
+motivo.
+
 ## CI/CD do GitHub
 
 O workflow `.github/workflows/ci-cd.yml` roda `make verify` e o smoke completo
