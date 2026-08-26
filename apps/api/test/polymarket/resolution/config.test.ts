@@ -80,7 +80,10 @@ describe("resolution config", () => {
   it("parses the shipped config file", async () => {
     const text = await readFile(SHIPPED, "utf8");
     const config = parseResolutionConfig(JSON.parse(text));
-    expect(config.scoreVersion).toBe("1.0.0");
+    // 1.1.0 since the titleDeferralTerms fix: the lexicon content changed, so
+    // the score version had to change with it (the boot gate refuses to reuse
+    // a version name whose content hash differs).
+    expect(config.scoreVersion).toBe("1.1.0");
     expect(config.onchain.enabled).toBe(true);
     expect(config.onchain.adapters).toContain(
       "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",

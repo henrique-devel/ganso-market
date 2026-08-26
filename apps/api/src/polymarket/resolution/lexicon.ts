@@ -39,6 +39,12 @@ export interface ResolutionLexicon {
   readonly conditionTerms: readonly string[];
   readonly disclosureTerms: readonly string[];
   readonly fallbackClauseTerms: readonly string[];
+  /**
+   * Phrases with which the rule text explicitly DEFERS to the title for a
+   * value instead of repeating it. When one is present, the title-vs-rule
+   * number/month/year comparison is meaningless and must not fire.
+   */
+  readonly titleDeferralTerms: readonly string[];
   /** Regex sources, compiled case-insensitively against normalized text. */
   readonly byDatePatterns: readonly string[];
   readonly componentWeights: LexiconComponentWeights;
@@ -123,6 +129,21 @@ export const DEFAULT_RESOLUTION_LEXICON: ResolutionLexicon = Object.freeze({
     "otherwise resolve",
     "unable to be determined",
     "not able to determine",
+  ]),
+  // Polymarket's standard crypto/price template says "the price specified in
+  // the title" and "the date specified in the title" rather than repeating
+  // them. Measured in production on 2026-08-26: without this list the
+  // title-mismatch check fired on 130 of 195 live markets — 67% of the
+  // universe vetoed because the title said {1.90, 28, August} while the rule
+  // text only contained {1, 12} from "1 minute candle" and "12:00".
+  titleDeferralTerms: Object.freeze([
+    "specified in the title",
+    "stated in the title",
+    "listed in the title",
+    "mentioned in the title",
+    "indicated in the title",
+    "in the market title",
+    "the title of this market",
   ]),
   byDatePatterns: Object.freeze([
     "\\bby\\s+(january|february|march|april|may|june|july|august|september|october|november|december)\\b",
@@ -408,6 +429,11 @@ export function parseResolutionLexicon(raw: unknown): ResolutionLexicon {
       "resolution_lexicon.fallback_clause_terms",
       defaults.fallbackClauseTerms,
     ),
+    titleDeferralTerms: parseTermArray(
+      root.title_deferral_terms,
+      "resolution_lexicon.title_deferral_terms",
+      defaults.titleDeferralTerms,
+    ),
     byDatePatterns: parsePatternArray(
       root.by_date_patterns,
       "resolution_lexicon.by_date_patterns",
@@ -681,13 +707,23 @@ export function scoreRulePrecision(
   // Title-mismatch risk: numbers, months and years are extracted from the RAW
   // title and rule text; any kind present on both sides with no common value
   // means the title promises one market and the rules settle another.
+  // A rule that says "the price specified in the title" is not promising a
+  // DIFFERENT value — it is promising the title's value. Comparing extracted
+  // numbers across the two sides then measures nothing but the incidental
+  // digits of the rule's own machinery ("1 minute candle", "12:00"), and it
+  // vetoed two thirds of the live universe before this guard existed.
+  const defersToTitle = hasAnyTerm(description, lexicon.titleDeferralTerms);
   const mismatch =
-    disjoint(
+    !defersToTitle &&
+    (disjoint(
       extractNumbers(input.question),
       extractNumbers(input.description),
     ) ||
-    disjoint(extractMonths(input.question), extractMonths(input.description)) ||
-    disjoint(extractYears(input.question), extractYears(input.description));
+      disjoint(
+        extractMonths(input.question),
+        extractMonths(input.description),
+      ) ||
+      disjoint(extractYears(input.question), extractYears(input.description)));
   if (mismatch) {
     hardFlags.push("TITLE_RULE_MISMATCH");
   }
