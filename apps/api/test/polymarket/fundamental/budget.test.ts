@@ -153,20 +153,65 @@ describe("estimate volumetry", () => {
     );
   });
 
-  it("keeps the RFC-010..013 tables inside their 6 GB reserve", () => {
-    // The RFC-007 budget reserves 6 GB for the RFC-010..013 tables: RFC-010
+  it("keeps the RFC-010..013 tables inside their 8 GB reserve", () => {
+    // The RFC-007 budget reserved 6 GB for the RFC-010..013 tables: RFC-010
     // holds 3.7 GB (after ceding 1.0 GB of the estimates quota on 2026-08-24),
     // RFC-011 holds the 1.3 GB allotted on 2026-08-23, and RFC-012 holds the
     // 1.0 GB approved on 2026-08-24 (scores 0.4 / graph+violations 0.3 /
-    // dispute timeline 0.2 / reports 0.1). Any new table must fit here.
+    // dispute timeline 0.2 / reports 0.1). That accounted for the ENTIRE 6 GB,
+    // leaving RFC-013 with literally zero room, so the reserve was expanded to
+    // 8 GB — funded by trimming polymarket_book_deltas from 60 to 52 GB, which
+    // keeps the module's declared total at 89 GB against the 110 GB budget.
     const reserve = RETENTION_TABLES.filter(
       (table) =>
         table.table.startsWith("fundamental_") ||
         table.table.startsWith("paper_") ||
         table.table.startsWith("resolution_") ||
-        table.table.startsWith("graph_"),
+        table.table.startsWith("graph_") ||
+        table.table.startsWith("portfolio_"),
     ).reduce((sum, table) => sum + table.quotaBytes, 0);
-    expect(reserve).toBeLessThanOrEqual(6 * GB);
+    expect(reserve).toBeLessThanOrEqual(8 * GB);
+  });
+
+  it("splits the RFC-013 two gigabytes as the engine's own slices", () => {
+    const quota = (name: string): number =>
+      RETENTION_TABLES.find((table) => table.table === name)?.quotaBytes ?? 0;
+    const decisions = quota("portfolio_decisions");
+    const panel = quota("portfolio_panel_snapshots");
+    const gates =
+      quota("portfolio_gate_measurements") + quota("portfolio_gate_reports");
+    const stateAndConfig =
+      quota("portfolio_exposures") +
+      quota("portfolio_state") +
+      quota("portfolio_state_events") +
+      quota("portfolio_config_versions") +
+      quota("portfolio_factor_map_versions") +
+      quota("portfolio_g2_clock") +
+      quota("portfolio_g2_clock_events") +
+      quota("portfolio_circuit_breakers");
+    expect(decisions).toBeCloseTo(0.9 * GB, 0);
+    expect(panel).toBeCloseTo(0.56 * GB, 0);
+    expect(gates).toBeCloseTo(0.35 * GB, 0);
+    expect(stateAndConfig).toBeCloseTo(0.19 * GB, 0);
+    expect(decisions + panel + gates + stateAndConfig).toBeCloseTo(2 * GB, 0);
+  });
+
+  it("never prunes the RFC-013 evidence the RFC-009 gates would rest on", () => {
+    // Gate measurements and reports are the audit trail behind any future
+    // decision to allow real execution. A TTL on them would quietly erase the
+    // reason a gate ever passed.
+    const byName = new Map(RETENTION_TABLES.map((t) => [t.table, t]));
+    for (const name of [
+      "portfolio_gate_measurements",
+      "portfolio_gate_reports",
+      "portfolio_state",
+      "portfolio_state_events",
+      "portfolio_config_versions",
+      "portfolio_factor_map_versions",
+    ]) {
+      expect(byName.get(name)?.protected, name).toBe(true);
+      expect(byName.get(name)?.ttlDays, name).toBeNull();
+    }
   });
 
   it("splits the RFC-012 gigabyte exactly as the owner approved", () => {
