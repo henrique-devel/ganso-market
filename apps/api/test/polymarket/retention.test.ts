@@ -77,10 +77,12 @@ describe("retention config", () => {
     }
     // Quotas amended by the owner on 2026-08-25 after production measurement
     // (~15.3 GB/day of deltas, ~1.6 GB/day of snapshots, ~100 MB/day of 1m
-    // aggregates): 12 -> 60 GB, 4 -> 8 GB and 3 -> 10 GB respectively.
+    // aggregates): 12 -> 60 GB, 4 -> 8 GB and 3 -> 10 GB. RFC-013 then took
+    // 8 GB back from the deltas (60 -> 52) to fund the expansion of the
+    // RFC-010..013 reserve from 6 to 8 GB, keeping the declared total at 89 GB.
     expect(byName.get("polymarket_book_deltas")?.ttlDays).toBe(14);
     expect(byName.get("polymarket_book_deltas")?.quotaBytes).toBe(
-      60 * 1024 ** 3,
+      52 * 1024 ** 3,
     );
     expect(byName.get("polymarket_book_deltas")?.requiresSeriesCoverage).toBe(
       true,

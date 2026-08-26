@@ -51,14 +51,17 @@ export interface RetentionTableConfig {
 // ttlDays null but a quota may still be pruned oldest-first when the quota
 // trips (quota beats TTL). Protected tables are never touched.
 export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
-  // 60 GB, not the original 12 GB: the measured stream is ~15.3 GB/day, so
+  // 52 GB, not the original 12 GB: the measured stream is ~15.3 GB/day, so
   // 12 GB retained under 20 hours of book depth — less than the 14-day TTL by
-  // two orders of magnitude, and not enough for any book-walk replay. At 60 GB
-  // the quota (not the TTL) still binds, at ~3.9 days.
+  // two orders of magnitude, and not enough for any book-walk replay. At 52 GB
+  // the quota (not the TTL) still binds, at ~3.4 days. The 8 GB between this
+  // and the 60 GB of the 2026-08-25 amendment funds the RFC-010..013 reserve
+  // expansion below (6 -> 8 GB), keeping the declared total at 89 GB against
+  // the 110 GB budget.
   {
     table: "polymarket_book_deltas",
     ttlDays: 14,
-    quotaBytes: 60 * GB,
+    quotaBytes: 52 * GB,
     timeColumn: "received_at",
     protected: false,
     requiresSeriesCoverage: true,
@@ -296,6 +299,107 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     quotaBytes: 0.1 * GB,
     timeColumn: "generated_at",
     protected: true,
+  },
+  // RFC-013 portfolio engine: 2.0 GB, the expansion of the RFC-010..013 reserve
+  // from 6 to 8 GB (funded by trimming polymarket_book_deltas from 60 to
+  // 52 GB). The original 6 GB was already fully allocated by RFC-010 (3.7),
+  // RFC-011 (1.3) and RFC-012 (1.0), so RFC-013 had literally zero room in it.
+  // Split: decisions 0.9 / panel 0.56 / gates+reports 0.35 / state,
+  // configuration and audit trails 0.19.
+  //
+  // The decision log is the audit trail of every entry, exit, veto and resize,
+  // and it carries its own book excerpt so replay survives the raw-delta
+  // window. It is the largest slice for that reason.
+  {
+    table: "portfolio_decisions",
+    ttlDays: 180,
+    quotaBytes: 0.9 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  {
+    table: "portfolio_panel_snapshots",
+    ttlDays: 30,
+    quotaBytes: 0.56 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
+  // Gate measurements and reports are the evidence behind any future RFC-009
+  // decision: never pruned, size monitored.
+  {
+    table: "portfolio_gate_measurements",
+    ttlDays: null,
+    quotaBytes: 0.25 * GB,
+    timeColumn: "received_at",
+    protected: true,
+  },
+  {
+    table: "portfolio_gate_reports",
+    ttlDays: null,
+    quotaBytes: 0.1 * GB,
+    timeColumn: "received_at",
+    protected: true,
+  },
+  // Current state, versioned configuration and the transition/clock audit
+  // trails. All small, all current-state or append-only audit: never pruned.
+  {
+    table: "portfolio_exposures",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "computed_at",
+    protected: true,
+  },
+  {
+    table: "portfolio_state",
+    ttlDays: null,
+    quotaBytes: 0.005 * GB,
+    timeColumn: "updated_at",
+    protected: true,
+  },
+  {
+    table: "portfolio_state_events",
+    ttlDays: null,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "at",
+    protected: true,
+  },
+  {
+    table: "portfolio_config_versions",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "created_at",
+    protected: true,
+  },
+  {
+    table: "portfolio_factor_map_versions",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "created_at",
+    protected: true,
+  },
+  {
+    table: "portfolio_g2_clock",
+    ttlDays: null,
+    quotaBytes: 0.005 * GB,
+    timeColumn: "updated_at",
+    protected: true,
+  },
+  {
+    table: "portfolio_g2_clock_events",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "at",
+    protected: true,
+  },
+  // Breakers are a series with a TTL; the open ones are current state and the
+  // prune only reaches rows whose window already closed.
+  {
+    table: "portfolio_circuit_breakers",
+    ttlDays: 180,
+    quotaBytes: 0.05 * GB,
+    timeColumn: "ended_at",
+    protected: false,
+    closedRowsOnly: true,
   },
   // RFC-010 metadata: model registry, labels, gate reports, lifecycle events
   // and calibration reports are the audit trail of every promotion decision.
