@@ -715,6 +715,126 @@ describe("retention job", () => {
     expect(last.getTime()).toBe(cutoff.getTime());
   });
 
+  it("keeps the table alive when one token's DELETE fails", async () => {
+    // Measured in production on 2026-08-26: a batch on a heavy token exceeded
+    // the 30 s statement_timeout (three indexes to maintain, one of them
+    // 39 GB, under live write load). The exception escaped past the coverage
+    // guard and aborted the WHOLE table's quota step, losing the prune for all
+    // 1142 tokens on every run.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const pool = fakePool((text, params) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }, { token_id: "t2" }], rowCount: 2 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        if (params[1] === "t1") {
+          throw new Error("statement timeout");
+        }
+        return { rows: [], rowCount: 6 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    // t2 was still pruned; only t1 was lost.
+    const deletes = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_book_deltas"),
+    );
+    expect(deletes.some((q) => q.params?.[1] === "t2")).toBe(true);
+    expect(report.actions[0]?.rowsDeleted).toBe(6);
+    expect(report.skipped).toEqual([
+      {
+        table: "polymarket_book_deltas",
+        reason: "delete_failed",
+        tokenId: "t1",
+      },
+    ]);
+  });
+
+  it("uses a smaller DELETE batch on coverage-gated tables", async () => {
+    // Index maintenance dominates the cost there, so the batch that finishes
+    // matters more than the batch that is theoretically fastest.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const deletion = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM polymarket_book_deltas"),
+    );
+    expect(deletion?.text).toContain("LIMIT 5000");
+    expect(deletion?.text).not.toContain("LIMIT 50000");
+  });
+
   it("stops a token at the first hole instead of walking every remaining slice", async () => {
     const config: RetentionTableConfig = {
       table: "polymarket_book_deltas",
