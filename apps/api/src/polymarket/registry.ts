@@ -90,7 +90,7 @@ function log(
   );
 }
 
-function parseIsoDate(value: string | null): Date | null {
+export function parseIsoDate(value: string | null): Date | null {
   if (value === null) {
     return null;
   }

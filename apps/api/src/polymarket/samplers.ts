@@ -7,7 +7,9 @@
 // cycle failed, and continue.
 
 import type { SqlExecutor } from "../database.js";
+import { parseExtendedMarket } from "./gamma.js";
 import { sourceTsToDate } from "./recorder.js";
+import { applyMarketMetadataObservation, parseIsoDate } from "./registry.js";
 
 export const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 export const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
@@ -591,8 +593,12 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
   async function fetchStatuses(
     conditionIds: readonly string[],
     closedOnly = false,
-  ): Promise<GammaStatusRow[]> {
+  ): Promise<{ rows: GammaStatusRow[]; raw: unknown[] }> {
     const rows: GammaStatusRow[] = [];
+    // The same payload also carries outcomes and clobTokenIds, which is what
+    // the affirmative-token mapping needs. Keeping the raw items costs nothing
+    // and saves a second round of Gamma calls for the pending sweep.
+    const raw: unknown[] = [];
     for (let i = 0; i < conditionIds.length; i += GAMMA_STATUS_CHUNK) {
       const chunk = conditionIds.slice(i, i + GAMMA_STATUS_CHUNK);
       const params = chunk
@@ -611,6 +617,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
       const body = (await response.json()) as unknown;
       if (Array.isArray(body)) {
         for (const item of body) {
+          raw.push(item);
           const parsed = parseGammaStatusRow(item);
           if (parsed !== null) {
             rows.push(parsed);
@@ -618,7 +625,64 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         }
       }
     }
-    return rows;
+    return { rows, raw };
+  }
+
+  /**
+   * Backfill the affirmative-token mapping for markets that already LEFT the
+   * universe.
+   *
+   * Migration 0012 is prospective: every market recorded before it has a NULL
+   * affirmative_token_id, and the registry only re-observes markets that are
+   * currently IN the universe. But the RFC-012 resolution service scores the
+   * universe PLUS the markets that exited within the last 7 days without
+   * resolving — exactly the set the registry stopped observing — and it fails
+   * closed on a missing mapping, by design (mapping the wrong token would
+   * invert the price semantics of the whole graph).
+   *
+   * Measured in production on 2026-08-25: 100 of 100 in-universe markets were
+   * mapped and 99 of 99 recently-exited ones were not, so the service would
+   * have crash-looped forever rather than transiently. Since every market that
+   * exits without resolving joins that window, waiting it out never converges.
+   *
+   * This sweep already fetches those markets to follow their UMA status, so it
+   * persists the mapping from the same payload. A market whose outcomes are not
+   * an exactly-binary Yes/No or Up/Down pair still maps to null — never a
+   * guess.
+   */
+  async function backfillMetadata(raw: readonly unknown[]): Promise<void> {
+    for (const item of raw) {
+      const record = parseExtendedMarket(item);
+      if (record === null) {
+        continue;
+      }
+      try {
+        await applyMarketMetadataObservation(
+          deps.pool,
+          {
+            conditionId: record.conditionId,
+            question: record.question,
+            category: record.category,
+            clobTokenIds: record.clobTokenIds,
+            affirmativeTokenId: record.affirmativeTokenId,
+            sourceTs: parseIsoDate(record.updatedAt),
+          },
+          new Date(deps.clock()),
+        );
+      } catch (error: unknown) {
+        // One market never aborts the sweep: the UMA status transitions this
+        // poller exists for matter more than the backfill.
+        logJson(
+          "warn",
+          "PENDING_METADATA_BACKFILL_FAILED",
+          "polymarket_pending_metadata_backfill_failed",
+          {
+            condition_id: record.conditionId,
+            error_name: error instanceof Error ? error.name : "UnknownError",
+          },
+        );
+      }
+    }
   }
 
   return {
@@ -646,7 +710,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
       const startedAtMs = deps.clock();
       let rows: GammaStatusRow[];
       try {
-        rows = await fetchStatuses(conditionIds);
+        rows = (await fetchStatuses(conditionIds)).rows;
       } catch (error: unknown) {
         logJson(
           "error",
@@ -716,7 +780,8 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         const closed = await fetchStatuses(pending, true);
         // Closed last: a terminal status must be applied after any open-state
         // reading of the same market in this sweep.
-        await processRows([...open, ...closed]);
+        await processRows([...open.rows, ...closed.rows]);
+        await backfillMetadata([...open.raw, ...closed.raw]);
       } catch (error: unknown) {
         logJson(
           "error",

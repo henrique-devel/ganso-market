@@ -482,20 +482,20 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   }
 
   // Batched delete (50k per statement via ctid) so a prune never holds a
-  // long lock. Returns rows deleted. tokenFilter narrows book_deltas prunes
-  // to tokens whose 1-minute aggregates already cover the interval.
+  // long lock. Returns rows deleted. `tokenId`, when given, scopes the delete
+  // to one token so it rides the (token_id, received_at) index instead of
+  // filtering a global time range.
   async function batchedDelete(
     config: RetentionTableConfig,
     cutoff: Date,
-    tokenFilter: readonly string[] | null,
+    tokenId: string | null,
   ): Promise<number> {
     let total = 0;
     for (let i = 0; i < MAX_DELETE_BATCHES; i += 1) {
       const closedFilter =
         config.closedRowsOnly === true ? " AND ended_at IS NOT NULL" : "";
-      const filterSql = tokenFilter === null ? "" : " AND token_id = ANY($2)";
-      const params: unknown[] =
-        tokenFilter === null ? [cutoff] : [cutoff, [...tokenFilter]];
+      const filterSql = tokenId === null ? "" : " AND token_id = $2";
+      const params: unknown[] = tokenId === null ? [cutoff] : [cutoff, tokenId];
       const result = await pool.query(
         `DELETE FROM ${config.table}
           WHERE ctid IN (
@@ -513,67 +513,68 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     return total;
   }
 
-  // Precondition (RFC task 11): only prune book_deltas whose interval is
-  // already materialized in polymarket_series_1m. Buckets only exist for
-  // minutes that actually saw events, so coverage is checked against the
-  // minutes that really contain deltas (COUNT of DISTINCT delta minutes vs.
-  // how many of those minutes have a bucket) — never against every minute of
-  // the min..max range, which would make sparse tokens permanently unprunable.
-  // Returns the tokens allowed to be pruned; uncovered tokens are skipped and
-  // logged, never silently.
-  async function seriesCoveredTokens(
+  // Precondition (RFC-007 task 11): never delete a book delta whose 1-minute
+  // aggregate does not exist yet. The first implementation asked that question
+  // with ONE query — DISTINCT (token_id, minute) over every row below the
+  // cutoff, grouped by token. Measured in production on 2026-08-25 that plan is
+  // a full scan of 262 million rows: it blew through the recorder's 30 s
+  // statement_timeout and threw, so the quota step aborted on EVERY run and
+  // polymarket_book_deltas never got pruned at all (RETENTION_STEP_FAILED,
+  // error swallowed per table). That is why the table reached 90 GB against a
+  // 12 GB quota.
+  //
+  // The question is now asked per token, which turns the same check into an
+  // index-only scan on (token_id, received_at): 14 s for the single heaviest
+  // token (4.9 M rows) and milliseconds for most, all inside the timeout.
+  //
+  // It also stops being all-or-nothing. The old check skipped a token entirely
+  // when ANY minute lacked a bucket, and a recorder restart leaves exactly that
+  // — one unaggregated minute. One hole therefore froze a token's deltas
+  // forever, and every restart added more frozen tokens until the quota could
+  // never be met. Now a hole only truncates the prune: the token is pruned up
+  // to its first uncovered minute, which preserves the guarantee exactly (no
+  // delta is deleted without its aggregate) while still making progress.
+  async function coverageCutoffForToken(
+    tokenId: string,
     cutoff: Date,
-    skipped: RetentionSkip[],
-  ): Promise<string[]> {
-    const coverage = await pool.query<{
-      token_id: string;
-      delta_minutes: string | number;
-      covered_minutes: string | number;
-    }>(
-      `SELECT d.token_id,
-              COUNT(*)::bigint AS delta_minutes,
-              COUNT(s.bucket_start)::bigint AS covered_minutes
+  ): Promise<Date | null> {
+    const result = await pool.query<{ first_uncovered: Date | string | null }>(
+      `SELECT min(m.minute) AS first_uncovered
          FROM (
-           SELECT DISTINCT token_id,
-                  date_trunc('minute', received_at) AS minute
-             FROM polymarket_book_deltas
-            WHERE received_at < $1
-         ) d
+           SELECT DISTINCT date_trunc('minute', d.received_at) AS minute
+             FROM polymarket_book_deltas d
+            WHERE d.token_id = $1 AND d.received_at < $2
+         ) m
          LEFT JOIN polymarket_series_1m s
-           ON s.token_id = d.token_id AND s.bucket_start = d.minute
-        GROUP BY d.token_id`,
-      [cutoff],
+           ON s.token_id = $1 AND s.bucket_start = m.minute
+        WHERE s.bucket_start IS NULL`,
+      [tokenId, cutoff],
     );
-    const allowed: string[] = [];
-    for (const row of coverage.rows) {
-      const deltaMinutes = Number(row.delta_minutes);
-      const coveredMinutes = Number(row.covered_minutes);
-      if (
-        Number.isFinite(deltaMinutes) &&
-        Number.isFinite(coveredMinutes) &&
-        deltaMinutes > 0 &&
-        coveredMinutes >= deltaMinutes
-      ) {
-        allowed.push(row.token_id);
-      } else {
-        skipped.push({
-          table: "polymarket_book_deltas",
-          reason: "series_coverage_missing",
-          tokenId: row.token_id,
-        });
-        log(
-          "warn",
-          "SERIES_COVERAGE_MISSING",
-          "polymarket_retention_series_coverage_missing",
-          {
-            token_id: row.token_id,
-            delta_minutes: deltaMinutes,
-            covered_minutes: coveredMinutes,
-          },
-        );
-      }
+    const firstUncovered = toDate(result.rows[0]?.first_uncovered ?? null);
+    if (firstUncovered === null) {
+      return cutoff;
     }
-    return allowed;
+    // A hole at or before the token's oldest retained minute leaves nothing
+    // prunable for this token on this pass.
+    return firstUncovered;
+  }
+
+  /**
+   * Tokens the delta pruner may consider. Read from polymarket_markets, which
+   * retention never prunes and which recorded every market the registry ever
+   * saw — verified in production to cover 100% of the tokens that have 1m
+   * aggregates, in 0.5 s. Asking polymarket_book_deltas itself would mean the
+   * 111 s full scan this rewrite exists to avoid.
+   */
+  async function registryTokenIds(): Promise<string[]> {
+    const result = await pool.query<{ token_id: string }>(
+      `SELECT DISTINCT jsonb_array_elements_text(clob_token_ids) AS token_id
+         FROM polymarket_markets`,
+      [],
+    );
+    return result.rows
+      .map((row) => row.token_id)
+      .filter((tokenId): tokenId is string => typeof tokenId === "string");
   }
 
   async function recordAction(action: RetentionAction): Promise<void> {
@@ -585,20 +586,78 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     );
   }
 
+  /**
+   * Coverage-gated prune: one token at a time, each with its OWN cutoff (the
+   * requested one, or its first uncovered minute). A token whose aggregates
+   * have a hole is pruned only up to that hole, and the hole is reported —
+   * never silently, and never as a reason to stall the whole table.
+   */
+  async function pruneCovered(
+    config: RetentionTableConfig,
+    cutoff: Date,
+    report: RetentionRunReport,
+  ): Promise<number> {
+    const tokenIds = await registryTokenIds();
+    let total = 0;
+    for (const tokenId of tokenIds) {
+      let tokenCutoff: Date | null;
+      try {
+        tokenCutoff = await coverageCutoffForToken(tokenId, cutoff);
+      } catch (error: unknown) {
+        // One token's failure must not abort the table: the whole point of
+        // this rewrite is that a single bad token used to cost every token.
+        report.skipped.push({
+          table: config.table,
+          reason: "coverage_query_failed",
+          tokenId,
+        });
+        log(
+          "error",
+          "RETENTION_STEP_FAILED",
+          "polymarket_retention_coverage_failed",
+          {
+            table: config.table,
+            token_id: tokenId,
+            error_name: error instanceof Error ? error.name : "UnknownError",
+          },
+        );
+        continue;
+      }
+      if (tokenCutoff === null || tokenCutoff.getTime() <= 0) {
+        continue;
+      }
+      if (tokenCutoff.getTime() < cutoff.getTime()) {
+        report.skipped.push({
+          table: config.table,
+          reason: "series_coverage_missing",
+          tokenId,
+        });
+        log(
+          "warn",
+          "SERIES_COVERAGE_MISSING",
+          "polymarket_retention_series_coverage_missing",
+          {
+            token_id: tokenId,
+            first_uncovered: tokenCutoff.toISOString(),
+            requested_cutoff: cutoff.toISOString(),
+          },
+        );
+      }
+      total += await batchedDelete(config, tokenCutoff, tokenId);
+    }
+    return total;
+  }
+
   async function pruneBefore(
     config: RetentionTableConfig,
     cutoff: Date,
     cause: "ttl" | "quota",
     report: RetentionRunReport,
   ): Promise<number> {
-    let tokenFilter: readonly string[] | null = null;
-    if (config.requiresSeriesCoverage === true) {
-      tokenFilter = await seriesCoveredTokens(cutoff, report.skipped);
-      if (tokenFilter.length === 0) {
-        return 0;
-      }
-    }
-    const rowsDeleted = await batchedDelete(config, cutoff, tokenFilter);
+    const rowsDeleted =
+      config.requiresSeriesCoverage === true
+        ? await pruneCovered(config, cutoff, report)
+        : await batchedDelete(config, cutoff, null);
     if (rowsDeleted > 0) {
       const action: RetentionAction = {
         table: config.table,

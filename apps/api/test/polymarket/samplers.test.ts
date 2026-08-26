@@ -538,6 +538,131 @@ describe("resolution follow-up after a market leaves the universe", () => {
     expect(payload.raw.outcomePrices).toEqual(["1", "0"]);
   });
 
+  it("backfills the affirmative-token mapping for markets that already left the universe", async () => {
+    // Measured in production on 2026-08-25: 100/100 in-universe markets were
+    // mapped and 99/99 recently-exited ones were not, because migration 0012 is
+    // prospective and the registry only re-observes the CURRENT universe. The
+    // RFC-012 resolution service scores the exited-but-unresolved window too and
+    // fails closed on a missing mapping, so it would have crash-looped forever.
+    // Every market that exits without resolving joins that window, so waiting it
+    // out never converges — the mapping has to be backfilled here.
+    const captured: Array<{ text: string; params: unknown[] }> = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        captured.push({ text, params: [...(params ?? [])] });
+        if (text.includes("WITH membership")) {
+          return Promise.resolve({
+            rows: [{ condition_id: "0xgone" } as unknown as R],
+            rowCount: 1,
+          });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const market = {
+      conditionId: "0xgone",
+      question: "Will BTC be up?",
+      slug: "btc-up",
+      category: "crypto",
+      negRisk: false,
+      clobTokenIds: '["tokenUp", "tokenDown"]',
+      description: "resolves by Chainlink",
+      outcomes: '["Up", "Down"]',
+      outcomePrices: '["1", "0"]',
+      umaResolutionStatus: "proposed",
+      closed: false,
+      resolved: false,
+      updatedAt: "2026-08-21T22:00:00.000Z",
+    };
+    const poller = createUmaStatusPoller({
+      pool: pool as never,
+      clock: () => Date.parse("2026-08-21T23:00:00.000Z"),
+      fetcher: ((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(url.includes("closed=true") ? [] : [market]),
+        })) as never,
+    });
+
+    await poller.pollPendingOnce();
+
+    const insert = captured.find((query) =>
+      query.text.includes("INSERT INTO polymarket_market_metadata_versions"),
+    );
+    expect(insert).toBeDefined();
+    // "Up" is the affirmative outcome, so its token is the mapped one — taken
+    // by NAME, never by array position.
+    expect(insert?.params).toContain("tokenUp");
+    expect(insert?.params).toContain("0xgone");
+  });
+
+  it("never guesses the affirmative token when the outcomes are not a binary Yes/No or Up/Down pair", async () => {
+    const captured: Array<{ text: string; params: unknown[] }> = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        captured.push({ text, params: [...(params ?? [])] });
+        if (text.includes("WITH membership")) {
+          return Promise.resolve({
+            rows: [{ condition_id: "0xamb" } as unknown as R],
+            rowCount: 1,
+          });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const poller = createUmaStatusPoller({
+      pool: pool as never,
+      clock: () => Date.parse("2026-08-21T23:00:00.000Z"),
+      fetcher: ((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              url.includes("closed=true")
+                ? []
+                : [
+                    {
+                      conditionId: "0xamb",
+                      question: "Who wins?",
+                      slug: "who-wins",
+                      category: "politics",
+                      negRisk: false,
+                      clobTokenIds: '["a", "b"]',
+                      description: "rules",
+                      outcomes: '["Alice", "Bob"]',
+                      umaResolutionStatus: "proposed",
+                      closed: false,
+                      resolved: false,
+                      updatedAt: "2026-08-21T22:00:00.000Z",
+                    },
+                  ],
+            ),
+        })) as never,
+    });
+
+    await poller.pollPendingOnce();
+
+    const insert = captured.find((query) =>
+      query.text.includes("INSERT INTO polymarket_market_metadata_versions"),
+    );
+    // The row is still written (question/category/tokens are real observations)
+    // but the affirmative token stays null: mapping the wrong one would invert
+    // the price semantics of the whole RFC-012 graph.
+    expect(insert).toBeDefined();
+    expect(insert?.params).not.toContain("a");
+    expect(insert?.params).not.toContain("b");
+    expect(insert?.params).toContain(null);
+  });
+
   it("follows only markets that left the universe without resolving", async () => {
     const captured: Array<{ text: string; params: unknown[] }> = [];
     const pool = {
