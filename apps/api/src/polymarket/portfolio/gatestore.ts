@@ -9,7 +9,6 @@
 // Writes are confined to `portfolio_gate_measurements`, `portfolio_g2_clock` and
 // `portfolio_g2_clock_events`.
 
-import { parseScaled } from "../fundamental/fixed.js";
 import { parsePortfolioConfig, type PortfolioConfig } from "./config.js";
 import type { CategoryClock, ClosedPosition } from "./gates.js";
 import type {
@@ -667,9 +666,4 @@ export async function loadConfigVersions(
     }
   }
   return out;
-}
-
-/** Scaled parse for a stored decimal string, for callers outside this file. */
-export function scaledOf(value: string | null): bigint | null {
-  return value === null ? null : parseScaled(value);
 }

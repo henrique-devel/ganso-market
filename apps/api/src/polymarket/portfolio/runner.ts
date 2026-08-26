@@ -20,6 +20,7 @@ import { parseScaled, SCALE } from "../fundamental/fixed.js";
 import {
   detectBreakers,
   entryFrozenBy,
+  executableMid,
   reconcileBreakers,
   type BreakerObservation,
   type BreakerSignal,
@@ -468,12 +469,9 @@ export function createPortfolioRunner(
       if (book === null) {
         continue;
       }
-      const bid =
-        book.bids[0] === undefined ? null : parseScaled(book.bids[0].price);
-      const ask =
-        book.asks[0] === undefined ? null : parseScaled(book.asks[0].price);
-      if (bid !== null && ask !== null) {
-        midsNow.set(tokenId, (bid + ask) / 2n);
+      const mid = executableMid(book.bids, book.asks);
+      if (mid !== null) {
+        midsNow.set(tokenId, mid);
       }
     }
     const midsBefore = await loadMidsAsOf(
@@ -558,6 +556,41 @@ export function createPortfolioRunner(
     return loadOpenBreakers(deps.pool);
   }
 
+  /**
+   * The markets a breaker may be detected on: the eligible universe plus every
+   * market with an open position, de-duplicated by token.
+   */
+  function observableMarkets(
+    markets: readonly {
+      conditionId: string;
+      tokenId: string;
+      endDate: Date | null;
+    }[],
+    positions: readonly OpenPositionRow[],
+  ): { conditionId: string; tokenId: string; endDate: Date | null }[] {
+    const byToken = new Map<
+      string,
+      { conditionId: string; tokenId: string; endDate: Date | null }
+    >();
+    for (const market of markets) {
+      byToken.set(market.tokenId, {
+        conditionId: market.conditionId,
+        tokenId: market.tokenId,
+        endDate: market.endDate,
+      });
+    }
+    for (const position of positions) {
+      if (!byToken.has(position.tokenId)) {
+        byToken.set(position.tokenId, {
+          conditionId: position.conditionId,
+          tokenId: position.tokenId,
+          endDate: position.endDate,
+        });
+      }
+    }
+    return [...byToken.values()];
+  }
+
   async function panelCycle(): Promise<{
     evaluated: number;
     entrable: number;
@@ -625,11 +658,11 @@ export function createPortfolioRunner(
     }
     const openBreakers = await reconcileAllBreakers({
       now,
-      markets: markets.map((market) => ({
-        conditionId: market.conditionId,
-        tokenId: market.tokenId,
-        endDate: market.endDate,
-      })),
+      // The eligible universe PLUS every market we hold. A position can sit in
+      // a market that already left the universe, and observing only the
+      // universe would report its breakers as no longer detected — closing
+      // them, which is the opposite of what "the condition cleared" means.
+      markets: observableMarkets(markets, positions),
       positions,
       changes,
       resolution: resolutionForBreakers,
@@ -1065,7 +1098,7 @@ export function createPortfolioRunner(
         loadOwnerApproval(deps.pool),
       ]);
 
-    const reconciliation = reconcile(await reconciliationSamples(now));
+    const reconciliation = reconcile(await reconciliationSamples());
 
     // The G2 clock the aggregate window uses is the OLDEST category clock: a
     // gate that spans categories cannot claim more continuous history than its
@@ -1120,10 +1153,7 @@ export function createPortfolioRunner(
   }
 
   /** Build the G4 reconciliation samples from recorded taker fills. */
-  async function reconciliationSamples(
-    now: Date,
-  ): Promise<ReconciliationSample[]> {
-    void now;
+  async function reconciliationSamples(): Promise<ReconciliationSample[]> {
     const fills = await loadFillReconciliationRows(
       deps.pool,
       RECONCILIATION_SAMPLE,

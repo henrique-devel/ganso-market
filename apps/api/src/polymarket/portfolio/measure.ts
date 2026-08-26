@@ -36,8 +36,6 @@ import {
 import { BREAKER_KINDS } from "./types.js";
 import type { GateId, GateReasonCode, GateStatus } from "./types.js";
 
-const DAY_MS = 24 * 3_600_000;
-
 /** One row destined for `portfolio_gate_measurements`. */
 export interface GateMeasurement {
   readonly gate: GateId;
@@ -467,12 +465,4 @@ export function measureGates(input: MeasureGatesInput): MeasureGatesResult {
     measurements,
     overall: overallStatus([g1, g2, g3, g4, g5, g6]),
   };
-}
-
-/** Days a clock has been running, for the soak and G2 windows. */
-export function daysBetween(from: Date | null, to: Date): number {
-  if (from === null) {
-    return 0;
-  }
-  return (to.getTime() - from.getTime()) / DAY_MS;
 }
