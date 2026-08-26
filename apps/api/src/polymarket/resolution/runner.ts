@@ -1046,9 +1046,15 @@ export function createResolutionRunner(
       running.set(name, true);
       run(clock())
         .catch((error: unknown) => {
+          // The message, not only the class name. A recurring JOB_FAILED with
+          // error_name "Error" says a job is broken and nothing about why —
+          // diagnosing the onchain collector in production on 2026-08-26 meant
+          // reproducing its RPC calls by hand. These messages are stable codes
+          // and RPC/DB failure strings, never user data or secrets.
           logJson("error", "JOB_FAILED", {
             job: name,
             error_name: error instanceof Error ? error.name : "UnknownError",
+            detail: error instanceof Error ? error.message : undefined,
           });
         })
         .finally(() => {
@@ -1114,6 +1120,7 @@ export function createResolutionRunner(
         logJson("error", "JOB_FAILED", {
           job: "report_boot",
           error_name: error instanceof Error ? error.name : "UnknownError",
+          detail: error instanceof Error ? error.message : undefined,
         });
       });
       assertRunning();
