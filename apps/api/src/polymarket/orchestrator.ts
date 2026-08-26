@@ -89,9 +89,14 @@ function safeJob(name: string, job: () => Promise<void>): () => void {
     running = true;
     job()
       .catch((error: unknown) => {
+        // The message, not only the class name: a recurring JOB_FAILED with
+        // error_name "Error" says a job is broken and nothing about why.
+        // These messages are stable codes and RPC/DB failure strings, never
+        // user data or secrets.
         logJson("error", "JOB_FAILED", {
           job: name,
           error_name: error instanceof Error ? error.name : "UnknownError",
+          detail: error instanceof Error ? error.message : undefined,
         });
       })
       .finally(() => {
