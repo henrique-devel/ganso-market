@@ -61,6 +61,12 @@ function float(value: unknown): number | null {
  *
  * `status = 'active'` on purpose: the gate asks about "o sinal usado nas
  * entradas", and a shadow estimate is by definition not used.
+ *
+ * `source` comes back with each row and matters more than it looks: without a
+ * promoted model the estimator falls back to a market baseline, whose `q` is
+ * derived from the same book as `market_prob`. G1 splits the two sets on this
+ * column, because scoring a baseline against the price compares the price to
+ * itself and passes every bar without measuring anything.
  */
 export async function loadForecastRows(
   pool: PortfolioPool,
@@ -68,7 +74,7 @@ export async function loadForecastRows(
   const result = await pool.query<Record<string, unknown>>(
     `SELECT DISTINCT ON (e.token_id)
             l.condition_id, e.q, e.market_prob, l.label,
-            l.publicly_knowable_ts, e.decision_ts
+            l.publicly_knowable_ts, e.decision_ts, e.source
        FROM fundamental_labels l
        JOIN fundamental_estimates e ON e.token_id = l.token_id
       WHERE e.status = 'active'
@@ -90,6 +96,7 @@ export async function loadForecastRows(
       label: String(row.label ?? ""),
       outcomeKnownAt: date(row.publicly_knowable_ts),
       forecastAt,
+      source: String(row.source ?? ""),
     });
   }
   return rows;

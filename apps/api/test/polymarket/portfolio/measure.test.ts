@@ -155,6 +155,7 @@ describe("forecast selection (G1)", () => {
     label: "1",
     outcomeKnownAt: new Date("2026-08-20T00:00:00Z"),
     forecastAt: new Date("2026-08-19T00:00:00Z"),
+    source: "MODEL",
   };
 
   it("keeps a clean binary forecast", () => {
@@ -328,6 +329,7 @@ describe("the full measurement", () => {
           label: "0.5",
           outcomeKnownAt: new Date("2026-08-20T00:00:00Z"),
           forecastAt: new Date("2026-08-19T00:00:00Z"),
+          source: "MODEL",
         },
       ],
     });
@@ -348,6 +350,7 @@ describe("the full measurement", () => {
       outcomeKnownAt: new Date("2026-08-20T00:00:00Z"),
       // AFTER the outcome was knowable.
       forecastAt: new Date("2026-08-21T00:00:00Z"),
+      source: "MODEL",
     }));
     const g1 = measureGates({
       ...EMPTY,

@@ -200,6 +200,7 @@ describe("G1 — calibration", () => {
           forecastAt: new Date("2026-08-03T00:00:00Z"),
         }),
       ],
+      modelForecasts: [],
       config: GATES,
     });
     expect(result.status).toBe("FAIL");
@@ -209,6 +210,7 @@ describe("G1 — calibration", () => {
   it("reports INSUFFICIENT_DATA below the resolved-market floor", () => {
     const result = evaluateG1({
       forecasts: [forecast()],
+      modelForecasts: [forecast()],
       config: GATES,
     });
     expect(result.status).toBe("INSUFFICIENT_DATA");
@@ -224,10 +226,60 @@ describe("G1 — calibration", () => {
         marketProbability: i % 2 === 0 ? 0.7 : 0.3,
       }),
     );
-    const result = evaluateG1({ forecasts, config: GATES });
+    const result = evaluateG1({
+      forecasts,
+      modelForecasts: forecasts,
+      config: GATES,
+    });
     expect(result.status).toBe("PASS");
     expect(result.metrics.beats_price).toBe(true);
     expect(Number(result.metrics.brier_skill_score)).toBeGreaterThan(0);
+  });
+
+  it("NEVER passes on a market baseline alone, however good the price is", () => {
+    // The production bug of 2026-08-26. With no promoted model the RFC-010
+    // estimator falls back to the book, so `q` IS the market probability. The
+    // Brier scores tie, "does not worsen the price" is trivially satisfied, and
+    // the absolute ceiling is cleared because the PRICE is well calibrated — so
+    // every condition passed and nothing had been measured.
+    //
+    // 120 markets, a well-calibrated price, and the baseline copying it exactly.
+    const baseline = Array.from({ length: 120 }, (_unused, i) => {
+      const price = i % 2 === 0 ? 0.9 : 0.1;
+      return forecast({
+        conditionId: `0x${String(i)}`,
+        outcome: i % 2 === 0 ? 1 : 0,
+        modelProbability: price,
+        marketProbability: price,
+      });
+    });
+    const result = evaluateG1({
+      forecasts: baseline,
+      // The whole point: no promoted model produced any of them.
+      modelForecasts: [],
+      config: GATES,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.status).not.toBe("PASS");
+    expect(result.metrics.model_forecasts).toBe(0);
+    expect(String(result.metrics.detail)).toContain("no promoted model");
+    // The used signal is still measured and reported — it just is not evidence
+    // that a MODEL beat anything.
+    expect(result.metrics.under_ceiling).toBe(true);
+    expect(Number(result.metrics.used_signal_brier)).toBeLessThan(0.2);
+  });
+
+  it("stays INSUFFICIENT_DATA when a model exists but on too few markets", () => {
+    const used = Array.from({ length: 120 }, (_unused, i) =>
+      forecast({ conditionId: `0x${String(i)}` }),
+    );
+    const result = evaluateG1({
+      forecasts: used,
+      modelForecasts: used.slice(0, 40),
+      config: GATES,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.metrics.model_resolved_markets).toBe(40);
   });
 
   it("FAILS a model that cannot beat the market price, however low its Brier", () => {
@@ -241,7 +293,11 @@ describe("G1 — calibration", () => {
         marketProbability: i % 2 === 0 ? 0.95 : 0.05,
       }),
     );
-    const result = evaluateG1({ forecasts, config: GATES });
+    const result = evaluateG1({
+      forecasts,
+      modelForecasts: forecasts,
+      config: GATES,
+    });
     expect(result.status).toBe("FAIL");
     expect(result.metrics.beats_price).toBe(false);
     expect(result.reasonCode).toBe("G1_CALIBRATION_NOT_MET");
