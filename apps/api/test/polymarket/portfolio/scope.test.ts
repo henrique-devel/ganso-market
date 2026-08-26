@@ -154,11 +154,15 @@ describe("RFC-013 portfolio module scope guard", () => {
   });
 
   it("writes only to the tables this RFC declares", async () => {
+    // An UPDATE statement names its table BEFORE `SET`, while an upsert's
+    // `ON CONFLICT ... DO UPDATE SET` has `SET` immediately after `UPDATE`.
+    // Requiring `UPDATE <table> SET` tells them apart without an ignore list,
+    // which would be a hole a real write could hide in.
     const writeStatement =
-      /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-z_][a-z0-9_]*)/gi;
+      /\b(?:INSERT\s+INTO|DELETE\s+FROM)\s+([a-z_][a-z0-9_]*)|\bUPDATE\s+([a-z_][a-z0-9_]*)\s+SET\b/gi;
     for (const { path, text } of await readAll()) {
       for (const match of text.matchAll(writeStatement)) {
-        const table = match[2]?.toLowerCase();
+        const table = (match[1] ?? match[2])?.toLowerCase();
         if (table === undefined) {
           continue;
         }

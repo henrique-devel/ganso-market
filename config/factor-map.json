@@ -1,0 +1,49 @@
+{
+  "version": "1.0.0",
+  "unknownFactorMultiplier": 0.5,
+  "negRiskMultiplier": 0.5,
+  "rules": [
+    {
+      "factor": "btc_price",
+      "category": "crypto",
+      "allOf": [],
+      "anyOf": ["bitcoin", "btc"],
+      "correlationMultiplier": 0.35
+    },
+    {
+      "factor": "eth_price",
+      "category": "crypto",
+      "allOf": [],
+      "anyOf": ["ethereum", "eth"],
+      "correlationMultiplier": 0.35
+    },
+    {
+      "factor": "sol_price",
+      "category": "crypto",
+      "allOf": [],
+      "anyOf": ["solana", "sol"],
+      "correlationMultiplier": 0.35
+    },
+    {
+      "factor": "fed_rate_decision",
+      "category": null,
+      "allOf": [],
+      "anyOf": ["fed", "fomc", "interest rate"],
+      "correlationMultiplier": 0.3
+    },
+    {
+      "factor": "us_cpi",
+      "category": null,
+      "allOf": [],
+      "anyOf": ["cpi", "inflation"],
+      "correlationMultiplier": 0.3
+    },
+    {
+      "factor": "us_jobs",
+      "category": null,
+      "allOf": [],
+      "anyOf": ["nonfarm", "unemployment", "jobs report"],
+      "correlationMultiplier": 0.3
+    }
+  ]
+}

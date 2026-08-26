@@ -1,0 +1,74 @@
+{
+  "version": "1.0.0",
+  "bankrollUsd": 1000,
+  "kelly": {
+    "lambda": 0.25,
+    "maxLambda": 0.5,
+    "uncertaintyShrinkSlope": 1
+  },
+  "costs": {
+    "safetyMarginMin": 0.01,
+    "safetyMarginEdgeFraction": 0.25,
+    "capitalCostAnnual": 0.12,
+    "slippageMaxPctEdge": 0.25,
+    "edgeLiqMin": 0.02
+  },
+  "priceBand": {
+    "minBuy": 0.1,
+    "maxBuy": 0.95
+  },
+  "depth": {
+    "takePct": 0.15
+  },
+  "caps": {
+    "entrada": 0.02,
+    "mercado": 0.05,
+    "grupoCorrelacionado": 0.2,
+    "categoria": 0.35,
+    "fonteResolucao": 0.25,
+    "catalisadorJanela": 0.25,
+    "capitalBloqueado": 0.6
+  },
+  "lossLimits": {
+    "perdaDiariaMax": 0.03,
+    "perdaSemanalMax": 0.06,
+    "drawdownMax": 0.1,
+    "reduceOnlyWeekDays": 7
+  },
+  "exits": {
+    "edgeResidualMin": 0.01,
+    "modelMoveThreshold": 0.05,
+    "depthFloorShares": 50,
+    "catalystBlackoutMin": 30
+  },
+  "staleness": {
+    "bookMaxAgeMs": 30000,
+    "estimateMaxAgeMs": 300000,
+    "resolutionMaxAgeMs": 3600000
+  },
+  "breakers": {
+    "jumpThreshold": 0.15,
+    "jumpWindowMs": 300000
+  },
+  "gates": {
+    "g1MinResolvedMarkets": 100,
+    "g1MaxBrier": 0.2,
+    "g2MinDays": 60,
+    "g2MinClosedPositions": 100,
+    "g2MinDistinctMarkets": 30,
+    "g2MinCategories": 2,
+    "g2EdgeHaircut": 0.5,
+    "bootstrapResamples": 2000,
+    "bootstrapBlockSize": 10,
+    "bootstrapSeed": 20260825,
+    "g4MaxFeeMedianError": 0.05,
+    "g4MinSoakDays": 30
+  },
+  "cadence": {
+    "panelMs": 60000,
+    "exposureMs": 60000,
+    "exitMs": 30000,
+    "gateMs": 3600000,
+    "reportMs": 604800000
+  }
+}

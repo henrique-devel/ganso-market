@@ -204,7 +204,11 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 10s
-    mem_limit: 1024m
+    # 832m, not 1024m: the 192m released here funds the RFC-013 portfolio
+    # engine below, and the recorder measured 230 MiB in production on
+    # 2026-08-26 with the full 100-market/200-token universe — 3.6x headroom
+    # remains. The compose aggregate stays exactly where it was.
+    mem_limit: 832m
     cpus: 0.5
     pids_limit: 128
     logging: *default-logging
@@ -220,7 +224,11 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     command:
-      ["node", "--max-old-space-size=160", "apps/api/dist/polymarket-estimator.js"]
+      [
+        "node",
+        "--max-old-space-size=160",
+        "apps/api/dist/polymarket-estimator.js",
+      ]
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -323,6 +331,52 @@ services:
     restart: unless-stopped
     stop_grace_period: 10s
     mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *default-logging
+
+  # RFC-013 portfolio engine. SIMULAÇÃO — SEM EXECUÇÃO REAL: no trading auth,
+  # wallet, signer, real order path or stop-loss may ever exist in this process
+  # (the module's scope test enforces it, and forbids even the identifiers).
+  # Every input is already in the database, so it joins only the internal
+  # backend network — it makes no outbound connection of its own.
+  polymarket-portfolio:
+    profiles: ["polymarket"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command:
+      [
+        "node",
+        "--max-old-space-size=160",
+        "apps/api/dist/polymarket-portfolio.js",
+      ]
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      GANSO_PORTFOLIO_CONFIG_FILE: /etc/ganso/portfolio.json
+      GANSO_PORTFOLIO_FACTOR_MAP_FILE: /etc/ganso/factor-map.json
+      GANSO_RELEASE_SHA_FILE: /etc/ganso/release-sha
+    secrets:
+      - postgres_password
+    volumes:
+      # Both files are COMPLETE, declaring every value rather than relying on
+      # in-code defaults. That is deliberate: config/ is bind-mounted and lands
+      # with the CD while the image updates only on a profile rebuild, so a
+      # partial file would let an old binary mint a version name pinned to the
+      # wrong content — exactly how score_version 1.1.0 was burned on
+      # 2026-08-26 (see docs/runbooks/single-server.md).
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      - ./config/portfolio.json:/etc/ganso/portfolio.json:ro
+      - ./config/factor-map.json:/etc/ganso/factor-map.json:ro
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 192m
     cpus: 0.5
     pids_limit: 128
     logging: *default-logging
