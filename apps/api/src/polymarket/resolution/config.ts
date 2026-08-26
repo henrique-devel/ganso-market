@@ -166,10 +166,15 @@ export interface ResolutionConfig {
 }
 
 export const DEFAULT_RESOLUTION_CONFIG: ResolutionConfig = Object.freeze({
-  // 1.1.0: the lexicon gained titleDeferralTerms, which changes what a score
-  // MEANS, so it must be a new version — the boot gate refuses to reuse a
-  // version name whose content hash differs.
-  scoreVersion: "1.1.0",
+  // 1.1.1, not 1.1.0: the lexicon gained titleDeferralTerms, which changes what
+  // a score MEANS, so it needed a new version — but 1.1.0 is burned. See the
+  // deploy-ordering note in docs/runbooks/single-server.md: config/ is
+  // bind-mounted and lands with the CD, while the lexicon it names lives in the
+  // image and only changes on a profile rebuild. In that window the OLD binary
+  // read the NEW score_version and wrote a resolution_score_versions row
+  // pinning 1.1.0 to the PREVIOUS lexicon hash. The row is immutable by
+  // trigger, and correctly so, so the name cannot be reused.
+  scoreVersion: "1.1.1",
   weights: Object.freeze({
     rulePrecision: 0.3,
     disputePrior: 0.15,

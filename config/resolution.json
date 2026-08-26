@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "score_version": "1.1.0",
+  "score_version": "1.1.1",
   "weights": {
     "rule_precision": 0.3,
     "dispute_prior": 0.15,
