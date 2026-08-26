@@ -161,6 +161,20 @@ describe("retention job", () => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        // Six hours of retained history: one 12h slice covers it exactly.
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }], rowCount: 1 };
       }
@@ -168,7 +182,13 @@ describe("retention job", () => {
         // The very first minute below the cutoff has no bucket, so the prune
         // is truncated to it and nothing is actually deletable.
         return {
-          rows: [{ first_uncovered: new Date(NOW.getTime() - 30 * DAY_MS) }],
+          rows: [
+            {
+              first_uncovered: new Date(
+                NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000,
+              ),
+            },
+          ],
           rowCount: 1,
         };
       }
@@ -187,7 +207,7 @@ describe("retention job", () => {
     );
     expect(deletes).toHaveLength(1);
     expect(deletes[0]?.params?.[0]).toEqual(
-      new Date(NOW.getTime() - 30 * DAY_MS),
+      new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
     );
     expect(deletes[0]?.params?.[0]).not.toEqual(cutoff);
     expect(
@@ -219,17 +239,31 @@ describe("retention job", () => {
       protected: false,
       requiresSeriesCoverage: true,
     };
-    const hole = new Date(NOW.getTime() - 20 * DAY_MS);
+    const hole = new Date(NOW.getTime() - 14 * DAY_MS - 3 * 3_600_000);
     let coverageCalls = 0;
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        // Six hours of retained history: one 12h slice covers it exactly.
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }, { token_id: "t2" }], rowCount: 2 };
       }
       if (text.includes("LEFT JOIN polymarket_series_1m")) {
-        // t1 has a hole 20 days back; t2 is fully covered.
+        // t1 has a hole inside its slice; t2 is fully covered.
         coverageCalls += 1;
         return {
           rows: [{ first_uncovered: coverageCalls === 1 ? hole : null }],
@@ -286,6 +320,20 @@ describe("retention job", () => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        // Six hours of retained history: one 12h slice covers it exactly.
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }], rowCount: 1 };
       }
@@ -326,6 +374,20 @@ describe("retention job", () => {
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        // Six hours of retained history: one 12h slice covers it exactly.
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
       }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }, { token_id: "t2" }], rowCount: 2 };
@@ -377,6 +439,20 @@ describe("retention job", () => {
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        // Six hours of retained history: one 12h slice covers it exactly.
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
       }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }], rowCount: 1 };
@@ -525,6 +601,20 @@ describe("retention job", () => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
       }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        // Six hours of retained history: one 12h slice covers it exactly.
+        return {
+          rows: [
+            {
+              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }], rowCount: 1 };
       }
@@ -558,6 +648,128 @@ describe("retention job", () => {
         cause: "ttl",
         prunedBefore: new Date(NOW.getTime() - 14 * DAY_MS),
         rowsDeleted: 7,
+      },
+    ]);
+  });
+
+  it("slices a long token history so no single coverage query spans it all", async () => {
+    // Measured in production: the per-token coverage check is an index-only
+    // scan, but its cost still grows with the range. At a 2-day cutoff the
+    // heaviest token took 14.3 s; once the quota prune pushed the cutoff to
+    // ~3.5 days it crossed the 30 s statement_timeout and that token lost its
+    // whole prune. Slicing keeps each query small and advances in pieces.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const cutoff = new Date(NOW.getTime() - 14 * DAY_MS);
+    // Three days of retained history below the cutoff: six 12h slices.
+    const oldest = new Date(cutoff.getTime() - 3 * DAY_MS);
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        return { rows: [{ oldest }], rowCount: 1 };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const coverage = pool.captured.filter((q) =>
+      q.text.includes("LEFT JOIN polymarket_series_1m"),
+    );
+    expect(coverage.length).toBeGreaterThanOrEqual(6);
+    // No individual query spans more than one slice.
+    let previous = oldest.getTime();
+    for (const query of coverage) {
+      const sliceEnd = query.params?.[1] as Date;
+      expect(sliceEnd.getTime() - previous).toBeLessThanOrEqual(
+        12 * 60 * 60 * 1_000,
+      );
+      previous = sliceEnd.getTime();
+    }
+    // And the last slice lands exactly on the requested cutoff, never past it.
+    const last = coverage[coverage.length - 1]?.params?.[1] as Date;
+    expect(last.getTime()).toBe(cutoff.getTime());
+  });
+
+  it("stops a token at the first hole instead of walking every remaining slice", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const cutoff = new Date(NOW.getTime() - 14 * DAY_MS);
+    const oldest = new Date(cutoff.getTime() - 3 * DAY_MS);
+    const hole = new Date(oldest.getTime() + 6 * 3_600_000);
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        return { rows: [{ oldest }], rowCount: 1 };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        return { rows: [{ first_uncovered: hole }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        return { rows: [], rowCount: 3 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    // One slice only: the hole ends the token's prune for this run.
+    const coverage = pool.captured.filter((q) =>
+      q.text.includes("LEFT JOIN polymarket_series_1m"),
+    );
+    expect(coverage).toHaveLength(1);
+    const deletes = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_book_deltas"),
+    );
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]?.params?.[0]).toEqual(hole);
+    expect(report.skipped).toEqual([
+      {
+        table: "polymarket_book_deltas",
+        reason: "series_coverage_missing",
+        tokenId: "t1",
       },
     ]);
   });
