@@ -53,7 +53,27 @@ export interface ResolvedForecast {
 }
 
 export interface G1Input {
+  /**
+   * The signal actually used for entries, whatever its source. Bar (b) of the
+   * RFC — "o sinal usado nas entradas tem Brier < 0,20" — is taken over this.
+   */
   readonly forecasts: readonly ResolvedForecast[];
+  /**
+   * The subset produced by a PROMOTED MODEL. Bar (a) — "o modelo promovido não
+   * piora Brier/log-loss vs o próprio preço" — is taken over this, and ONLY
+   * over this.
+   *
+   * The distinction is not bookkeeping, and getting it wrong made this gate
+   * report PASS on no evidence in production on 2026-08-26. With no promoted
+   * model, the RFC-010 estimator falls back to a market baseline: `q` is then
+   * derived from the same recorded book as the market probability it would be
+   * compared against. Scoring that set against the price compares the price to
+   * ITSELF — the Brier scores tie, "does not worsen" is trivially satisfied,
+   * and the absolute ceiling is cleared because the PRICE is well calibrated
+   * (~0.074 by the RFC's own figure). Every condition passes and nothing was
+   * measured.
+   */
+  readonly modelForecasts: readonly ResolvedForecast[];
   readonly config: GateConfig;
 }
 
@@ -61,14 +81,26 @@ export interface G1Input {
  * G1 — model calibration. Walk-forward over resolved markets, never k-fold:
  * shuffling time would train on the future.
  *
- * Two bars, both required: the promoted model must not be WORSE than the price
+ * Two bars, both required: the PROMOTED MODEL must not be worse than the price
  * itself (a model that cannot beat the market price is not a model), and the
  * signal actually used for entries must score under the RFC's Brier ceiling.
+ *
+ * With no promoted model the first bar is not merely unmet — it is
+ * UNMEASURABLE, and the gate says INSUFFICIENT_DATA. "We have not measured a
+ * model yet" and "a model was measured and cleared the bar" are the two states
+ * this gate exists to keep apart.
  */
 export function evaluateG1(input: G1Input): GateResult {
   // Leakage guard first: a forecast made at or after the outcome was knowable
-  // is not a forecast, and one such row poisons the whole score.
-  const leaking = input.forecasts.filter(
+  // is not a forecast, and one such row poisons the whole score. Both sets are
+  // checked, because the model set is what the substantive bar is taken over —
+  // de-duplicated by identity, since the model set is normally a subset and
+  // counting a row twice would report a number nobody could reconcile.
+  const candidates = new Set<ResolvedForecast>([
+    ...input.forecasts,
+    ...input.modelForecasts,
+  ]);
+  const leaking = [...candidates].filter(
     (point) => point.forecastAt.getTime() >= point.outcomeKnownAt.getTime(),
   );
   if (leaking.length > 0) {
@@ -98,11 +130,47 @@ export function evaluateG1(input: G1Input): GateResult {
     };
   }
 
-  const modelPoints = input.forecasts.map((point) => ({
+  // Bar (b): the signal actually used for entries, against the absolute ceiling.
+  const usedBrier = brierScore(
+    input.forecasts.map((point) => ({
+      probability: point.modelProbability,
+      outcome: point.outcome,
+    })),
+  );
+  const underCeiling = usedBrier < input.config.g1MaxBrier;
+
+  // Bar (a): the promoted model against the price. Unmeasurable without one.
+  const modelMarkets = new Set(
+    input.modelForecasts.map((point) => point.conditionId),
+  ).size;
+  if (modelMarkets < input.config.g1MinResolvedMarkets) {
+    return {
+      gate: "G1",
+      status: "INSUFFICIENT_DATA",
+      reasonCode: "G1_CALIBRATION_NOT_MET",
+      metrics: {
+        resolved_markets: distinctMarkets,
+        forecasts: input.forecasts.length,
+        used_signal_brier: usedBrier,
+        under_ceiling: underCeiling,
+        ceiling: input.config.g1MaxBrier,
+        model_resolved_markets: modelMarkets,
+        model_forecasts: input.modelForecasts.length,
+        required: input.config.g1MinResolvedMarkets,
+        detail:
+          input.modelForecasts.length === 0
+            ? "no promoted model: the used signal is a market baseline, and " +
+              "scoring it against the price would compare the price to itself"
+            : "not enough resolved markets forecast by a promoted model",
+      },
+    };
+  }
+
+  const modelPoints = input.modelForecasts.map((point) => ({
     probability: point.modelProbability,
     outcome: point.outcome,
   }));
-  const marketPoints = input.forecasts.map((point) => ({
+  const marketPoints = input.modelForecasts.map((point) => ({
     probability: point.marketProbability,
     outcome: point.outcome,
   }));
@@ -114,7 +182,6 @@ export function evaluateG1(input: G1Input): GateResult {
   const bss = brierSkillScore(modelBrier, marketBrier);
 
   const beatsPrice = modelBrier <= marketBrier && modelLogLoss <= marketLogLoss;
-  const underCeiling = modelBrier < input.config.g1MaxBrier;
   const passed = beatsPrice && underCeiling;
 
   return {
@@ -124,11 +191,14 @@ export function evaluateG1(input: G1Input): GateResult {
     metrics: {
       resolved_markets: distinctMarkets,
       forecasts: input.forecasts.length,
+      model_resolved_markets: modelMarkets,
+      model_forecasts: input.modelForecasts.length,
       model_brier: modelBrier,
       market_brier: marketBrier,
       model_log_loss: modelLogLoss,
       market_log_loss: marketLogLoss,
       brier_skill_score: bss,
+      used_signal_brier: usedBrier,
       beats_price: beatsPrice,
       under_ceiling: underCeiling,
       ceiling: input.config.g1MaxBrier,

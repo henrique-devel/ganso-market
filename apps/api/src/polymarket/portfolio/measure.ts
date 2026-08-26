@@ -60,6 +60,12 @@ export interface ForecastRow {
   /** The instant the outcome became publicly knowable. Never `closedTime`. */
   readonly outcomeKnownAt: Date | null;
   readonly forecastAt: Date;
+  /**
+   * `MODEL` when a promoted model produced it, `MARKET_BASELINE` when the
+   * RFC-010 estimator fell back to the book. Only the former can be scored
+   * against the price: a baseline IS the price.
+   */
+  readonly source: string;
 }
 
 /** Why a candidate forecast was not scored, and how many were dropped for it. */
@@ -71,7 +77,10 @@ export interface ForecastExclusions {
 }
 
 export interface ForecastSelection {
+  /** The signal used for entries, whatever produced it. */
   readonly forecasts: readonly ResolvedForecast[];
+  /** The subset a PROMOTED MODEL produced. Empty when none is promoted. */
+  readonly modelForecasts: readonly ResolvedForecast[];
   readonly excluded: Readonly<ForecastExclusions>;
 }
 
@@ -93,6 +102,7 @@ export function selectForecasts(
   rows: readonly ForecastRow[],
 ): ForecastSelection {
   const forecasts: ResolvedForecast[] = [];
+  const modelForecasts: ResolvedForecast[] = [];
   const excluded: ForecastExclusions = {
     fifty_fifty_label: 0,
     non_binary_label: 0,
@@ -116,16 +126,20 @@ export function selectForecasts(
       excluded.no_market_probability += 1;
       continue;
     }
-    forecasts.push({
+    const forecast: ResolvedForecast = {
       conditionId: row.conditionId,
       modelProbability: row.modelProbability,
       marketProbability: row.marketProbability,
       outcome: row.label === "1" ? 1 : 0,
       outcomeKnownAt: row.outcomeKnownAt,
       forecastAt: row.forecastAt,
-    });
+    };
+    forecasts.push(forecast);
+    if (row.source === "MODEL") {
+      modelForecasts.push(forecast);
+    }
   }
-  return { forecasts, excluded };
+  return { forecasts, modelForecasts, excluded };
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +414,7 @@ export function measureGates(input: MeasureGatesInput): MeasureGatesResult {
   const selection = selectForecasts(input.forecastRows);
   const g1 = evaluateG1({
     forecasts: selection.forecasts,
+    modelForecasts: selection.modelForecasts,
     config: input.config,
   });
   const g1From = oldestOf(selection.forecasts.map((point) => point.forecastAt));
@@ -449,6 +464,7 @@ export function measureGates(input: MeasureGatesInput): MeasureGatesResult {
     toMeasurement(g1, windowOf(g1From, input.now), {
       excluded_forecasts: selection.excluded,
       scored_forecasts: selection.forecasts.length,
+      scored_model_forecasts: selection.modelForecasts.length,
       candidate_rows: input.forecastRows.length,
     }),
     toMeasurement(g2, windowOf(input.clockStart, input.now)),
