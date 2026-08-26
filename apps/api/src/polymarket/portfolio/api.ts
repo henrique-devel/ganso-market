@@ -18,7 +18,7 @@ import {
   utcDayBucket,
   utcWeekStart,
 } from "./state.js";
-import { SIMULATION_BANNER } from "./types.js";
+import { GATE_IDS, SIMULATION_BANNER } from "./types.js";
 import type { PortfolioStateSnapshot } from "./state.js";
 import { money } from "./ev.js";
 
@@ -36,6 +36,24 @@ export interface PortfolioRoutesDeps {
 
 const LIST_LIMIT = 200;
 const HISTORY_LIMIT = 500;
+const MEASUREMENT_PAGE_DEFAULT = 50;
+const MEASUREMENT_PAGE_MAX = 200;
+const GATE_STATUSES: readonly string[] = ["PASS", "FAIL", "INSUFFICIENT_DATA"];
+
+/**
+ * Parse an ISO instant from the query string.
+ *
+ * Returns `"invalid"` rather than null for unparseable input: silently ignoring
+ * a malformed `from` would answer a different question than the one asked, and
+ * the caller would have no way to tell.
+ */
+function parseInstant(value: string | null): Date | null | "invalid" {
+  if (value === null) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "invalid" : parsed;
+}
 
 function jsonError(
   reply: FastifyReply,
@@ -75,6 +93,15 @@ function paramString(request: FastifyRequest, name: string): string | null {
     return null;
   }
   const value = (params as Record<string, unknown>)[name];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function queryString(request: FastifyRequest, name: string): string | null {
+  const query: unknown = request.query;
+  if (typeof query !== "object" || query === null) {
+    return null;
+  }
+  const value = (query as Record<string, unknown>)[name];
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
@@ -308,6 +335,89 @@ export function registerPortfolioRoutes(
         calibrated_expectation: CALIBRATED_EXPECTATION,
         gates: latest.rows,
         reports: reports.rows,
+      });
+    }),
+  );
+
+  // GET /polymarket/gates/measurements — the queryable measurement history.
+  //
+  // This is what stands in for the RFC's weekly report, by the owner's decision
+  // of 2026-08-26: the same numbers, consulted when someone wants them, with
+  // filters and keyset pagination, instead of a document generated on a timer
+  // whether or not anyone reads it.
+  //
+  // Keyset pagination on measurement_id, not OFFSET. The table is append-only
+  // and never pruned, so it only grows; an OFFSET page would get slower every
+  // week and could skip or repeat a row when a measurement lands mid-listing.
+  app.get(
+    "/polymarket/gates/measurements",
+    { preHandler: guard },
+    wrap(async (request, reply) => {
+      const gate = queryString(request, "gate");
+      if (gate !== null && !(GATE_IDS as readonly string[]).includes(gate)) {
+        return jsonError(reply, 400, "INVALID_GATE");
+      }
+      const status = queryString(request, "status");
+      if (status !== null && !GATE_STATUSES.includes(status)) {
+        return jsonError(reply, 400, "INVALID_GATE_STATUS");
+      }
+      const from = parseInstant(queryString(request, "from"));
+      const to = parseInstant(queryString(request, "to"));
+      if (from === "invalid" || to === "invalid") {
+        return jsonError(reply, 400, "INVALID_TIME_RANGE");
+      }
+      const limitRaw = queryString(request, "limit");
+      const limit =
+        limitRaw === null ? MEASUREMENT_PAGE_DEFAULT : Number(limitRaw);
+      if (
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > MEASUREMENT_PAGE_MAX
+      ) {
+        return jsonError(reply, 400, "INVALID_LIMIT");
+      }
+      const cursorRaw = queryString(request, "cursor");
+      const cursor = cursorRaw === null ? null : Number(cursorRaw);
+      if (cursor !== null && (!Number.isInteger(cursor) || cursor <= 0)) {
+        return jsonError(reply, 400, "INVALID_CURSOR");
+      }
+
+      // One extra row is fetched to learn whether another page exists without
+      // a second COUNT over a table that only ever grows.
+      const rows = await pool.query(
+        `SELECT measurement_id, gate, status, reason_code, metrics_json,
+                config_version, window_from, window_to, measured_at
+           FROM portfolio_gate_measurements
+          WHERE ($1::text IS NULL OR gate = $1)
+            AND ($2::text IS NULL OR status = $2)
+            AND ($3::timestamptz IS NULL OR measured_at >= $3)
+            AND ($4::timestamptz IS NULL OR measured_at <= $4)
+            AND ($5::bigint IS NULL OR measurement_id < $5)
+          ORDER BY measurement_id DESC
+          LIMIT $6`,
+        [gate, status, from, to, cursor, limit + 1],
+      );
+      const page = rows.rows.slice(0, limit);
+      const last = page[page.length - 1] as
+        { measurement_id?: unknown } | undefined;
+      const nextCursor =
+        rows.rows.length > limit && last?.measurement_id !== undefined
+          ? String(last.measurement_id)
+          : null;
+      return reply.send({
+        simulation: SIMULATION_BANNER,
+        // Repeated on the history endpoint too: a reader paging through months
+        // of measurements should not have to remember that a PASS is not a
+        // promise.
+        calibrated_expectation: CALIBRATED_EXPECTATION,
+        filters: {
+          gate,
+          status,
+          from: from?.toISOString() ?? null,
+          to: to?.toISOString() ?? null,
+        },
+        page: { limit, cursor: cursorRaw, next_cursor: nextCursor },
+        measurements: page,
       });
     }),
   );

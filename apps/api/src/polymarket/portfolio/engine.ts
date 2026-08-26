@@ -68,6 +68,17 @@ export interface EvaluationInput {
   readonly resolutionAgeMs: number | null;
   readonly rulePrecisionMultiplier: number;
 
+  /**
+   * Panel provenance (fields 9 and 10 of task 6). Pass-through: shown and
+   * persisted, never an input to any arithmetic, which is why the replay
+   * restores them from the persisted panel instead of duplicating them.
+   */
+  readonly resolutionSource: string | null;
+  /** Relevant excerpt of the rule version in force. Truncated for the quota. */
+  readonly ruleExcerpt: string | null;
+  /** Correlated or contradictory markets, from the RFC-012 logical graph. */
+  readonly correlatedMarkets: readonly string[];
+
   /** Venue parameters. */
   readonly takerFeeRate: string | null;
   readonly minOrderSize: string | null;
@@ -140,9 +151,25 @@ export interface PanelFields {
     readonly expected_lockup_s: number;
   };
   readonly resolution_source: string | null;
+  /** Trecho relevante da regra vigente (field 9). */
+  readonly rule_excerpt: string | null;
   readonly correlated_markets: readonly string[];
   readonly entry_reason: string | null;
   readonly invalidation_condition: string | null;
+  /**
+   * Field 12 as an EVALUABLE condition rather than prose: the level the
+   * conservative estimate has to stay above for the thesis to hold. Prose in a
+   * panel is not a monitored condition, and the RFC asks for one that is.
+   *
+   * It is a condition on the MODEL, deliberately not on the price. A condition
+   * of the form "leave if the bid falls below X" would be a stop-loss wearing
+   * another name, and a binary book can gap past X without ever trading it. The
+   * price side of an exit is covered by the residual-edge and depth criteria,
+   * which read what the book would actually pay.
+   */
+  readonly invalidation: {
+    readonly prob_lower_below: string | null;
+  };
   readonly data_freshness: {
     readonly book_age_ms: number | null;
     readonly estimate_age_ms: number | null;
@@ -245,10 +272,12 @@ function emptyPanel(input: EvaluationInput): PanelFields {
       p_5050: input.p5050,
       expected_lockup_s: input.expectedLockupS,
     },
-    resolution_source: null,
-    correlated_markets: [],
+    resolution_source: input.resolutionSource,
+    rule_excerpt: input.ruleExcerpt,
+    correlated_markets: input.correlatedMarkets,
     entry_reason: null,
     invalidation_condition: null,
+    invalidation: { prob_lower_below: null },
     data_freshness: {
       book_age_ms: input.bookAgeMs,
       estimate_age_ms: input.estimateAgeMs,
@@ -559,8 +588,14 @@ export function evaluateMarket(input: EvaluationInput): Evaluation {
       `${money(best.ev.execPriceScaled)} mais custos ${money(best.ev.costsTotalScaled)} ` +
       `e margem ${money(best.ev.safetyMarginScaled)}`,
     invalidation_condition:
-      `q_lo cair abaixo de ${money(best.ev.execPriceScaled + best.ev.costsTotalScaled)} ` +
-      `ou o livro executável piorar além da banda`,
+      `limite inferior cair abaixo de ` +
+      `${money(best.ev.execPriceScaled + best.ev.costsTotalScaled)} ` +
+      `(preço executável mais custos): a razão para manter deixa de existir`,
+    invalidation: {
+      prob_lower_below: money(
+        best.ev.execPriceScaled + best.ev.costsTotalScaled,
+      ),
+    },
   };
 
   if (sizing.sizeScaled <= 0n) {

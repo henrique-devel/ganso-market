@@ -43,6 +43,10 @@ const GOOD: EvaluationInput = {
   expectedLockupS: 3_600,
   resolutionAgeMs: 60_000,
   rulePrecisionMultiplier: 1,
+  resolutionSource: "UMA:0xadapter",
+  ruleExcerpt:
+    "Resolves YES if BTC closes above $88,000 on the reference feed.",
+  correlatedMarkets: ["MUTEX:0xb"],
   takerFeeRate: "0.07",
   minOrderSize: "5",
   bufferDailyHurdle: 0.0005,

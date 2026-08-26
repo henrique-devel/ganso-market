@@ -100,6 +100,74 @@ McHale: sob incerteza de estimativa a fração ótima diminui), e o teto de 0,5
 depende de track record que já tenha passado o G1 — é um campo que o gate lê,
 nunca um botão que um operador aperta.
 
+## A condição de invalidação é sobre o MODELO, não sobre o preço
+
+A tarefa 6 exige "condição de invalidação (expressão avaliável, monitorada)", e
+a entrada registra uma: o nível abaixo do qual o **limite inferior** da
+estimativa deixa de justificar manter a posição (`preço_executável + custos`).
+O ciclo de saída compara o dado de hoje contra esse número gravado na entrada.
+
+O que ela deliberadamente **não** é: uma condição da forma "sair se o bid cair
+abaixo de X". Isso seria um stop-loss com outro nome, e um livro binário pode
+passar por X sem negociar X. O lado de preço da saída fica com os critérios que
+leem o que o livro **pagaria de fato** — edge residual no bid executável e
+profundidade de saída —, ambos por book-walk sobre a posição inteira.
+
+Uma consequência que vale registrar: o critério 6 (capital bloqueado deixou de
+compensar o edge) cobra o custo de capital **integral** do lockup restante na
+saída, e apenas o **excedente** sobre o hurdle diário do buffer da RFC-012 na
+entrada. Os dois estão certos por motivos diferentes: o edge líquido da entrada
+já subtrai o buffer (que contém `capitalDailyHurdle × lockupDays`), então cobrar
+o custo inteiro em cima cobraria o mesmo lockup duas vezes; o edge residual da
+saída não subtrai buffer nenhum, então cobrar só o excedente cobraria **zero**
+— com os parâmetros default o hurdle do buffer (US$ 0,0005/share/dia, ~18,3%
+a.a.) é maior que `custo_capital_anual` (12% a.a.) em qualquer preço e qualquer
+lockup, e o critério nunca poderia disparar.
+
+## Medição contínua dos gates, sem relatório semanal
+
+A tarefa 8 pede medição contínua **com relatório semanal automático**. Por
+decisão do proprietário de 2026-08-26 o relatório foi substituído por um
+**espaço de consulta paginado** no painel (`GET
+/polymarket/gates/measurements`, aba "Consulta"): os mesmos números, com filtro
+por gate, situação e janela, consultados quando alguém quiser — em vez de um
+documento gerado por timer independentemente de alguém lê-lo.
+
+`portfolio_gate_reports` continua no schema **sem uso** de propósito: o G6 é
+registrado contra o id de um relatório, e apagar a tabela jogaria fora a única
+forma de amarrar uma revisão escrita aos números que ela aprovou.
+
+A paginação é por cursor (keyset sobre `measurement_id`), não por `OFFSET`. A
+tabela é append-only e nunca é podada — só cresce —, então uma página por
+`OFFSET` ficaria mais lenta a cada semana e poderia repetir ou pular uma linha
+quando uma medição nova entrasse no meio da listagem.
+
+## Replay determinístico: o que ele prova e o que não prova
+
+Cada decisão persiste, além do trecho de book (`book_json`), o **bloco de
+replay** em `inputs_json.replay`: todo escalar que o motor leu, na escala de
+trabalho de nove dígitos e não nos seis dígitos que as colunas exibem. Um
+round-trip de seis dígitos perderia até 1e-9 por valor, o que basta para mover
+um tamanho em uma share e transformar um replay igual num mismatch que ninguém
+consegue explicar.
+
+O replay reconstrói a entrada a partir do **decision log** e da versão de config
+que a decisão nomeia (`portfolio_config_versions.content_json`) — nunca de
+`polymarket_book_snapshots`, `fundamental_estimates` ou
+`resolution_market_state`. É isso que significa "replay independente do TTL dos
+dados crus": o que a retenção já podou é irrelevante para a reprodutibilidade.
+
+O que ele prova: dados os inputs gravados e a config gravada, o motor produz
+saída byte a byte idêntica. O que ele **não** prova — e não pode: que os inputs
+foram gravados honestamente. Isso é papel do `CHECK` de look-ahead, do trigger
+append-only e das consultas as-of do `store.ts`.
+
+Três campos vêm do painel persistido em vez do bloco de replay
+(`resolution_source`, `rule_excerpt`, `correlated_markets`): são pass-through
+puros, nenhuma aritmética os lê, e duplicá-los custaria bytes em toda linha de
+um log que cresce uma vez por mercado por minuto sem comprar nada — comparar um
+valor com uma cópia de si mesmo não prova nada em nenhuma direção.
+
 ## Fronteira com a RFC-009
 
 Execução real (assinatura de ordem, auth de trading, wallet burn na Polygon) é

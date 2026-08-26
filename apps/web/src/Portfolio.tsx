@@ -12,11 +12,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchDecisions,
   fetchExposures,
+  fetchGateMeasurements,
   fetchGates,
   fetchOpportunities,
   fetchPortfolioState,
   type Decision,
   type Exposure,
+  type GateMeasurementPage,
   type GateSnapshot,
   type Opportunity,
   type PortfolioStateSnapshot,
@@ -24,7 +26,49 @@ import {
 
 const REFRESH_MS = 30_000;
 
-type Section = "oportunidades" | "exposicao" | "estado" | "gates" | "decisoes";
+type Section =
+  "oportunidades" | "exposicao" | "estado" | "gates" | "consulta" | "decisoes";
+
+const GATE_OPTIONS = ["G1", "G2", "G3", "G4", "G5", "G6"] as const;
+const STATUS_OPTIONS = ["PASS", "FAIL", "INSUFFICIENT_DATA"] as const;
+const PAGE_SIZE = 25;
+
+interface MeasurementFilters {
+  readonly gate: string;
+  readonly status: string;
+  readonly from: string;
+  readonly to: string;
+}
+
+const NO_FILTERS: MeasurementFilters = {
+  gate: "",
+  status: "",
+  from: "",
+  to: "",
+};
+
+/**
+ * A compact one-line summary of a measurement's metrics.
+ *
+ * Only scalars, and only the first few: the full object goes in the expandable
+ * block below, so the table stays readable while nothing is hidden.
+ */
+function metricSummary(metrics: Readonly<Record<string, unknown>>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(metrics)) {
+    if (parts.length >= 4) {
+      break;
+    }
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      parts.push(`${key}=${String(value)}`);
+    }
+  }
+  return parts.length === 0 ? "—" : parts.join(" · ");
+}
 
 interface Loaded {
   readonly opportunities: readonly Opportunity[];
@@ -72,6 +116,16 @@ export function PortfolioPanel({
   const [failed, setFailed] = useState(false);
   const mounted = useRef(true);
 
+  // The query space keeps its own state: it is a deliberate query, not part of
+  // the 30-second refresh, so paging through months of measurements is not
+  // yanked back to page one by a timer.
+  const [filters, setFilters] = useState<MeasurementFilters>(NO_FILTERS);
+  const [cursors, setCursors] = useState<readonly string[]>([]);
+  const [measurements, setMeasurements] = useState<GateMeasurementPage | null>(
+    null,
+  );
+  const [measurementsFailed, setMeasurementsFailed] = useState(false);
+
   const refresh = useCallback(async (): Promise<void> => {
     const [opportunities, exposures, state, gates, decisions] =
       await Promise.all([
@@ -99,6 +153,34 @@ export function PortfolioPanel({
       decisions: decisions.kind === "ok" ? decisions.value : EMPTY.decisions,
     });
   }, [accessToken, onUnauthorized]);
+
+  const loadMeasurements = useCallback(async (): Promise<void> => {
+    const cursor = cursors[cursors.length - 1];
+    const result = await fetchGateMeasurements(accessToken, {
+      ...(filters.gate === "" ? {} : { gate: filters.gate }),
+      ...(filters.status === "" ? {} : { status: filters.status }),
+      ...(filters.from === "" ? {} : { from: `${filters.from}T00:00:00Z` }),
+      ...(filters.to === "" ? {} : { to: `${filters.to}T23:59:59Z` }),
+      limit: PAGE_SIZE,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    if (!mounted.current) {
+      return;
+    }
+    if (result.kind === "unauthorized") {
+      onUnauthorized();
+      return;
+    }
+    setMeasurementsFailed(result.kind === "error");
+    setMeasurements(result.kind === "ok" ? result.value : null);
+  }, [accessToken, cursors, filters, onUnauthorized]);
+
+  useEffect(() => {
+    if (section !== "consulta") {
+      return;
+    }
+    void loadMeasurements();
+  }, [section, loadMeasurements]);
 
   useEffect(() => {
     mounted.current = true;
@@ -139,6 +221,7 @@ export function PortfolioPanel({
             ["exposicao", "Exposição"],
             ["estado", "Estado"],
             ["gates", "Gates"],
+            ["consulta", "Consulta"],
             ["decisoes", "Decisões"],
           ] as const
         ).map(([key, label]) => (
@@ -310,6 +393,189 @@ export function PortfolioPanel({
               ))}
             </tbody>
           </table>
+        </>
+      ) : null}
+
+      {section === "consulta" ? (
+        <>
+          <p className="scope">
+            Espaço de consulta do histórico de medições de gate. Substitui o
+            relatório semanal: os mesmos números, consultados quando você
+            quiser. A tabela <code>portfolio_gate_measurements</code> é imutável
+            e nunca é podada — é a trilha de evidência de qualquer decisão
+            futura sobre a RFC-009.
+          </p>
+
+          <form
+            className="filters"
+            aria-label="Filtros da consulta"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setCursors([]);
+            }}
+          >
+            <label>
+              Gate
+              <select
+                value={filters.gate}
+                onChange={(event) => {
+                  setCursors([]);
+                  setFilters((current) => ({
+                    ...current,
+                    gate: event.target.value,
+                  }));
+                }}
+              >
+                <option value="">todos</option>
+                {GATE_OPTIONS.map((gate) => (
+                  <option key={gate} value={gate}>
+                    {gate}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Situação
+              <select
+                value={filters.status}
+                onChange={(event) => {
+                  setCursors([]);
+                  setFilters((current) => ({
+                    ...current,
+                    status: event.target.value,
+                  }));
+                }}
+              >
+                <option value="">todas</option>
+                {STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              De
+              <input
+                type="date"
+                value={filters.from}
+                onChange={(event) => {
+                  setCursors([]);
+                  setFilters((current) => ({
+                    ...current,
+                    from: event.target.value,
+                  }));
+                }}
+              />
+            </label>
+            <label>
+              Até
+              <input
+                type="date"
+                value={filters.to}
+                onChange={(event) => {
+                  setCursors([]);
+                  setFilters((current) => ({
+                    ...current,
+                    to: event.target.value,
+                  }));
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setCursors([]);
+                setFilters(NO_FILTERS);
+              }}
+            >
+              Limpar
+            </button>
+          </form>
+
+          {measurementsFailed ? (
+            <p className="scope">
+              Não foi possível carregar o histórico de medições.
+            </p>
+          ) : null}
+
+          <table className="grid">
+            <caption>
+              Medições de gate, da mais recente para a mais antiga.{" "}
+              <code>INSUFFICIENT_DATA</code> não é <code>FAIL</code>: um é
+              &quot;ainda não medimos o bastante&quot;, o outro é &quot;medimos
+              e não funcionou&quot;.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">Gate</th>
+                <th scope="col">Situação</th>
+                <th scope="col">Motivo</th>
+                <th scope="col">Números</th>
+                <th scope="col">Janela</th>
+                <th scope="col">Medido em</th>
+                <th scope="col">Config</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(measurements?.measurements ?? []).map((measurement) => (
+                <tr
+                  key={String(
+                    measurement.measurement_id ??
+                      `${measurement.gate}-${measurement.measured_at ?? "?"}`,
+                  )}
+                >
+                  <td>{measurement.measurement_id ?? "—"}</td>
+                  <td>{measurement.gate}</td>
+                  <td>{measurement.status ?? "—"}</td>
+                  <td>{measurement.reason_code ?? "—"}</td>
+                  <td>
+                    <details>
+                      <summary>{metricSummary(measurement.metrics)}</summary>
+                      <pre>{JSON.stringify(measurement.metrics, null, 2)}</pre>
+                    </details>
+                  </td>
+                  <td>
+                    {measurement.window_from ?? "—"} →{" "}
+                    {measurement.window_to ?? "—"}
+                  </td>
+                  <td>{measurement.measured_at ?? "—"}</td>
+                  <td>{measurement.config_version ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <nav className="pager" aria-label="Paginação das medições">
+            <button
+              type="button"
+              disabled={cursors.length === 0}
+              onClick={() => {
+                setCursors((current) => current.slice(0, -1));
+              }}
+            >
+              Página anterior
+            </button>
+            <span>
+              Página {String(cursors.length + 1)} ·{" "}
+              {String((measurements?.measurements ?? []).length)} medições
+            </span>
+            <button
+              type="button"
+              disabled={(measurements?.nextCursor ?? null) === null}
+              onClick={() => {
+                const next = measurements?.nextCursor ?? null;
+                if (next !== null) {
+                  setCursors((current) => [...current, next]);
+                }
+              }}
+            >
+              Próxima página
+            </button>
+          </nav>
+
+          <p className="scope">{measurements?.calibratedExpectation ?? ""}</p>
         </>
       ) : null}
 

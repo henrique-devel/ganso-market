@@ -41,6 +41,10 @@ export interface EligibleMarket {
   readonly minOrderSize: string | null;
   readonly ruleVersion: number | null;
   readonly paramVersion: number | null;
+  /** Rule text of the version in force (panel field 9). */
+  readonly ruleDescription: string | null;
+  /** Venue taker fee, in bps, of the parameter version in force. */
+  readonly takerFeeBps: string | null;
 }
 
 /**
@@ -68,8 +72,10 @@ export async function loadEligibleMarkets(
             ev.event_id,
             COALESCE(r.resolution_source, r.resolved_by) AS resolution_source,
             r.end_date,
+            r.description,
             p.tick_size,
             p.min_order_size,
+            COALESCE(p.taker_fee_bps, p.fee_base_bps) AS taker_fee_bps,
             r.version AS rule_version,
             p.version AS param_version
        FROM membership m
@@ -83,7 +89,7 @@ export async function loadEligibleMarkets(
           LIMIT 1
        ) meta ON TRUE
        LEFT JOIN LATERAL (
-         SELECT version, resolution_source, resolved_by, end_date
+         SELECT version, resolution_source, resolved_by, end_date, description
            FROM polymarket_rule_versions rv
           WHERE rv.condition_id = m.condition_id
             AND rv.valid_from <= $1
@@ -92,7 +98,8 @@ export async function loadEligibleMarkets(
           LIMIT 1
        ) r ON TRUE
        LEFT JOIN LATERAL (
-         SELECT version, neg_risk, tick_size, min_order_size
+         SELECT version, neg_risk, tick_size, min_order_size,
+                taker_fee_bps, fee_base_bps
            FROM polymarket_param_versions pv
           WHERE pv.condition_id = m.condition_id
             AND pv.valid_from <= $1
@@ -142,6 +149,14 @@ export async function loadEligibleMarkets(
       row.param_version === null || row.param_version === undefined
         ? null
         : Number(row.param_version),
+    ruleDescription:
+      row.description === null || row.description === undefined
+        ? null
+        : String(row.description),
+    takerFeeBps:
+      row.taker_fee_bps === null || row.taker_fee_bps === undefined
+        ? null
+        : String(row.taker_fee_bps),
   }));
 }
 
