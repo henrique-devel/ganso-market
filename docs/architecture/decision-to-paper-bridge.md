@@ -1,8 +1,11 @@
-# Onde mora a ponte decisão → ordem de paper (recomendação)
+# Onde mora a ponte decisão → ordem de paper
 
 - Data: 2026-08-27
-- Estado: **recomendação de desenho, não implementada**. Escrita a pedido do
-  proprietário como decisão de projeto antes de virar código.
+- Estado: **implementada em 2026-08-27** (migration 0015, job `bridge` no runner
+  do paper, carimbo no ciclo do portfolio). O desenho abaixo é o que foi
+  construído; as duas adições que ele não previa estão na seção "O que a
+  implementação acrescentou". Escrita antes como decisão de projeto, a pedido do
+  proprietário.
 - **SIMULAÇÃO — SEM EXECUÇÃO REAL.** Nada aqui cria ordem real, wallet, signer
   ou credencial de trading. A ponte descrita liga um motor de decisão a um
   simulador; a execução real continua sendo escopo exclusivo da RFC-009, atrás
@@ -23,7 +26,7 @@ falta de tempo, e sim por falta de caminho. É um gargalo maior que a ausência
 de modelo promovido na RFC-010: mesmo com um modelo promovido, sem a ponte nada
 chega ao paper.
 
-## Recomendação
+## O desenho
 
 **O decision log é o outbox. O consumidor mora no módulo `paper`. Nenhum dos
 dois módulos escreve na tabela do outro.**
@@ -104,9 +107,43 @@ ponte, que consome em 30 s. Mas ela é a razão de a chave viajar com a **ordem*
 e não só com a decisão: `paper_orders` não está nessa quota, então o registro
 de o que foi enviado sobrevive à poda do que foi decidido.
 
+## O que a implementação acrescentou (2026-08-27)
+
+Duas coisas que o desenho não previa, e uma correção de detalhe.
+
+**1. A provenance da entrada, carimbada na tabela `portfolio_position_entries`.**
+Decisão do proprietário do mesmo dia (item 1 da seção de calibração no handoff):
+o ciclo de saída lê a decisão de **entrada** para comparar hoje contra o que a
+entrada se comprometeu a acreditar, e o decision log é podado pela quota em ~3
+dias. Toda posição segurada mais que isso perdia a própria tese, e quatro dos
+sete critérios de saída ficavam inertes em silêncio. A ponte é o único lugar onde
+a posição nasce, então é onde o carimbo custa menos: `stampBridgedOrders` grava a
+tese numa tabela `protected`, nunca podada, e `entryProvenanceFor` lê dela
+primeiro e cai para o log só para entradas anteriores à ponte. Há teste contra
+PostgreSQL real que **apaga a linha de decisão** — o que a quota faz — e exige
+que a provenance continue completa.
+
+**2. O limite conservador troca de ponta com a perna.** O motor modela a perna NO
+como **venda** do token afirmativo, então toda decisão nomeia o token afirmativo
+e `order_side` carrega a perna. A ponte passa `q_lo` para uma compra e `q_hi`
+para uma venda: na venda o caso pessimista é a probabilidade ser **alta**, e
+passar `q_lo` ali seria entregar à política o limite otimista com o nome do
+conservador — o ramo taker (`edge = worst − qLo`) leria lucro que o intervalo não
+sustenta. Verificado contra PostgreSQL real: a mesma perna YES vira FAK
+(`TAKER_EDGE_EXCEEDS_FEE`) e a perna NO, no mesmo livro, **não** vira taker.
+
+**3. Decisão velha é descartada, não enfileirada.** A janela de frescor (30 s, o
+mesmo limite que o endpoint de intents aplica ao livro) entra na **consulta**: a
+ponte só vê decisões dentro dela. As que passaram são contadas e logadas
+(`aged_out` no `BRIDGE_TICK`, em `warn`) em vez de executadas tarde contra um
+livro que já andou. Um `aged_out` diferente de zero é falha operacional — ciclo
+travado, tick lento —, não condição de mercado.
+
 ## Estado
 
-Recomendação escrita, **nenhuma linha implementada**. Implementar é um PR
-pequeno (migration 0015, um job no runner do paper, um carimbo no ciclo do
-portfolio, testes dos dois lados) e está fora do escopo do PR que fechou as
-degenerações de G2/G3/G4 e o registro do G6.
+Implementada. Migration 0015 acrescenta `paper_orders.decision_id` (com índice
+único parcial, que é a idempotência da ponte no banco), `'portfolio'` no CHECK de
+`source`, um CHECK que exige decisão **se e somente se** a fonte é `portfolio`,
+o índice parcial da fila de trabalho e a tabela `portfolio_position_entries`
+(imutável por trigger). A 0014 não foi tocada. Evidência de verificação em
+[`docs/test-results/RFC-013-portfolio-engine.md`](../test-results/RFC-013-portfolio-engine.md).

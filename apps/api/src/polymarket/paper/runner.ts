@@ -9,12 +9,13 @@
 // wallet, a signer or a real order path (scope.test.ts enforces it, the same
 // guard the fundamental module carries).
 
-import type { SqlExecutor } from "../../database.js";
+import { bridgeTick } from "./bridge.js";
 import {
   brokerTick,
   killSwitchTriggersTick,
   markTick,
   settlementTick,
+  type PaperPool,
 } from "./brokerstore.js";
 import {
   fillLabelerTick,
@@ -41,6 +42,13 @@ export const DEFAULT_SETTLEMENT_TICK_MS = 60_000;
 export const DEFAULT_MARK_TICK_MS = 60_000;
 export const DEFAULT_CALIBRATION_TICK_MS = 60_000;
 export const DEFAULT_SAMPLER_TICK_MS = 300_000;
+/**
+ * RFC-013 bridge cadence. Deliberately faster than the portfolio's 60 s panel
+ * cycle and shorter than the 30 s decision-freshness bound: a decision that
+ * waits longer than that bound is dropped rather than executed against a book
+ * that has moved on.
+ */
+export const DEFAULT_BRIDGE_TICK_MS = 30_000;
 
 /** A token with a book snapshot this recent is "being recorded" (in universe). */
 export const ACTIVE_TOKEN_WINDOW_MS = 10 * 60_000;
@@ -72,7 +80,14 @@ export class PaperScopeError extends Error {
 }
 
 export interface PaperRunnerDeps {
-  readonly pool: SqlExecutor;
+  /**
+   * `PaperPool` rather than `SqlExecutor` because the RFC-013 bridge accepts
+   * orders from this process, and acceptance is transactional: the type has to
+   * admit the transaction the real pool carries, or the bridge would compile
+   * against a pool that can only ever answer
+   * PAPER_BROKER_TRANSACTION_UNAVAILABLE.
+   */
+  readonly pool: PaperPool;
   /** From the runtime config; anything but "paper" refuses to boot. */
   readonly executionMode: string;
   readonly gitSha: string | null;
@@ -83,6 +98,7 @@ export interface PaperRunnerDeps {
   readonly markTickMs?: number;
   readonly calibrationTickMs?: number;
   readonly samplerTickMs?: number;
+  readonly bridgeTickMs?: number;
   readonly latencyMs?: number;
   readonly clock?: () => Date;
   /** Test seam: replaces process.stderr. */
@@ -96,6 +112,8 @@ export interface PaperRunner {
   heartbeatOnce(): Promise<void>;
   /** One feature-pipeline tick; exposed for tests and the smoke path. */
   featuresTickOnce(): Promise<void>;
+  /** One decision -> order bridge tick; exposed for tests and the smoke path. */
+  bridgeTickOnce(): Promise<void>;
 }
 
 interface ActiveToken {
@@ -122,6 +140,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
   let markTimer: ReturnType<typeof setInterval> | null = null;
   let calibrationTimer: ReturnType<typeof setInterval> | null = null;
   let samplerTimer: ReturnType<typeof setInterval> | null = null;
+  let bridgeTimer: ReturnType<typeof setInterval> | null = null;
   let probing = false;
   let computing = false;
   let brokering = false;
@@ -129,6 +148,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
   let marking = false;
   let calibrating = false;
   let sampling = false;
+  let bridging = false;
 
   // Cursor of the last computed window start per token per kind. In-memory by
   // design: a restart resumes from "now" (bounded skip, logged), never from a
@@ -242,6 +262,36 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       cursors.set(cursorKey, start);
     }
     return { computed, persisted };
+  }
+
+  /**
+   * RFC-013 bridge: accepted entries become simulated orders.
+   *
+   * Supervised like the other jobs — a slow tick skips instead of stacking, and
+   * a failure logs the error NAME plus the message, which is the lesson from the
+   * two diagnoses that cost real time with only `error_name: "Error"` to go on.
+   */
+  async function bridgeTickOnce(): Promise<void> {
+    if (bridging) {
+      logJson("warn", "JOB_STILL_RUNNING", { job: "bridge" });
+      return;
+    }
+    bridging = true;
+    try {
+      await bridgeTick(deps.pool, {
+        clock,
+        logSink: sink,
+        ...(deps.latencyMs === undefined ? {} : { latencyMs: deps.latencyMs }),
+      });
+    } catch (error: unknown) {
+      logJson("error", "JOB_FAILED", {
+        job: "bridge",
+        error_name: error instanceof Error ? error.name : "UnknownError",
+        error_message: error instanceof Error ? error.message : null,
+      });
+    } finally {
+      bridging = false;
+    }
   }
 
   async function featuresTickOnce(): Promise<void> {
@@ -371,6 +421,9 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
             calibrating = false;
           });
       }, deps.calibrationTickMs ?? DEFAULT_CALIBRATION_TICK_MS);
+      bridgeTimer = setInterval(() => {
+        void bridgeTickOnce();
+      }, deps.bridgeTickMs ?? DEFAULT_BRIDGE_TICK_MS);
       samplerTimer = setInterval(() => {
         if (sampling) {
           return;
@@ -391,6 +444,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         markTimer,
         calibrationTimer,
         samplerTimer,
+        bridgeTimer,
       ]) {
         if (timer !== null) {
           clearInterval(timer);
@@ -403,10 +457,12 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       markTimer = null;
       calibrationTimer = null;
       samplerTimer = null;
+      bridgeTimer = null;
       logJson("info", "PAPER_STOPPED", {});
       return Promise.resolve();
     },
     heartbeatOnce,
     featuresTickOnce,
+    bridgeTickOnce,
   };
 }

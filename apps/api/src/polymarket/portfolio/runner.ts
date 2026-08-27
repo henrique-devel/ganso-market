@@ -108,6 +108,7 @@ import {
   insertDecision,
   loadEligibleMarkets,
   resolutionStateFor,
+  stampBridgedOrders,
   type BookAsOf,
   type EstimateAsOf,
 } from "./store.js";
@@ -599,6 +600,31 @@ export function createPortfolioRunner(
     entrable: number;
   }> {
     const now = clock();
+
+    // 0. Reconcile the bridge before deciding anything else. The paper module
+    //    turned accepted entries into orders; this stamps `paper_order_id` back
+    //    onto those decisions and copies each entry's thesis into
+    //    `portfolio_position_entries`, which is never pruned. It runs first so
+    //    the exposures and the exit cycle in this same minute already see a
+    //    reconciled log.
+    try {
+      const bridge = await stampBridgedOrders(deps.pool);
+      if (bridge.stamped > 0 || bridge.entriesRecorded > 0) {
+        logJson("info", "PORTFOLIO_BRIDGE_STAMPED", {
+          stamped: bridge.stamped,
+          entries_recorded: bridge.entriesRecorded,
+        });
+      }
+    } catch (error: unknown) {
+      // A reconciliation failure must not stop the cycle from deciding: the
+      // stamp is idempotent and retries on the next minute. It is logged with
+      // the message, not only the name.
+      logJson("error", "PORTFOLIO_BRIDGE_STAMP_FAILED", {
+        error_name: error instanceof Error ? error.name : "UnknownError",
+        error_message: error instanceof Error ? error.message : null,
+      });
+    }
+
     const markets = await loadEligibleMarkets(deps.pool, now);
     const positions = await loadOpenPositions(deps.pool);
 

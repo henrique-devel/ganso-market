@@ -57,6 +57,7 @@ import {
   ensureConfigVersion,
   insertDecision,
   loadEligibleMarkets,
+  stampBridgedOrders,
 } from "../../../src/polymarket/portfolio/store.js";
 import { replayAudit } from "../../../src/polymarket/portfolio/replay.js";
 import type { PortfolioPool } from "../../../src/polymarket/portfolio/types.js";
@@ -982,6 +983,139 @@ describe.skipIf(DATABASE_URL === undefined)(
         "G6",
       ]);
       expect(report?.overallStatus).toBe("BLOCKED");
+    });
+
+    it("stamps a bridged order and keeps the entry's thesis after the log is pruned", async () => {
+      // The whole point of portfolio_position_entries, exercised end to end
+      // against the real schema. A distinct token, so the other fixtures in this
+      // file cannot supply the provenance by accident.
+      const token = `${TOKEN}-bridge`;
+      const decisionId = await insertDecision(pool(), {
+        kind: "ENTRY",
+        conditionId: CONDITION,
+        tokenId: token,
+        marketSide: "YES",
+        orderSide: "BUY",
+        decisionTs: NOW,
+        q: "0.800000",
+        qLo: "0.750000",
+        qHi: "0.850000",
+        estimateSource: "MARKET_BASELINE",
+        execPrice: "0.620000",
+        worstPrice: "0.620000",
+        bestPrice: "0.620000",
+        feeExpected: "0.000000",
+        slippage: "0.000000",
+        capitalCost: "0.000000",
+        resolutionBuffer: "0.001000",
+        costsTotal: "0.001000",
+        safetyMargin: "0.010000",
+        edgeGross: "0.130000",
+        edgeNet: "0.119000",
+        sizeShares: "20.000000",
+        kellyCapShares: "40.000000",
+        notionalUsd: "12.400000",
+        bindingConstraint: "CAP_ENTRADA",
+        limiters: [{ constraint: "CAP_ENTRADA", max_shares: "20.000000" }],
+        configVersion: CONFIG.version,
+        configHash: portfolioConfigHash(CONFIG),
+        factorMapVersion: "1.0.0",
+        ruleVersion: 1,
+        paramVersion: 1,
+        resolutionScoreVersion: null,
+        resolutionAction: "NONE",
+        oldestInputTs: new Date("2026-08-26T11:30:00.000Z"),
+        newestInputTs: new Date("2026-08-26T11:59:58.000Z"),
+        book: { token_id: token, bids: [], asks: [], recorded_at: null },
+        inputs: {
+          panel: {
+            resolution_source: "UMA:0xadapter",
+            invalidation: { prob_lower_below: "0.621000" },
+          },
+          // A JSON number, which is how the runner writes it: the stamp has to
+          // put it in the canonical six-digit form the column accepts.
+          replay: { rule_precision_multiplier: 0.9 },
+        },
+        outcome: "ACCEPTED",
+        reasonCode: null,
+        portfolioState: "NORMAL",
+      });
+
+      // What the bridge produces, written directly: this test is about the
+      // portfolio half of the contract.
+      const orderId = `portfolio:${String(decisionId)}`;
+      await pool().query(
+        `INSERT INTO paper_orders
+           (order_id, token_id, condition_id, side, order_type, limit_price,
+            size, post_only, source, status, decided_at, accepted_at,
+            decision_id)
+         VALUES ($1,$2,$3,'BUY','GTC','0.610000','20.000000',TRUE,'portfolio',
+                 'open',$4,$4,$5)`,
+        [orderId, token, CONDITION, NOW, decisionId],
+      );
+
+      const first = await stampBridgedOrders(pool());
+      expect(first.stamped).toBeGreaterThanOrEqual(1);
+      expect(first.entriesRecorded).toBeGreaterThanOrEqual(1);
+
+      const stamped = await pool().query<{ paper_order_id: string | null }>(
+        `SELECT paper_order_id FROM portfolio_decisions WHERE decision_id = $1`,
+        [decisionId],
+      );
+      expect(stamped.rows[0]?.paper_order_id).toBe(orderId);
+
+      // Idempotent: nothing left to do on the next cycle.
+      const second = await stampBridgedOrders(pool());
+      expect(second.stamped).toBe(0);
+      expect(second.entriesRecorded).toBe(0);
+
+      const before = await entryProvenanceFor(pool(), token);
+      expect(before).toMatchObject({
+        decisionId,
+        marketSide: "YES",
+        qLo: "0.750000",
+        qHi: "0.850000",
+        ruleVersion: 1,
+        resolutionSource: "UMA:0xadapter",
+      });
+      // Scaled bigints at the project's 1e9 fixed point.
+      expect(before?.invalidationProbLowerBelowScaled).toBe(621_000_000n);
+      expect(before?.rulePrecisionScaled).toBe(900_000_000n);
+
+      // THE regression. This is what the quota does to the decision log after
+      // about three days, and what used to take four of the seven exit criteria
+      // with it: with the entry gone, invalidation, model-move, source-change
+      // and precision-downgrade all defaulted to "we do not know that it moved"
+      // and could never fire again for this position.
+      await pool().query(
+        `DELETE FROM portfolio_decisions WHERE decision_id = $1`,
+        [decisionId],
+      );
+      const afterPrune = await entryProvenanceFor(pool(), token);
+      expect(afterPrune).not.toBeNull();
+      expect(afterPrune?.qLo).toBe("0.750000");
+      expect(afterPrune?.invalidationProbLowerBelowScaled).toBe(621_000_000n);
+      expect(afterPrune?.rulePrecisionScaled).toBe(900_000_000n);
+      expect(afterPrune?.resolutionSource).toBe("UMA:0xadapter");
+      expect(afterPrune?.ruleVersion).toBe(1);
+    });
+
+    it("refuses to rewrite an entry's recorded thesis", async () => {
+      // Immutable for the same reason the decision log is: a rewrite would let
+      // today's opinion edit the past, and the exit criteria would be comparing
+      // today against today.
+      const rows = await pool().query<{ decision_id: string }>(
+        `SELECT decision_id FROM portfolio_position_entries LIMIT 1`,
+      );
+      const id = rows.rows[0]?.decision_id;
+      expect(id).toBeDefined();
+      await expect(
+        pool().query(
+          `UPDATE portfolio_position_entries SET q_lo = '0.100000'
+            WHERE decision_id = $1`,
+          [id],
+        ),
+      ).rejects.toThrow(/immutable/);
     });
 
     it("refuses to mint the same config version with different content", async () => {

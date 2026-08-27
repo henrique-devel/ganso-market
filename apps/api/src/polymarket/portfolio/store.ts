@@ -25,8 +25,14 @@ import type {
  * through the same adapter, so the 25% source cap effectively caps the whole
  * book at 25% of the bankroll. That is the parameter doing exactly what its
  * rationale says ("cláusulas fallback idênticas em massa = risco
- * correlacionado"), not a bug — but it is a calibration question for the owner,
- * and loosening it silently would be the forbidden direction.
+ * correlacionado"), not a bug.
+ *
+ * Owner decision, 2026-08-27: keep the 25% and change the KEY — cap by rule
+ * clause family (the RFC-012 lexicon already classifies clauses) and leave the
+ * adapter to the venue-level cap. Not implemented here yet; the fallback for an
+ * unclassifiable clause has to be NAMED when it is, because a silent "unknown"
+ * would rebuild the same oversized bucket under a new name. Loosening the number
+ * instead remains the forbidden direction.
  */
 export interface EligibleMarket {
   readonly conditionId: string;
@@ -483,4 +489,149 @@ export async function ensureFactorMapVersion(
   if (row.content_hash !== input.contentHash) {
     throw new Error("PORTFOLIO_FACTOR_MAP_CONTENT_MISMATCH");
   }
+}
+
+// ---------------------------------------------------------------------------
+// RFC-013 bridge, portfolio half: reconcile the orders the paper module created
+// from this log, and copy the entry's thesis somewhere it cannot be pruned.
+
+export interface BridgeStampOutcome {
+  /** Decisions whose `paper_order_id` was filled in on this pass. */
+  readonly stamped: number;
+  /** Entry provenance rows written on this pass. */
+  readonly entriesRecorded: number;
+}
+
+/**
+ * Orders that exist for decisions this log has not yet stamped.
+ *
+ * Read-only on `paper_orders`: the join key travels with the order, and the
+ * portfolio module updates only its own tables. That is what lets both scope
+ * guards stay exactly as strict as they are — neither module writes across the
+ * boundary, so no exception has to be opened in either one.
+ */
+const BRIDGED_ORDERS_SQL = `
+  SELECT o.decision_id, o.order_id, d.condition_id, d.token_id, d.market_side,
+         d.decision_ts, d.q_lo, d.q_hi, d.rule_version,
+         d.inputs_json #>> '{panel,resolution_source}' AS resolution_source,
+         d.inputs_json #>> '{panel,invalidation,prob_lower_below}'
+           AS invalidation_prob_lower_below,
+         d.inputs_json #>> '{replay,rule_precision_multiplier}'
+           AS rule_precision_multiplier
+    FROM paper_orders o
+    JOIN portfolio_decisions d ON d.decision_id = o.decision_id
+   WHERE o.decision_id IS NOT NULL
+     AND d.paper_order_id IS NULL
+     AND d.decision_kind = 'ENTRY'
+     AND d.outcome = 'ACCEPTED'
+   ORDER BY o.decision_id
+   LIMIT $1`;
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function integer(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    return Number(value);
+  }
+  return null;
+}
+
+/**
+ * Six decimals, the form every probability and price in this project uses.
+ *
+ * `rule_precision_multiplier` is stored in the replay payload as a JSON number,
+ * so it arrives as whatever text PostgreSQL renders (`0.85`, `1`). The stored
+ * column keeps the canonical form so a comparison between the entry's precision
+ * and today's needs no reparsing convention.
+ */
+function sixDecimals(value: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed.toFixed(6);
+}
+
+/**
+ * Stamp `paper_order_id` on bridged decisions and record what each entry
+ * committed to believing.
+ *
+ * Order of the two writes is deliberate: the provenance row goes in FIRST and
+ * the stamp is the commit point. The work list is driven by
+ * `paper_order_id IS NULL`, so stamping first and crashing before the provenance
+ * insert would drop the decision off the list permanently and leave the position
+ * with no thesis — which is precisely the failure this table exists to prevent.
+ * Both writes are idempotent, so a crash in between costs a retry and nothing
+ * else.
+ */
+export async function stampBridgedOrders(
+  pool: PortfolioPool,
+  limit = 100,
+): Promise<BridgeStampOutcome> {
+  const bridged = await pool.query<Record<string, unknown>>(
+    BRIDGED_ORDERS_SQL,
+    [limit],
+  );
+  let stamped = 0;
+  let entriesRecorded = 0;
+  for (const row of bridged.rows) {
+    const decisionId = integer(row.decision_id);
+    const orderId = text(row.order_id);
+    const conditionId = text(row.condition_id);
+    const tokenId = text(row.token_id);
+    const marketSide = row.market_side === "NO" ? "NO" : "YES";
+    const decisionTs = row.decision_ts;
+    if (
+      decisionId === null ||
+      orderId === null ||
+      conditionId === null ||
+      tokenId === null ||
+      decisionTs == null
+    ) {
+      continue;
+    }
+    const inserted = await pool.query(
+      `INSERT INTO portfolio_position_entries
+         (decision_id, condition_id, token_id, market_side, paper_order_id,
+          entry_decision_ts, q_lo, q_hi, rule_version, resolution_source,
+          rule_precision, invalidation_prob_lower_below)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (decision_id) DO NOTHING`,
+      [
+        decisionId,
+        conditionId,
+        tokenId,
+        marketSide,
+        orderId,
+        decisionTs,
+        text(row.q_lo),
+        text(row.q_hi),
+        integer(row.rule_version),
+        text(row.resolution_source),
+        sixDecimals(text(row.rule_precision_multiplier)),
+        sixDecimals(text(row.invalidation_prob_lower_below)),
+      ],
+    );
+    if (inserted.rowCount !== null && inserted.rowCount > 0) {
+      entriesRecorded += 1;
+    }
+    const update = await pool.query(
+      `UPDATE portfolio_decisions
+          SET paper_order_id = $1
+        WHERE decision_id = $2 AND paper_order_id IS NULL`,
+      [orderId, decisionId],
+    );
+    if (update.rowCount !== null && update.rowCount > 0) {
+      stamped += 1;
+    }
+  }
+  return { stamped, entriesRecorded };
 }

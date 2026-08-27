@@ -225,7 +225,11 @@ afetada**.
 
 ## 7. Achados de calibração para o proprietário
 
-Nenhum destes é bug de código; são consequências dos parâmetros, medidas.
+Nenhum dos achados 7.1–7.3 é bug de código; são consequências dos parâmetros,
+medidas. As seções 7.4–7.6 foram acrescentadas em 2026-08-27, ao registrar as
+decisões do proprietário sobre 7.1–7.3: 7.4 e 7.5 saíram de perguntar qual era o
+custo real de cada opção, e 7.4 **não** é só calibração — é um caminho de
+degeneração no ciclo de saída, latente porque não há posição aberta.
 
 ### 7.1 `custo_capital_anual` não tem efeito nenhuma decisão de entrada
 
@@ -238,8 +242,25 @@ excedente é sempre negativo, logo `capital_cost` é sempre `0.000000` na
 decomposição da entrada.
 
 Isso é o `max(os dois)` funcionando como documentado, mas significa que o
-parâmetro `custo_capital_anual` da RFC-013 hoje **não altera nenhuma decisão**.
-Subir para acima de ~18,3% a.a. seria o que o tornaria vinculante.
+parâmetro `custo_capital_anual` da RFC-013 hoje **não altera nenhuma decisão de
+entrada**.
+
+**Correção deste achado (2026-08-27).** "Acima de ~18,3% a.a." está incompleto: o
+lockup cancela na comparação e o **preço não**, então o parâmetro passa a morder
+quando `r > 0,1825 / preço`. Isso dá **19,2% a.a.** no topo da banda de compra
+(0,95), **36,5%** a meio preço e 182,5% no piso (0,10). A diferença entre 20% e
+40% é a diferença entre "segue praticamente inerte" e "reprecifica o livro".
+
+**DECISÃO DO PROPRIETÁRIO (2026-08-27):** subir o parâmetro para torná-lo
+vinculante e validar por shadow replay. O número sai da varredura sobre o
+decision log gravado (o replay da seção 5 guarda todo escalar), não de escolha a
+priori; `config/portfolio.json` fica em 1.2.0 até lá. Registro completo no
+handoff, seção "DECISÃO DO PROPRIETÁRIO — calibração da RFC-013".
+
+Vale notar o que o achado original não dizia: na **saída** o parâmetro já é
+vinculante hoje, porque o critério 6 cobra o custo integral do lockup restante
+sem descontar buffer. Subir a taxa aperta a entrada **e** deixa a saída mais
+impaciente com capital preso.
 
 O mesmo cálculo revelou um bug de fiação, corrigido: o critério 6 de saída
 (capital bloqueado deixou de compensar o edge) cobrava o excedente sobre o
@@ -260,14 +281,100 @@ exigência de 30, e o G4 seria **inmensurável para sempre**. O soak passou a se
 medido pelo mais antigo entre a primeira medição de gate (tabela `protected`,
 nunca podada) e o decision log.
 
-Decisão pendente do proprietário: aumentar a quota do decision log, ou reduzir a
-cadência do painel, ou aceitar ~3 dias de histórico de decisões.
+**DECISÃO DO PROPRIETÁRIO (2026-08-27):** aceitar ~3 dias por enquanto e declarar
+o TTL em **90 dias**, pelo raciocínio de que a maior parte do log é histórico que
+não será relido.
 
-### 7.3 Cap de fonte de resolução (herdado da fase B, ainda aberto)
+Duas coisas que a decisão exige registrar, porque mudam o que "90 dias"
+significa:
+
+1. **O TTL não é o que prende.** A quota poda em 3,4 dias com TTL de 180 ou de
+   90 — o número menor ganha, e é a quota. Reter 90 dias de verdade exigiria
+   **25,9 GB**, contra um banco em 111 GB físicos num orçamento de 110 GB. Os 90
+   dias só passam a valer depois de a cadência de escrita cair (seção 7.4).
+2. **Aceitar 3 dias tem um custo que não é histórico perdido** — é a seção 7.4.
+
+### 7.3 Cap de fonte de resolução (herdado da fase B, decidido em 2026-08-27)
 
 460 de 570 rule versions resolvem pelo mesmo adapter UMA, então o cap de 25% por
 fonte efetivamente capeia o livro inteiro em 25% da banca. É o parâmetro fazendo
 o que sua justificativa diz; afrouxar em silêncio seria a direção proibida.
+
+Números com que o achado foi apresentado ao proprietário: banca nocional de
+US$ 1.000 ⇒ livro inteiro ≤ US$ 250; o cap de capital bloqueado (60%) nunca
+prende; com o cap de entrada de 2% o livro satura em ~12 posições; e
+`binding_constraint` passa a dizer `fonteResolucao` em quase toda decisão, que é
+ruído no campo que existe para explicar tamanho pequeno.
+
+**DECISÃO DO PROPRIETÁRIO (2026-08-27): manter os 25% e trocar a chave do
+bucket** — capear por família de cláusula de regra (léxico da RFC-012) em vez do
+adapter, deixando o adapter para o cap de venue. O fallback para cláusula não
+classificável tem de ser **nomeado**: um "unknown" silencioso recriaria o bucket
+gigante com outro nome, o mesmo defeito com roupa nova. Não é mudança de config
+(o número fica em 0,25), mas muda comportamento de sizing, então o PR entra com
+teste de que cláusulas diferentes deixam de compartilhar bucket e cláusulas
+iguais continuam compartilhando. Registro completo no handoff, seção de decisões,
+item 3.
+
+### 7.4 A provenance da entrada expira antes da posição (achado novo, 2026-08-27)
+
+Saiu de responder "qual é o impacto de aceitar 3 dias". Não é histórico perdido:
+`entryProvenanceFor` (`exitstore.ts:243`) lê, a cada ciclo de saída, a linha de
+decisão da **entrada** da posição aberta — de propósito, para comparar hoje
+contra o que a entrada se comprometeu a acreditar, em vez de recomputar a tese
+com o dado de hoje e comparar hoje contra hoje. Quando a quota poda essa linha,
+quatro dos sete critérios de saída deixam de poder disparar:
+
+| Critério                           | Com a entrada podada                                                      | Onde               |
+| ---------------------------------- | ------------------------------------------------------------------------- | ------------------ |
+| Condição de invalidação (campo 12) | `invalidationProbLowerBelowScaled === null` ⇒ `invalidationFired` `false` | `exitcycle.ts:273` |
+| Modelo se moveu contra a tese      | `entryProbScaled` cai para a estimativa de hoje ⇒ diferença zero          | `exitcycle.ts:306` |
+| Fonte/regra de resolução mudou     | `entryRuleVersion === null` ⇒ `sourceChanged` `false`                     | `exitcycle.ts:277` |
+| Precisão de regra degradou         | `entryRulePrecisionScaled === null` ⇒ `false`                             | `exitcycle.ts:285` |
+
+Cada `null` é deliberado e comentado no código como "não sabemos que se moveu" —
+a direção honesta quando a linha **nunca existiu**. O que a poda faz é
+transformar exceção em rotina: toda posição segurada por mais de ~3 dias perde a
+própria tese, sem log e sem veredito diferente. É a lente da seção 10 (passa por
+degeneração) do lado da saída — o critério não falha, ele só deixa de disparar.
+
+**Latente hoje:** zero posições abertas e a ponte de paper não existe. Vira real
+no dia em que a ponte entrar — que é também o único lugar onde a posição é
+criada, e portanto onde o carimbo da provenance na própria posição custa menos.
+
+A correção de retenção que sobra depois disso é escrever menos, não guardar mais:
+o ciclo de entrada grava incondicionalmente uma linha por mercado por ciclo
+(`runner.ts:861`), enquanto o de saída já grava só quando o veredito muda
+(`runner.ts:997`). Estender a mesma regra à entrada é o que faz os 90 dias
+caberem na mesma quota — e exige registrar a mesma interpretação de "toda
+intenção persiste" que o ciclo de saída já recebeu, mais a medição do fator de
+redução real no log de produção.
+
+### 7.5 `portfolio_panel_snapshots` declara 30 dias e retém a mesma ordem de 3
+
+Mesma aritmética da 7.2, tabela vizinha: uma linha por mercado por ciclo no mesmo
+`panelMs` de 60 s (`runner.ts:864`), e o `panel_json` carrega o mesmo livro de 10
+níveis por lado (`BOOK_LEVELS = 10`) mais o trecho de regra de até 240 caracteres
+(`RULE_EXCERPT_MAX_CHARS`). Contra a quota de 0,56 GB, na ordem de 1,4 kB/linha a
+janela real fica em ~3 dias, não nos 30 do TTL declarado. **Aritmética, não
+medição** — a linha não foi medida com `pg_column_size`.
+
+Diferença que importa: aqui não há consumidor profundo. A API lê
+`DISTINCT ON (token_id) … ORDER BY computed_at DESC` (`api.ts:172`) e o detalhe
+lê `LIMIT 1`. É etiqueta errada, não perigo: medir a linha em produção e
+redeclarar o TTL, sem inventar quota nova.
+
+### 7.6 `g2MaxSinglePositionPnlShare = 0,25` — aprovado pelo proprietário
+
+O limiar era escolha do implementador e não da RFC. **DECISÃO DO PROPRIETÁRIO
+(2026-08-27): fica em 0,25.** O que ele faz: o G2 rejeita a amostra quando uma
+única posição fechada responde por mais de 25% do PnL bruto absoluto do conjunto
+(`gates.ts:408`), segunda perna de dispersão ao lado de dias distintos de
+fechamento e blocos de bootstrap. Com as 100 posições fechadas que o G2 exige,
+uma distribuição uniforme dá 1% cada — 25% significa que um fechamento moveu um
+quarto de todo o dinheiro que o livro moveu. Revisão contra dado real fica
+registrada para quando existirem ≥ 100 posições fechadas, o que depende da ponte
+de paper.
 
 ## 8. Versão de config: 1.0.0 → 1.1.0
 
@@ -640,7 +747,12 @@ relógio (seção 10.1), o reset também joga fora as posições daquele regime.
   única condição não medida sobre livro é o fingerprint de regime — ele já
   compara duas coisas de origens diferentes (o parâmetro gravado da venue e o
   relógio persistido) e não tem o formato do defeito.
-- **Ponte decisão → ordem de paper NÃO existe**: verificado por busca de código —
+- ~~**Ponte decisão → ordem de paper NÃO existe**~~ — **implementada na seção 13**
+  (2026-08-27), com a provenance da entrada carimbada na posição, que é o que
+  fecha o caminho de degeneração da seção 7.4. Segue **não verificada em
+  produção**: exige merge, CD e rebuild de profile. O registro original abaixo,
+  por ser o que motivou o desenho.
+- **Ponte decisão → ordem de paper NÃO existia**: verificado por busca de código —
   fora do próprio módulo, o único código que toca `portfolio_decisions` é o
   worker de retenção. A coluna `paper_order_id` da migration nunca é preenchida.
   Em produção já houve **2 entradas ACEITAS** que não geraram posição nenhuma.
@@ -655,3 +767,112 @@ relógio (seção 10.1), o reset também joga fora as posições daquele regime.
   resolução do próprio mercado ou um evento/release do calendário macro dentro
   da janela. É uma aproximação declarada — um catalisador que o calendário não
   conhece faz o breaker abrir, o que é a direção conservadora.
+
+## 13. Ponte decisão → ordem de paper (2026-08-27)
+
+Implementada nesta sessão, depois das decisões de calibração da seção 7. É o
+gargalo que a seção 12 listava como "NÃO existe": em produção houve **2 entradas
+ACEITAS e 0 posições**, e sem posição fechada G2/G3/G4 ficam em
+`INSUFFICIENT_DATA` por falta de caminho, não de tempo.
+
+**SIMULAÇÃO — SEM EXECUÇÃO REAL.** Toda ordem aqui é uma linha em `paper_orders`.
+Os dois guards de escopo seguem exatamente tão estritos quanto eram: o consumidor
+mora no módulo `paper` (que pode escrever `paper_*` e ler qualquer coisa) e o
+carimbo de volta mora no módulo `portfolio` (que só escreve `portfolio_*`).
+Nenhuma exceção foi aberta em nenhum dos dois; `portfolio_position_entries`
+entrou na lista de tabelas escrevíveis do guard do portfolio.
+
+### 13.1 O que foi construído
+
+| Peça                                  | Onde                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------- |
+| Migration 0015 (a 0014 intocada)      | `migrations/0015_decision_to_paper_bridge.sql`                        |
+| Job `bridge`, a cada 30 s             | `paper/bridge.ts`, ligado em `paper/runner.ts`                        |
+| `source: 'portfolio'` + `decision_id` | `paper/brokerstore.ts` (`AcceptInput`, INSERT, ledger)                |
+| Carimbo + provenance da entrada       | `portfolio/store.ts` (`stampBridgedOrders`), passo 0 do ciclo `panel` |
+| Leitura durável da provenance         | `portfolio/exitstore.ts` (`entryProvenanceFor`)                       |
+| Nova tabela na retenção, `protected`  | `polymarket/retention.ts`                                             |
+
+Migration 0015 acrescenta: `paper_orders.decision_id`; `'portfolio'` no CHECK de
+`source`; um CHECK que exige decisão **se e somente se** a fonte é `portfolio`;
+um índice único parcial em `decision_id` (a idempotência da ponte, no banco);
+o índice parcial da fila de trabalho da ponte em `portfolio_decisions`; e a
+tabela `portfolio_position_entries`, imutável por trigger e nunca podada.
+Deliberadamente **sem FK** de `decision_id` para `portfolio_decisions`: o log é
+uma série podada, e uma FK ou travaria a poda ou apagaria em cascata justamente o
+registro que se quer guardar por mais tempo.
+
+### 13.2 Um defeito de fail-open encontrado ao ligar a terceira fonte
+
+Ao acrescentar `'portfolio'` ao tipo de `source`, três lugares que decidiam por
+`source === "intent"` passariam a tratar uma ordem da ponte como se fosse
+**manual**:
+
+- `resolutionOrderPolicyDenial` só recusaria VETO para intents;
+- a mesma função só aplicaria o **sanity veto** a intents;
+- e a consulta do sanity veto em `loadResolutionOrderPolicy` nem seria feita.
+
+Ou seja: a ponte teria nascido furando o veto de sanidade da RFC-012. Corrigido
+antes de existir, invertendo o teste — `modelDependent(source)` é "tudo que não é
+manual", então uma quarta fonte futura herda o lado estrito por omissão. Listar
+as fontes model-driven é o que faz um veto deixar de ser um veto.
+
+Um segundo defeito da mesma família: `parseOpenOrder` devolvia `null` para uma
+`source` desconhecida, e uma ordem da ponte **desapareceria da lista de ordens
+abertas** — nunca preenchida, nunca cancelada, nunca expirada, aberta para
+sempre. Também corrigido.
+
+### 13.3 Verificação contra PostgreSQL real
+
+Banco descartável (`postgres:18.4-bookworm`, a mesma imagem do Compose), as
+**quinze** migrations aplicadas em ordem numa base vazia: `schema_versions`
+chega a **15** sem erro.
+
+Matriz de recusa do banco, exercitada por `psql` sobre o schema aplicado:
+
+| Tentativa                                         | Resultado                                      |
+| ------------------------------------------------- | ---------------------------------------------- |
+| `source='manual'` **com** `decision_id`           | recusada (`..._decision_source_check`)         |
+| `source='portfolio'` **sem** `decision_id`        | recusada (mesma constraint)                    |
+| `source='robot'`                                  | recusada                                       |
+| `source='portfolio'` com decisão                  | aceita                                         |
+| segunda ordem para a **mesma** decisão            | recusada (`paper_orders_decision_id_key`)      |
+| `UPDATE`/`DELETE` em `portfolio_position_entries` | recusados pelo trigger de imutabilidade        |
+| `rule_precision = '1.5'` (fora do formato)        | recusada                                       |
+| `invalidation_prob_lower_below = '1.020000'`      | aceita — é preço mais custos, pode passar de 1 |
+
+Suítes, num banco recém-migrado (`GANSO_TEST_DATABASE_URL`):
+
+- `paper/bridge.pg.test.ts` (**4 testes**): a entrada aceita vira ordem
+  `source='portfolio'` com `order_id = portfolio:<decision_id>`, FAK em 0,62 com
+  `TAKER_EDGE_EXCEEDS_FEE` (a perna YES contra `q_lo = 0,75`); a perna **NO** no
+  mesmo livro **não** vira taker, porque seu limite conservador é `q_hi = 0,85`;
+  o `order_accepted` do ledger carrega `source` e `decision_id`; um segundo tick
+  antes do carimbo não cria segunda ordem; e uma decisão fora da janela de frescor
+  é contada em `aged_out` e **não** vira ordem.
+- `portfolio/integration.pg.test.ts` (**+2 testes**, 23 no total): o carimbo
+  preenche `paper_order_id`, grava a provenance, é idempotente no ciclo seguinte
+  — e, **apagada a linha de decisão** (que é o que a quota faz em ~3 dias), a
+  provenance continua completa: `q_lo`, `q_hi`, fonte, versão de regra, precisão
+  e nível de invalidação. Esse é o teste de regressão da seção 7.4.
+
+Gate de fonte completo: `format-check`, `lint`, `npm test`
+(**1.368 passando, 57 skipped, 0 falhando** — as skipped são as suítes PG),
+`build` e `secret-scan` verdes.
+
+### 13.4 Não verificado
+
+- **Nada disso rodou em produção.** Exige merge, CD e **rebuild de profile** do
+  `polymarket-paper` e do `polymarket-portfolio` — três passos, como sempre — mais
+  a migration 0015 aplicada. Até o rebuild, o binário antigo do paper não tem o
+  job `bridge`.
+- **Nenhum fill.** A ponte cria ordens; quem as preenche é o `brokerTick`, com
+  fila passiva e latência. Se a política resolver por cota passiva, a ordem pode
+  ficar aberta sem nunca virar posição — e o G2 continua parado. O primeiro sinal
+  a observar depois do deploy é `paper_positions` ganhando linha, não
+  `paper_orders`.
+- **As suítes PG compartilham um banco.** Rodá-las todas de uma vez faz suítes
+  diferentes lerem as fixtures umas das outras (a `resolution` e a `versioning` já
+  se atrapalhavam entre si antes desta sessão). As duas suítes da RFC-013 passam
+  juntas, em paralelo e em série, num banco recém-migrado, porque cada uma afirma
+  sobre o seu próprio token e limpa o que criou.

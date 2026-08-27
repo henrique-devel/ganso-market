@@ -89,6 +89,10 @@ const WRITABLE_TABLES: readonly string[] = [
   "portfolio_gate_reports",
   "portfolio_g2_clock",
   "portfolio_g2_clock_events",
+  // RFC-013 bridge: the entry's thesis, copied out of the decision log so the
+  // exit criteria survive the log's quota. Written by this module, read by this
+  // module; the paper module never touches it.
+  "portfolio_position_entries",
 ];
 
 async function moduleFiles(): Promise<string[]> {

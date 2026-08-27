@@ -327,8 +327,12 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
   // from 6 to 8 GB (funded by trimming polymarket_book_deltas from 60 to
   // 52 GB). The original 6 GB was already fully allocated by RFC-010 (3.7),
   // RFC-011 (1.3) and RFC-012 (1.0), so RFC-013 had literally zero room in it.
-  // Split: decisions 0.9 / panel 0.56 / gates+reports 0.35 / state,
-  // configuration and audit trails 0.19.
+  // Split: decisions 0.9 / panel 0.54 / gates+reports 0.35 / state,
+  // configuration and audit trails 0.21. The bridge's entry-provenance table
+  // (0.02 GB) was funded by trimming the panel snapshots from 0.56, so the
+  // RFC-013 slice stays at exactly 2.0 GB and the reserve at 8. The panel is the
+  // right place to take it from: it is a live view whose newest row per token is
+  // all anything reads, and its own quota already binds long before its TTL.
   //
   // The decision log is the audit trail of every entry, exit, veto and resize,
   // and it carries its own book excerpt so replay survives the raw-delta
@@ -340,10 +344,16 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "received_at",
     protected: false,
   },
+  // The declared 30-day TTL is aspirational, not what happens: at the same one
+  // row per market per cycle as the decision log, and a panel_json that carries
+  // the same ten book levels per side plus the rule excerpt, this quota binds in
+  // days. Nothing reads it deep (the API takes the newest row per token), so it
+  // is a mislabel and not a hazard — measure the row in production and redeclare
+  // the TTL rather than inventing quota.
   {
     table: "portfolio_panel_snapshots",
     ttlDays: 30,
-    quotaBytes: 0.56 * GB,
+    quotaBytes: 0.54 * GB,
     timeColumn: "received_at",
     protected: false,
   },
@@ -412,6 +422,20 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     ttlDays: null,
     quotaBytes: 0.02 * GB,
     timeColumn: "at",
+    protected: true,
+  },
+  // What each entry committed to believing (RFC-013 bridge). NEVER pruned, and
+  // that is the whole point: the exit cycle compares a held position against
+  // this row, and the decision log it was copied from is pruned by quota in
+  // about three days. Pruning this table would put back the degeneration it was
+  // created to remove — four of the seven exit criteria silently unable to fire
+  // on any position older than the log. One row per position, not per cycle, so
+  // 0.02 GB is generous.
+  {
+    table: "portfolio_position_entries",
+    ttlDays: null,
+    quotaBytes: 0.02 * GB,
+    timeColumn: "created_at",
     protected: true,
   },
   // Breakers are a series with a TTL; the open ones are current state and the
