@@ -233,17 +233,45 @@ export interface EntryProvenance {
 }
 
 /**
- * The newest ACCEPTED entry for a token, with the thresholds it recorded.
+ * The newest entry provenance for a token: what the ENTRY committed to.
  *
  * The invalidation condition and the rule-precision multiplier are read out of
- * the decision's own JSON rather than recomputed: the point of monitoring an
- * invalidation is to compare today against what the ENTRY committed to, and
+ * what was RECORDED rather than recomputed: the point of monitoring an
+ * invalidation is to compare today against what the entry committed to, and
  * recomputing it from today's data would compare today against itself.
+ *
+ * Two sources, in this order:
+ *
+ * 1. `portfolio_position_entries`, written by the bridge stamp when the order
+ *    was accepted. Never pruned.
+ * 2. the decision log, for entries that predate the bridge.
+ *
+ * The order is not a preference, it is a correctness requirement. The decision
+ * log has a TTL of months but a quota that binds in about three days, so reading
+ * it alone meant that a position held longer than that came back with every
+ * field null — and four of the seven exit criteria default to "we do not know
+ * that it moved" on null, so they stopped being able to fire. Honest for a row
+ * that never existed; silent degeneration for one that retention removed.
  */
 export async function entryProvenanceFor(
   pool: PortfolioPool,
   tokenId: string,
 ): Promise<EntryProvenance | null> {
+  const stamped = await pool.query<Record<string, unknown>>(
+    `SELECT decision_id, entry_decision_ts AS decision_ts, market_side, q_lo,
+            q_hi, rule_version, resolution_source,
+            rule_precision AS rule_precision_multiplier,
+            invalidation_prob_lower_below
+       FROM portfolio_position_entries
+      WHERE token_id = $1
+      ORDER BY entry_decision_ts DESC, decision_id DESC
+      LIMIT 1`,
+    [tokenId],
+  );
+  const stampedRow = stamped.rows[0];
+  if (stampedRow !== undefined) {
+    return parseEntryProvenance(stampedRow);
+  }
   const result = await pool.query<Record<string, unknown>>(
     `SELECT decision_id, decision_ts, market_side, q_lo, q_hi, rule_version,
             inputs_json #>> '{panel,resolution_source}' AS resolution_source,
@@ -263,6 +291,11 @@ export async function entryProvenanceFor(
   if (row === undefined) {
     return null;
   }
+  return parseEntryProvenance(row);
+}
+
+/** Same shape from either source; the column names are aliased to match. */
+function parseEntryProvenance(row: Record<string, unknown>): EntryProvenance {
   const precisionText = text(row.rule_precision_multiplier);
   const precision =
     precisionText === null ? null : Number.parseFloat(precisionText);

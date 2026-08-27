@@ -188,11 +188,15 @@ describe("estimate volumetry", () => {
       quota("portfolio_factor_map_versions") +
       quota("portfolio_g2_clock") +
       quota("portfolio_g2_clock_events") +
-      quota("portfolio_circuit_breakers");
+      quota("portfolio_circuit_breakers") +
+      // The bridge's entry-provenance table joined the audit group and was
+      // funded from the panel snapshots (0.56 -> 0.54), not from new budget:
+      // the slice below is still exactly 2 GB.
+      quota("portfolio_position_entries");
     expect(decisions).toBeCloseTo(0.9 * GB, 0);
-    expect(panel).toBeCloseTo(0.56 * GB, 0);
+    expect(panel).toBeCloseTo(0.54 * GB, 0);
     expect(gates).toBeCloseTo(0.35 * GB, 0);
-    expect(stateAndConfig).toBeCloseTo(0.19 * GB, 0);
+    expect(stateAndConfig).toBeCloseTo(0.21 * GB, 0);
     expect(decisions + panel + gates + stateAndConfig).toBeCloseTo(2 * GB, 0);
   });
 

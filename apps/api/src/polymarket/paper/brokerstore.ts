@@ -340,13 +340,38 @@ export async function freezeMarket(
 }
 
 // ---------------------------------------------------------------------------
-// Order acceptance (called by the API) and cancellation.
+// Order acceptance (called by the API and by the RFC-013 bridge) and
+// cancellation.
+
+/**
+ * Where a simulated order came from. `portfolio` is the RFC-013 bridge: the
+ * portfolio engine's accepted entry, consumed here rather than pushed by it.
+ */
+export type OrderSource = "manual" | "intent" | "portfolio";
+
+/**
+ * True for every source that is a MODEL speaking rather than an operator.
+ *
+ * The resolution policy has to branch on this, and it deliberately branches on
+ * "not manual" instead of listing the model-driven sources: a new source added
+ * later inherits the strict side by default. Listing them would mean a future
+ * source silently skips the sanity veto, which is how a veto stops being one.
+ */
+function modelDependent(source: OrderSource): boolean {
+  return source !== "manual";
+}
 
 export interface AcceptInput {
   readonly orderId: string;
   readonly draft: OrderDraft;
   readonly conditionId: string | null;
-  readonly source: "manual" | "intent";
+  readonly source: OrderSource;
+  /**
+   * RFC-013 bridge: the portfolio decision this order came from. Required for
+   * `source: "portfolio"` and forbidden otherwise (the migration checks both
+   * directions), and unique, so one decision can never produce two orders.
+   */
+  readonly decisionId?: number | null;
   readonly policyReason?: string | null;
   readonly policyVersion?: string | null;
   /** Intent audit trail (task 9): q/q_lo/size_max as received. */
@@ -579,8 +604,9 @@ export async function acceptPaperOrder(
       await tx.query(
         "INSERT INTO paper_orders (order_id, token_id, condition_id, side, order_type, " +
           "limit_price, size, amount_usd, post_only, worst_price, expiration_s, " +
-          "policy_reason, policy_version, source, status, decided_at, accepted_at, resolution_generation) " +
-          "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17::uuid)",
+          "policy_reason, policy_version, source, status, decided_at, accepted_at, " +
+          "resolution_generation, decision_id) " +
+          "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17::uuid,$18)",
         [
           input.orderId,
           order.tokenId,
@@ -599,6 +625,7 @@ export async function acceptPaperOrder(
           now,
           acceptedAt,
           resolutionGeneration,
+          input.decisionId ?? null,
         ],
       );
       const acceptedEventInserted = await appendLedgerEvent(tx, {
@@ -617,6 +644,7 @@ export async function acceptPaperOrder(
           expiration_s: order.expirationS,
           simulated_latency_ms: latencyMs,
           source: input.source,
+          decision_id: input.decisionId ?? null,
           policy_reason: input.policyReason ?? null,
           resolution_generation: resolutionGeneration,
           intent: input.intent ?? null,
@@ -840,7 +868,7 @@ interface OpenOrderRow {
   readonly resolutionRiskCheckPending: boolean;
   readonly resolutionRiskClaim: string | null;
   readonly resolutionRiskClaimedAt: Date | null;
-  readonly source: "manual" | "intent";
+  readonly source: OrderSource;
   readonly resolutionVetoOverride: boolean;
 }
 
@@ -860,7 +888,7 @@ function parseOpenOrder(row: Record<string, unknown>): OpenOrderRow | null {
       orderType !== "GTD" &&
       orderType !== "FAK" &&
       orderType !== "FOK") ||
-    (source !== "manual" && source !== "intent") ||
+    (source !== "manual" && source !== "intent" && source !== "portfolio") ||
     limitPrice === null ||
     size === null
   ) {
@@ -1128,7 +1156,7 @@ interface ResolutionOrderPolicy {
 interface ResolutionPolicySubject {
   readonly conditionId: string | null;
   readonly tokenId: string;
-  readonly source: "manual" | "intent";
+  readonly source: OrderSource;
   readonly resolutionVetoOverride: boolean;
 }
 
@@ -1198,7 +1226,7 @@ async function loadResolutionOrderPolicy(
   }
 
   let sanityVetoActive = false;
-  if (order.source === "intent") {
+  if (modelDependent(order.source)) {
     let veto;
     try {
       veto = await pool.query(
@@ -1228,7 +1256,7 @@ function resolutionOrderPolicyDenial(
 ): ResolutionOrderPolicyFailure | null {
   if (
     policy.effectiveAction === "VETO" &&
-    (order.source === "intent" || !order.resolutionVetoOverride)
+    (modelDependent(order.source) || !order.resolutionVetoOverride)
   ) {
     return {
       reason: "RESOLUTION_VETO",
@@ -1238,7 +1266,7 @@ function resolutionOrderPolicyDenial(
       },
     };
   }
-  if (order.source === "intent" && policy.sanityVetoActive) {
+  if (modelDependent(order.source) && policy.sanityVetoActive) {
     return {
       reason: "SANITY_VETO_ACTIVE",
       details: { source: order.source, token_id: order.tokenId },
