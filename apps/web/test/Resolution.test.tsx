@@ -311,3 +311,64 @@ describe("ResolutionView", () => {
     expect(html).toContain("Carregando detalhe…");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Kill switch card: the only control this dashboard offers.
+
+describe("kill switch card", () => {
+  it("offers the rearm only when the switch is engaged AND the state is known", () => {
+    const engaged = renderView({
+      pipeline: pipelineFixture,
+      onRearm: () => Promise.resolve(null),
+    });
+    expect(engaged).toContain("Rearmar");
+    expect(engaged).toContain("Engajado");
+  });
+
+  it("shows no button while the pipeline read has not landed", () => {
+    // Nothing to rearm FROM: a button here would be a blind control, and the
+    // badge is a placeholder rather than a claim that the broker is running.
+    const unknown = renderView({
+      pipeline: null,
+      onRearm: () => Promise.resolve(null),
+    });
+    expect(unknown).not.toContain("Rearmar");
+    expect(unknown).not.toContain("Armado");
+  });
+
+  it("shows no button when the switch is already armed", () => {
+    const armed = renderView({
+      pipeline: {
+        ...pipelineFixture,
+        kill_switch: {
+          engaged: false,
+          reason: null,
+          engaged_at: "2026-08-24T09:00:00.000Z",
+          rearmed_at: "2026-08-24T11:00:00.000Z",
+          frozen_markets: [],
+        },
+      },
+      onRearm: () => Promise.resolve(null),
+    });
+    expect(armed).toContain("Armado");
+    expect(armed).not.toContain("Rearmar</button>");
+    expect(armed).toContain("Rearmado");
+  });
+
+  it("shows no button when no action was supplied", () => {
+    // A static render, or any caller that does not wire the API, gets a
+    // read-only card rather than a button that cannot work.
+    const readOnly = renderView({ pipeline: pipelineFixture });
+    expect(readOnly).toContain("Engajado");
+    expect(readOnly).not.toContain("<button");
+  });
+
+  it("keeps the reason on screen next to the control", () => {
+    // The operator decides against the evidence, not from memory.
+    const engaged = renderView({
+      pipeline: pipelineFixture,
+      onRearm: () => Promise.resolve(null),
+    });
+    expect(engaged).toContain(pipelineFixture.kill_switch?.reason ?? "");
+  });
+});

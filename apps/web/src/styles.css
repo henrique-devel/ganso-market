@@ -420,6 +420,41 @@ h1 {
   color: #8eaa98;
 }
 
+/* Kill switch card: the one control the panel offers. The confirm step is the
+   default green; the cancel is a ghost, so the destructive-looking pair is not
+   two equally weighted buttons. */
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+.card-actions .refresh {
+  margin-top: 0;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.refresh--ghost {
+  border-color: #2a3a30;
+  color: #8eaa98;
+  background: transparent;
+}
+
+.refresh--ghost:hover {
+  background: #17231c;
+}
+
+.refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.card-note--error {
+  color: #eb8a90;
+}
+
 .kill-switch-alert {
   margin: 0 0 1rem;
   padding: 0.65rem 1rem;

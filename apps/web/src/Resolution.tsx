@@ -12,6 +12,7 @@ import {
   type DivergenceDirection,
   type DivergenceSets,
   type GraphViolation,
+  type KillSwitchState,
   type MarketDetail,
   type MeasurementReport,
   type PipelineSnapshot,
@@ -21,6 +22,7 @@ import {
   type VetoSets,
   type ViolationSets,
 } from "./resolution.js";
+import { rearmKillSwitch } from "./paper.js";
 
 const REFRESH_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -140,6 +142,30 @@ export function ResolutionPanel({
     [accessToken, onUnauthorized],
   );
 
+  /**
+   * The rearm, wired to the API here so the view stays a pure renderer.
+   *
+   * A refused rearm is not an error: the server has a reason (the switch may
+   * have re-engaged between the read and the click), and the reason is what goes
+   * on screen. On success the pipeline is re-read, so the card stops showing
+   * "Engajado" because the SERVER says so, not because this function assumed it.
+   */
+  const handleRearm = useCallback(async (): Promise<string | null> => {
+    const result = await rearmKillSwitch(accessToken);
+    if (result.kind === "unauthorized") {
+      onUnauthorized();
+      return "SESSAO_EXPIRADA";
+    }
+    if (result.kind === "refused") {
+      return result.reason ?? "RECUSADO";
+    }
+    if (result.kind === "error") {
+      return "FALHA_NA_CHAMADA";
+    }
+    await refresh();
+    return null;
+  }, [accessToken, onUnauthorized, refresh]);
+
   return (
     <ResolutionView
       markets={markets}
@@ -154,6 +180,7 @@ export function ResolutionPanel({
       detail={detail}
       detailLoading={detailLoading}
       onSelectMarket={handleSelect}
+      onRearm={handleRearm}
     />
   );
 }
@@ -194,6 +221,15 @@ function latestReport(
 // ---------------------------------------------------------------------------
 // Pure presentational view (renderToStaticMarkup-testable, no effects).
 
+/**
+ * The one write this dashboard can make, as a function the pure view calls.
+ *
+ * Returns `null` when the rearm succeeded, or a short code to put on screen when
+ * the server refused. The token, the 401 handling and the refresh stay in the
+ * container: `ResolutionView` renders, and does not know how to talk to an API.
+ */
+export type RearmAction = () => Promise<string | null>;
+
 export interface ResolutionViewProps {
   readonly markets: readonly ResolutionMarket[] | null;
   readonly divergences: DivergenceSets | null;
@@ -207,6 +243,8 @@ export interface ResolutionViewProps {
   readonly detail: MarketDetail | null;
   readonly detailLoading: boolean;
   readonly onSelectMarket: (conditionId: string | null) => void;
+  /** Absent means the control is not offered — a static render shows no button. */
+  readonly onRearm?: RearmAction;
 }
 
 export function ResolutionView({
@@ -222,6 +260,7 @@ export function ResolutionView({
   detail,
   detailLoading,
   onSelectMarket,
+  onRearm,
 }: ResolutionViewProps) {
   const selectedMarket =
     selected === null
@@ -239,6 +278,8 @@ export function ResolutionView({
         markets={markets}
         divergences={divergences}
         pipeline={pipeline}
+        now={now}
+        {...(onRearm === undefined ? {} : { onRearm })}
       />
       <ScoreTable
         markets={markets}
@@ -278,10 +319,14 @@ function SummaryCards({
   markets,
   divergences,
   pipeline,
+  now,
+  onRearm,
 }: Readonly<{
   markets: readonly ResolutionMarket[] | null;
   divergences: DivergenceSets | null;
   pipeline: PipelineSnapshot | null;
+  now: number;
+  onRearm?: RearmAction;
 }>) {
   const counts = actionCounts(markets);
   const disputes =
@@ -291,7 +336,6 @@ function SummaryCards({
   const activeDivergences =
     divergences?.active.length ?? pipeline?.divergences_active ?? null;
   const killSwitch = pipeline?.kill_switch ?? null;
-  const killEngaged = killSwitch?.engaged === true;
   return (
     <section className="cards" aria-label="Resumo">
       <article className="card">
@@ -317,22 +361,139 @@ function SummaryCards({
         <h3>Divergências ativas</h3>
         <p className="card-value">{activeDivergences ?? "…"}</p>
       </article>
-      <article className="card">
-        <h3>Kill switch</h3>
-        <p className="card-value">
-          <span
-            className={killEngaged ? "badge badge--veto" : "badge badge--none"}
-          >
-            {pipeline === null ? "…" : killEngaged ? "Engajado" : "Armado"}
-          </span>
-        </p>
-        {killEngaged && killSwitch !== null ? (
-          <p className="card-note" title={killSwitch.reason ?? undefined}>
-            {killSwitch.reason ?? "Sem motivo registrado."}
-          </p>
-        ) : null}
-      </article>
+      <KillSwitchCard
+        killSwitch={killSwitch}
+        known={pipeline !== null}
+        now={now}
+        {...(onRearm === undefined ? {} : { onRearm })}
+      />
     </section>
+  );
+}
+
+/**
+ * The kill switch, and the only control this dashboard offers.
+ *
+ * SIMULAÇÃO — SEM EXECUÇÃO REAL: rearming lets the SIMULATOR accept orders
+ * again. Three rules shape the card, and each one is a way it could go wrong:
+ *
+ *  1. **No button while the state is unknown.** Until the pipeline read lands
+ *     there is nothing to rearm FROM, and offering the action anyway would be a
+ *     blind control.
+ *  2. **Two clicks, never one.** The first click only reveals what the action
+ *     does. A halt is a safety state; leaving it should not be reachable by a
+ *     misplaced tap.
+ *  3. **The reason and the instant stay on screen through the confirmation**, so
+ *     the decision is taken against the evidence and not from memory.
+ *
+ * Engaging is deliberately absent. The switch has automatic triggers (recorder
+ * staleness, daily loss), so stopping never waits on a human; a manual halt
+ * stays an action taken from inside the server, and the perimeter does not
+ * publish it.
+ */
+function KillSwitchCard({
+  killSwitch,
+  known,
+  now,
+  onRearm,
+}: Readonly<{
+  killSwitch: KillSwitchState | null;
+  known: boolean;
+  now: number;
+  onRearm?: RearmAction;
+}>) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const engaged = killSwitch?.engaged === true;
+  // No effect resets `confirming`: the confirmation only renders while the
+  // switch is engaged, so a stale `true` is invisible and harmless. Keeping the
+  // view free of effects is what makes it renderable to static markup in tests.
+  const offering = engaged && known && onRearm !== undefined;
+
+  const rearm = (action: RearmAction) => async (): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    const problem = await action();
+    setBusy(false);
+    if (problem !== null) {
+      setFailure(problem);
+      return;
+    }
+    setConfirming(false);
+  };
+
+  return (
+    <article className="card">
+      <h3>Kill switch</h3>
+      <p className="card-value">
+        <span className={engaged ? "badge badge--veto" : "badge badge--none"}>
+          {!known ? "…" : engaged ? "Engajado" : "Armado"}
+        </span>
+      </p>
+      {engaged && killSwitch !== null ? (
+        <p className="card-note" title={killSwitch.reason ?? undefined}>
+          {killSwitch.reason ?? "Sem motivo registrado."} ·{" "}
+          {relativeTime(killSwitch.engaged_at, now)}
+        </p>
+      ) : null}
+      {!engaged && known && killSwitch?.rearmed_at != null ? (
+        <p className="card-note">
+          Rearmado {relativeTime(killSwitch.rearmed_at, now)}.
+        </p>
+      ) : null}
+      {offering && onRearm !== undefined ? (
+        confirming ? (
+          <>
+            <p className="card-note">
+              Rearmar volta a permitir que o simulador aceite ordens. O registro
+              do engate permanece: o gate G3 continua enxergando que o switch
+              foi exercitado.
+            </p>
+            <p className="card-actions">
+              <button
+                type="button"
+                className="refresh"
+                disabled={busy}
+                onClick={() => {
+                  void rearm(onRearm)();
+                }}
+              >
+                {busy ? "Rearmando…" : "Confirmar rearme"}
+              </button>
+              <button
+                type="button"
+                className="refresh refresh--ghost"
+                disabled={busy}
+                onClick={() => {
+                  setConfirming(false);
+                  setFailure(null);
+                }}
+              >
+                Cancelar
+              </button>
+            </p>
+          </>
+        ) : (
+          <p className="card-actions">
+            <button
+              type="button"
+              className="refresh"
+              onClick={() => {
+                setConfirming(true);
+              }}
+            >
+              Rearmar
+            </button>
+          </p>
+        )
+      ) : null}
+      {failure === null ? null : (
+        <p className="card-note card-note--error" role="alert">
+          Rearme recusado: <code>{failure}</code>
+        </p>
+      )}
+    </article>
   );
 }
 
