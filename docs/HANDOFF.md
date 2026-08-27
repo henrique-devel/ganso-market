@@ -474,6 +474,27 @@ posição fechada. Rearmado às 20:48:54Z pelo caminho de código real
   instante do engate ficam na tela durante a confirmação, para a decisão ser
   tomada contra a evidência e não de memória.
 
+**FATO VERIFICADO (produção, 2026-08-27 21:1xZ, revisão `578197aa`):** o botão
+está no ar e o perímetro se comporta como projetado. Medido de dentro do
+servidor, sem token:
+
+| Requisição                                     | Resposta                            |
+| ---------------------------------------------- | ----------------------------------- |
+| `POST /api/polymarket/paper/kill-switch/rearm` | **401** — publicado, exige sessão   |
+| `GET` no mesmo caminho                         | **404** — método fixado             |
+| `POST /api/polymarket/paper/intents`           | **404** — cria ordens, fica fechado |
+
+Foram só dois passos (merge + CD): `web` e `nginx` são serviços default. O botão
+só aparece com o switch engatado — hoje ele está armado, então o card mostra
+"Armado / Rearmado há…".
+
+**Estado da ponte depois do rearme:** nenhuma ordem ainda, e o motivo não é a
+ponte. A última entrada **aceita** foi às 18:17:12Z; das 18:17 às 21:15 o motor
+não aceitou nenhuma (`aged_out` parado em 45, `considered: 0` em todo tick).
+Ou seja: o gargalo saiu do kill switch e voltou para onde a RFC-013 sempre disse
+que estaria — `entrable: 0` sem modelo promovido na RFC-010. A ponte está armada
+e sem trabalho, que é diferente de estar quebrada.
+
 **Teste de regressão do perímetro:** `scripts/tests/test_nginx_perimeter.py`
 falha se alguém trocar o `location =` por um prefixo, se o método deixar de ser
 fixado, se o limitador sumir, ou se qualquer caminho da RFC-012/013 deixar de ser
@@ -1517,9 +1538,15 @@ do merge.
   muda, que é de onde vêm os 90 dias de verdade; (c) TTL 180 → 90 junto de (b),
   porque mudá-lo sozinho não muda nada — a quota poda antes.
 - **Ponte decisão → ordem de paper**: **ativa em produção** desde 2026-08-27
-  17:00Z (PR #44). Ainda não produziu ordem nenhuma: `entrable: 0` no ciclo, e as
-  38 entradas aceitas do passado estão fora da janela de frescor. Falta observar
+  17:00Z (PR #44). Ainda não produziu ordem nenhuma, e o gargalo mudou duas
+  vezes no mesmo dia: primeiro era o kill switch (engatado havia 35 h, achado
+  pela própria ponte e rearmado às 20:48Z), depois voltou a ser o de sempre —
+  das 18:17 às 21:15Z o motor não aceitou **nenhuma** entrada, porque
+  `entrable: 0` sem modelo promovido na RFC-010. Falta observar
   `paper_positions` ganhando a primeira linha.
+- **Kill switch do paper**: rearmado em 2026-08-27 20:48:54Z. O `engaged_at` de
+  2026-08-26 permanece na linha, então o G3 continua enxergando que o switch foi
+  exercitado. O rearme agora tem botão no painel (PR #46).
 - **Alarme global de quota ativo**: `QUOTA_GLOBAL_ALARM` a cada ciclo de
   retenção — 121,5 GB medidos contra um orçamento de 110 GiB (`pg_database_size`
   113 GB, disco em 43%). Não é desta mudança: o alarme dispara em 90% do
