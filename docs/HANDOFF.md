@@ -6,8 +6,8 @@
   checagem rodado pela primeira vez; **as quatro decisões de calibração do
   proprietário registradas**, um achado novo saído da primeira delas — a
   provenance da entrada expira antes da posição — e a **ponte decisão → ordem de
-  paper implementada** com migration 0015, verificada contra PostgreSQL real e
-  **ainda não deployada**)
+  paper implementada** com migration 0015 e **ativa em produção** desde
+  2026-08-27 17:00Z)
 - Branch principal: `main`
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
@@ -1295,7 +1295,7 @@ medidos de hora em hora, `PORTFOLIO_REPLAY_OK` a cada ciclo, RAM estável e
 nenhum `PORTFOLIO_GATE_REPORT_MINTED` inesperado — um relatório novo sem
 mudança de veredito seria bug.
 
-### 3. (IMPLEMENTADA, não deployada) A ponte decisão → ordem de paper
+### 3. (ATIVA EM PRODUÇÃO) A ponte decisão → ordem de paper
 
 Construída em 2026-08-27, com a provenance da entrada carimbada junto — o
 requisito que a decisão 1 acrescentou. Detalhe e evidência na seção 13 de
@@ -1324,12 +1324,47 @@ o desenho, agora com o que a implementação acrescentou, em
   de aceitação, e a provenance sobrevivendo à **exclusão** da linha de decisão.
   Gate de fonte completo verde (1.368 testes).
 
-**O que falta é deploy, e ele tem três passos como sempre:** merge, CD, e rebuild
-de profile do `polymarket-paper` **e** do `polymarket-portfolio` — o binário
-antigo do paper não tem o job `bridge` —, mais a migration 0015 aplicada. Primeiro
-sinal a observar depois: `paper_positions` ganhando linha. `paper_orders` crescendo
-sem posição nenhuma significa que as ordens passivas não estão sendo preenchidas,
-e o G2 continua parado.
+**FATO VERIFICADO — deployada em 2026-08-27 17:00Z** (PR #44, revisão
+`be09bfcf` no servidor). Foram **dois** passos, não três, e um deles desmente
+uma suposição que este handoff carregava:
+
+- **O CD aplica as migrations.** O serviço `migrate` do Compose sobe junto no
+  `up` do `server-update`, roda `apply.sh` e sai. Depois do CD a
+  `schema_versions` já estava em **15**, com `portfolio_position_entries` e
+  `paper_orders.decision_id` no banco, sem ninguém rodar nada à mão. O que o CD
+  **não** faz continua sendo trocar a imagem dos containers de profile.
+- **O rebuild de profile continua obrigatório e continua sendo a pegadinha.**
+  Depois do CD, `docker compose ps` mostrava `polymarket-paper` como "Up About a
+  minute" — mas `docker ps --format {{.CreatedAt}}` mostrava a imagem de
+  **26/08 19:52**. O status é uptime do container, não idade da imagem; olhar o
+  status teria feito a ponte parecer implantada sem estar. Rebuild executado em
+  `polymarket-paper`, `polymarket-portfolio` e `polymarket-recorder` (este pela
+  mudança na retenção).
+
+Estado observado depois do rebuild:
+
+| Sinal             | Valor                                                                   |
+| ----------------- | ----------------------------------------------------------------------- |
+| `PAPER_BOOT`      | 17:00:02Z, `execution_mode: paper`                                      |
+| `BRIDGE_TICK`     | a cada 30 s, `considered: 0, accepted: 0, skipped: 0, aged_out: 38`     |
+| `PORTFOLIO_BOOT`  | `config_version` **1.2.0**, hash `1c8a3316…` (inalterada)               |
+| `PORTFOLIO_CYCLE` | `evaluated: 85`, `entrable: 0`, `positions: 0`, `open_breakers: 29`     |
+| Erros em 5 min    | paper **0**, portfolio **0**, recorder **1** (o alarme de quota abaixo) |
+| RAM               | paper 35,7 MiB/256; portfolio 28,4 MiB/192; recorder 92,7 MiB/832       |
+
+**`aged_out: 38` é o resultado correto, não um defeito.** São as 38 entradas
+aceitas que o motor gravou **antes** de a ponte existir; todas passaram da janela
+de frescor de 30 s, e a ponte se recusa a executá-las contra um livro que já
+andou. O contador cai sozinho conforme a quota poda o log (~3 dias). Enquanto
+não cair, o `BRIDGE_TICK` sai em `warn` a cada 30 s com o mesmo 38 — ruidoso e
+honesto. Se incomodar, o ajuste é contar só o que envelheceu **depois** do boot,
+não silenciar.
+
+Primeiro sinal a observar de verdade: **`paper_positions` ganhando linha**.
+`paper_orders` crescendo sem posição nenhuma significa ordem passiva sem fill, e
+o G2 continua parado. Com `entrable: 0` (nenhum modelo promovido na RFC-010) a
+ponte pode ficar sem trabalho por bastante tempo — o que continua sendo o
+resultado correto neste estado, não uma falha da ponte.
 
 ### 3b. Cadência de escrita do decision log (decisão 1, itens b e c)
 
@@ -1436,11 +1471,17 @@ do merge.
   com mais de ~3 dias, em silêncio; (b) escrever a entrada só quando o veredito
   muda, que é de onde vêm os 90 dias de verdade; (c) TTL 180 → 90 junto de (b),
   porque mudá-lo sozinho não muda nada — a quota poda antes.
-- **Ponte decisão → ordem de paper**: implementada e verificada contra PostgreSQL
-  real, **não deployada**. Precisa de merge, CD, migration 0015 e rebuild de
-  profile do `polymarket-paper` e do `polymarket-portfolio`. Primeiro sinal a
-  observar: `paper_positions` ganhando linha — `paper_orders` crescendo sem
-  posição significa ordem passiva sem fill, e o G2 continua parado.
+- **Ponte decisão → ordem de paper**: **ativa em produção** desde 2026-08-27
+  17:00Z (PR #44). Ainda não produziu ordem nenhuma: `entrable: 0` no ciclo, e as
+  38 entradas aceitas do passado estão fora da janela de frescor. Falta observar
+  `paper_positions` ganhando a primeira linha.
+- **Alarme global de quota ativo**: `QUOTA_GLOBAL_ALARM` a cada ciclo de
+  retenção — 121,5 GB medidos contra um orçamento de 110 GiB (`pg_database_size`
+  113 GB, disco em 43%). Não é desta mudança: o alarme dispara em 90% do
+  orçamento e o handoff já registrava 111 GB em 03:11Z. Enquanto ele estiver de
+  pé, o pruner encolhe os TTLs efetivos em 0,75 por passo, então **toda janela de
+  retenção deste projeto é menor do que o número declarado** — inclusive as que
+  a decisão 1 discute.
 - **`portfolio_panel_snapshots` declara 30 dias de TTL** e, pela mesma
   aritmética, retém a ordem de 3. Sem consumidor profundo (a API só lê a linha
   mais nova por token), então é etiqueta errada e não perigo. Medir
