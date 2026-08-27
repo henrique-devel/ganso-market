@@ -1,8 +1,9 @@
 # Handoff do projeto Ganso Market
 
 - Última atualização: 2026-08-27 (madrugada — degenerações de G2/G3/G4
-  fechadas, registro da aprovação do G6 implementado, ponte de paper decidida
-  em documento)
+  fechadas e **ativas em produção** com config 1.2.0, registro da aprovação do
+  G6 implementado, ponte de paper decidida em documento, segundo bloco de
+  checagem rodado pela primeira vez)
 - Branch principal: `main`
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
@@ -957,6 +958,63 @@ entram na lista que dispara `PORTFOLIO_CONFIG_GATE_LOOSENED`.
 `config/portfolio.json` chega pelo CD e o binário que o lê só muda no rebuild de
 profile: **os dois têm que sair na mesma janela**.
 
+### SEGUNDO BLOCO DE CHECAGEM — rodado pela primeira vez (2026-08-27 03:11Z)
+
+Nunca havia rodado contra a fase E. Rodou depois do rebuild com a config 1.2.0.
+
+| Verificação                    | Resultado                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `PORTFOLIO_BOOT`               | `config_version` **1.2.0**, hash `1c8a3316…`, `factor_map_version` 1.0.0                            |
+| Seis gates                     | **todos `INSUFFICIENT_DATA`**, `rfc_009_status: BLOCKED` — o resultado correto                      |
+| `PORTFOLIO_GATE_REPORT_MINTED` | **`report_id: 1`, `reason: "first_report"`** — o primeiro relatório de gates que já existiu         |
+| `gates-cli show` em produção   | responde, com os seis vereditos e a expectativa calibrada impressa                                  |
+| `PORTFOLIO_REPLAY_OK`          | presente; **zero** `MISMATCH`; **zero** linhas de erro no serviço                                   |
+| Métricas novas do G4           | `samples_required: 100`, `self_referential_fee_samples: 0`, `self_referential_slippage_samples: 0`  |
+| Métricas novas do G2           | `distinct_close_days`, `bootstrap_blocks`, `outside_window` presentes nos shortfalls                |
+| Perímetro Nginx                | GET `gates/measurements`, `portfolio/state`, `opportunities`, `decisions` → **401**; POST → **404** |
+| RAM                            | portfolio **23,8 MiB de 192**; recorder 87 de 832; postgres 252 de 1024; nada perto do teto         |
+| Imagens                        | `api` e `polymarket-portfolio` de 03:10Z de hoje; as outras quatro de 17:03Z de ontem               |
+| Poda de `book_deltas`          | **rodando**: 5 execuções, **124,8 M linhas** apagadas; vivas 249,4 M → **106,9 M**                  |
+
+**A janela de crash-loop foi observada, e é a lição de sempre.** O CD entregou
+`config/portfolio.json` 1.2.0 e recriou o container **antes** do rebuild; o
+binário antigo leu quatro chaves que não conhecia e recusou com
+`PORTFOLIO_CONFIG_UNKNOWN_KEY` — fail-closed correto. O rebuild fechou a janela.
+Merge, CD e rebuild continuam sendo três passos.
+
+**Relógio do G2 resetou sozinho, corretamente.** `macro` foi resetado às
+02:19:29Z com `regime_fingerprint_changed`: a venue mudou fee/tick nessa
+categoria e os dias acumulados foram jogados fora. `crypto` segue desde
+2026-08-26 19:53:19Z. É o mecanismo do G5 funcionando em produção, observado
+pela primeira vez.
+
+**`pg_database_size` em 111 GB contra um orçamento de 110 GB.** Não é
+descontrole: `DELETE` não devolve páginas ao arquivo, então o número físico é
+uma marca d'água. A quota por tabela usa `liveBytes` (físico descontado da
+fração de tuplas mortas) exatamente para não entrar no laço destrutivo de podar
+sobre um tamanho que nunca cai — está documentado em `retention.ts`. Disco em
+119 GB de 301 GB (**42%**).
+
+### Achado novo: 32 `FEATURES_WINDOW_FAILED` por 20 min no paper
+
+**FATO VERIFICADO** (2026-08-27, achado pelo bloco de checagem): o serviço
+`polymarket-paper` registra `FEATURES_WINDOW_FAILED` ~32 vezes a cada 20 min,
+com **apenas** `error_name: "Error"` e nenhuma mensagem — o mesmo padrão que o
+#37 corrigiu no recorder e na resolução, e que custou tempo real de diagnóstico
+duas vezes. O job de features do paper não foi coberto por aquele PR.
+
+Somado a isso, uma inconsistência: o `FEATURES_TICK` do mesmo ciclo reporta
+`failures: 0` enquanto as linhas de falha saem. Os dois contadores não falam da
+mesma coisa.
+
+Não é regressão desta sessão: a imagem do `polymarket-paper` é de 17:03Z de
+2026-08-26 e não foi tocada. Fica como pendência.
+
+(`FEATURES_BACKLOG_SKIPPED` aparece ~6.000 vezes no mesmo intervalo, sempre com
+`window_kind: "1s"` e `windows_skipped: 5`. É `warn`, não erro: o tick roda a
+cada ~10 s e as janelas de 1 s acumulam, então o catch-up é limitado de
+propósito. Ruidoso, não quebrado.)
+
 ### Achado aberto: coletor onchain falhando
 
 **FATO VERIFICADO:** `JOB_FAILED job:"onchain"` se repete a cada ciclo — 12
@@ -1011,35 +1069,19 @@ aprovação do G6** implementado (relatórios + CLI), a **ponte de paper decidid
 em documento**, e a config cunhada em **1.2.0**. O que segue é o que **ainda
 não** foi feito.
 
-### 1. Rebuild de profile com a config 1.2.0
+### 1. (FEITO) Rebuild de profile com a config 1.2.0
 
-O deploy do CD entrega `config/portfolio.json` com a versão 1.2.0, mas o binário
-que a lê só muda no rebuild. Enquanto os dois não saírem na mesma janela, o
-`polymarket-portfolio` continua rodando o código antigo contra um arquivo novo.
+Executado às 03:10Z de 2026-08-27, com `polymarket-portfolio` e `api`
+reconstruídos. Boot confirmado em `config_version` **1.2.0** e o primeiro
+relatório de gates cunhado (`report_id: 1`, `reason: "first_report"`).
 
-```sh
-cd /opt/ganso-market && docker compose --env-file deploy/server.env \
-  --profile polymarket up --build --detach polymarket-portfolio api
-```
+### 2. Soak de 24 h
 
-O `api` entra na lista porque é onde vive o `apps/api/dist/gates-cli.js` do registro do
-G6.
-
-Esperado no boot: `PORTFOLIO_BOOT` com `config_version` **1.2.0**, e no primeiro
-ciclo de gates um `PORTFOLIO_GATE_REPORT_MINTED` com `reason: "first_report"` —
-o primeiro relatório que já existiu.
-
-### 2. Rodar o segundo bloco de checagem pós-ativação
-
-Nunca rodou contra a fase E. Mede o que o primeiro bloco não vê: contagem de
-`PORTFOLIO_REPLAY_OK` versus `MISMATCH`, RAM dos containers contra os 192 MiB,
-idade das imagens, a poda de `book_deltas` em `polymarket_retention_log`, e um
-`curl` confirmando que o Nginx publica `/api/polymarket/gates/measurements`
-(esperado: **401**; um **404** significa que a borda não recarregou).
-
-O `PORTFOLIO_REPLAY_OK` é a primeira vez que o replay corre sobre decisões
-geradas contra books reais de 10 níveis, e não sobre os fixtures rasos dos
-testes.
+O segundo bloco de checagem **rodou** às 03:11Z de 2026-08-27 (seção acima) e
+saiu limpo. O que falta é o soak: 24 h de observação contínua com os seis gates
+medidos de hora em hora, `PORTFOLIO_REPLAY_OK` a cada ciclo, RAM estável e
+nenhum `PORTFOLIO_GATE_REPORT_MINTED` inesperado — um relatório novo sem
+mudança de veredito seria bug.
 
 ### 3. Implementar a ponte decisão → ordem de paper
 
