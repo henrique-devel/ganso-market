@@ -151,6 +151,22 @@ async function seed(): Promise<void> {
       JSON.stringify([{ price: "0.62", size: "300" }]),
     ],
   );
+  // A SECOND, earlier snapshot, so the book the decision saw and the book the
+  // fill consumed are two different recorded observations. With only one row
+  // they would be the same line, and the G4 slippage reference would be the
+  // simulator compared against itself.
+  await p.query(
+    `INSERT INTO polymarket_book_snapshots
+       (token_id, condition_id, received_at, bids_json, asks_json)
+     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+    [
+      TOKEN,
+      CONDITION,
+      new Date("2026-08-26T11:58:00.000Z"),
+      JSON.stringify([{ price: "0.60", size: "500" }]),
+      JSON.stringify([{ price: "0.61", size: "300" }]),
+    ],
+  );
   await p.query(
     `INSERT INTO paper_positions
        (token_id, condition_id, shares, cost_usd, realized_pnl_usd, opened_at,
@@ -158,6 +174,36 @@ async function seed(): Promise<void> {
      VALUES ($1, $2, '100', '50', '0', $3, '60', FALSE)`,
     [TOKEN, CONDITION, new Date("2026-08-25T12:00:00.000Z")],
   );
+  // One taker execution, written the way the RFC-011 ledger writes it: ONE
+  // event per book level consumed. The G4 reconciliation has to put the order
+  // back together before it can compare anything.
+  await p.query(
+    `INSERT INTO paper_orders
+       (order_id, token_id, condition_id, side, order_type, limit_price, size,
+        filled_size, post_only, worst_price, status, decided_at, accepted_at)
+     VALUES ($1, $2, $3, 'BUY', 'FAK', '0.63', '150', '150', FALSE, '0.63',
+             'filled', $4, $4)`,
+    [`ord-${RUN}`, TOKEN, CONDITION, new Date("2026-08-26T11:59:00.000Z")],
+  );
+  for (const [index, fill] of [
+    { price: "0.62", size: "100", fee: "0.500000" },
+    { price: "0.63", size: "50", fee: "0.300000" },
+  ].entries()) {
+    await p.query(
+      `INSERT INTO paper_ledger_events
+         (idempotency_key, event_type, order_id, token_id, condition_id,
+          payload_json, event_ts)
+       VALUES ($1, 'fill', $2, $3, $4, $5::jsonb, $6)`,
+      [
+        `ord-${RUN}:taker:${String(index)}`,
+        `ord-${RUN}`,
+        TOKEN,
+        CONDITION,
+        JSON.stringify({ ...fill, side: "BUY", taker: true }),
+        new Date("2026-08-26T12:00:05.000Z"),
+      ],
+    );
+  }
   await p.query(
     `INSERT INTO resolution_market_state
        (condition_id, action, effective_action, resolution_buffer, p_5050,
@@ -493,6 +539,87 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(
         approval.currentReportId === null || approval.currentReportId > 0,
       ).toBe(true);
+    });
+
+    it("reconciles a taker execution as ONE order, not as one row per level", async () => {
+      // The ledger writes one `fill` event per level consumed. Comparing a
+      // single level's price against a walk of that level's size from the top
+      // of the book pits two different quantities against each other, and the
+      // number means nothing whichever way it comes out.
+      const rows = await loadFillReconciliationRows(pool(), 50);
+      const mine = rows.find((row) => row.orderId === `ord-${RUN}`);
+      expect(mine).toBeDefined();
+      expect(mine?.side).toBe("BUY");
+      // 100 @ 0.62 + 50 @ 0.63 = 150 shares, notional 93.5, VWAP 0.6233...
+      expect(Number(mine?.filledSize)).toBeCloseTo(150, 6);
+      expect(Number(mine?.vwapPrice)).toBeCloseTo(93.5 / 150, 9);
+      expect(Number(mine?.simulatedFeeUsd)).toBeCloseTo(0.8, 6);
+      // sum(p x (1 - p) x size), the venue curve with the RATE factored out, so
+      // the real fee stays exact instead of being taken at the VWAP.
+      expect(Number(mine?.feeShape)).toBeCloseTo(
+        0.62 * 0.38 * 100 + 0.63 * 0.37 * 50,
+        6,
+      );
+      // The two instants the slippage reference depends on: the fill consumed
+      // the book at exec_ts, and the decision was made a minute earlier.
+      expect(mine?.decidedAt.toISOString()).toBe("2026-08-26T11:59:00.000Z");
+      expect(mine?.execTs.toISOString()).toBe("2026-08-26T12:00:05.000Z");
+      // No recorded trade carries a fee rate in this fixture, so the fee leg
+      // has no reference at all — which is the honest answer, not zero error.
+      expect(mine?.venueFeeRateBps).toBeNull();
+
+      // End to end, against the real book: the runner rebuilds the order from
+      // its two fill events, walks the book of the DECISION instant — a
+      // different recorded observation from the one the fill consumed — and
+      // counts ONE independent slippage sample. One is not a hundred, so the
+      // gate still refuses to answer, which is the point.
+      //
+      // The two snapshots go in HERE rather than being taken from `seed`: this
+      // database is shared, and a sibling suite that prunes book snapshots
+      // would otherwise turn this assertion into a coin flip.
+      for (const snapshot of [
+        { at: "2026-08-26T11:58:30.000Z", bid: "0.60", ask: "0.61" },
+        { at: "2026-08-26T11:59:59.000Z", bid: "0.61", ask: "0.62" },
+      ]) {
+        await pool().query(
+          `INSERT INTO polymarket_book_snapshots
+             (token_id, condition_id, received_at, bids_json, asks_json)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+          [
+            TOKEN,
+            CONDITION,
+            new Date(snapshot.at),
+            JSON.stringify([{ price: snapshot.bid, size: "500" }]),
+            JSON.stringify([{ price: snapshot.ask, size: "500" }]),
+          ],
+        );
+      }
+      const measuredAt = new Date(NOW.getTime() + 600_000);
+      await createPortfolioRunner({
+        pool: pool(),
+        config: CONFIG,
+        factorMap: DEFAULT_FACTOR_MAP,
+        executionMode: "paper",
+        clock: () => measuredAt,
+      }).tickOnce("gates");
+
+      const g4 = await pool().query<{ metrics: Record<string, unknown> }>(
+        `SELECT metrics_json AS metrics
+           FROM portfolio_gate_measurements
+          WHERE gate = 'G4'
+          ORDER BY measurement_id DESC
+          LIMIT 1`,
+      );
+      const metrics = g4.rows[0]?.metrics ?? {};
+      expect(Number(metrics.slippage_samples)).toBeGreaterThanOrEqual(1);
+      expect(metrics.self_referential_slippage_samples).toBe(0);
+      expect(metrics.samples_required).toBe(CONFIG.gates.g4MinReconciledFills);
+      // And it still refuses: one reconciled execution is not a reconciliation.
+      const status = await pool().query<{ status: string }>(
+        `SELECT status FROM portfolio_gate_measurements
+          WHERE gate = 'G4' ORDER BY measurement_id DESC LIMIT 1`,
+      );
+      expect(status.rows[0]?.status).toBe("INSUFFICIENT_DATA");
     });
 
     it("mints a gate report and attaches the owner's review exactly once", async () => {

@@ -518,9 +518,25 @@ Cada degeneração ganhou um teste que **teria pego** o defeito, e todos afirmam
 | "NEVER passes a signature with no written record behind it" (G6)         | registro escrito                                                |
 
 Módulo `portfolio`: **292 → 322** testes (`gates` 37 → 50, `measure` 22 → 25,
-`runner` 11 → 13, `approval` 12 novos), mais `integration.pg` 19 → 20.
+`runner` 11 → 13, `approval` 12 novos), mais `integration.pg` 19 → **21**.
 `make verify` verde; suíte serial contra PostgreSQL 18.4 recém-migrado:
-**1.407/1.407**.
+**1.408/1.408**, e verde de novo na segunda execução sobre o mesmo banco já
+populado — as asserções novas não dependem de ordem nem de estado deixado por
+outra suíte.
+
+### 10.7 Um bug que só o PostgreSQL real pegou
+
+A reconciliação agregada divide `notional / filled_size` em SQL. A divisão
+`numeric` do PostgreSQL é **ilimitada**: `93.5 / 150` volta como
+`0.62333333333333333333`, vinte dígitos. E `parseScaled` **recusa** — em vez de
+truncar em silêncio — qualquer string com mais precisão que a escala de
+trabalho, que é a regra certa.
+
+Somadas, as duas coisas descartariam **toda** amostra de reconciliação na
+entrada, e o G4 reportaria zero amostras para sempre sem nada no log dizendo por
+quê. Os agregados passaram a ser arredondados a nove dígitos no próprio SQL, com
+o motivo escrito ao lado da constante. Nenhum teste com pool falso pegaria isso:
+um pool falso devolve a string que o teste escreveu.
 
 O veredito medido **não muda**: os seis gates seguem sem nenhum `PASS` e
 `rfc_009_status` segue `BLOCKED`. O que muda é que agora eles seguem assim

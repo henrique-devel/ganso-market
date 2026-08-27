@@ -255,6 +255,22 @@ export interface FillReconciliationRow {
 }
 
 /**
+ * Digits every aggregate is rounded to before it leaves SQL.
+ *
+ * Not cosmetic. `parseScaled` REFUSES a string with more precision than the
+ * working scale rather than truncating it silently, which is the right rule —
+ * but numeric division in PostgreSQL is unbounded, so an unrounded VWAP
+ * (93.5 / 150 = 0.62333333333333333333) comes back with twenty digits and is
+ * refused. Every reconciliation sample would then be dropped on the way in, and
+ * G4 would report zero samples forever with nothing in the logs to say why.
+ * Rounding here makes the refusal mean what it is for: a malformed row.
+ *
+ * Nine digits is the module's working scale; a price moves in ticks of 0.01 and
+ * carries six decimals of meaning, so nothing measurable is lost.
+ */
+const WORKING_SCALE_DIGITS = 9;
+
+/**
  * How far from a fill a recorded trade may be and still be taken as evidence of
  * the fee rate in force. A rate from a day away is not the rate that applied.
  *
@@ -305,8 +321,11 @@ export async function loadFillReconciliationRows(
         LIMIT $1
      )
      SELECT x.order_id, x.token_id, x.side, x.decided_at, x.exec_ts,
-            x.filled_size, x.fee_total, x.fee_shape,
-            (x.notional / x.filled_size) AS vwap_price,
+            round(x.filled_size, ${WORKING_SCALE_DIGITS}) AS filled_size,
+            round(x.fee_total, ${WORKING_SCALE_DIGITS}) AS fee_total,
+            round(x.fee_shape, ${WORKING_SCALE_DIGITS}) AS fee_shape,
+            round(x.notional / x.filled_size, ${WORKING_SCALE_DIGITS})
+              AS vwap_price,
             (SELECT t.fee_rate_bps
                FROM polymarket_trades t
               WHERE t.token_id = x.token_id
