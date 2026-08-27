@@ -198,8 +198,10 @@ describe("reconciliation (G4)", () => {
         side: "BUY",
         simulatedFeeUsd: 0.5,
         realFeeUsd: 0.5,
+        feeReference: "VENUE_TRADE_FEED",
         simulatedPrice: 0.52,
         bookWalkPrice: 0.5,
+        priceReference: "DECISION_BOOK",
       },
     ]);
     expect(result.slippageBias).toBeCloseTo(0.02, 6);
@@ -213,8 +215,10 @@ describe("reconciliation (G4)", () => {
         side: "BUY",
         simulatedFeeUsd: 0.5,
         realFeeUsd: 0.5,
+        feeReference: "VENUE_TRADE_FEED",
         simulatedPrice: 0.48,
         bookWalkPrice: 0.5,
+        priceReference: "DECISION_BOOK",
       },
     ]);
     expect(result.slippageBias).toBeLessThan(0);
@@ -226,8 +230,10 @@ describe("reconciliation (G4)", () => {
         side: "SELL",
         simulatedFeeUsd: 0,
         realFeeUsd: null,
+        feeReference: null,
         simulatedPrice: 0.48,
         bookWalkPrice: 0.5,
+        priceReference: "DECISION_BOOK",
       },
     ]);
     expect(result.slippageBias).toBeCloseTo(0.02, 6);
@@ -240,9 +246,71 @@ describe("reconciliation (G4)", () => {
     expect(result.feeMedianError).toBeNull();
     expect(result.slippageBias).toBeNull();
   });
+
+  it("EXCLUDES a reference re-derived from the observation the fill consumed", () => {
+    // The G1 incident, in the reconciliation. Re-walking the very snapshot the
+    // simulator filled against is the same query over the same table for the
+    // same levels: the bias is zero by construction, and `bias >= 0` cannot
+    // fail. Such a sample is counted, never averaged — "no samples" and "no
+    // HONEST samples" are different situations for whoever reads the gate.
+    const result = reconcile([
+      {
+        side: "BUY",
+        simulatedFeeUsd: 0.5,
+        realFeeUsd: 0.5,
+        feeReference: "SIMULATOR_OWN_RATE",
+        simulatedPrice: 0.5,
+        bookWalkPrice: 0.5,
+        priceReference: "EXECUTION_BOOK",
+      },
+    ]);
+    expect(result.slippageBias).toBeNull();
+    expect(result.feeMedianError).toBeNull();
+    expect(result.slippageSamples).toBe(0);
+    expect(result.feeSamples).toBe(0);
+    expect(result.selfReferentialSlippageSamples).toBe(1);
+    expect(result.selfReferentialFeeSamples).toBe(1);
+  });
+
+  it("keeps the independent samples and drops only the self-referential ones", () => {
+    const result = reconcile([
+      {
+        side: "BUY",
+        simulatedFeeUsd: 0.5,
+        realFeeUsd: 0.5,
+        feeReference: "VENUE_TRADE_FEED",
+        simulatedPrice: 0.52,
+        bookWalkPrice: 0.5,
+        priceReference: "DECISION_BOOK",
+      },
+      {
+        side: "BUY",
+        simulatedFeeUsd: 9,
+        realFeeUsd: 9,
+        feeReference: "SIMULATOR_OWN_RATE",
+        simulatedPrice: 0.5,
+        bookWalkPrice: 0.5,
+        priceReference: "EXECUTION_BOOK",
+      },
+    ]);
+    expect(result.slippageSamples).toBe(1);
+    expect(result.feeSamples).toBe(1);
+    expect(result.selfReferentialSlippageSamples).toBe(1);
+    expect(result.selfReferentialFeeSamples).toBe(1);
+    expect(result.slippageBias).toBeCloseTo(0.02, 6);
+  });
 });
 
 describe("the full measurement", () => {
+  const DAY_MS = 24 * 3_600_000;
+  /** A paper book long, broad and spread enough to clear the evidence base. */
+  const PAPER_BOOK = Array.from({ length: 150 }, (_unused, i) => ({
+    pnl: 2 + (i % 5) * 0.2,
+    conditionId: `0x${String(i % 40)}`,
+    category: i % 2 === 0 ? "crypto" : "macro",
+    closedAt: new Date(NOW.getTime() - (150 - i) * (DAY_MS / 2)),
+  }));
+
   const EMPTY: MeasureGatesInput = {
     now: NOW,
     config: GATES,
@@ -258,6 +326,8 @@ describe("the full measurement", () => {
       slippageBias: null,
       feeSamples: 0,
       slippageSamples: 0,
+      selfReferentialFeeSamples: 0,
+      selfReferentialSlippageSamples: 0,
     },
     soakDays: 0,
     killSwitchExercised: false,
@@ -300,9 +370,27 @@ describe("the full measurement", () => {
     }
   });
 
-  it("G3 fails until EVERY breaker kind has been exercised", () => {
-    const partial = measureGates({
+  it("G3 is INSUFFICIENT_DATA over an empty book, even with every breaker exercised", () => {
+    // The shape the G1 incident had: zero positions produce zero unblocked
+    // breaches and zero drawdown, so the survival facts read perfect over a
+    // book that never existed. This measurement used to report PASS.
+    const g3 = measureGates({
       ...EMPTY,
+      breakersExercised: [...BREAKER_KINDS],
+    }).measurements.find((m) => m.gate === "G3");
+    expect(g3?.status).toBe("INSUFFICIENT_DATA");
+    expect(g3?.status).not.toBe("PASS");
+  });
+
+  it("G3 fails until EVERY breaker kind has been exercised", () => {
+    // Over a book that is actually long enough to have survived something.
+    const withBook = {
+      ...EMPTY,
+      closed: PAPER_BOOK,
+      clockStart: new Date(NOW.getTime() - 90 * DAY_MS),
+    };
+    const partial = measureGates({
+      ...withBook,
       breakersExercised: [...BREAKER_KINDS].slice(0, 2),
     });
     const g3 = partial.measurements.find((m) => m.gate === "G3");
@@ -310,7 +398,7 @@ describe("the full measurement", () => {
     expect(g3?.reasonCode).toBe("G3_RISK_BREACH");
 
     const complete = measureGates({
-      ...EMPTY,
+      ...withBook,
       breakersExercised: [...BREAKER_KINDS],
     });
     expect(complete.measurements.find((m) => m.gate === "G3")?.status).toBe(
@@ -365,6 +453,8 @@ describe("the full measurement", () => {
     // No weighting, no "mostly passing", no override.
     const result = measureGates({
       ...EMPTY,
+      closed: PAPER_BOOK,
+      clockStart: new Date(NOW.getTime() - 90 * DAY_MS),
       breakersExercised: [...BREAKER_KINDS],
     });
     expect(

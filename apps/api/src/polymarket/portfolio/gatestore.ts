@@ -6,10 +6,13 @@
 // INSUFFICIENT_DATA — which is the honest state of a portfolio that has not
 // traded yet, and deliberately not the same state as FAIL.
 //
-// Writes are confined to `portfolio_gate_measurements`, `portfolio_g2_clock` and
-// `portfolio_g2_clock_events`.
+// Writes are confined to `portfolio_gate_measurements`, `portfolio_gate_reports`,
+// `portfolio_g2_clock` and `portfolio_g2_clock_events`.
+
+import { createHash } from "node:crypto";
 
 import { parsePortfolioConfig, type PortfolioConfig } from "./config.js";
+import { CALIBRATED_EXPECTATION } from "./gates.js";
 import type { CategoryClock, ClosedPosition } from "./gates.js";
 import type {
   ClockResetPlan,
@@ -20,6 +23,8 @@ import type {
 import type { PersistedDecision } from "./replay.js";
 import type {
   DecisionKind,
+  GateId,
+  GateStatus,
   MarketSide,
   PortfolioPool,
   PortfolioStateName,
@@ -214,13 +219,36 @@ export async function loadRiskSurvival(
 // G4: reconciliation of simulated fills against the venue's own numbers.
 // ---------------------------------------------------------------------------
 
-/** One taker fill, with the venue rate recorded closest to it in time. */
+/**
+ * One paper ORDER's taker execution, aggregated, with the venue rate recorded
+ * closest to it in time and the instant the decision behind it was made.
+ *
+ * Per order, not per fill event. The ledger writes one `fill` row per book
+ * level consumed, so a per-event comparison pits a single level's price against
+ * a walk of that level's size from the top of the book — two different
+ * quantities, and a number that means nothing whichever way it comes out.
+ * Reconciliation is a statement about an execution, so the execution is the
+ * unit.
+ */
 export interface FillReconciliationRow {
+  readonly orderId: string;
   readonly tokenId: string;
   readonly side: "BUY" | "SELL";
-  readonly price: string;
-  readonly size: string;
+  /** Total taker size filled for the order. */
+  readonly filledSize: string;
+  /** Volume-weighted price across the order's taker fills. */
+  readonly vwapPrice: string;
+  /** Fee the simulator charged, summed across the order's taker fills. */
   readonly simulatedFeeUsd: string;
+  /**
+   * `sum(price x (1 - price) x size)` over the same fills — the venue's fee
+   * curve with the RATE factored out, so the real fee is one multiplication and
+   * stays exact instead of being approximated at the VWAP.
+   */
+  readonly feeShape: string;
+  /** Instant the decision behind the order was made, before any latency. */
+  readonly decidedAt: Date;
+  /** Instant of the last of the order's taker fills. */
   readonly execTs: Date;
   /** `fee_rate_bps` of the nearest recorded trade on the token, or null. */
   readonly venueFeeRateBps: string | null;
@@ -237,62 +265,91 @@ export interface FillReconciliationRow {
 const FEE_MATCH_WINDOW = "1 hour";
 
 /**
- * Taker fills, newest first, each paired with the venue's own fee rate.
+ * Taker executions, newest first, each paired with the venue's own fee rate.
  *
  * Only taker fills: a maker quote pays no fee on V2, so a maker fill has nothing
  * to reconcile and including it would dilute the median with zeros.
+ *
+ * `decided_at` rides along because it is what makes the slippage comparison
+ * capable of failing. The simulator fills against the book at t + latency; a
+ * reference re-walked from that SAME snapshot is the simulator against itself.
+ * The book the decision was actually made against is a different observation,
+ * and the gap between them is exactly the conservatism the simulator claims.
  */
 export async function loadFillReconciliationRows(
   pool: PortfolioPool,
   limit: number,
 ): Promise<FillReconciliationRow[]> {
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT e.token_id,
-            e.payload_json ->> 'side' AS side,
-            e.payload_json ->> 'price' AS price,
-            e.payload_json ->> 'size' AS size,
-            e.payload_json ->> 'fee' AS fee,
-            e.event_ts,
+    `WITH executions AS (
+       SELECT e.order_id,
+              o.token_id,
+              o.side,
+              o.decided_at,
+              max(e.event_ts) AS exec_ts,
+              sum((e.payload_json ->> 'size')::numeric) AS filled_size,
+              sum((e.payload_json ->> 'price')::numeric
+                  * (e.payload_json ->> 'size')::numeric) AS notional,
+              sum((e.payload_json ->> 'fee')::numeric) AS fee_total,
+              sum((e.payload_json ->> 'price')::numeric
+                  * (1 - (e.payload_json ->> 'price')::numeric)
+                  * (e.payload_json ->> 'size')::numeric) AS fee_shape
+         FROM paper_ledger_events e
+         JOIN paper_orders o ON o.order_id = e.order_id
+        WHERE e.event_type = 'fill'
+          AND e.payload_json ->> 'taker' = 'true'
+          AND e.order_id IS NOT NULL
+        GROUP BY e.order_id, o.token_id, o.side, o.decided_at
+       HAVING sum((e.payload_json ->> 'size')::numeric) > 0
+        ORDER BY max(e.event_ts) DESC
+        LIMIT $1
+     )
+     SELECT x.order_id, x.token_id, x.side, x.decided_at, x.exec_ts,
+            x.filled_size, x.fee_total, x.fee_shape,
+            (x.notional / x.filled_size) AS vwap_price,
             (SELECT t.fee_rate_bps
                FROM polymarket_trades t
-              WHERE t.token_id = e.token_id
+              WHERE t.token_id = x.token_id
                 AND t.fee_rate_bps IS NOT NULL
                 AND COALESCE(t.trade_ts, t.received_at) BETWEEN
-                      e.event_ts - interval '${FEE_MATCH_WINDOW}'
-                  AND e.event_ts + interval '${FEE_MATCH_WINDOW}'
+                      x.exec_ts - interval '${FEE_MATCH_WINDOW}'
+                  AND x.exec_ts + interval '${FEE_MATCH_WINDOW}'
               ORDER BY abs(extract(epoch FROM (
-                        COALESCE(t.trade_ts, t.received_at) - e.event_ts)))
+                        COALESCE(t.trade_ts, t.received_at) - x.exec_ts)))
               LIMIT 1) AS venue_fee_rate_bps
-       FROM paper_ledger_events e
-      WHERE e.event_type = 'fill'
-        AND e.payload_json ->> 'taker' = 'true'
-        AND e.token_id IS NOT NULL
-      ORDER BY e.event_ts DESC
-      LIMIT $1`,
+       FROM executions x
+      ORDER BY x.exec_ts DESC`,
     [limit],
   );
   const rows: FillReconciliationRow[] = [];
   for (const row of result.rows) {
     const side = String(row.side ?? "");
-    const price = text(row.price);
-    const size = text(row.size);
-    const fee = text(row.fee);
-    const execTs = date(row.event_ts);
+    const filledSize = text(row.filled_size);
+    const vwapPrice = text(row.vwap_price);
+    const fee = text(row.fee_total);
+    const feeShape = text(row.fee_shape);
+    const decidedAt = date(row.decided_at);
+    const execTs = date(row.exec_ts);
     if (
       (side !== "BUY" && side !== "SELL") ||
-      price === null ||
-      size === null ||
+      filledSize === null ||
+      vwapPrice === null ||
       fee === null ||
+      feeShape === null ||
+      decidedAt === null ||
       execTs === null
     ) {
       continue;
     }
     rows.push({
+      orderId: String(row.order_id ?? ""),
       tokenId: String(row.token_id ?? ""),
       side,
-      price,
-      size,
+      filledSize,
+      vwapPrice,
       simulatedFeeUsd: fee,
+      feeShape,
+      decidedAt,
       execTs,
       venueFeeRateBps: text(row.venue_fee_rate_bps),
     });
@@ -475,6 +532,10 @@ export interface OwnerApproval {
  * G6 is the only gate a computation cannot pass. It is recorded against a
  * specific report so a review of older numbers cannot carry forward onto newer
  * ones.
+ *
+ * Ordered by `report_id`, not by `generated_at`: the identity column is
+ * monotonic by construction while the timestamp comes from a process clock, and
+ * "which report is current" is the hinge the whole gate turns on.
  */
 export async function loadOwnerApproval(pool: PortfolioPool): Promise<{
   readonly approval: OwnerApproval | null;
@@ -483,7 +544,7 @@ export async function loadOwnerApproval(pool: PortfolioPool): Promise<{
   const result = await pool.query<Record<string, unknown>>(
     `SELECT report_id, approval_json
        FROM portfolio_gate_reports
-      ORDER BY generated_at DESC
+      ORDER BY report_id DESC
       LIMIT 50`,
   );
   let currentReportId: number | null = null;
@@ -515,6 +576,177 @@ export async function loadOwnerApproval(pool: PortfolioPool): Promise<{
     }
   }
   return { approval, currentReportId };
+}
+
+/**
+ * The verdict fingerprint of a measurement set: gate, status and reason code,
+ * in gate order.
+ *
+ * Deliberately NOT over the metrics. Every cycle moves a number somewhere —
+ * a soak day, a sample count — and minting a report for each one would produce
+ * a report an hour and invalidate the owner's review continuously. What has to
+ * invalidate a review is a VERDICT changing, and that is exactly what this
+ * hashes.
+ */
+export function gateVerdictFingerprint(
+  measurements: readonly GateMeasurement[],
+  overall: string,
+): string {
+  const ordered = [...measurements]
+    .map((m) => [m.gate, m.status, m.reasonCode ?? ""] as const)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  return createHash("sha256")
+    .update(JSON.stringify({ overall, gates: ordered }))
+    .digest("hex");
+}
+
+export interface GateReportRow {
+  readonly reportId: number;
+  readonly fingerprint: string;
+  readonly overallStatus: "BLOCKED" | "READY_FOR_OWNER_REVIEW";
+  readonly gates: readonly {
+    readonly gate: GateId;
+    readonly status: GateStatus;
+  }[];
+  readonly alreadyApproved: boolean;
+}
+
+function parseReportRow(row: Record<string, unknown>): GateReportRow | null {
+  const raw: unknown = json(row.gates_json);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return null;
+  }
+  const content = raw as Record<string, unknown>;
+  const gatesRaw: unknown = content.gates;
+  const gates: { gate: GateId; status: GateStatus }[] = [];
+  if (Array.isArray(gatesRaw)) {
+    for (const entry of gatesRaw) {
+      if (typeof entry !== "object" || entry === null) {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      gates.push({
+        gate: String(record.gate ?? "") as GateId,
+        status: String(record.status ?? "") as GateStatus,
+      });
+    }
+  }
+  return {
+    reportId: Number(row.report_id ?? 0),
+    fingerprint: String(content.fingerprint ?? ""),
+    overallStatus:
+      String(row.overall_status ?? "") === "READY_FOR_OWNER_REVIEW"
+        ? "READY_FOR_OWNER_REVIEW"
+        : "BLOCKED",
+    gates,
+    alreadyApproved:
+      row.approval_json !== null && row.approval_json !== undefined,
+  };
+}
+
+/** The newest report, or null when none has been minted yet. */
+export async function loadLatestGateReport(
+  pool: PortfolioPool,
+): Promise<GateReportRow | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT report_id, gates_json, overall_status, approval_json
+       FROM portfolio_gate_reports
+      ORDER BY report_id DESC
+      LIMIT 1`,
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : parseReportRow(row);
+}
+
+/** One report by id, for the approval CLI to show before it writes. */
+export async function loadGateReport(
+  pool: PortfolioPool,
+  reportId: number,
+): Promise<GateReportRow | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT report_id, gates_json, overall_status, approval_json
+       FROM portfolio_gate_reports
+      WHERE report_id = $1`,
+    [reportId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : parseReportRow(row);
+}
+
+/**
+ * Mint a report: the frozen snapshot a G6 review is written against.
+ *
+ * The calibrated expectation goes INTO the row, because the RFC requires it on
+ * the report and a report is the thing the owner reads. Storing it with the
+ * numbers means the record of what was approved carries the warning that was
+ * printed alongside it.
+ */
+export async function insertGateReport(
+  pool: PortfolioPool,
+  input: {
+    readonly measurements: readonly GateMeasurement[];
+    readonly overall: "BLOCKED" | "READY_FOR_OWNER_REVIEW";
+    readonly fingerprint: string;
+    readonly generatedAt: Date;
+    readonly windowFrom: Date;
+    readonly windowTo: Date;
+    readonly configVersion: string;
+  },
+): Promise<number> {
+  const result = await pool.query<Record<string, unknown>>(
+    `INSERT INTO portfolio_gate_reports
+       (generated_at, window_from, window_to, gates_json, overall_status,
+        config_version)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6)
+     RETURNING report_id`,
+    [
+      input.generatedAt,
+      input.windowFrom,
+      input.windowTo,
+      JSON.stringify({
+        fingerprint: input.fingerprint,
+        calibrated_expectation: CALIBRATED_EXPECTATION,
+        gates: input.measurements.map((measurement) => ({
+          gate: measurement.gate,
+          status: measurement.status,
+          reason_code: measurement.reasonCode,
+          metrics: measurement.metrics,
+          window_from: measurement.windowFrom?.toISOString() ?? null,
+          window_to: measurement.windowTo?.toISOString() ?? null,
+        })),
+      }),
+      input.overall,
+      input.configVersion,
+    ],
+  );
+  return Number(result.rows[0]?.report_id ?? 0);
+}
+
+/**
+ * Attach the owner's written review to a report.
+ *
+ * The guard is repeated IN the statement rather than trusted from the check
+ * above it: a report that stopped being current, or acquired an approval,
+ * between the read and the write must not be overwritten. Zero rows updated is
+ * the refusal, and the caller reports it as one.
+ */
+export async function recordOwnerApproval(
+  pool: PortfolioPool,
+  input: {
+    readonly reportId: number;
+    readonly approval: Record<string, unknown>;
+  },
+): Promise<boolean> {
+  const result = await pool.query<Record<string, unknown>>(
+    `UPDATE portfolio_gate_reports
+        SET approval_json = $2::jsonb
+      WHERE report_id = $1
+        AND approval_json IS NULL
+        AND report_id = (SELECT max(report_id) FROM portfolio_gate_reports)
+      RETURNING report_id`,
+    [input.reportId, JSON.stringify(input.approval)],
+  );
+  return result.rows.length === 1;
 }
 
 // ---------------------------------------------------------------------------

@@ -32,9 +32,13 @@ import {
 import {
   applyClockReset,
   insertGateMeasurement,
+  insertGateReport,
   loadClosedPositions,
   loadConfigVersions,
   loadFillReconciliationRows,
+  loadGateReport,
+  loadLatestGateReport,
+  recordOwnerApproval,
   loadForecastRows,
   loadG2Clocks,
   loadOperationalEvidence,
@@ -482,7 +486,87 @@ describe.skipIf(DATABASE_URL === undefined)(
       const params = await loadRegimeParamsByCategory(p);
       expect(params.crypto?.length).toBeGreaterThan(0);
       const approval = await loadOwnerApproval(p);
-      expect(approval.approval).toBeNull();
+      // Not asserted as null, for the same reason the risk counts above are
+      // not asserted as zero: this database is shared with the other suites
+      // and with the report test below. What matters here is that the query
+      // runs and comes back in the shape the gate reads.
+      expect(
+        approval.currentReportId === null || approval.currentReportId > 0,
+      ).toBe(true);
+    });
+
+    it("mints a gate report and attaches the owner's review exactly once", async () => {
+      const p = pool();
+      const generatedAt = new Date(NOW.getTime() + 300_000);
+      const reportId = await insertGateReport(p, {
+        measurements: [
+          {
+            gate: "G2",
+            status: "INSUFFICIENT_DATA",
+            reasonCode: "G2_INSUFFICIENT_PAPER",
+            metrics: { closed_positions: 0 },
+            windowFrom: null,
+            windowTo: generatedAt,
+          },
+        ],
+        overall: "BLOCKED",
+        fingerprint: "a".repeat(64),
+        generatedAt,
+        windowFrom: NOW,
+        windowTo: generatedAt,
+        configVersion: CONFIG.version,
+      });
+      expect(reportId).toBeGreaterThan(0);
+
+      const stored = await loadGateReport(p, reportId);
+      expect(stored?.fingerprint).toBe("a".repeat(64));
+      expect(stored?.gates.map((entry) => entry.gate)).toEqual(["G2"]);
+      expect(stored?.alreadyApproved).toBe(false);
+      // The calibrated expectation travels with the numbers it was printed
+      // beside, so the record of what was approved carries its own warning.
+      const raw = await p.query<{ expectation: string }>(
+        `SELECT gates_json ->> 'calibrated_expectation' AS expectation
+           FROM portfolio_gate_reports WHERE report_id = $1`,
+        [reportId],
+      );
+      expect(raw.rows[0]?.expectation).toContain("84%");
+
+      expect(await loadLatestGateReport(p)).toMatchObject({ reportId });
+
+      const review = {
+        reviewed_at: generatedAt.toISOString(),
+        reviewer: "owner",
+        note: "Revisão escrita completa do relatório de gates registrada.",
+      };
+      expect(await recordOwnerApproval(p, { reportId, approval: review })).toBe(
+        true,
+      );
+      // Second attempt on the same report: an approval is never edited in
+      // place, and the statement carries its own guard rather than trusting
+      // the check that ran before it.
+      expect(await recordOwnerApproval(p, { reportId, approval: review })).toBe(
+        false,
+      );
+
+      const loaded = await loadOwnerApproval(p);
+      expect(loaded.currentReportId).toBe(reportId);
+      expect(loaded.approval?.reviewer).toBe("owner");
+
+      // A newer report makes the older one unapprovable, which is the whole
+      // mechanism: a review carries only against the numbers it named.
+      const newer = await insertGateReport(p, {
+        measurements: [],
+        overall: "BLOCKED",
+        fingerprint: "b".repeat(64),
+        generatedAt: new Date(NOW.getTime() + 360_000),
+        windowFrom: NOW,
+        windowTo: new Date(NOW.getTime() + 360_000),
+        configVersion: CONFIG.version,
+      });
+      expect(newer).toBeGreaterThan(reportId);
+      expect(await recordOwnerApproval(p, { reportId, approval: review })).toBe(
+        false,
+      );
     });
 
     it("starts and resets the G2 clock, keeping the event trail", async () => {
@@ -715,6 +799,19 @@ describe.skipIf(DATABASE_URL === undefined)(
       ]);
       // RFC-009 stays blocked: nothing here can pass a gate on an empty book.
       expect(measured.rows.every((row) => row.status !== "PASS")).toBe(true);
+
+      // And the cycle leaves a report behind, which is what gives a future G6
+      // review an id to be written against.
+      const report = await loadLatestGateReport(pool());
+      expect(report?.gates.map((entry) => entry.gate)).toEqual([
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+      ]);
+      expect(report?.overallStatus).toBe("BLOCKED");
     });
 
     it("refuses to mint the same config version with different content", async () => {

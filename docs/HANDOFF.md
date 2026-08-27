@@ -1,17 +1,17 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-26 (noite — RFC-012 e **RFC-013 ATIVAS em
-  produção**; `polymarket-portfolio` criado às 19:53Z, corrigido às 23:49Z)
+- Última atualização: 2026-08-27 (madrugada — degenerações de G2/G3/G4
+  fechadas, registro da aprovação do G6 implementado, ponte de paper decidida
+  em documento)
 - Branch principal: `main`
-- RFC ativa: RFC-013 (motor de portfólio) — fases A, B, C, D mergeadas
-  (PRs #30, #33, #34, #36) e fase E aberta nesta sessão (medição contínua de
-  gates, ciclo de saída, replay determinístico, espaço de consulta); migration
-  0014 aplicada em produção e **não alterada** pela fase E; o serviço
-  `polymarket-portfolio` ainda NÃO foi criado no servidor
+- RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
+  #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
+  migration 0014 aplicada em produção e **nunca alterada** desde então
 - RFC-012: **ativa em produção** desde 2026-08-26 01:15Z
-- RFC-013: **ativa em produção** desde 2026-08-26 19:53Z (config 1.1.0). Um
-  falso `PASS` no G1 ficou de pé por ~4 h e foi corrigido no PR #40; ver a seção
-  do incidente abaixo
+- RFC-013: **ativa em produção** desde 2026-08-26 19:53Z. Um falso `PASS` no G1
+  ficou de pé por ~4 h e foi corrigido no PR #40; a auditoria dos outros cinco
+  gates sob a mesma lente encontrou o mesmo defeito em **G2, G3 e G4**, e uma
+  variante mais silenciosa no **G6**. Config **1.1.0 → 1.2.0**
 - Modo permitido no runtime atual: `paper`
 
 Este documento registra o ponto de continuidade entre sessões. Ele não
@@ -425,7 +425,7 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 | RFC-010 — Modelo fundamental (`q` + incerteza)        | Implementada e ativa em produção (2026-08-20); modelos em `shadow`, nenhum promovido                   | [`docs/test-results/RFC-010-fundamental-model.md`](test-results/RFC-010-fundamental-model.md)                     |
 | RFC-011 — Microestrutura e paper broker               | Código completo (2026-08-24); container ativo em produção, nenhuma ordem paper criada ainda            | [`docs/test-results/RFC-011-microstructure-paper.md`](test-results/RFC-011-microstructure-paper.md)               |
 | RFC-012 — Risco de resolução e grafo lógico           | **Ativa em produção (2026-08-26 01:15Z)**, `score_version` 1.1.1; 220 mercados pontuados, todos `NONE` | [`docs/test-results/RFC-012-resolution-graph.md`](test-results/RFC-012-resolution-graph.md)                       |
-| RFC-013 — Motor de portfólio e gates                  | **Ativa em produção** desde 2026-08-26 19:53Z (fases A–E, config 1.1.0)                                 | Gates G1–G6 habilitam a RFC-009; todos medidos e nenhum `PASS` — correto hoje. O G1 passou indevidamente por ~4 h |
+| RFC-013 — Motor de portfólio e gates                  | **Ativa em produção** desde 2026-08-26 19:53Z (fases A–E, config **1.2.0**)                            | Gates G1–G6 habilitam a RFC-009; todos medidos e nenhum `PASS` — correto hoje. Quatro degenerações fechadas       |
 | RFC-009 — Execução Polymarket maker-side              | Não iniciada; exige gates G1–G6 da RFC-013 + aprovação explícita                                       | Burn wallet Polygon; risco jurisdicional aceito                                                                   |
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
@@ -728,13 +728,13 @@ rebuild dos containers de profile tem que acontecer na mesma janela do merge.
 
 ### RFC-013 — fases A a E
 
-| Fase | PR  | Conteúdo                                                                                                                                                                                         | Estado                                                 |
-| ---- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
-| A    | #30 | Migration 0014 (12 tabelas), config versionada com hash, EV por share, sizing Kelly, máquina de estados, mapa de fatores, guard de escopo, documento de ausência de execução real e de stop-loss | migration **aplicada** (schema_versions = 14)          |
-| B    | #33 | Exposições em 8 dimensões, 7 critérios de saída, motor de decisão, painel de 14 campos, store, runner, serviço `polymarket-portfolio`                                                            | mergeada, **serviço não criado no servidor**           |
-| C    | #34 | Gates G1–G6, block-bootstrap reproduzível                                                                                                                                                        | mergeada                                               |
-| D    | #36 | API (9 endpoints), perímetro Nginx GET-only, aba "Portfólio" no painel                                                                                                                           | mergeada, **Nginx não recarregado com as rotas novas** |
-| E    | —   | Medição contínua dos gates (tarefa 8) + relógio G2 por categoria, ciclo de saída sobre posições abertas (tarefa 5 no runner), replay determinístico do decision log (tarefa 7), circuit breakers (tarefa 4), PnL realizado do ledger, campos 9/10/12 do painel, espaço de consulta paginado | **aberta nesta sessão**; migration 0014 intocada |
+| Fase | PR  | Conteúdo                                                                                                                                                                                                                                                                                    | Estado                                                 |
+| ---- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| A    | #30 | Migration 0014 (12 tabelas), config versionada com hash, EV por share, sizing Kelly, máquina de estados, mapa de fatores, guard de escopo, documento de ausência de execução real e de stop-loss                                                                                            | migration **aplicada** (schema_versions = 14)          |
+| B    | #33 | Exposições em 8 dimensões, 7 critérios de saída, motor de decisão, painel de 14 campos, store, runner, serviço `polymarket-portfolio`                                                                                                                                                       | mergeada, **serviço não criado no servidor**           |
+| C    | #34 | Gates G1–G6, block-bootstrap reproduzível                                                                                                                                                                                                                                                   | mergeada                                               |
+| D    | #36 | API (9 endpoints), perímetro Nginx GET-only, aba "Portfólio" no painel                                                                                                                                                                                                                      | mergeada, **Nginx não recarregado com as rotas novas** |
+| E    | —   | Medição contínua dos gates (tarefa 8) + relógio G2 por categoria, ciclo de saída sobre posições abertas (tarefa 5 no runner), replay determinístico do decision log (tarefa 7), circuit breakers (tarefa 4), PnL realizado do ledger, campos 9/10/12 do painel, espaço de consulta paginado | **aberta nesta sessão**; migration 0014 intocada       |
 
 **199 → 290 testes** no módulo `portfolio` (mais 19 só-PostgreSQL).
 
@@ -871,6 +871,92 @@ com entradas aceitas, nenhuma posição nasce, nenhuma fecha, e o G2 fica em
 `portfolio` (o guard de escopo proíbe escrever fora de `portfolio_*`), então
 onde ela mora é decisão de projeto pendente.
 
+### AUDITORIA: os outros quatro gates tinham o mesmo defeito do G1 (2026-08-27)
+
+O incidente do G1 deixou uma pergunta escrita: _"nenhum dos outros quatro gates
+foi reauditado sob a lente 'passa por degeneração'"_. A auditoria foi feita.
+**Três dos quatro tinham o defeito**, e o quarto tinha uma variante mais
+silenciosa. Em todos, o padrão é o mesmo: uma condição que se satisfaz porque
+não havia nada contra o que comparar.
+
+| Gate   | Como passava sem medir nada                                                                                                                                                                                                                                                                                                                                      |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **G2** | PnL constante ⇒ toda reamostragem devolve o mesmo número ⇒ o IC 95% colapsa num ponto e `ciLow > 0` vira aritmética sobre ele. Idem para rajada num só dia, poucos blocos independentes, e uma posição dominando o livro. E as posições fechadas **antes** do relógio continuavam na amostra: um reset do G5 que joga os dias fora e mantém o sample é cosmético |
+| **G3** | Zero posições ⇒ zero breaches não bloqueados e zero drawdown ⇒ com os breakers demonstrados, `PASS` sobre um livro que nunca existiu                                                                                                                                                                                                                             |
+| **G4** | O viés de slippage comparava o fill simulado com um book-walk sobre **o mesmo snapshot que o simulador consumiu** — a mesma consulta, na mesma tabela, pelos mesmos níveis. Viés zero por construção, `bias >= 0` incapaz de falhar. E sem mínimo de amostra: uma mediana sobre uma amostra é aquela amostra                                                     |
+| **G6** | `currentReportId === null` significava "confere" — e **nada jamais cunhava um relatório**, então era null sempre. Uma aprovação gravada à mão casaria com qualquer coisa                                                                                                                                                                                         |
+
+O que fechou cada um, com teste de regressão no formato do #40 (todos afirmam
+`not.toBe("PASS")`), está em
+[`docs/test-results/RFC-013-portfolio-engine.md`](test-results/RFC-013-portfolio-engine.md)
+§10. Em resumo: dispersão exigida no G2 (largura de intervalo, blocos, dias de
+fechamento distintos, concentração, corte pela janela do relógio); G3 passa a
+receber **o mesmo objeto** de base de evidência que o G2; G4 ganha mínimo de
+amostra por perna e **proveniência declarada** em cada amostra, com as
+auto-referentes excluídas da aritmética e contadas; G6 ganha relatórios de
+verdade e um caminho de registro.
+
+**O veredito medido não mudou**: seis gates, nenhum `PASS`, `rfc_009_status`
+`BLOCKED`. Mudou o motivo.
+
+### Registro da aprovação do G6
+
+O ciclo de gates passa a cunhar `portfolio_gate_reports` quando — e só quando —
+**um veredito muda** (fingerprint sobre gate/status/reason_code, não sobre as
+métricas: um relatório por hora invalidaria a revisão continuamente). Uma
+aprovação vale exatamente enquanto valerem as respostas que ela aprovou.
+
+O registro é uma **CLI**, não um endpoint: o perímetro publica o portfólio só
+em GET, e as duas coisas fechadas na borda são as que mudam o que o sistema tem
+permissão de fazer — sair de `HALTED`, e esta.
+
+```sh
+docker compose exec -T api node dist/gates-cli.js show
+docker compose exec -T api node dist/gates-cli.js approve <id> \
+  --reviewer owner --acknowledge-expectation < revisao.txt
+```
+
+Recusa com código próprio: relatório inexistente, não corrente, já aprovado,
+gates ainda não todos `PASS`, revisor inválido, registro escrito com menos de 40
+caracteres, expectativa calibrada não reconhecida. A mesma guarda está repetida
+**dentro** do `UPDATE`. Procedimento em
+[`docs/runbooks/polymarket-portfolio.md`](runbooks/polymarket-portfolio.md).
+
+### DECISÃO DE DESENHO: onde mora a ponte decisão → ordem de paper
+
+Recomendação escrita em
+[`docs/architecture/decision-to-paper-bridge.md`](architecture/decision-to-paper-bridge.md),
+**não implementada**:
+
+> **O decision log é o outbox. O consumidor mora no módulo `paper`. Nenhum dos
+> dois módulos escreve na tabela do outro.**
+
+Um job `bridge` a cada 30 s no `paper/runner.ts` lê `portfolio_decisions`
+(`ENTRY`/`ACCEPTED`/`paper_order_id IS NULL`), revalida frescor por conta
+própria e chama **em processo** o mesmo `decideOrderType` + `acceptPaperOrder`
+que o endpoint de intents já usa. A chave de junção viaja com a ordem
+(`paper_orders.decision_id`), e é o **próprio módulo portfolio** que carimba
+`paper_order_id` no ciclo seguinte, lendo `paper_orders` só para leitura. Assim
+os dois guards de escopo continuam exatamente tão estritos quanto são hoje.
+
+Custo: migration **0015** (`paper_orders.source` ganha `'portfolio'`, mais a
+coluna `decision_id`), zero container novo, zero RAM nova, zero superfície nova
+no perímetro. As alternativas — dentro do portfolio, um terceiro serviço, uma
+chamada HTTP, ou o portfolio escrevendo `paper_orders` — e por que cada uma foi
+recusada estão no documento.
+
+### Config 1.1.0 → 1.2.0 (cuidado de deploy)
+
+Quatro parâmetros de gate novos (`g2MinDistinctCloseDays`,
+`g2MinBootstrapBlocks`, `g2MaxSinglePositionPnlShare`, `g4MinReconciledFills`)
+mudam o conteúdo hasheado. A 1.1.0 **está cunhada em produção** desde 19:53Z de
+2026-08-26, então editá-la repetiria o incidente do `score_version`: a versão
+foi cunhada de novo. O parser continua recusando afrouxamento — os quatro
+entram na lista que dispara `PORTFOLIO_CONFIG_GATE_LOOSENED`.
+
+`config/portfolio.json` chega pelo CD e o binário que o lê só muda no rebuild de
+profile: **os dois têm que sair na mesma janela**.
+
 ### Achado aberto: coletor onchain falhando
 
 **FATO VERIFICADO:** `JOB_FAILED job:"onchain"` se repete a cada ciclo — 12
@@ -916,13 +1002,34 @@ A RFC-012 está **ativa em produção**. A RFC-013 tem as fases A–D mergeadas 
 **ainda não existe no servidor** e a poda de `book_deltas` **ainda não roda**,
 porque as duas coisas dependem do mesmo rebuild.
 
-### 0. FEITO nesta sessão
+### 0. FEITO nas duas últimas sessões
 
-PRs #37, #39 e #40 mergeados e deployados; `polymarket-portfolio` criado no
-servidor (config 1.1.0) e corrigido; G1 confirmado em `INSUFFICIENT_DATA`. O que
-segue abaixo é o que **ainda não** foi feito.
+PRs #37, #39, #40 e #41 mergeados e deployados; `polymarket-portfolio` criado no
+servidor e corrigido; G1 confirmado em `INSUFFICIENT_DATA`. Nesta sessão: as
+degenerações de **G2/G3/G4** fechadas com testes de regressão, o **registro da
+aprovação do G6** implementado (relatórios + CLI), a **ponte de paper decidida
+em documento**, e a config cunhada em **1.2.0**. O que segue é o que **ainda
+não** foi feito.
 
-### 1. Rodar o segundo bloco de checagem pós-ativação
+### 1. Rebuild de profile com a config 1.2.0
+
+O deploy do CD entrega `config/portfolio.json` com a versão 1.2.0, mas o binário
+que a lê só muda no rebuild. Enquanto os dois não saírem na mesma janela, o
+`polymarket-portfolio` continua rodando o código antigo contra um arquivo novo.
+
+```sh
+cd /opt/ganso-market && docker compose --env-file deploy/server.env \
+  --profile polymarket up --build --detach polymarket-portfolio api
+```
+
+O `api` entra na lista porque é onde vive o `dist/gates-cli.js` do registro do
+G6.
+
+Esperado no boot: `PORTFOLIO_BOOT` com `config_version` **1.2.0**, e no primeiro
+ciclo de gates um `PORTFOLIO_GATE_REPORT_MINTED` com `reason: "first_report"` —
+o primeiro relatório que já existiu.
+
+### 2. Rodar o segundo bloco de checagem pós-ativação
 
 Nunca rodou contra a fase E. Mede o que o primeiro bloco não vê: contagem de
 `PORTFOLIO_REPLAY_OK` versus `MISMATCH`, RAM dos containers contra os 192 MiB,
@@ -934,18 +1041,14 @@ O `PORTFOLIO_REPLAY_OK` é a primeira vez que o replay corre sobre decisões
 geradas contra books reais de 10 níveis, e não sobre os fixtures rasos dos
 testes.
 
-### 2. Auditar G2–G6 contra o modo de falha do G1
+### 3. Implementar a ponte decisão → ordem de paper
 
-O G1 passou porque comparava uma coisa com ela mesma. Os outros quatro em
-`INSUFFICIENT_DATA` estão nesse estado por falta de dado, então nenhum chegou
-perto de uma barra — mas nenhum foi reauditado sob a lente "passa por
-degeneração". O G4 é o mais suspeito: `reconcile([])` devolve nulos e o gate
-depende de contagens que podem estar vazias de um jeito parecido.
-
-### 3. Decidir onde mora a ponte decisão → ordem de paper
-
-Ver a seção do achado acima. É o gargalo real do G2, e é decisão de projeto
-antes de ser código.
+O desenho está decidido e escrito
+([`docs/architecture/decision-to-paper-bridge.md`](architecture/decision-to-paper-bridge.md));
+falta o PR: migration 0015, o job `bridge` no runner do paper, o carimbo no
+ciclo do portfolio, testes dos dois lados. É o gargalo real do G2 — sem ele,
+G2/G3/G4 ficam em `INSUFFICIENT_DATA` para sempre, por falta de caminho e não de
+tempo.
 
 ### 4. (histórico) Um único rebuild de profile no servidor
 
@@ -975,9 +1078,9 @@ propriedade do arquivo e não do binário — mas se um PR futuro mudar um defau
 do código **e** o arquivo ao mesmo tempo, o rebuild tem que sair na mesma janela
 do merge.
 
-### 3. Observação pós-ativação
+### 5. Observação pós-ativação
 
-- Log esperado no boot: `PORTFOLIO_BOOT` com `config_version` **1.1.0**,
+- Log esperado no boot: `PORTFOLIO_BOOT` com `config_version` **1.2.0**,
   `config_hash`, `factor_map_version` e `factor_map_hash`; depois
   `PORTFOLIO_CYCLE` a cada 60 s com `evaluated`, `entrable`, `state`,
   `positions`, `open_breakers` e `stale_marks`.
@@ -1002,7 +1105,7 @@ do merge.
   `polymarket_retention_log` e que `n_live_tup` cai de forma sustentada.
 - Painel: aba "Portfólio" no web app, atrás do login.
 
-### 4. Pendências declaradas
+### 6. Pendências declaradas
 
 - **Coletor onchain** (`JOB_FAILED job:"onchain"`, `ONCHAIN_POLLED` zerado): o
   `polygon-rpc.com` da config devolve 403 desde que a RFC-012 foi escrita; o
@@ -1017,7 +1120,10 @@ do merge.
 - **Gates G1–G6**: todos medidos, **nenhum `PASS`** — e esse é o resultado
   correto: não há modelo promovido na RFC-010, nenhuma posição fechada em paper,
   nenhum circuit breaker exercitado em produção e nenhuma revisão escrita do
-  proprietário. `rfc_009_status` permanece `BLOCKED`.
+  proprietário. `rfc_009_status` permanece `BLOCKED`. Depois da auditoria de
+  2026-08-27, nenhum deles pode passar por degeneração — o G5 é o único que não
+  precisou de correção, porque sua única condição já compara duas origens
+  diferentes (o parâmetro gravado da venue e o relógio persistido).
 - **Quota do decision log** (achado novo, decisão do proprietário): a linha média
   de `portfolio_decisions` mede **2.038 bytes**; a um ciclo/minuto sobre 98
   mercados são ~141 mil linhas/dia ≈ **288 MB/dia** contra uma quota de 0,9 GB,
