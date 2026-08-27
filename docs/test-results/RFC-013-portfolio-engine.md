@@ -496,6 +496,25 @@ entra na lista que dispara `PORTFOLIO_CONFIG_GATE_LOOSENED`.
 que o lê só muda no rebuild de profile. Os dois têm que sair na mesma janela —
 é a mesma lição de sempre, e desta vez ela é sobre 1.2.0.
 
+**De onde vêm os quatro números — declaração explícita.** A RFC não nomeia
+nenhum deles; eu escolhi os quatro, e a justificativa de cada um:
+
+| Parâmetro                     | Valor | Por quê                                                                                                                                                                                        |
+| ----------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `g2MinBootstrapBlocks`        | 10    | É exatamente `g2MinClosedPositions / bootstrapBlockSize` = 100/10, então **não acrescenta barra nenhuma** no piso da RFC; ele só passa a valer se alguém aumentar o bloco ou reduzir a amostra |
+| `g2MinDistinctCloseDays`      | 20    | Um terço da janela de 60 dias — evidência espalhada pela janela em vez de um episódio                                                                                                          |
+| `g2MaxSinglePositionPnlShare` | 0,25  | Com 100 posições, o uniforme é 1%; um quarto de todo o dinheiro movido numa posição é ~25× a média                                                                                             |
+| `g4MinReconciledFills`        | 100   | O mesmo piso de amostra que a RFC exige do G2, aplicado à reconciliação                                                                                                                        |
+
+O que merece revisão do proprietário com dado real é o **terceiro**. Um livro
+maker em que a maioria das posições zera e poucas pagam pode passar de 25%
+legitimamente. Duas coisas amortecem o risco: nesse formato o intervalo do
+bootstrap fica largo e provavelmente atravessa o zero de qualquer jeito (ou
+seja, o `FAIL` viria pelo caminho normal), e a resposta aqui é
+`INSUFFICIENT_DATA` — "junte mais dado" — e não uma reprovação. Mas o parser só
+recusa **afrouxar**, então subir esse teto exigiria mudança de código, de
+propósito.
+
 ### 10.6 Testes de regressão, no formato do G1
 
 Cada degeneração ganhou um teste que **teria pego** o defeito, e todos afirmam
