@@ -44,11 +44,11 @@ A conta é criada/rotacionada localmente, nunca por endpoint público:
 ```bash
 # dentro do container da API (a senha vem do stdin, nunca de argv)
 printf '%s' 'SENHA-COM-16-OU-MAIS-CARACTERES' | \
-  docker compose exec -T api node dist/account-cli.js create owner
+  docker compose exec -T api node apps/api/dist/account-cli.js create owner
 
 # rotacionar a senha (revoga todas as sessões):
 printf '%s' 'NOVA-SENHA-FORTE' | \
-  docker compose exec -T api node dist/account-cli.js reset owner
+  docker compose exec -T api node apps/api/dist/account-cli.js reset owner
 ```
 
 A CLI recusa senha com menos de 16 caracteres e nunca imprime o valor.

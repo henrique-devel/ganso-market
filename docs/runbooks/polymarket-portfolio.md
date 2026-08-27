@@ -48,8 +48,11 @@ de `HALTED`, e esta.
 ### 1. Ver o relatório corrente
 
 ```sh
-docker compose exec -T api node dist/gates-cli.js show
+docker compose exec -T api node apps/api/dist/gates-cli.js show
 ```
+
+(O caminho é `apps/api/dist/...` e não `dist/...`: o `WORKDIR` da imagem é
+`/workspace`, a raiz do repositório, não o workspace da api.)
 
 Devolve `report_id`, `overall_status`, os seis vereditos, se já há aprovação, e
 a expectativa calibrada que a RFC exige impressa no relatório.
@@ -60,7 +63,7 @@ A revisão vai por **stdin** — texto livre, mínimo de 40 caracteres, e ela é
 gate: uma assinatura sobre uma página em branco não é uma revisão.
 
 ```sh
-docker compose exec -T api node dist/gates-cli.js approve 7 \
+docker compose exec -T api node apps/api/dist/gates-cli.js approve 7 \
   --reviewer owner --acknowledge-expectation < revisao.txt
 ```
 

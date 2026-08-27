@@ -911,8 +911,8 @@ em GET, e as duas coisas fechadas na borda são as que mudam o que o sistema tem
 permissão de fazer — sair de `HALTED`, e esta.
 
 ```sh
-docker compose exec -T api node dist/gates-cli.js show
-docker compose exec -T api node dist/gates-cli.js approve <id> \
+docker compose exec -T api node apps/api/dist/gates-cli.js show
+docker compose exec -T api node apps/api/dist/gates-cli.js approve <id> \
   --reviewer owner --acknowledge-expectation < revisao.txt
 ```
 
@@ -1022,7 +1022,7 @@ cd /opt/ganso-market && docker compose --env-file deploy/server.env \
   --profile polymarket up --build --detach polymarket-portfolio api
 ```
 
-O `api` entra na lista porque é onde vive o `dist/gates-cli.js` do registro do
+O `api` entra na lista porque é onde vive o `apps/api/dist/gates-cli.js` do registro do
 G6.
 
 Esperado no boot: `PORTFOLIO_BOOT` com `config_version` **1.2.0**, e no primeiro

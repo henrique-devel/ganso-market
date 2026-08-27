@@ -8,9 +8,12 @@
 //
 // Run inside the API container, with the written review on stdin:
 //
-//   docker compose exec -T api node dist/gates-cli.js show
-//   docker compose exec -T api node dist/gates-cli.js approve 7 \
+//   docker compose exec -T api node apps/api/dist/gates-cli.js show
+//   docker compose exec -T api node apps/api/dist/gates-cli.js approve 7 \
 //     --reviewer owner --acknowledge-expectation < review.txt
+//
+// The path is `apps/api/dist/...` and not `dist/...`: the image's WORKDIR is
+// /workspace, the repository root, not the api workspace.
 //
 // SIMULAÇÃO — SEM EXECUÇÃO REAL. A passing G6 unlocks nothing by itself:
 // RFC-009 stays blocked until every gate is PASS and the owner starts it
