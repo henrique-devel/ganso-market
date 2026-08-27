@@ -435,6 +435,51 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
 
 As RFCs do caminho Solana foram removidas em 2026-08-18 (ver decisão acima).
 
+## DECISÃO DO PROPRIETÁRIO — o kill switch ganha botão no painel (2026-08-27)
+
+**FATO INFORMADO:** o proprietário pediu que o rearme do kill switch do paper
+broker fosse possível pela interface web, em vez de exigir acesso ao servidor.
+
+**FATO VERIFICADO — por que o pedido apareceu.** O switch estava **engatado desde
+2026-08-26 05:28:48Z** com motivo `RECORDER_STALE` e nunca havia sido rearmado —
+35 h de broker parado que ninguém tinha como ver sem entrar no servidor. Quem
+encontrou foi a ponte, no primeiro trabalho real dela: `BRIDGE_DECISION_SKIPPED`
+com `reason: "KILL_SWITCH_ENGAGED"`. Enquanto ele estivesse de pé, **nenhuma
+ordem de paper era aceita de fonte nenhuma**, e o G2 não acumulava uma única
+posição fechada. Rearmado às 20:48:54Z pelo caminho de código real
+(`rearmKillSwitch`), com o evento `kill_switch_rearmed` no ledger e o
+`engaged_at` preservado — o G3 continua enxergando que o switch foi exercitado.
+
+**O que o botão é, e o que ele deliberadamente não é:**
+
+- **Uma única superfície nova no perímetro**, e é a primeira escrita que ele
+  publica: `POST /api/polymarket/paper/kill-switch/rearm`, como `location =`
+  (caminho exato) e não como prefixo. `^~ /api/polymarket/paper` publicaria
+  também o `POST .../intents`, que **cria ordens** — a superfície que nunca pode
+  ser alcançável de fora. Tem limitador de taxa em zona própria, para um burst
+  no rearme não consumir o orçamento do login.
+- **Sem GET novo.** O estado do switch já viaja no
+  `GET /api/polymarket/resolution-risk/pipeline`, que o painel já lê e já
+  desenha. Um segundo endpoint para o mesmo fato seria mais uma coisa para
+  manter de acordo com a primeira.
+- **Sem botão de engatar.** O switch tem gatilhos automáticos (recorder parado,
+  perda diária), então parar nunca espera por humano. Uma parada manual continua
+  sendo ação de dentro do servidor, e o `halt`/`resume` da RFC-013 continuam
+  fechados.
+- **Sem botão quando o estado é desconhecido.** Enquanto a leitura do pipeline
+  não chega, não há de que rearmar: oferecer a ação assim mesmo seria controle
+  cego. E o parser recusa qualquer `engaged` que não seja booleano — um payload
+  quebrado não pode ser lido como "o broker está rodando".
+- **Dois cliques, nunca um.** O primeiro só revela o que a ação faz. O motivo e o
+  instante do engate ficam na tela durante a confirmação, para a decisão ser
+  tomada contra a evidência e não de memória.
+
+**Teste de regressão do perímetro:** `scripts/tests/test_nginx_perimeter.py`
+falha se alguém trocar o `location =` por um prefixo, se o método deixar de ser
+fixado, se o limitador sumir, ou se qualquer caminho da RFC-012/013 deixar de ser
+GET-only. O buraco não é o risco — o risco é ele alargar por acidente, num diff
+que pareceria uma mudança de um caractere.
+
 ## Decisões e invariantes vigentes
 
 1. `ExecutionMode` aceita exclusivamente `paper` no runtime atual (o caminho

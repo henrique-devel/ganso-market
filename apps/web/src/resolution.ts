@@ -289,6 +289,74 @@ export async function authorizedGet<T>(
   return { kind: "ok", value };
 }
 
+/**
+ * The one write this dashboard makes.
+ *
+ * Separate from `authorizedGet` rather than a flag on it, because the failure
+ * modes differ and the caller has to be able to tell them apart: a refused write
+ * must not look like a stale read. `409` comes back as its own result so the
+ * page can say WHY the server refused instead of "erro".
+ */
+export type ResolutionPostResult<T> =
+  | { readonly kind: "ok"; readonly value: T }
+  | { readonly kind: "unauthorized" }
+  | { readonly kind: "refused"; readonly reason: string | null }
+  | { readonly kind: "error" };
+
+export async function authorizedPost<T>(
+  path: string,
+  accessToken: string,
+  validate: (body: unknown) => T | null,
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionPostResult<T>> {
+  let response: ResolutionResponse;
+  try {
+    response = await fetcher(path, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "include",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+      },
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch {
+    return { kind: "error" };
+  }
+  if (response.status === 401) {
+    return { kind: "unauthorized" };
+  }
+  if (response.status === 409) {
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      return { kind: "refused", reason: null };
+    }
+    const reason =
+      isRecord(body) && typeof body.reason_code === "string"
+        ? body.reason_code
+        : null;
+    return { kind: "refused", reason };
+  }
+  if (!response.ok) {
+    return { kind: "error" };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: "error" };
+  }
+  const value = validate(body);
+  if (value === null) {
+    return { kind: "error" };
+  }
+  return { kind: "ok", value };
+}
+
 export function fetchResolutionRisk(
   accessToken: string,
   fetcher: ResolutionFetcher = fetch,

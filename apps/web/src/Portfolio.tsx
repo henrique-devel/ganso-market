@@ -3,6 +3,12 @@
 // well as from the Nginx perimeter — leaving HALTED should take a deliberate
 // operator action from inside, not a button on a page.
 //
+// One control DOES exist in the dashboard, and it is not here: the paper kill
+// switch's rearm, on the Resolução tab, next to the state it acts on (owner
+// decision, 2026-08-27). It is a different switch from these two — the RFC-011
+// broker halt, not the RFC-013 portfolio state — and it is published as one
+// exact path with a confirmation step. This tab's controls stay closed.
+//
 // The panel shows vetoed opportunities WITH their reason. Hiding them would let
 // the page imply the universe is cleaner than it is; showing one without the
 // reason is what the RFC forbids outright.
