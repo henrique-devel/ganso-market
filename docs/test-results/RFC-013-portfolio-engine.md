@@ -570,7 +570,37 @@ O veredito medido **não muda**: os seis gates seguem sem nenhum `PASS` e
 `rfc_009_status` segue `BLOCKED`. O que muda é que agora eles seguem assim
 pelos motivos certos.
 
-## 11. Não verificado / pendências
+## 11. Verificação em produção da config 1.2.0 (2026-08-27 03:11Z)
+
+O que estava declarado como "não verificado em produção" na seção 9 passou a
+ser verificado, com o segundo bloco de checagem rodando pela primeira vez contra
+a fase E.
+
+| Verificação                    | Resultado                                                                                          |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `PORTFOLIO_BOOT`               | `config_version` **1.2.0**, `config_hash` `1c8a3316…`                                              |
+| Seis gates                     | todos `INSUFFICIENT_DATA`; `rfc_009_status: BLOCKED`                                               |
+| `PORTFOLIO_GATE_REPORT_MINTED` | **`report_id: 1`, `reason: "first_report"`** — o primeiro relatório que já existiu                 |
+| `gates-cli show`               | responde em produção, com os seis vereditos e a expectativa calibrada                              |
+| `PORTFOLIO_REPLAY_OK`          | presente; zero `MISMATCH`; zero linhas de erro no serviço                                          |
+| G4, métricas novas             | `samples_required: 100`; `self_referential_fee_samples: 0`; `self_referential_slippage_samples: 0` |
+| G2, métricas novas             | `distinct_close_days`, `bootstrap_blocks` e `outside_window` presentes nos shortfalls              |
+| Perímetro                      | GET → **401** nas quatro rotas; POST → **404**                                                     |
+| RAM                            | `polymarket-portfolio` em **23,8 MiB de 192**                                                      |
+
+**A janela de crash-loop apareceu, e foi exatamente a prevista.** O CD entregou
+o arquivo 1.2.0 e recriou o container antes do rebuild; o binário antigo recusou
+as quatro chaves novas com `PORTFOLIO_CONFIG_UNKNOWN_KEY`. Fail-closed correto,
+fechado pelo rebuild. É a mesma lição do `score_version`, agora com o número
+medido: a janela existe sempre que config e binário não saem juntos.
+
+**O reset do relógio do G2 foi observado em produção pela primeira vez.** A
+categoria `macro` resetou às 02:19:29Z com `regime_fingerprint_changed` — a
+venue mudou fee/tick e os dias acumulados foram jogados fora. É o G5 fazendo
+exatamente o que a RFC manda, e agora, com o corte da amostra pela janela do
+relógio (seção 10.1), o reset também joga fora as posições daquele regime.
+
+## 12. Não verificado / pendências
 
 - **Ativação em produção**: o serviço `polymarket-portfolio` continua **não
   criado no servidor**, e o Nginx continua **não recarregado** com as rotas GET
