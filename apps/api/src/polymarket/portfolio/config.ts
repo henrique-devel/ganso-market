@@ -124,6 +124,27 @@ export interface GateConfig {
   readonly g2MinClosedPositions: number;
   readonly g2MinDistinctMarkets: number;
   readonly g2MinCategories: number;
+  /**
+   * G2 dispersion: distinct UTC days on which positions closed.
+   *
+   * The RFC's "60 dias corridos" describes the CLOCK, not the evidence. A
+   * hundred positions closed inside one afternoon of a 60-day run is a burst,
+   * and a block bootstrap over a burst resamples one market episode.
+   */
+  readonly g2MinDistinctCloseDays: number;
+  /**
+   * G2 dispersion: independent blocks the sample must support, i.e.
+   * floor(n / blockSize). At the RFC's own floor (100 positions, blocks of 10)
+   * this is exactly 10 and binds nothing; it binds when the block grows or the
+   * sample shrinks, which is when the interval stops meaning anything.
+   */
+  readonly g2MinBootstrapBlocks: number;
+  /**
+   * G2 dispersion: the largest share of the gross moved PnL (sum of absolute
+   * values) that a SINGLE closed position may account for. One position at a
+   * quarter of the whole book makes "100 closed positions" a fiction.
+   */
+  readonly g2MaxSinglePositionPnlShare: number;
   /** Haircut applied to the realized edge before the CI is taken. */
   readonly g2EdgeHaircut: number;
   /** Block-bootstrap resamples and block length, in closed positions. */
@@ -133,6 +154,12 @@ export interface GateConfig {
   readonly bootstrapSeed: number;
   /** G4: median relative error allowed between simulated and real fees. */
   readonly g4MaxFeeMedianError: number;
+  /**
+   * G4: independent reconciliation samples required on EACH leg (fee and
+   * slippage) before the gate reports a verdict at all. One reconciled fill is
+   * not a reconciliation, and a median over one sample is that sample.
+   */
+  readonly g4MinReconciledFills: number;
   readonly g4MinSoakDays: number;
 }
 
@@ -172,7 +199,7 @@ export interface PortfolioConfig {
  * new config version, never an edit in place.
  */
 export const DEFAULT_PORTFOLIO_CONFIG: PortfolioConfig = Object.freeze({
-  version: "1.1.0",
+  version: "1.2.0",
   bankrollUsd: 1_000,
   kelly: Object.freeze({
     lambda: 0.25,
@@ -223,11 +250,15 @@ export const DEFAULT_PORTFOLIO_CONFIG: PortfolioConfig = Object.freeze({
     g2MinClosedPositions: 100,
     g2MinDistinctMarkets: 30,
     g2MinCategories: 2,
+    g2MinDistinctCloseDays: 20,
+    g2MinBootstrapBlocks: 10,
+    g2MaxSinglePositionPnlShare: 0.25,
     g2EdgeHaircut: 0.5,
     bootstrapResamples: 2_000,
     bootstrapBlockSize: 10,
     bootstrapSeed: 20_260_825,
     g4MaxFeeMedianError: 0.05,
+    g4MinReconciledFills: 100,
     g4MinSoakDays: 30,
   }),
   cadence: Object.freeze({
@@ -625,11 +656,15 @@ export function parsePortfolioConfig(raw: unknown): PortfolioConfig {
     "g2MinClosedPositions",
     "g2MinDistinctMarkets",
     "g2MinCategories",
+    "g2MinDistinctCloseDays",
+    "g2MinBootstrapBlocks",
+    "g2MaxSinglePositionPnlShare",
     "g2EdgeHaircut",
     "bootstrapResamples",
     "bootstrapBlockSize",
     "bootstrapSeed",
     "g4MaxFeeMedianError",
+    "g4MinReconciledFills",
     "g4MinSoakDays",
   ] as const;
   rejectUnknownKeys(gatesRaw, gateKeys, "portfolio.gates");
@@ -676,6 +711,27 @@ export function parsePortfolioConfig(raw: unknown): PortfolioConfig {
       POSITIVE,
       "gates",
     ),
+    g2MinDistinctCloseDays: num(
+      gatesRaw,
+      "g2MinDistinctCloseDays",
+      defaults.gates.g2MinDistinctCloseDays,
+      POSITIVE,
+      "gates",
+    ),
+    g2MinBootstrapBlocks: num(
+      gatesRaw,
+      "g2MinBootstrapBlocks",
+      defaults.gates.g2MinBootstrapBlocks,
+      POSITIVE,
+      "gates",
+    ),
+    g2MaxSinglePositionPnlShare: num(
+      gatesRaw,
+      "g2MaxSinglePositionPnlShare",
+      defaults.gates.g2MaxSinglePositionPnlShare,
+      FRACTION,
+      "gates",
+    ),
     g2EdgeHaircut: num(
       gatesRaw,
       "g2EdgeHaircut",
@@ -711,6 +767,13 @@ export function parsePortfolioConfig(raw: unknown): PortfolioConfig {
       FRACTION,
       "gates",
     ),
+    g4MinReconciledFills: num(
+      gatesRaw,
+      "g4MinReconciledFills",
+      defaults.gates.g4MinReconciledFills,
+      POSITIVE,
+      "gates",
+    ),
     g4MinSoakDays: num(
       gatesRaw,
       "g4MinSoakDays",
@@ -729,8 +792,13 @@ export function parsePortfolioConfig(raw: unknown): PortfolioConfig {
     gates.g2MinClosedPositions < defaults.gates.g2MinClosedPositions ||
     gates.g2MinDistinctMarkets < defaults.gates.g2MinDistinctMarkets ||
     gates.g2MinCategories < defaults.gates.g2MinCategories ||
+    gates.g2MinDistinctCloseDays < defaults.gates.g2MinDistinctCloseDays ||
+    gates.g2MinBootstrapBlocks < defaults.gates.g2MinBootstrapBlocks ||
+    gates.g2MaxSinglePositionPnlShare >
+      defaults.gates.g2MaxSinglePositionPnlShare ||
     gates.g2EdgeHaircut < defaults.gates.g2EdgeHaircut ||
     gates.g4MaxFeeMedianError > defaults.gates.g4MaxFeeMedianError ||
+    gates.g4MinReconciledFills < defaults.gates.g4MinReconciledFills ||
     gates.g4MinSoakDays < defaults.gates.g4MinSoakDays
   ) {
     fail(

@@ -17,6 +17,7 @@ import {
   evaluateG5,
   evaluateG6,
   overallStatus,
+  paperEvidenceBase,
   type GateResult,
   type ResolvedForecast,
 } from "../../../src/polymarket/portfolio/gates.js";
@@ -304,13 +305,43 @@ describe("G1 — calibration", () => {
   });
 });
 
+/**
+ * Closed positions SPREAD over the window: one every twelve hours, cycling
+ * through markets and two categories.
+ *
+ * Spread on purpose. Counts alone are also satisfied by a hundred positions
+ * closed inside one afternoon, and that shape is what `burst` below produces.
+ */
 function closed(count: number, pnl: (i: number) => number, markets = 40) {
   return Array.from({ length: count }, (_unused, i) => ({
     pnl: pnl(i),
     conditionId: `0x${String(i % markets)}`,
     category: i % 2 === 0 ? "crypto" : "macro",
-    closedAt: new Date(NOW.getTime() - (count - i) * 3_600_000),
+    closedAt: new Date(NOW.getTime() - (count - i) * (DAY_MS / 2)),
   }));
+}
+
+/** The same book, closed inside a single afternoon. */
+function burst(count: number, pnl: (i: number) => number, markets = 40) {
+  return Array.from({ length: count }, (_unused, i) => ({
+    pnl: pnl(i),
+    conditionId: `0x${String(i % markets)}`,
+    category: i % 2 === 0 ? "crypto" : "macro",
+    closedAt: new Date(NOW.getTime() - (count - i) * 60_000),
+  }));
+}
+
+/** The evidence base G3 is taken over, from the same closed positions. */
+function evidenceOf(
+  positions: ReturnType<typeof closed>,
+  clockStart: Date | null,
+) {
+  return paperEvidenceBase({
+    closed: positions,
+    clockStart,
+    now: NOW,
+    config: GATES,
+  });
 }
 
 describe("G2 — paper with realism", () => {
@@ -337,8 +368,10 @@ describe("G2 — paper with realism", () => {
     });
     const shortfalls = result.metrics.shortfalls as Record<string, unknown>;
     expect(Object.keys(shortfalls).sort()).toEqual([
+      "bootstrap_blocks",
       "closed_positions",
       "days",
+      "distinct_close_days",
       "distinct_markets",
     ]);
   });
@@ -369,6 +402,103 @@ describe("G2 — paper with realism", () => {
     expect(result.reasonCode).toBe("NO_EVIDENCE_OF_ALPHA");
   });
 
+  it("NEVER passes on a constant PnL series, however positive", () => {
+    // The G1 failure mode in G2's clothing. Every resample of a constant series
+    // returns the identical mean, so the 95% interval collapses to a point and
+    // `ciLow > 0` is arithmetic on that point rather than a statement about
+    // uncertainty. A hundred binary-market positions that all realized exactly
+    // the same PnL is an artifact of how the number was produced.
+    const constant = evaluateG2({
+      closed: closed(150, () => 1),
+      clockStart,
+      now: NOW,
+      config: GATES,
+    });
+    expect(constant.status).toBe("INSUFFICIENT_DATA");
+    expect(constant.status).not.toBe("PASS");
+    expect(constant.metrics.degenerate_interval).toBe(true);
+    expect(constant.metrics.ci95_width).toBe(0);
+    // The point estimate is up — which is exactly why the old gate passed.
+    expect(constant.bootstrap?.aboveZero).toBe(true);
+  });
+
+  it("NEVER passes on a burst: every close inside one afternoon", () => {
+    // Sixty days on the clock, and every position closed within a couple of
+    // hours of the others. Every count in the RFC is satisfied and the block
+    // bootstrap resamples a single market episode.
+    const result = evaluateG2({
+      closed: burst(150, (i) => 2 + (i % 5) * 0.2),
+      clockStart,
+      now: NOW,
+      config: GATES,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.status).not.toBe("PASS");
+    const shortfalls = result.metrics.shortfalls as Record<string, unknown>;
+    expect(Object.keys(shortfalls)).toEqual(["distinct_close_days"]);
+  });
+
+  it("NEVER passes when one position is most of the money the book moved", () => {
+    const result = evaluateG2({
+      closed: closed(150, (i) => (i === 100 ? 10 : 0.01)),
+      clockStart,
+      now: NOW,
+      config: GATES,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    const shortfalls = result.metrics.shortfalls as Record<string, unknown>;
+    expect(Object.keys(shortfalls)).toEqual(["single_position_share"]);
+    expect(Number(result.metrics.largest_position_pnl_share)).toBeGreaterThan(
+      0.8,
+    );
+  });
+
+  it("NEVER passes when the sample supports too few independent blocks", () => {
+    // A block bootstrap over three blocks is the sample rearranged three ways.
+    const result = evaluateG2({
+      closed: closed(150, (i) => 2 + (i % 5) * 0.2),
+      clockStart,
+      now: NOW,
+      config: { ...GATES, bootstrapBlockSize: 40 },
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    const shortfalls = result.metrics.shortfalls as Record<string, unknown>;
+    expect(Object.keys(shortfalls)).toEqual(["bootstrap_blocks"]);
+    expect(result.metrics.bootstrap_blocks).toBe(3);
+  });
+
+  it("drops closed positions from BEFORE the clock start", () => {
+    // A G5 reset throws the elapsed days away because the regime that produced
+    // them is gone. Keeping the positions closed during those days while
+    // discarding the days would make the reset cosmetic: the same sample, worn
+    // with a shorter clock.
+    const beforeReset = Array.from({ length: 120 }, (_unused, i) => ({
+      pnl: 2,
+      conditionId: `0x${String(i % 40)}`,
+      category: i % 2 === 0 ? "crypto" : "macro",
+      closedAt: new Date(NOW.getTime() - (120 - i) * DAY_MS - 70 * DAY_MS),
+    }));
+    const afterReset = Array.from({ length: 50 }, (_unused, i) => ({
+      pnl: 1 + (i % 4) * 0.3,
+      conditionId: `0x${String(i % 40)}`,
+      category: i % 2 === 0 ? "crypto" : "macro",
+      closedAt: new Date(NOW.getTime() - (50 - i) * DAY_MS),
+    }));
+    const result = evaluateG2({
+      closed: [...beforeReset, ...afterReset],
+      clockStart: new Date(NOW.getTime() - 61 * DAY_MS),
+      now: NOW,
+      config: GATES,
+    });
+    // 170 closed positions on the books, 50 inside the window.
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.metrics.closed_positions).toBe(50);
+    const shortfall = (result.metrics.shortfalls as Record<string, unknown>)
+      .closed_positions as Record<string, unknown>;
+    expect(shortfall.have).toBe(50);
+    expect(shortfall.outside_window).toBe(120);
+  });
+
   it("requires at least two categories, not just many markets", () => {
     const singleCategory = closed(150, () => 2).map((position) => ({
       ...position,
@@ -386,6 +516,11 @@ describe("G2 — paper with realism", () => {
 
 describe("G3 — risk survival", () => {
   const required = ["UMA_PROPOSED_OR_DISPUTED", "PRICE_JUMP_NO_CATALYST"];
+  const clockStart = new Date(NOW.getTime() - 90 * DAY_MS);
+  const sufficient = evidenceOf(
+    closed(150, (i) => 2 + (i % 5) * 0.2),
+    clockStart,
+  );
 
   it("passes only with zero unblocked breaches and every breaker exercised", () => {
     expect(
@@ -395,8 +530,58 @@ describe("G3 — risk survival", () => {
         drawdownMax: 0.1,
         breakersExercised: required,
         breakersRequired: required,
+        evidence: sufficient,
       }).status,
     ).toBe("PASS");
+  });
+
+  it("NEVER passes over an empty book, however clean it reads", () => {
+    // The G1 failure mode a third time. Zero positions produce zero unblocked
+    // breaches and zero drawdown, so every survival fact reads perfect — and
+    // the gate used to call that PASS. Nothing was survived, because nothing
+    // was ever at risk.
+    const result = evaluateG3({
+      unblockedBreaches: 0,
+      maxDrawdown: 0,
+      drawdownMax: 0.1,
+      breakersExercised: required,
+      breakersRequired: required,
+      evidence: evidenceOf([], clockStart),
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.status).not.toBe("PASS");
+    expect(String(result.metrics.detail)).toContain("no risk was survived");
+    const evidence = result.metrics.evidence_base as Record<string, unknown>;
+    expect(evidence.closed_positions).toBe(0);
+  });
+
+  it("is taken over the SAME base G2 requires, shortfall for shortfall", () => {
+    // Not "a base of its own that happens to look similar": both gates read one
+    // object, so a book too short for G2 is too short for G3 by construction.
+    const short = closed(20, () => 1);
+    const g2 = evaluateG2({
+      closed: short,
+      clockStart,
+      now: NOW,
+      config: GATES,
+    });
+    const g3 = evaluateG3({
+      unblockedBreaches: 0,
+      maxDrawdown: 0,
+      drawdownMax: 0.1,
+      breakersExercised: required,
+      breakersRequired: required,
+      evidence: evidenceOf(short, clockStart),
+    });
+    expect(g2.status).toBe("INSUFFICIENT_DATA");
+    expect(g3.status).toBe("INSUFFICIENT_DATA");
+    const base = g3.metrics.evidence_base as Record<string, unknown>;
+    const g2Shortfalls = g2.metrics.shortfalls as Record<string, unknown>;
+    const g3Shortfalls = base.shortfalls as Record<string, unknown>;
+    expect(Object.keys(g3Shortfalls).length).toBeGreaterThan(0);
+    for (const key of Object.keys(g3Shortfalls)) {
+      expect(Object.keys(g2Shortfalls)).toContain(key);
+    }
   });
 
   it("fails on a single unblocked breach", () => {
@@ -407,6 +592,7 @@ describe("G3 — risk survival", () => {
         drawdownMax: 0.1,
         breakersExercised: required,
         breakersRequired: required,
+        evidence: sufficient,
       }).status,
     ).toBe("FAIL");
   });
@@ -418,8 +604,24 @@ describe("G3 — risk survival", () => {
       drawdownMax: 0.1,
       breakersExercised: ["UMA_PROPOSED_OR_DISPUTED"],
       breakersRequired: required,
+      evidence: sufficient,
     });
     expect(result.status).toBe("FAIL");
+    expect(result.metrics.breakers_missing).toEqual(["PRICE_JUMP_NO_CATALYST"]);
+  });
+
+  it("still reports the breaker demonstrations when the book is short", () => {
+    // An injected scenario is a deliberate test, not something the book has to
+    // produce on its own — so the information survives; it just stops being
+    // sufficient by itself.
+    const result = evaluateG3({
+      unblockedBreaches: 0,
+      maxDrawdown: 0,
+      drawdownMax: 0.1,
+      breakersExercised: ["UMA_PROPOSED_OR_DISPUTED"],
+      breakersRequired: required,
+      evidence: evidenceOf([], clockStart),
+    });
     expect(result.metrics.breakers_missing).toEqual(["PRICE_JUMP_NO_CATALYST"]);
   });
 });
@@ -428,6 +630,10 @@ describe("G4 — reconciliation", () => {
   const base = {
     feeMedianError: 0.02,
     slippageBias: 0.001,
+    feeSamples: 120,
+    slippageSamples: 120,
+    selfReferentialFeeSamples: 0,
+    selfReferentialSlippageSamples: 0,
     soakDays: 40,
     killSwitchExercised: true,
     reduceOnlyExercised: true,
@@ -457,8 +663,54 @@ describe("G4 — reconciliation", () => {
       ...base,
       feeMedianError: null,
       slippageBias: null,
+      feeSamples: 0,
+      slippageSamples: 0,
     });
     expect(result.status).toBe("INSUFFICIENT_DATA");
+  });
+
+  it("NEVER passes on a handful of samples, however good they look", () => {
+    // A median over one sample is that sample; a mean bias over one sample is
+    // that sample's sign. Both cleared every bar before this.
+    const result = evaluateG4({ ...base, feeSamples: 1, slippageSamples: 1 });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.status).not.toBe("PASS");
+    expect(result.metrics.samples_required).toBe(GATES.g4MinReconciledFills);
+    expect(String(result.metrics.detail)).toContain(
+      "not enough independently reconciled fills",
+    );
+  });
+
+  it("requires the minimum on EACH leg: fees say nothing about slippage", () => {
+    expect(evaluateG4({ ...base, slippageSamples: 3 }).status).toBe(
+      "INSUFFICIENT_DATA",
+    );
+    expect(evaluateG4({ ...base, feeSamples: 3 }).status).toBe(
+      "INSUFFICIENT_DATA",
+    );
+  });
+
+  it("NEVER passes when every reference was the simulator's own input", () => {
+    // The G1 incident in G4's shape: when the "real" number is re-derived from
+    // the same recorded observation the simulator consumed, the fee error is
+    // zero and the slippage bias is zero — both clear their bars, and neither
+    // measured anything. Those samples never reach the arithmetic, so the
+    // counts are zero and the rejected ones are named.
+    const result = evaluateG4({
+      ...base,
+      feeMedianError: null,
+      slippageBias: null,
+      feeSamples: 0,
+      slippageSamples: 0,
+      selfReferentialFeeSamples: 400,
+      selfReferentialSlippageSamples: 400,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.status).not.toBe("PASS");
+    expect(result.metrics.self_referential_slippage_samples).toBe(400);
+    expect(String(result.metrics.detail)).toContain(
+      "comparing the simulator to itself",
+    );
   });
 });
 
@@ -519,6 +771,10 @@ describe("G5 — regime freshness", () => {
 });
 
 describe("G6 — approval", () => {
+  const REVIEW =
+    "Li o relatório inteiro, incluindo a expectativa calibrada, e aceito a " +
+    "evidência como suficiente para a decisão registrada.";
+
   it("is INSUFFICIENT_DATA with no written review", () => {
     expect(evaluateG6({ approval: null, currentReportId: 5 }).status).toBe(
       "INSUFFICIENT_DATA",
@@ -531,7 +787,7 @@ describe("G6 — approval", () => {
       approval: {
         reviewedAt: NOW,
         reviewer: "owner",
-        note: "ok",
+        note: REVIEW,
         reportId: 4,
       },
       currentReportId: 5,
@@ -540,13 +796,41 @@ describe("G6 — approval", () => {
     expect(result.metrics.matches_current_report).toBe(false);
   });
 
+  it("NEVER passes an approval with no report to have been written against", () => {
+    // `currentReportId === null` used to mean "matches" — an approval of
+    // nothing matching everything, which is the G1 shape exactly: a condition
+    // satisfied because there was nothing to compare it against. And it was the
+    // LIVE state of this gate, because nothing minted gate reports at all.
+    const result = evaluateG6({
+      approval: {
+        reviewedAt: NOW,
+        reviewer: "owner",
+        note: REVIEW,
+        reportId: 1,
+      },
+      currentReportId: null,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(result.status).not.toBe("PASS");
+    expect(String(result.metrics.detail)).toContain("no gate report");
+  });
+
+  it("NEVER passes a signature with no written record behind it", () => {
+    const result = evaluateG6({
+      approval: { reviewedAt: NOW, reviewer: "owner", note: "ok", reportId: 5 },
+      currentReportId: 5,
+    });
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    expect(String(result.metrics.detail)).toContain("written record");
+  });
+
   it("passes on a review of the report under consideration", () => {
     expect(
       evaluateG6({
         approval: {
           reviewedAt: NOW,
           reviewer: "owner",
-          note: "ok",
+          note: REVIEW,
           reportId: 5,
         },
         currentReportId: 5,

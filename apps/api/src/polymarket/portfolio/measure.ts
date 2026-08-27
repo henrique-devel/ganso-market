@@ -28,6 +28,7 @@ import {
   evaluateG5,
   evaluateG6,
   overallStatus,
+  paperEvidenceBase,
   type CategoryClock,
   type ClosedPosition,
   type GateResult,
@@ -146,6 +147,37 @@ export function selectForecasts(
 // G4 inputs: fee and slippage reconciliation over recorded paper fills.
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a reconciliation reference came from.
+ *
+ * This is the whole point of the type. The G1 incident of 2026-08-26 was a gate
+ * comparing the price to itself and passing every bar; G4 has the same shape
+ * available to it twice over, and the only defence is for each sample to SAY
+ * where its reference came from and for the arithmetic to refuse the ones that
+ * came from the simulator's own input.
+ */
+export type FeeReference =
+  /** The venue's own `fee_rate_bps`, off the recorded trade feed. Independent. */
+  | "VENUE_TRADE_FEED"
+  /** The rate the simulator itself charged with. Self-referential. */
+  | "SIMULATOR_OWN_RATE";
+
+export type PriceReference =
+  /**
+   * A book-walk over the snapshot recorded at the DECISION instant — a
+   * different observation from the one the fill consumed, which is what makes
+   * the comparison capable of failing. It is also what the simulator's
+   * conservatism claims: it executes against t + latency, not against the book
+   * the decision saw.
+   */
+  | "DECISION_BOOK"
+  /**
+   * A book-walk over the very snapshot the simulator filled against.
+   * Self-referential: the same query, the same table, the same levels, so the
+   * bias is zero by construction and `bias >= 0` can never fail.
+   */
+  | "EXECUTION_BOOK";
+
 export interface ReconciliationSample {
   readonly side: "BUY" | "SELL";
   /** Fee the simulator charged for this fill, in USD. */
@@ -155,10 +187,14 @@ export interface ReconciliationSample {
    * Null when no recorded trade near the fill carried a rate.
    */
   readonly realFeeUsd: number | null;
-  /** Price the simulator filled at. */
+  /** Provenance of `realFeeUsd`. Null exactly when `realFeeUsd` is null. */
+  readonly feeReference: FeeReference | null;
+  /** Volume-weighted price the simulator filled the order at. */
   readonly simulatedPrice: number;
-  /** Price a book-walk of the same size over the recorded book would give. */
+  /** Price a book-walk of the same size over the reference book would give. */
   readonly bookWalkPrice: number | null;
+  /** Provenance of `bookWalkPrice`. Null exactly when `bookWalkPrice` is null. */
+  readonly priceReference: PriceReference | null;
 }
 
 export interface ReconciliationResult {
@@ -166,13 +202,17 @@ export interface ReconciliationResult {
   readonly feeMedianError: number | null;
   /**
    * Mean conservatism of the simulated price: positive means the simulator was
-   * WORSE than the recorded book (paid more buying, received less selling),
+   * WORSE than the reference book (paid more buying, received less selling),
    * which is the safe direction. Negative is the optimistic bias the RFC
    * forbids, and evaluateG4 fails on it.
    */
   readonly slippageBias: number | null;
+  /** Samples that reached the arithmetic: independent references only. */
   readonly feeSamples: number;
   readonly slippageSamples: number;
+  /** Samples dropped for being the simulator compared against itself. */
+  readonly selfReferentialFeeSamples: number;
+  readonly selfReferentialSlippageSamples: number;
 }
 
 function median(values: readonly number[]): number | null {
@@ -203,19 +243,33 @@ export function reconcile(
 ): ReconciliationResult {
   const feeErrors: number[] = [];
   const biases: number[] = [];
+  let selfFee = 0;
+  let selfSlippage = 0;
   for (const sample of samples) {
     if (sample.realFeeUsd !== null && sample.realFeeUsd > 0) {
-      feeErrors.push(
-        Math.abs(sample.simulatedFeeUsd - sample.realFeeUsd) /
-          sample.realFeeUsd,
-      );
+      // A reference the simulator produced is not a reference. Counted, never
+      // averaged: an excluded sample has to be visible, because "no samples"
+      // and "no HONEST samples" are different situations for whoever reads the
+      // gate.
+      if (sample.feeReference === "VENUE_TRADE_FEED") {
+        feeErrors.push(
+          Math.abs(sample.simulatedFeeUsd - sample.realFeeUsd) /
+            sample.realFeeUsd,
+        );
+      } else {
+        selfFee += 1;
+      }
     }
     if (sample.bookWalkPrice !== null) {
-      biases.push(
-        sample.side === "BUY"
-          ? sample.simulatedPrice - sample.bookWalkPrice
-          : sample.bookWalkPrice - sample.simulatedPrice,
-      );
+      if (sample.priceReference === "DECISION_BOOK") {
+        biases.push(
+          sample.side === "BUY"
+            ? sample.simulatedPrice - sample.bookWalkPrice
+            : sample.bookWalkPrice - sample.simulatedPrice,
+        );
+      } else {
+        selfSlippage += 1;
+      }
     }
   }
   return {
@@ -226,6 +280,8 @@ export function reconcile(
         : biases.reduce((sum, value) => sum + value, 0) / biases.length,
     feeSamples: feeErrors.length,
     slippageSamples: biases.length,
+    selfReferentialFeeSamples: selfFee,
+    selfReferentialSlippageSamples: selfSlippage,
   };
 }
 
@@ -426,6 +482,16 @@ export function measureGates(input: MeasureGatesInput): MeasureGatesResult {
     config: input.config,
   });
 
+  // The SAME base, computed once and handed to both gates. G3's survival facts
+  // are measured over the paper book G2 requires, and an empty book reads clean
+  // on every one of them.
+  const evidence = paperEvidenceBase({
+    closed: input.closed,
+    clockStart: input.clockStart,
+    now: input.now,
+    config: input.config,
+  });
+
   const g3 = evaluateG3({
     unblockedBreaches: input.unblockedBreaches,
     maxDrawdown: input.maxDrawdown,
@@ -435,11 +501,17 @@ export function measureGates(input: MeasureGatesInput): MeasureGatesResult {
     // deriving the list from the type means a new breaker cannot be added
     // without also having to be exercised.
     breakersRequired: BREAKER_KINDS,
+    evidence,
   });
 
   const g4 = evaluateG4({
     feeMedianError: input.reconciliation.feeMedianError,
     slippageBias: input.reconciliation.slippageBias,
+    feeSamples: input.reconciliation.feeSamples,
+    slippageSamples: input.reconciliation.slippageSamples,
+    selfReferentialFeeSamples: input.reconciliation.selfReferentialFeeSamples,
+    selfReferentialSlippageSamples:
+      input.reconciliation.selfReferentialSlippageSamples,
     soakDays: input.soakDays,
     killSwitchExercised: input.killSwitchExercised,
     reduceOnlyExercised: input.reduceOnlyExercised,
@@ -469,10 +541,7 @@ export function measureGates(input: MeasureGatesInput): MeasureGatesResult {
     }),
     toMeasurement(g2, windowOf(input.clockStart, input.now)),
     toMeasurement(g3, windowOf(null, input.now)),
-    toMeasurement(g4, windowOf(null, input.now), {
-      fee_samples: input.reconciliation.feeSamples,
-      slippage_samples: input.reconciliation.slippageSamples,
-    }),
+    toMeasurement(g4, windowOf(null, input.now)),
     toMeasurement(g5, windowOf(oldestClock, input.now)),
     toMeasurement(g6, windowOf(null, input.now)),
   ];

@@ -1,8 +1,12 @@
 # Evidência de verificação — RFC-013 (motor de portfólio, entrada/saída e gates)
 
-- Data: 2026-08-26 (BRT)
+- Data: 2026-08-26 (fases A–E, seções 1–9), com adendo de **2026-08-27**
+  (seção 10: auditoria de G2–G6 contra o modo de falha do G1, e registro da
+  aprovação do G6)
 - Branch: `claude/rfc-013-portfolio-engine-f01fe2`, sobre a `main` em
-  `2151950` (merge do PR [#38](https://github.com/henrique-devel/ganso-market/pull/38))
+  `2151950` (merge do PR [#38](https://github.com/henrique-devel/ganso-market/pull/38));
+  o adendo veio de `claude/degeneracoes-g2-g3-g4-merge-376055`, sobre `4a037a3`
+  (merge do PR [#41](https://github.com/henrique-devel/ganso-market/pull/41))
 - Fases anteriores: PRs [#30](https://github.com/henrique-devel/ganso-market/pull/30)
   (A), [#33](https://github.com/henrique-devel/ganso-market/pull/33) (B),
   [#34](https://github.com/henrique-devel/ganso-market/pull/34) (C),
@@ -17,45 +21,48 @@
 - **SIMULAÇÃO — SEM EXECUÇÃO REAL.** Nenhuma ordem real, wallet, signer ou
   credencial de trading existe neste módulo.
 - **Nenhum gate passa hoje** — mas o G1 passou indevidamente por ~4 h em
-  produção antes de ser corrigido. A seção 9 registra o incidente inteiro.
+  produção antes de ser corrigido. A seção 9 registra o incidente inteiro, e a
+  seção 10 registra a auditoria dos outros cinco contra o mesmo modo de falha:
+  **G2, G3 e G4 tinham o defeito, e o G6 tinha uma variante mais silenciosa**.
 
 Este documento registra somente comandos realmente executados e resultados
 reais. Ele consolida a evidência das fases A–D (cujos números vivem nos corpos
-dos PRs #26–#37) e acrescenta a verificação da fase E — medição contínua de
-gates, ciclo de saída, replay determinístico e espaço de consulta.
+dos PRs #26–#37), acrescenta a verificação da fase E — medição contínua de
+gates, ciclo de saída, replay determinístico e espaço de consulta — e, na
+seção 10, a auditoria que fechou as degenerações restantes.
 
 ## 1. Escopo desta sessão (fase E)
 
 O handoff de 2026-08-26 declarava quatro pendências. Todas foram fechadas:
 
-| Pendência declarada                                                              | Estado                                                                                              |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Nenhum job gravando em `portfolio_gate_measurements` (tarefa 8)                  | job `gates` a cada 1 h + no boot; 6 medições por ciclo; relógio G2 por categoria                    |
-| `exits.ts` implementado mas fora do ciclo do runner                              | job `exits` a cada 30 s sobre posições abertas, gravando `EXIT` no decision log quando o veredito muda |
-| Replay determinístico do decision log e seu teste obrigatório (tarefa 7)         | `replay.ts` + `decisionrow.ts`; 14 testes; auditoria automática a cada ciclo de gates               |
-| `docs/test-results/RFC-013-portfolio-engine.md` inexistente                      | este documento                                                                                      |
+| Pendência declarada                                                      | Estado                                                                                                 |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Nenhum job gravando em `portfolio_gate_measurements` (tarefa 8)          | job `gates` a cada 1 h + no boot; 6 medições por ciclo; relógio G2 por categoria                       |
+| `exits.ts` implementado mas fora do ciclo do runner                      | job `exits` a cada 30 s sobre posições abertas, gravando `EXIT` no decision log quando o veredito muda |
+| Replay determinístico do decision log e seu teste obrigatório (tarefa 7) | `replay.ts` + `decisionrow.ts`; 14 testes; auditoria automática a cada ciclo de gates                  |
+| `docs/test-results/RFC-013-portfolio-engine.md` inexistente              | este documento                                                                                         |
 
 Três lacunas adicionais foram encontradas na leitura do código e fechadas, por
 serem pré-requisito das três primeiras:
 
-| Lacuna encontrada                                                                     | Consequência que tinha                                                        |
-| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `breakerOpen: false` fixo no runner: os 5 circuit breakers da tarefa 4 nunca abriam    | G3 nunca poderia passar (exige cada breaker demonstrado) e a saída não congelava |
-| `realizedPnlTotalScaled: 0n` fixo: a máquina de estados nunca podia disparar           | `perda_diaria_max`, `perda_semanal_max` e `drawdown_max` eram inertes; G2/G3 mediriam nada |
-| `takerFeeRate`, `rulePrecisionMultiplier` fixos e campos 9/10/12 do painel nulos       | fee taker nunca cobrada; multiplicador de rule-precision sempre 1; painel incompleto |
+| Lacuna encontrada                                                                   | Consequência que tinha                                                                     |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `breakerOpen: false` fixo no runner: os 5 circuit breakers da tarefa 4 nunca abriam | G3 nunca poderia passar (exige cada breaker demonstrado) e a saída não congelava           |
+| `realizedPnlTotalScaled: 0n` fixo: a máquina de estados nunca podia disparar        | `perda_diaria_max`, `perda_semanal_max` e `drawdown_max` eram inertes; G2/G3 mediriam nada |
+| `takerFeeRate`, `rulePrecisionMultiplier` fixos e campos 9/10/12 do painel nulos    | fee taker nunca cobrada; multiplicador de rule-precision sempre 1; painel incompleto       |
 
 ## 2. Gate de fonte (`make verify`, partes executadas)
 
-| Etapa                                        | Resultado                                                                    |
-| -------------------------------------------- | ---------------------------------------------------------------------------- |
-| `npm run format:check` (prettier)            | OK — "All matched files use Prettier code style!"                            |
-| `npm run lint` (tsc por workspace)           | OK — api, web e contracts sem erro                                          |
-| `npm test` — @ganso-market/api               | **93 arquivos aprovados + 4 pulados; 1.327 testes aprovados, 49 pulados**    |
-| `npm test` — @ganso-market/web               | **6 arquivos, 41 testes aprovados**                                          |
-| `npm test` — contracts                       | 2 arquivos, 70 testes aprovados                                              |
-| `npm run build`                              | OK (api tsc, web vite 251,02 kB / gzip 74,45 kB, contracts tsc)              |
-| `scripts/scan_secrets.py`                    | OK — "secret scan passed; no matched content was printed"                    |
-| `make compose-config`                        | OK — **agregado 4 261 412 864 bytes**, exatamente o mesmo de antes           |
+| Etapa                              | Resultado                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------- |
+| `npm run format:check` (prettier)  | OK — "All matched files use Prettier code style!"                         |
+| `npm run lint` (tsc por workspace) | OK — api, web e contracts sem erro                                        |
+| `npm test` — @ganso-market/api     | **93 arquivos aprovados + 4 pulados; 1.327 testes aprovados, 49 pulados** |
+| `npm test` — @ganso-market/web     | **6 arquivos, 41 testes aprovados**                                       |
+| `npm test` — contracts             | 2 arquivos, 70 testes aprovados                                           |
+| `npm run build`                    | OK (api tsc, web vite 251,02 kB / gzip 74,45 kB, contracts tsc)           |
+| `scripts/scan_secrets.py`          | OK — "secret scan passed; no matched content was printed"                 |
+| `make compose-config`              | OK — **agregado 4 261 412 864 bytes**, exatamente o mesmo de antes        |
 
 O agregado de memória do Compose não mudou porque **nenhum serviço novo foi
 criado**: a fase E acrescenta jobs ao `polymarket-portfolio` que já existia na
@@ -70,18 +77,18 @@ reexecutados nesta sessão.
 
 ## 3. Módulo `portfolio`: 199 → 292 testes
 
-| Suíte                    | Testes | O que cobre                                                                    |
-| ------------------------ | ------ | ------------------------------------------------------------------------------ |
-| `replay.test.ts`         | 14     | teste obrigatório da tarefa 7 (novo)                                           |
-| `exitcycle.test.ts`      | 23     | fiação dos sete critérios sobre uma posição real (novo)                        |
-| `breakers.test.ts`       | 16     | os 5 circuit breakers da tarefa 4 (novo)                                       |
-| `measure.test.ts`        | 22     | montagem da medição de gates, incluindo o reset do G2 (novo)                   |
-| `gates.test.ts`          | 37     | 35 → 37: +2 travando o G1 contra baseline de mercado (seção 9)                 |
-| `runner.test.ts`         | 11     | ciclos de saída e de gates pelo runner (novo)                                  |
-| `api.test.ts`            | 18     | 13 → 18: +5 no endpoint paginado de medições                                    |
-| demais (A–D)             | 151    | inalteradas                                                                    |
-| **total (gate de fonte)**| **292**|                                                                                |
-| `integration.pg.test.ts` | 19     | PostgreSQL real; pulados no gate de fonte (novo)                               |
+| Suíte                     | Testes  | O que cobre                                                    |
+| ------------------------- | ------- | -------------------------------------------------------------- |
+| `replay.test.ts`          | 14      | teste obrigatório da tarefa 7 (novo)                           |
+| `exitcycle.test.ts`       | 23      | fiação dos sete critérios sobre uma posição real (novo)        |
+| `breakers.test.ts`        | 16      | os 5 circuit breakers da tarefa 4 (novo)                       |
+| `measure.test.ts`         | 22      | montagem da medição de gates, incluindo o reset do G2 (novo)   |
+| `gates.test.ts`           | 37      | 35 → 37: +2 travando o G1 contra baseline de mercado (seção 9) |
+| `runner.test.ts`          | 11      | ciclos de saída e de gates pelo runner (novo)                  |
+| `api.test.ts`             | 18      | 13 → 18: +5 no endpoint paginado de medições                   |
+| demais (A–D)              | 151     | inalteradas                                                    |
+| **total (gate de fonte)** | **292** |                                                                |
+| `integration.pg.test.ts`  | 19      | PostgreSQL real; pulados no gate de fonte (novo)               |
 
 Comando: `npx vitest run test/polymarket/portfolio` →
 **16 arquivos, 292 aprovados, 19 pulados (311)**.
@@ -108,10 +115,11 @@ esta fase não precisou de tabela nova.
 > Nota de protocolo, confirmada nesta sessão: as suítes de integração
 > compartilham um banco e **falham em paralelo** — não por causa desta fase.
 > Rodando só `resolution/integration.test.ts` + `fundamental/integration.test.ts`
-> + `versioning.pg.test.ts` (todas anteriores a esta RFC), em paralelo:
-> **2 arquivos falham, 8 testes falham**. Com `--no-file-parallelism`, tudo
-> passa. É a mesma exigência de serialização que a evidência da RFC-012 já
-> registrava.
+>
+> - `versioning.pg.test.ts` (todas anteriores a esta RFC), em paralelo:
+>   **2 arquivos falham, 8 testes falham**. Com `--no-file-parallelism`, tudo
+>   passa. É a mesma exigência de serialização que a evidência da RFC-012 já
+>   registrava.
 
 O novo `portfolio/integration.pg.test.ts` existe porque **SQL só tipa contra um
 servidor**: um pool falso que responde por substring aceita `members_json ?|
@@ -119,37 +127,37 @@ $1::text[]` com o operando errado, um caminho `#>>` numa coluna que não é JSON
 ou um `count(*) FILTER` que o planner recusaria. Ele exercita, contra o schema
 real:
 
-| Verificação                                                              | Resultado                                                                                 |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `loadEligibleMarkets` com texto de regra e fee schedule                   | OK; `resolution_source` resolve para o adapter via `COALESCE`                              |
-| `loadOpenPositions`, `loadPaperPnl`                                       | OK; marca ausente/stale contribui o **custo**, nunca um ganho não realizado               |
-| `loadMarketChangeStates`, `loadCorrelatedMarkets`, `loadMidsAsOf`         | OK; as três consultas em lote                                                             |
-| `loadMidsAsOf` num instante anterior ao book gravado                      | **não retorna nada** — as-of é as-of                                                      |
-| abrir, listar e fechar um circuit breaker                                 | OK; breaker de escopo `token` guarda também o `condition_id`                               |
-| `insertDecision` + `loadRecentDecisions` (round-trip JSONB)               | OK; o bloco de replay volta íntegro                                                       |
-| `insertDecision` com input mais novo que a decisão                        | **recusado** por `portfolio_decisions_no_lookahead`                                        |
-| `entryProvenanceFor`                                                      | OK; lê a invalidação e o multiplicador de rule-precision do JSON da entrada                |
-| todas as consultas de entrada dos gates (G1–G6)                           | executam sem erro de tipo                                                                  |
-| `applyClockReset` duas vezes                                              | OK; **2** linhas em `portfolio_g2_clock_events` (um relógio de 60 dias e um resetado 3× não podem parecer iguais) |
-| `UPDATE` numa medição de gate                                             | **recusado**: "portfolio_gate_measurements rows are immutable"                             |
-| `ensureConfigVersion` com o mesmo nome e conteúdo diferente               | **recusado** com `PORTFOLIO_CONFIG_VERSION_CONTENT_MISMATCH`                                |
-| ciclo `panel` completo                                                    | estado, 7+ dimensões de exposição com custo de unwind real, painel e decisão gravados      |
-| ciclo `exits` completo                                                    | decisão `EXIT` gravada; **replay das linhas que passaram pelo PostgreSQL confere**          |
-| ciclo `gates` completo                                                    | 6 medições imutáveis; nenhuma `PASS` **nestas fixtures** (ver seção 9 para o que aconteceu em produção) |
+| Verificação                                                       | Resultado                                                                                                         |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `loadEligibleMarkets` com texto de regra e fee schedule           | OK; `resolution_source` resolve para o adapter via `COALESCE`                                                     |
+| `loadOpenPositions`, `loadPaperPnl`                               | OK; marca ausente/stale contribui o **custo**, nunca um ganho não realizado                                       |
+| `loadMarketChangeStates`, `loadCorrelatedMarkets`, `loadMidsAsOf` | OK; as três consultas em lote                                                                                     |
+| `loadMidsAsOf` num instante anterior ao book gravado              | **não retorna nada** — as-of é as-of                                                                              |
+| abrir, listar e fechar um circuit breaker                         | OK; breaker de escopo `token` guarda também o `condition_id`                                                      |
+| `insertDecision` + `loadRecentDecisions` (round-trip JSONB)       | OK; o bloco de replay volta íntegro                                                                               |
+| `insertDecision` com input mais novo que a decisão                | **recusado** por `portfolio_decisions_no_lookahead`                                                               |
+| `entryProvenanceFor`                                              | OK; lê a invalidação e o multiplicador de rule-precision do JSON da entrada                                       |
+| todas as consultas de entrada dos gates (G1–G6)                   | executam sem erro de tipo                                                                                         |
+| `applyClockReset` duas vezes                                      | OK; **2** linhas em `portfolio_g2_clock_events` (um relógio de 60 dias e um resetado 3× não podem parecer iguais) |
+| `UPDATE` numa medição de gate                                     | **recusado**: "portfolio_gate_measurements rows are immutable"                                                    |
+| `ensureConfigVersion` com o mesmo nome e conteúdo diferente       | **recusado** com `PORTFOLIO_CONFIG_VERSION_CONTENT_MISMATCH`                                                      |
+| ciclo `panel` completo                                            | estado, 7+ dimensões de exposição com custo de unwind real, painel e decisão gravados                             |
+| ciclo `exits` completo                                            | decisão `EXIT` gravada; **replay das linhas que passaram pelo PostgreSQL confere**                                |
+| ciclo `gates` completo                                            | 6 medições imutáveis; nenhuma `PASS` **nestas fixtures** (ver seção 9 para o que aconteceu em produção)           |
 
 ### O que o ciclo `panel` decidiu, contra o banco real
 
 Mercado semeado com `q_lo = 0.750000` e ask gravado em `0.62`:
 
-| Campo                | Valor gravado                                                       |
-| -------------------- | ------------------------------------------------------------------- |
-| `exec_price`         | `0.620000` — book-walk sobre o ask gravado, nunca o mid             |
-| `costs_total`        | `0.001000`                                                          |
-| `edge_net`           | `0.129000`                                                          |
-| `safety_margin`      | `0.032500` — `max($0,01; 25% do edge bruto no limite inferior)`      |
+| Campo                | Valor gravado                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `exec_price`         | `0.620000` — book-walk sobre o ask gravado, nunca o mid                                            |
+| `costs_total`        | `0.001000`                                                                                         |
+| `edge_net`           | `0.129000`                                                                                         |
+| `safety_margin`      | `0.032500` — `max($0,01; 25% do edge bruto no limite inferior)`                                    |
 | `entry_reason`       | "limite inferior 0.750000 supera preço executável 0.620000 mais custos 0.001000 e margem 0.032500" |
-| `outcome`            | `REJECTED`, `reason_code = CAP_EXHAUSTED`                            |
-| `binding_constraint` | `CAP_MERCADO`, `size_shares = 0.000000`                              |
+| `outcome`            | `REJECTED`, `reason_code = CAP_EXHAUSTED`                                                          |
+| `binding_constraint` | `CAP_MERCADO`, `size_shares = 0.000000`                                                            |
 
 Vale ler os dois últimos: o critério de entrada **passou** e o tamanho ainda
 saiu **zero**, porque a posição já aberta no mesmo mercado (custo US$ 50)
@@ -282,12 +290,12 @@ o dado que o produziu não existe em fixture.
 
 ### O que aconteceu
 
-| Instante (UTC) | Evento |
-| -------------- | ------ |
-| 2026-08-26 19:53:02 | `PORTFOLIO_BOOT` com `config_version 1.1.0` — fase E ativa |
-| 19:53:19 | primeiro `PORTFOLIO_GATES_MEASURED`: **`{"gate":"G1","status":"PASS","reason_code":null}`** |
-| 23:48:13 | última medição com o veredito errado ainda de pé |
-| 23:49:19 | após rebuild com a correção: `INSUFFICIENT_DATA` / `G1_CALIBRATION_NOT_MET` |
+| Instante (UTC)      | Evento                                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| 2026-08-26 19:53:02 | `PORTFOLIO_BOOT` com `config_version 1.1.0` — fase E ativa                                  |
+| 19:53:19            | primeiro `PORTFOLIO_GATES_MEASURED`: **`{"gate":"G1","status":"PASS","reason_code":null}`** |
+| 23:48:13            | última medição com o veredito errado ainda de pé                                            |
+| 23:49:19            | após rebuild com a correção: `INSUFFICIENT_DATA` / `G1_CALIBRATION_NOT_MET`                 |
 
 O falso verde ficou de pé por **~4 horas**, em um dos seis sinais que
 destravariam a RFC-009.
@@ -314,7 +322,7 @@ diagnóstico sem depender de leitura de código:
 brier_do_sinal_usado | 0.07451024201319072
 ```
 
-A RFC-013 cita, como referência, *"barra: preço tem Brier ~0,074"*. O sinal
+A RFC-013 cita, como referência, _"barra: preço tem Brier ~0,074"_. O sinal
 usado nas entradas mediu **0,07451** — exatamente o que a RFC diz que o preço
 mede, porque era o preço.
 
@@ -358,7 +366,211 @@ parecido. Está declarado como pendência.
 A linha `PASS` de 19:53 permanece em `portfolio_gate_measurements`, imutável por
 trigger. Isso é correto: é a trilha de evidência de que o falso verde existiu.
 
-## 10. Não verificado / pendências
+## 10. Auditoria de G2–G6 contra o modo de falha do G1 (2026-08-27)
+
+A seção 9 fecha com uma pendência: _"nenhum dos outros quatro gates foi
+reauditado sob a lente 'passa por degeneração'"_. Esta seção é essa auditoria,
+feita a pedido do proprietário. **Três dos quatro tinham o defeito**, e o
+quarto — o G6 — tinha uma variante do mesmo, mais silenciosa.
+
+O padrão é sempre o mesmo: uma condição que se satisfaz porque não havia nada
+contra o que comparar.
+
+### 10.1 G2 passava sobre um PnL constante
+
+`blockBootstrapMean` sobre uma série constante devolve o **mesmo** número em
+todo reamostragem: `ciLow = ciHigh = média`, e `aboveZero` (que é `ciLow > 0`)
+vira aritmética sobre esse ponto. Cem posições fechadas de mercado binário que
+realizaram exatamente o mesmo PnL não são um track record — são um artefato de
+como o número foi produzido.
+
+Mais três formas do mesmo problema, todas satisfazendo cada contagem da RFC:
+
+| Forma                               | Por que a medição não tinha conteúdo                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Rajada**: tudo fechado numa tarde | Os 60 dias descrevem o **relógio**, não a evidência; o block bootstrap reamostra um único episódio de mercado |
+| **Poucos blocos independentes**     | Um block bootstrap sobre 3 blocos é a amostra reorganizada de três jeitos                                     |
+| **Uma posição dominando**           | 149 posições de US$ 0,01 e uma de US$ 10: "100 posições fechadas" vira ficção                                 |
+
+E uma quarta, que é a consequência direta da regra de reset do G5: **as
+posições fechadas antes do início do relógio continuavam entrando na amostra**.
+Um reset que joga os dias fora e mantém o sample é cosmético — a mesma amostra,
+vestida com um relógio mais curto.
+
+Fechado com: largura de intervalo estritamente positiva (uma faixa tem que ser
+uma faixa), `g2MinBootstrapBlocks`, `g2MinDistinctCloseDays`,
+`g2MaxSinglePositionPnlShare`, e o corte da amostra pela janela do relógio.
+Nenhum deles é `FAIL` — são ausência de medição, logo `INSUFFICIENT_DATA`.
+
+### 10.2 G3 passava sobre um livro vazio
+
+Zero posições produzem **zero** breaches não bloqueados e **zero** drawdown.
+Com os cinco circuit breakers demonstrados em cenário injetado, as três
+condições do gate liam perfeitas e o veredito era `PASS` — sobre um livro que
+nunca existiu. "Nada quebrou" só é evidência quando alguma coisa esteve em
+risco.
+
+Fechado com: G3 passa a receber **o mesmo objeto de base de evidência** que o
+G2 (`paperEvidenceBase`), não uma base própria parecida. Um livro curto demais
+para o G2 é curto demais para o G3 por construção. As demonstrações de breaker
+continuam sendo reportadas quando a base é curta — um cenário injetado é um
+teste deliberado, não algo que o livro tenha que produzir sozinho — elas apenas
+deixam de bastar.
+
+### 10.3 G4 comparava o simulador com ele mesmo
+
+Duas coisas, e a segunda é literalmente o G1 de novo:
+
+1. **Sem mínimo de amostra.** Uma mediana sobre uma amostra é aquela amostra; um
+   viés médio sobre uma amostra é o sinal daquela amostra. Ambos limpavam as
+   barras.
+2. **Referência auto-referente.** O viés de slippage comparava o preço do fill
+   simulado com um book-walk sobre **o mesmo snapshot gravado que o simulador
+   consumiu** — `bookAsOf(pool, token, execTs)` no gate e `bookAtOrBefore(pool,
+token, fill)` no broker são a mesma consulta, na mesma tabela, pelos mesmos
+   níveis. O viés é zero por construção e `bias >= 0` **não podia falhar**. O
+   comentário no código chamava isso de "caminho independente"; não era.
+
+   Havia ainda um terceiro defeito somado: o ledger grava **um evento de fill
+   por nível consumido**, então a comparação punha o preço de um nível contra um
+   walk daquele tamanho a partir do topo do livro — duas quantidades diferentes,
+   e um número sem significado em qualquer direção.
+
+Fechado com: `g4MinReconciledFills` (100, exigido em **cada** perna — cem
+amostras de fee não dizem nada sobre slippage); proveniência declarada em cada
+amostra (`VENUE_TRADE_FEED` / `SIMULATOR_OWN_RATE`, `DECISION_BOOK` /
+`EXECUTION_BOOK`), com as auto-referentes **excluídas da aritmética e contadas**
+— "zero amostras" e "zero amostras honestas" são situações diferentes para quem
+lê o gate; reconciliação agregada **por ordem**, não por evento de fill; e a
+referência de preço passou a ser o book do **instante da decisão**, que é uma
+observação diferente da que o fill consumiu e é exatamente o conservadorismo
+que o simulador afirma ter (ele executa contra t + latência). Quando o livro não
+se moveu entre os dois instantes, as duas observações **são** a mesma linha
+gravada — a amostra diz isso e é excluída.
+
+A perna de fee já era independente por acaso (o simulador cobra com
+`taker_fee_bps` de `polymarket_param_versions`; o gate compara com
+`fee_rate_bps` de `polymarket_trades`, outro feed). Agora é independente **por
+declaração**, e uma regressão futura que ligue a referência errada é pega pela
+aritmética e por teste.
+
+### 10.4 G6 aceitava uma aprovação de coisa nenhuma
+
+`currentReportId === null` significava "confere". Como **nada no sistema jamais
+cunhou um relatório** — `portfolio_gate_reports` estava no schema, vazia, por
+desenho —, `currentReportId` era null em produção **sempre**. Uma aprovação
+gravada à mão na tabela teria casado com qualquer coisa. É a mesma forma do G1:
+uma condição satisfeita por falta de termo de comparação.
+
+Fechado com as duas metades que faltavam:
+
+- **o relatório passou a existir**. O ciclo de gates cunha um
+  `portfolio_gate_reports` quando — e só quando — **um veredito muda**
+  (fingerprint sobre gate/status/reason_code, deliberadamente **não** sobre as
+  métricas: um dia de soak a mais move um número em todo ciclo, e um relatório
+  por hora invalidaria a revisão do proprietário continuamente). Assim uma
+  aprovação vale exatamente enquanto valerem as respostas que ela aprovou;
+- **o registro da aprovação passou a ter caminho**: `dist/gates-cli.js`, dentro
+  do container, com a revisão por stdin. Não é endpoint de propósito — o
+  perímetro publica o portfólio só em GET, e as duas coisas que ficam fechadas
+  na borda são as que mudam o que o sistema pode fazer: sair de `HALTED`, e
+  esta. A CLI recusa com código próprio: relatório inexistente, não corrente, já
+  aprovado, gates ainda não todos `PASS`, revisor inválido, registro escrito com
+  menos de 40 caracteres, e expectativa calibrada não reconhecida
+  explicitamente. A mesma guarda está repetida **dentro** do `UPDATE`, então
+  perder uma corrida recusa em vez de sobrescrever.
+
+Procedimento operacional em
+[`docs/runbooks/polymarket-portfolio.md`](../runbooks/polymarket-portfolio.md).
+
+### 10.5 Config 1.1.0 → 1.2.0
+
+Quatro parâmetros novos (`g2MinDistinctCloseDays`, `g2MinBootstrapBlocks`,
+`g2MaxSinglePositionPnlShare`, `g4MinReconciledFills`) mudam o conteúdo
+hasheado, então a versão foi **cunhada de novo**. A 1.1.0 **está cunhada em
+produção** desde 19:53Z de 2026-08-26 — editá-la repetiria o incidente do
+`score_version`. O parser continua recusando afrouxamento: cada um dos quatro
+entra na lista que dispara `PORTFOLIO_CONFIG_GATE_LOOSENED`.
+
+**Consequência de deploy:** `config/portfolio.json` chega pelo CD e o binário
+que o lê só muda no rebuild de profile. Os dois têm que sair na mesma janela —
+é a mesma lição de sempre, e desta vez ela é sobre 1.2.0.
+
+**De onde vêm os quatro números — declaração explícita.** A RFC não nomeia
+nenhum deles; eu escolhi os quatro, e a justificativa de cada um:
+
+| Parâmetro                     | Valor | Por quê                                                                                                                                                                                        |
+| ----------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `g2MinBootstrapBlocks`        | 10    | É exatamente `g2MinClosedPositions / bootstrapBlockSize` = 100/10, então **não acrescenta barra nenhuma** no piso da RFC; ele só passa a valer se alguém aumentar o bloco ou reduzir a amostra |
+| `g2MinDistinctCloseDays`      | 20    | Um terço da janela de 60 dias — evidência espalhada pela janela em vez de um episódio                                                                                                          |
+| `g2MaxSinglePositionPnlShare` | 0,25  | Com 100 posições, o uniforme é 1%; um quarto de todo o dinheiro movido numa posição é ~25× a média                                                                                             |
+| `g4MinReconciledFills`        | 100   | O mesmo piso de amostra que a RFC exige do G2, aplicado à reconciliação                                                                                                                        |
+
+O que merece revisão do proprietário com dado real é o **terceiro**. Um livro
+maker em que a maioria das posições zera e poucas pagam pode passar de 25%
+legitimamente. Duas coisas amortecem o risco: nesse formato o intervalo do
+bootstrap fica largo e provavelmente atravessa o zero de qualquer jeito (ou
+seja, o `FAIL` viria pelo caminho normal), e a resposta aqui é
+`INSUFFICIENT_DATA` — "junte mais dado" — e não uma reprovação. Mas o parser só
+recusa **afrouxar**, então subir esse teto exigiria mudança de código, de
+propósito.
+
+### 10.6 Testes de regressão, no formato do G1
+
+Cada degeneração ganhou um teste que **teria pego** o defeito, e todos afirmam
+`not.toBe("PASS")` explicitamente:
+
+| Teste                                                                    | O que trava                                                     |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| "NEVER passes on a constant PnL series, however positive"                | intervalo degenerado; o teste ainda afirma `aboveZero === true` |
+| "NEVER passes on a burst: every close inside one afternoon"              | dispersão temporal                                              |
+| "NEVER passes when one position is most of the money the book moved"     | concentração                                                    |
+| "NEVER passes when the sample supports too few independent blocks"       | blocos independentes                                            |
+| "drops closed positions from BEFORE the clock start"                     | 170 fechadas nos livros, 50 na janela                           |
+| "NEVER passes over an empty book, however clean it reads" (G3)           | sobrevivência sem exposição                                     |
+| "is taken over the SAME base G2 requires, shortfall for shortfall" (G3)  | que a base é a mesma, não uma parecida                          |
+| "NEVER passes on a handful of samples, however good they look" (G4)      | mínimo de amostra                                               |
+| "requires the minimum on EACH leg" (G4)                                  | fee e slippage separados                                        |
+| "NEVER passes when every reference was the simulator's own input" (G4)   | auto-referência                                                 |
+| "EXCLUDES a reference re-derived from the observation the fill consumed" | a exclusão em `reconcile`, com a contagem do que foi excluído   |
+| "NEVER passes an approval with no report to have been written against"   | o `currentReportId === null` que valia em produção              |
+| "NEVER passes a signature with no written record behind it" (G6)         | registro escrito                                                |
+
+Módulo `portfolio`: **292 → 322** testes (`gates` 37 → 50, `measure` 22 → 25,
+`runner` 11 → 13, `approval` 12 novos), mais `integration.pg` 19 → **21**.
+`make verify` verde; suíte serial contra PostgreSQL 18.4 recém-migrado:
+**1.408/1.408**, e verde de novo na segunda execução sobre o mesmo banco já
+populado — as asserções novas não dependem de ordem nem de estado deixado por
+outra suíte.
+
+### 10.7 Um bug que só o PostgreSQL real pegou
+
+A reconciliação agregada divide `notional / filled_size` em SQL. A divisão
+`numeric` do PostgreSQL é **ilimitada**: `93.5 / 150` volta como
+`0.62333333333333333333`, vinte dígitos. E `parseScaled` **recusa** — em vez de
+truncar em silêncio — qualquer string com mais precisão que a escala de
+trabalho, que é a regra certa.
+
+Somadas, as duas coisas descartariam **toda** amostra de reconciliação na
+entrada, e o G4 reportaria zero amostras para sempre sem nada no log dizendo por
+quê. Os agregados passaram a ser arredondados a nove dígitos no próprio SQL, com
+o motivo escrito ao lado da constante. Nenhum teste com pool falso pegaria isso:
+um pool falso devolve a string que o teste escreveu.
+
+Na mesma leitura apareceu um segundo caso, mais sutil: um **walk incompleto**
+não é referência. Se o book da decisão não conseguiria preencher a ordem
+inteira, a VWAP de referência cobre menos shares e é portanto um preço
+**melhor** do que a ordem merecia — o que enviesa a comparação para "o
+simulador foi conservador" e mascararia uma otimismo real. Passou a ser tratado
+como ausência de referência, igual a book faltando, com teste que insere uma
+ordem maior que a profundidade e afirma que a contagem de amostras **não** se
+move.
+
+O veredito medido **não muda**: os seis gates seguem sem nenhum `PASS` e
+`rfc_009_status` segue `BLOCKED`. O que muda é que agora eles seguem assim
+pelos motivos certos.
+
+## 11. Não verificado / pendências
 
 - **Ativação em produção**: o serviço `polymarket-portfolio` continua **não
   criado no servidor**, e o Nginx continua **não recarregado** com as rotas GET
@@ -373,12 +585,15 @@ trigger. Isso é correto: é a trilha de evidência de que o falso verde existiu
   não há modelo promovido na RFC-010, não há posição fechada em paper, nenhum
   circuit breaker foi exercitado em produção e não há revisão escrita do
   proprietário. `rfc_009_status` permanece `BLOCKED`.
-- **G4 na prática**: a reconciliação de fee compara o fill simulado com o
-  `fee_rate_bps` do trade gravado mais próximo no tempo do mesmo token, e o viés
-  de slippage compara o preço simulado com um book-walk do mesmo tamanho sobre o
-  book gravado. Ambos foram testados como aritmética e as consultas rodam contra
+- **G4 na prática**: depois da seção 10.3, a perna de fee compara o fill
+  simulado com o `fee_rate_bps` do trade gravado mais próximo no tempo (outro
+  feed) e a perna de slippage compara a VWAP da ordem com um book-walk sobre o
+  book do **instante da decisão**, com as amostras auto-referentes excluídas e
+  contadas. Ambas foram testadas como aritmética e as consultas rodam contra
   PostgreSQL real, mas **não existe nenhum fill de paper** para reconciliar
-  ainda, então o gate responde `INSUFFICIENT_DATA` com zero amostras.
+  ainda, então o gate responde `INSUFFICIENT_DATA` com zero amostras — e agora
+  também com zero amostras auto-referentes, porque não há fill de espécie
+  alguma.
 - **PnL realizado por janela**: o total é exato (é o do ledger da RFC-011), mas
   as janelas diária e semanal atribuem o realizado de cada posição ao seu
   `resolved_at`. Realização por fechamento **antecipado** (venda antes da
@@ -388,17 +603,24 @@ trigger. Isso é correto: é a trilha de evidência de que o falso verde existiu
   evento, que é papel do módulo da RFC-011. `updated_at` não serve de
   substituto: uma atualização de marca o move e reatribuiria uma perda antiga
   para hoje em todo ciclo.
-- **Os gates G2–G6 contra o modo de falha "passa por degeneração"**: o G1 passou
-  porque comparava uma coisa com ela mesma (seção 9). Os outros quatro não foram
-  reauditados sob essa lente. O G4 é o mais suspeito, porque `reconcile([])`
-  devolve nulos e o gate depende de contagens que podem estar vazias.
+- ~~Os gates G2–G6 contra o modo de falha "passa por degeneração"~~ —
+  **fechado na seção 10**. Três dos quatro tinham o defeito; o G4 era mesmo o
+  mais suspeito, e por dois motivos somados em vez de um. Nenhum gate ficou sem
+  teste de regressão. O que **não** foi reauditado sob essa lente é o G5, cuja
+  única condição não medida sobre livro é o fingerprint de regime — ele já
+  compara duas coisas de origens diferentes (o parâmetro gravado da venue e o
+  relógio persistido) e não tem o formato do defeito.
 - **Ponte decisão → ordem de paper NÃO existe**: verificado por busca de código —
   fora do próprio módulo, o único código que toca `portfolio_decisions` é o
   worker de retenção. A coluna `paper_order_id` da migration nunca é preenchida.
   Em produção já houve **2 entradas ACEITAS** que não geraram posição nenhuma.
   Sem essa ponte, o G2 nunca acumula posição fechada e fica em
   `INSUFFICIENT_DATA` para sempre — é o gargalo real do gate, maior que a
-  ausência de modelo promovido na RFC-010.
+  ausência de modelo promovido na RFC-010. **Recomendação de desenho escrita**
+  em
+  [`docs/architecture/decision-to-paper-bridge.md`](../architecture/decision-to-paper-bridge.md)
+  (2026-08-27): o decision log é o outbox, o consumidor mora no módulo `paper`,
+  e nenhum dos dois módulos escreve na tabela do outro. Não implementada.
 - **Breaker de salto sem catalisador**: "catalisador conhecido" é o instante de
   resolução do próprio mercado ou um evento/release do calendário macro dentro
   da janela. É uma aproximação declarada — um catalisador que o calendário não

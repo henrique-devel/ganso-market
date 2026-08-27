@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "bankrollUsd": 1000,
   "kelly": {
     "lambda": 0.25,
@@ -58,11 +58,15 @@
     "g2MinClosedPositions": 100,
     "g2MinDistinctMarkets": 30,
     "g2MinCategories": 2,
+    "g2MinDistinctCloseDays": 20,
+    "g2MinBootstrapBlocks": 10,
+    "g2MaxSinglePositionPnlShare": 0.25,
     "g2EdgeHaircut": 0.5,
     "bootstrapResamples": 2000,
     "bootstrapBlockSize": 10,
     "bootstrapSeed": 20260825,
     "g4MaxFeeMedianError": 0.05,
+    "g4MinReconciledFills": 100,
     "g4MinSoakDays": 30
   },
   "cadence": {

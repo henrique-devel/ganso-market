@@ -67,12 +67,15 @@ import {
 } from "./exitstore.js";
 import {
   applyClockReset,
+  gateVerdictFingerprint,
   insertGateMeasurement,
+  insertGateReport,
   loadClosedPositions,
   loadConfigVersions,
   loadFillReconciliationRows,
   loadForecastRows,
   loadG2Clocks,
+  loadLatestGateReport,
   loadOperationalEvidence,
   loadOwnerApproval,
   loadRecentDecisions,
@@ -1100,9 +1103,18 @@ export function createPortfolioRunner(
 
     const reconciliation = reconcile(await reconciliationSamples());
 
-    // The G2 clock the aggregate window uses is the OLDEST category clock: a
-    // gate that spans categories cannot claim more continuous history than its
-    // youngest-reset category has.
+    // The G2 clock the aggregate window uses is the OLDEST category clock —
+    // the longest continuous history any category has, not the shortest.
+    //
+    // Stated plainly because it is a real trade-off and the owner should get to
+    // pick: taking the YOUNGEST-reset clock would make a fee change in one
+    // category shrink the whole gate's window, which is what the RFC's reset
+    // rule implies — but it would also mean a brand-new CATEGORY appearing in
+    // the universe collapses the window to zero days and G2 can never mature as
+    // the book grows. Per-category G2 measurement is the answer to both, and it
+    // is not what this cycle does today. What the aggregate window DOES do
+    // honestly, since 2026-08-27, is drop the closed positions that fall before
+    // its start: a reset that kept its sample would be cosmetic.
     const clockStart = clocks.reduce<Date | null>(
       (oldest, clock2) =>
         oldest === null || clock2.clockStart.getTime() < oldest.getTime()
@@ -1149,51 +1161,135 @@ export function createPortfolioRunner(
       })),
     });
 
+    // Mint a report when — and only when — a VERDICT changed.
+    //
+    // This is what gives G6 something to be written against. Without a report
+    // there is no id for a review to name, and `currentReportId` stays null;
+    // with a report an hour there would be a new id every hour and no review
+    // could survive long enough to be read. Minting on verdict change means an
+    // approval lasts exactly as long as the answers it approved.
+    const fingerprint = gateVerdictFingerprint(
+      measured.measurements,
+      measured.overall,
+    );
+    const latestReport = await loadLatestGateReport(deps.pool);
+    if (latestReport === null || latestReport.fingerprint !== fingerprint) {
+      const windowFrom =
+        measured.measurements.reduce<Date | null>(
+          (oldest, measurement) =>
+            measurement.windowFrom !== null &&
+            (oldest === null ||
+              measurement.windowFrom.getTime() < oldest.getTime())
+              ? measurement.windowFrom
+              : oldest,
+          null,
+        ) ?? now;
+      const reportId = await insertGateReport(deps.pool, {
+        measurements: measured.measurements,
+        overall: measured.overall,
+        fingerprint,
+        generatedAt: now,
+        windowFrom,
+        windowTo: now,
+        configVersion: deps.config.version,
+      });
+      logJson("info", "PORTFOLIO_GATE_REPORT_MINTED", {
+        report_id: reportId,
+        overall: measured.overall,
+        previous_report_id: latestReport?.reportId ?? null,
+        reason: latestReport === null ? "first_report" : "verdict_changed",
+      });
+    }
+
     await auditReplay();
   }
 
-  /** Build the G4 reconciliation samples from recorded taker fills. */
+  /**
+   * Build the G4 reconciliation samples from recorded taker executions.
+   *
+   * Two references, and the difference between them is the whole gate:
+   *
+   *   - the FEE reference is the venue's own `fee_rate_bps`, off the recorded
+   *     trade feed. The simulator charges with `taker_fee_bps` from
+   *     `polymarket_param_versions`, a different feed entirely, so the two
+   *     numbers can genuinely disagree;
+   *   - the PRICE reference is a book-walk over the snapshot recorded at the
+   *     DECISION instant. Re-walking the snapshot the fill consumed would be the
+   *     same query over the same table for the same levels — the simulator
+   *     compared against itself, bias zero by construction, `bias >= 0` unable
+   *     to fail. When the book did not move between the two instants they ARE
+   *     the same recorded observation, and the sample says so and is excluded.
+   */
   async function reconciliationSamples(): Promise<ReconciliationSample[]> {
-    const fills = await loadFillReconciliationRows(
+    const executions = await loadFillReconciliationRows(
       deps.pool,
       RECONCILIATION_SAMPLE,
     );
     const samples: ReconciliationSample[] = [];
-    for (const fill of fills) {
-      const price = parseScaled(fill.price);
-      const size = parseScaled(fill.size);
-      const simulatedFee = parseScaled(fill.simulatedFeeUsd);
-      if (price === null || size === null || simulatedFee === null) {
+    for (const execution of executions) {
+      const size = parseScaled(execution.filledSize);
+      const vwap = parseScaled(execution.vwapPrice);
+      const simulatedFee = parseScaled(execution.simulatedFeeUsd);
+      const feeShape = parseScaled(execution.feeShape);
+      if (
+        size === null ||
+        size <= 0n ||
+        vwap === null ||
+        simulatedFee === null ||
+        feeShape === null
+      ) {
         continue;
       }
-      // The venue's own curve at the same price and size: rate x p x (1 - p).
-      const rate = feeRateFromBps(fill.venueFeeRateBps);
+
+      // The venue's own curve, with the rate factored out of the fill loop:
+      // sum(rate x p x (1 - p) x size) = rate x feeShape. Exact, not taken at
+      // the VWAP.
+      const rate = feeRateFromBps(execution.venueFeeRateBps);
       const rateScaled = rate === null ? null : parseScaled(rate);
       const realFee =
-        rateScaled === null
-          ? null
-          : (rateScaled * price * (SCALE - price) * size) /
-            (SCALE * SCALE * SCALE);
+        rateScaled === null ? null : (rateScaled * feeShape) / SCALE;
 
-      // What a book-walk of the same size over the recorded book would have
-      // given at the same instant. Comparing the simulator against the raw book
-      // by an independent path is the point: it is the only way a hidden
-      // optimism in the fill model would show up.
-      const book = sliceBook(
-        await bookAsOf(deps.pool, fill.tokenId, fill.execTs),
+      const decisionBook = sliceBook(
+        await bookAsOf(deps.pool, execution.tokenId, execution.decidedAt),
       );
-      const walk =
-        book === null
+      const executionBook = sliceBook(
+        await bookAsOf(deps.pool, execution.tokenId, execution.execTs),
+      );
+      // Same recorded observation on both sides means there is no second
+      // observation: the reference would be the simulator's own input.
+      const sameObservation =
+        decisionBook !== null &&
+        executionBook !== null &&
+        decisionBook.receivedAt.getTime() ===
+          executionBook.receivedAt.getTime();
+      // An INCOMPLETE walk is not a reference. If the decision book could not
+      // have filled the whole order, its VWAP covers fewer shares and is
+      // therefore a better price than the order deserved — which biases the
+      // comparison toward "the simulator was conservative" and would mask a
+      // real optimism. Treated as no reference at all, like a missing book.
+      const rawWalk =
+        decisionBook === null
           ? null
-          : bookWalk(fill.side === "BUY" ? book.asks : book.bids, size);
+          : bookWalk(
+              execution.side === "BUY" ? decisionBook.asks : decisionBook.bids,
+              size,
+            );
+      const walk = rawWalk === null || !rawWalk.complete ? null : rawWalk;
 
       samples.push({
-        side: fill.side,
+        side: execution.side,
         simulatedFeeUsd: Number(simulatedFee) / Number(SCALE),
         realFeeUsd: realFee === null ? null : Number(realFee) / Number(SCALE),
-        simulatedPrice: Number(price) / Number(SCALE),
+        feeReference: realFee === null ? null : "VENUE_TRADE_FEED",
+        simulatedPrice: Number(vwap) / Number(SCALE),
         bookWalkPrice:
           walk === null ? null : Number(walk.vwapScaled) / Number(SCALE),
+        priceReference:
+          walk === null
+            ? null
+            : sameObservation
+              ? "EXECUTION_BOOK"
+              : "DECISION_BOOK",
       });
     }
     return samples;

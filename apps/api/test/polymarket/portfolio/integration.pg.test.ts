@@ -32,9 +32,13 @@ import {
 import {
   applyClockReset,
   insertGateMeasurement,
+  insertGateReport,
   loadClosedPositions,
   loadConfigVersions,
   loadFillReconciliationRows,
+  loadGateReport,
+  loadLatestGateReport,
+  recordOwnerApproval,
   loadForecastRows,
   loadG2Clocks,
   loadOperationalEvidence,
@@ -147,6 +151,22 @@ async function seed(): Promise<void> {
       JSON.stringify([{ price: "0.62", size: "300" }]),
     ],
   );
+  // A SECOND, earlier snapshot, so the book the decision saw and the book the
+  // fill consumed are two different recorded observations. With only one row
+  // they would be the same line, and the G4 slippage reference would be the
+  // simulator compared against itself.
+  await p.query(
+    `INSERT INTO polymarket_book_snapshots
+       (token_id, condition_id, received_at, bids_json, asks_json)
+     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+    [
+      TOKEN,
+      CONDITION,
+      new Date("2026-08-26T11:58:00.000Z"),
+      JSON.stringify([{ price: "0.60", size: "500" }]),
+      JSON.stringify([{ price: "0.61", size: "300" }]),
+    ],
+  );
   await p.query(
     `INSERT INTO paper_positions
        (token_id, condition_id, shares, cost_usd, realized_pnl_usd, opened_at,
@@ -154,6 +174,36 @@ async function seed(): Promise<void> {
      VALUES ($1, $2, '100', '50', '0', $3, '60', FALSE)`,
     [TOKEN, CONDITION, new Date("2026-08-25T12:00:00.000Z")],
   );
+  // One taker execution, written the way the RFC-011 ledger writes it: ONE
+  // event per book level consumed. The G4 reconciliation has to put the order
+  // back together before it can compare anything.
+  await p.query(
+    `INSERT INTO paper_orders
+       (order_id, token_id, condition_id, side, order_type, limit_price, size,
+        filled_size, post_only, worst_price, status, decided_at, accepted_at)
+     VALUES ($1, $2, $3, 'BUY', 'FAK', '0.63', '150', '150', FALSE, '0.63',
+             'filled', $4, $4)`,
+    [`ord-${RUN}`, TOKEN, CONDITION, new Date("2026-08-26T11:59:00.000Z")],
+  );
+  for (const [index, fill] of [
+    { price: "0.62", size: "100", fee: "0.500000" },
+    { price: "0.63", size: "50", fee: "0.300000" },
+  ].entries()) {
+    await p.query(
+      `INSERT INTO paper_ledger_events
+         (idempotency_key, event_type, order_id, token_id, condition_id,
+          payload_json, event_ts)
+       VALUES ($1, 'fill', $2, $3, $4, $5::jsonb, $6)`,
+      [
+        `ord-${RUN}:taker:${String(index)}`,
+        `ord-${RUN}`,
+        TOKEN,
+        CONDITION,
+        JSON.stringify({ ...fill, side: "BUY", taker: true }),
+        new Date("2026-08-26T12:00:05.000Z"),
+      ],
+    );
+  }
   await p.query(
     `INSERT INTO resolution_market_state
        (condition_id, action, effective_action, resolution_buffer, p_5050,
@@ -482,7 +532,211 @@ describe.skipIf(DATABASE_URL === undefined)(
       const params = await loadRegimeParamsByCategory(p);
       expect(params.crypto?.length).toBeGreaterThan(0);
       const approval = await loadOwnerApproval(p);
-      expect(approval.approval).toBeNull();
+      // Not asserted as null, for the same reason the risk counts above are
+      // not asserted as zero: this database is shared with the other suites
+      // and with the report test below. What matters here is that the query
+      // runs and comes back in the shape the gate reads.
+      expect(
+        approval.currentReportId === null || approval.currentReportId > 0,
+      ).toBe(true);
+    });
+
+    it("reconciles a taker execution as ONE order, not as one row per level", async () => {
+      // The ledger writes one `fill` event per level consumed. Comparing a
+      // single level's price against a walk of that level's size from the top
+      // of the book pits two different quantities against each other, and the
+      // number means nothing whichever way it comes out.
+      const rows = await loadFillReconciliationRows(pool(), 50);
+      const mine = rows.find((row) => row.orderId === `ord-${RUN}`);
+      expect(mine).toBeDefined();
+      expect(mine?.side).toBe("BUY");
+      // 100 @ 0.62 + 50 @ 0.63 = 150 shares, notional 93.5, VWAP 0.6233...
+      expect(Number(mine?.filledSize)).toBeCloseTo(150, 6);
+      expect(Number(mine?.vwapPrice)).toBeCloseTo(93.5 / 150, 9);
+      expect(Number(mine?.simulatedFeeUsd)).toBeCloseTo(0.8, 6);
+      // sum(p x (1 - p) x size), the venue curve with the RATE factored out, so
+      // the real fee stays exact instead of being taken at the VWAP.
+      expect(Number(mine?.feeShape)).toBeCloseTo(
+        0.62 * 0.38 * 100 + 0.63 * 0.37 * 50,
+        6,
+      );
+      // The two instants the slippage reference depends on: the fill consumed
+      // the book at exec_ts, and the decision was made a minute earlier.
+      expect(mine?.decidedAt.toISOString()).toBe("2026-08-26T11:59:00.000Z");
+      expect(mine?.execTs.toISOString()).toBe("2026-08-26T12:00:05.000Z");
+      // No recorded trade carries a fee rate in this fixture, so the fee leg
+      // has no reference at all — which is the honest answer, not zero error.
+      expect(mine?.venueFeeRateBps).toBeNull();
+
+      // End to end, against the real book: the runner rebuilds the order from
+      // its two fill events and walks the book of the DECISION instant — a
+      // different recorded observation from the one the fill consumed.
+      //
+      // The two snapshots go in HERE rather than being taken from `seed`: this
+      // database is shared, and a sibling suite that prunes book snapshots
+      // would otherwise turn this assertion into a coin flip.
+      for (const snapshot of [
+        { at: "2026-08-26T11:58:30.000Z", bid: "0.60", ask: "0.61" },
+        { at: "2026-08-26T11:59:59.000Z", bid: "0.61", ask: "0.62" },
+      ]) {
+        await pool().query(
+          `INSERT INTO polymarket_book_snapshots
+             (token_id, condition_id, received_at, bids_json, asks_json)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+          [
+            TOKEN,
+            CONDITION,
+            new Date(snapshot.at),
+            JSON.stringify([{ price: snapshot.bid, size: "500" }]),
+            JSON.stringify([{ price: snapshot.ask, size: "500" }]),
+          ],
+        );
+      }
+
+      const slippageSamples = async (at: Date): Promise<number> => {
+        await createPortfolioRunner({
+          pool: pool(),
+          config: CONFIG,
+          factorMap: DEFAULT_FACTOR_MAP,
+          executionMode: "paper",
+          clock: () => at,
+        }).tickOnce("gates");
+        const measured = await pool().query<{
+          metrics: Record<string, unknown>;
+          status: string;
+        }>(
+          `SELECT metrics_json AS metrics, status
+             FROM portfolio_gate_measurements
+            WHERE gate = 'G4'
+            ORDER BY measurement_id DESC
+            LIMIT 1`,
+        );
+        const row = measured.rows[0];
+        expect(row?.status).toBe("INSUFFICIENT_DATA");
+        expect(row?.metrics.self_referential_slippage_samples).toBe(0);
+        expect(row?.metrics.samples_required).toBe(
+          CONFIG.gates.g4MinReconciledFills,
+        );
+        return Number(row?.metrics.slippage_samples ?? 0);
+      };
+
+      // The 150-share order reconciles.
+      const before = await slippageSamples(new Date(NOW.getTime() + 600_000));
+      expect(before).toBeGreaterThanOrEqual(1);
+
+      // A SECOND execution, larger than the decision book could have filled.
+      // Its reference walk is incomplete, so the reference VWAP covers fewer
+      // shares and is therefore a BETTER price than the order deserved — a bias
+      // toward "the simulator was conservative" that would mask a real
+      // optimism. It has to contribute nothing, not a flattering sample.
+      //
+      // Asserted as a delta rather than an absolute count, because this
+      // database is shared with earlier runs of this same suite.
+      await pool().query(
+        `INSERT INTO paper_orders
+           (order_id, token_id, condition_id, side, order_type, limit_price,
+            size, filled_size, post_only, worst_price, status, decided_at,
+            accepted_at)
+         VALUES ($1, $2, $3, 'BUY', 'FAK', '0.70', '900', '900', FALSE, '0.70',
+                 'filled', $4, $4)`,
+        [`deep-${RUN}`, TOKEN, CONDITION, new Date("2026-08-26T11:59:00.000Z")],
+      );
+      await pool().query(
+        `INSERT INTO paper_ledger_events
+           (idempotency_key, event_type, order_id, token_id, condition_id,
+            payload_json, event_ts)
+         VALUES ($1, 'fill', $2, $3, $4, $5::jsonb, $6)`,
+        [
+          `deep-${RUN}:taker:0`,
+          `deep-${RUN}`,
+          TOKEN,
+          CONDITION,
+          JSON.stringify({
+            side: "BUY",
+            price: "0.65",
+            size: "900",
+            fee: "1.000000",
+            taker: true,
+          }),
+          new Date("2026-08-26T12:00:06.000Z"),
+        ],
+      );
+      const after = await slippageSamples(new Date(NOW.getTime() + 660_000));
+      expect(after).toBe(before);
+    });
+
+    it("mints a gate report and attaches the owner's review exactly once", async () => {
+      const p = pool();
+      const generatedAt = new Date(NOW.getTime() + 300_000);
+      const reportId = await insertGateReport(p, {
+        measurements: [
+          {
+            gate: "G2",
+            status: "INSUFFICIENT_DATA",
+            reasonCode: "G2_INSUFFICIENT_PAPER",
+            metrics: { closed_positions: 0 },
+            windowFrom: null,
+            windowTo: generatedAt,
+          },
+        ],
+        overall: "BLOCKED",
+        fingerprint: "a".repeat(64),
+        generatedAt,
+        windowFrom: NOW,
+        windowTo: generatedAt,
+        configVersion: CONFIG.version,
+      });
+      expect(reportId).toBeGreaterThan(0);
+
+      const stored = await loadGateReport(p, reportId);
+      expect(stored?.fingerprint).toBe("a".repeat(64));
+      expect(stored?.gates.map((entry) => entry.gate)).toEqual(["G2"]);
+      expect(stored?.alreadyApproved).toBe(false);
+      // The calibrated expectation travels with the numbers it was printed
+      // beside, so the record of what was approved carries its own warning.
+      const raw = await p.query<{ expectation: string }>(
+        `SELECT gates_json ->> 'calibrated_expectation' AS expectation
+           FROM portfolio_gate_reports WHERE report_id = $1`,
+        [reportId],
+      );
+      expect(raw.rows[0]?.expectation).toContain("84%");
+
+      expect(await loadLatestGateReport(p)).toMatchObject({ reportId });
+
+      const review = {
+        reviewed_at: generatedAt.toISOString(),
+        reviewer: "owner",
+        note: "Revisão escrita completa do relatório de gates registrada.",
+      };
+      expect(await recordOwnerApproval(p, { reportId, approval: review })).toBe(
+        true,
+      );
+      // Second attempt on the same report: an approval is never edited in
+      // place, and the statement carries its own guard rather than trusting
+      // the check that ran before it.
+      expect(await recordOwnerApproval(p, { reportId, approval: review })).toBe(
+        false,
+      );
+
+      const loaded = await loadOwnerApproval(p);
+      expect(loaded.currentReportId).toBe(reportId);
+      expect(loaded.approval?.reviewer).toBe("owner");
+
+      // A newer report makes the older one unapprovable, which is the whole
+      // mechanism: a review carries only against the numbers it named.
+      const newer = await insertGateReport(p, {
+        measurements: [],
+        overall: "BLOCKED",
+        fingerprint: "b".repeat(64),
+        generatedAt: new Date(NOW.getTime() + 360_000),
+        windowFrom: NOW,
+        windowTo: new Date(NOW.getTime() + 360_000),
+        configVersion: CONFIG.version,
+      });
+      expect(newer).toBeGreaterThan(reportId);
+      expect(await recordOwnerApproval(p, { reportId, approval: review })).toBe(
+        false,
+      );
     });
 
     it("starts and resets the G2 clock, keeping the event trail", async () => {
@@ -715,6 +969,19 @@ describe.skipIf(DATABASE_URL === undefined)(
       ]);
       // RFC-009 stays blocked: nothing here can pass a gate on an empty book.
       expect(measured.rows.every((row) => row.status !== "PASS")).toBe(true);
+
+      // And the cycle leaves a report behind, which is what gives a future G6
+      // review an id to be written against.
+      const report = await loadLatestGateReport(pool());
+      expect(report?.gates.map((entry) => entry.gate)).toEqual([
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+      ]);
+      expect(report?.overallStatus).toBe("BLOCKED");
     });
 
     it("refuses to mint the same config version with different content", async () => {

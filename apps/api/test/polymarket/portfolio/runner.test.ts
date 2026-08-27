@@ -29,6 +29,8 @@ interface WorldOptions {
   readonly lastExitSignature?: string | null;
   /** Bids of the position's book; the default leaves plenty of residual edge. */
   readonly bids?: { price: string; size: string }[];
+  /** Gate reports already on record; the default is a fresh, empty table. */
+  readonly gateReports?: Row[];
 }
 
 interface World {
@@ -229,7 +231,7 @@ function world(options: WorldOptions = {}): World {
         return respond([{ exercised: false }]);
       }
       if (text.includes("FROM portfolio_gate_reports")) {
-        return respond([]);
+        return respond(options.gateReports ?? []);
       }
       if (text.includes("FROM paper_ledger_events")) {
         return respond([]);
@@ -375,6 +377,72 @@ describe("gate cycle", () => {
         expect(row.params[2], String(row.params[0])).not.toBeNull();
       }
     }
+  });
+
+  it("mints the report a G6 review can be written against", async () => {
+    // Without a report there is no id for an approval to name, so
+    // `currentReportId` stays null — and G6 used to read a null current report
+    // as "matches", an approval of nothing matching everything.
+    const scene = world();
+    await runner(scene.pool).tickOnce("gates");
+    const report = scene.inserts.find(
+      (row) => row.table === "portfolio_gate_reports",
+    );
+    expect(report).toBeDefined();
+    const content = JSON.parse(String(report?.params[3])) as {
+      fingerprint: string;
+      calibrated_expectation: string;
+      gates: { gate: string; status: string }[];
+    };
+    expect(content.gates.map((gate) => gate.gate)).toEqual([
+      "G1",
+      "G2",
+      "G3",
+      "G4",
+      "G5",
+      "G6",
+    ]);
+    expect(content.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    // The RFC requires the calibrated expectation printed on the report, so it
+    // travels with the numbers a review approved.
+    expect(content.calibrated_expectation).toContain("84%");
+    expect(report?.params[4]).toBe("BLOCKED");
+  });
+
+  it("does NOT mint a second report while every verdict is unchanged", async () => {
+    // A report an hour would invalidate the owner's review continuously, since
+    // a review only carries against the report it names. What has to invalidate
+    // one is a VERDICT changing — a soak day ticking over is not that.
+    const first = world();
+    await runner(first.pool).tickOnce("gates");
+    const minted = first.inserts.find(
+      (row) => row.table === "portfolio_gate_reports",
+    );
+    const content = JSON.parse(String(minted?.params[3])) as {
+      fingerprint: string;
+    };
+
+    const second = world({
+      gateReports: [
+        {
+          report_id: 7,
+          gates_json: { fingerprint: content.fingerprint, gates: [] },
+          overall_status: "BLOCKED",
+          approval_json: null,
+        },
+      ],
+    });
+    await runner(second.pool).tickOnce("gates");
+    expect(
+      second.inserts.filter((row) => row.table === "portfolio_gate_reports"),
+    ).toHaveLength(0);
+    // The measurements still land every cycle: the evidence trail is continuous
+    // even when the verdicts are not moving.
+    expect(
+      second.inserts.filter(
+        (row) => row.table === "portfolio_gate_measurements",
+      ),
+    ).toHaveLength(6);
   });
 
   it("audits the replay of the decision log in the same cycle", async () => {
