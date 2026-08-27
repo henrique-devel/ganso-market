@@ -538,6 +538,15 @@ quê. Os agregados passaram a ser arredondados a nove dígitos no próprio SQL, 
 o motivo escrito ao lado da constante. Nenhum teste com pool falso pegaria isso:
 um pool falso devolve a string que o teste escreveu.
 
+Na mesma leitura apareceu um segundo caso, mais sutil: um **walk incompleto**
+não é referência. Se o book da decisão não conseguiria preencher a ordem
+inteira, a VWAP de referência cobre menos shares e é portanto um preço
+**melhor** do que a ordem merecia — o que enviesa a comparação para "o
+simulador foi conservador" e mascararia uma otimismo real. Passou a ser tratado
+como ausência de referência, igual a book faltando, com teste que insere uma
+ordem maior que a profundidade e afirma que a contagem de amostras **não** se
+move.
+
 O veredito medido **não muda**: os seis gates seguem sem nenhum `PASS` e
 `rfc_009_status` segue `BLOCKED`. O que muda é que agora eles seguem assim
 pelos motivos certos.

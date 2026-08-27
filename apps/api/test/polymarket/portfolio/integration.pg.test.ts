@@ -569,10 +569,8 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(mine?.venueFeeRateBps).toBeNull();
 
       // End to end, against the real book: the runner rebuilds the order from
-      // its two fill events, walks the book of the DECISION instant — a
-      // different recorded observation from the one the fill consumed — and
-      // counts ONE independent slippage sample. One is not a hundred, so the
-      // gate still refuses to answer, which is the point.
+      // its two fill events and walks the book of the DECISION instant — a
+      // different recorded observation from the one the fill consumed.
       //
       // The two snapshots go in HERE rather than being taken from `seed`: this
       // database is shared, and a sibling suite that prunes book snapshots
@@ -594,32 +592,77 @@ describe.skipIf(DATABASE_URL === undefined)(
           ],
         );
       }
-      const measuredAt = new Date(NOW.getTime() + 600_000);
-      await createPortfolioRunner({
-        pool: pool(),
-        config: CONFIG,
-        factorMap: DEFAULT_FACTOR_MAP,
-        executionMode: "paper",
-        clock: () => measuredAt,
-      }).tickOnce("gates");
 
-      const g4 = await pool().query<{ metrics: Record<string, unknown> }>(
-        `SELECT metrics_json AS metrics
-           FROM portfolio_gate_measurements
-          WHERE gate = 'G4'
-          ORDER BY measurement_id DESC
-          LIMIT 1`,
+      const slippageSamples = async (at: Date): Promise<number> => {
+        await createPortfolioRunner({
+          pool: pool(),
+          config: CONFIG,
+          factorMap: DEFAULT_FACTOR_MAP,
+          executionMode: "paper",
+          clock: () => at,
+        }).tickOnce("gates");
+        const measured = await pool().query<{
+          metrics: Record<string, unknown>;
+          status: string;
+        }>(
+          `SELECT metrics_json AS metrics, status
+             FROM portfolio_gate_measurements
+            WHERE gate = 'G4'
+            ORDER BY measurement_id DESC
+            LIMIT 1`,
+        );
+        const row = measured.rows[0];
+        expect(row?.status).toBe("INSUFFICIENT_DATA");
+        expect(row?.metrics.self_referential_slippage_samples).toBe(0);
+        expect(row?.metrics.samples_required).toBe(
+          CONFIG.gates.g4MinReconciledFills,
+        );
+        return Number(row?.metrics.slippage_samples ?? 0);
+      };
+
+      // The 150-share order reconciles.
+      const before = await slippageSamples(new Date(NOW.getTime() + 600_000));
+      expect(before).toBeGreaterThanOrEqual(1);
+
+      // A SECOND execution, larger than the decision book could have filled.
+      // Its reference walk is incomplete, so the reference VWAP covers fewer
+      // shares and is therefore a BETTER price than the order deserved — a bias
+      // toward "the simulator was conservative" that would mask a real
+      // optimism. It has to contribute nothing, not a flattering sample.
+      //
+      // Asserted as a delta rather than an absolute count, because this
+      // database is shared with earlier runs of this same suite.
+      await pool().query(
+        `INSERT INTO paper_orders
+           (order_id, token_id, condition_id, side, order_type, limit_price,
+            size, filled_size, post_only, worst_price, status, decided_at,
+            accepted_at)
+         VALUES ($1, $2, $3, 'BUY', 'FAK', '0.70', '900', '900', FALSE, '0.70',
+                 'filled', $4, $4)`,
+        [`deep-${RUN}`, TOKEN, CONDITION, new Date("2026-08-26T11:59:00.000Z")],
       );
-      const metrics = g4.rows[0]?.metrics ?? {};
-      expect(Number(metrics.slippage_samples)).toBeGreaterThanOrEqual(1);
-      expect(metrics.self_referential_slippage_samples).toBe(0);
-      expect(metrics.samples_required).toBe(CONFIG.gates.g4MinReconciledFills);
-      // And it still refuses: one reconciled execution is not a reconciliation.
-      const status = await pool().query<{ status: string }>(
-        `SELECT status FROM portfolio_gate_measurements
-          WHERE gate = 'G4' ORDER BY measurement_id DESC LIMIT 1`,
+      await pool().query(
+        `INSERT INTO paper_ledger_events
+           (idempotency_key, event_type, order_id, token_id, condition_id,
+            payload_json, event_ts)
+         VALUES ($1, 'fill', $2, $3, $4, $5::jsonb, $6)`,
+        [
+          `deep-${RUN}:taker:0`,
+          `deep-${RUN}`,
+          TOKEN,
+          CONDITION,
+          JSON.stringify({
+            side: "BUY",
+            price: "0.65",
+            size: "900",
+            fee: "1.000000",
+            taker: true,
+          }),
+          new Date("2026-08-26T12:00:06.000Z"),
+        ],
       );
-      expect(status.rows[0]?.status).toBe("INSUFFICIENT_DATA");
+      const after = await slippageSamples(new Date(NOW.getTime() + 660_000));
+      expect(after).toBe(before);
     });
 
     it("mints a gate report and attaches the owner's review exactly once", async () => {

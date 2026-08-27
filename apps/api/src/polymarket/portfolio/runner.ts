@@ -1262,13 +1262,19 @@ export function createPortfolioRunner(
         executionBook !== null &&
         decisionBook.receivedAt.getTime() ===
           executionBook.receivedAt.getTime();
-      const walk =
+      // An INCOMPLETE walk is not a reference. If the decision book could not
+      // have filled the whole order, its VWAP covers fewer shares and is
+      // therefore a better price than the order deserved — which biases the
+      // comparison toward "the simulator was conservative" and would mask a
+      // real optimism. Treated as no reference at all, like a missing book.
+      const rawWalk =
         decisionBook === null
           ? null
           : bookWalk(
               execution.side === "BUY" ? decisionBook.asks : decisionBook.bids,
               size,
             );
+      const walk = rawWalk === null || !rawWalk.complete ? null : rawWalk;
 
       samples.push({
         side: execution.side,
