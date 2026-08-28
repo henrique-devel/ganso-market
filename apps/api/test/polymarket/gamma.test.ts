@@ -148,3 +148,47 @@ describe("keyword classification (Gamma rows have no category)", () => {
     expect(classifyFrom("Will there be a ceasefire by March?")).toBeNull();
   });
 });
+
+describe("a tagless payload is not a market without a category", () => {
+  function classify(question: string, tags?: readonly { slug: string }[]) {
+    const entry = parseMarket({
+      conditionId: "0xt",
+      question,
+      slug: "",
+      clobTokenIds: '["1","2"]',
+      description: "Some resolution rules text here.",
+      active: true,
+      closed: false,
+      enableOrderBook: true,
+      ...(tags === undefined ? {} : { tags }),
+    });
+    return entry?.category ?? null;
+  }
+
+  /**
+   * Why `include_tag=true` is not optional on any Gamma call whose result
+   * reaches the metadata history.
+   *
+   * Tags are the PRIMARY classifier and the keyword list is a fallback that
+   * names a handful of tickers. Drop the tags and real in-universe markets stop
+   * classifying — these four are the exact questions found in production on
+   * 2026-08-27 sitting on a NULL-category metadata version, put there by the
+   * pending-resolution sweep, which requested Gamma without the parameter.
+   */
+  const LOST_WITHOUT_TAGS = [
+    ["Will STRC hit $100 by September 30?", "crypto"],
+    ["Variational FDV above $1B one day after launch?", "crypto"],
+    ["Will Hyperliquid reach $100 by December 31, 2026?", "crypto"],
+    ["Will the Bank of Korea hike by 50 bps or more?", "macro"],
+  ] as const;
+
+  it.each(LOST_WITHOUT_TAGS)(
+    "classifies %s only when the tag array is present",
+    (question, category) => {
+      expect(classify(question, [{ slug: category }])).toBe(category);
+      // The same market, same classifier, payload without tags: the keyword
+      // fallback does not name it, and the answer silently becomes null.
+      expect(classify(question)).toBeNull();
+    },
+  );
+});

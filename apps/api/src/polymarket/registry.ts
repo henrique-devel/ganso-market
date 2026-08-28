@@ -358,11 +358,12 @@ function metadataTokenIds(value: unknown): string[] | null {
 function metadataMatches(
   open: OpenMetadataVersion,
   record: MarketMetadataObservation,
+  category: string | null,
 ): boolean {
   const previousTokens = metadataTokenIds(open.clob_token_ids);
   return (
     open.question === record.question &&
-    open.category === record.category &&
+    open.category === category &&
     previousTokens !== null &&
     previousTokens.length === record.clobTokenIds.length &&
     previousTokens.every(
@@ -370,6 +371,29 @@ function metadataMatches(
     ) &&
     open.affirmative_token_id === record.affirmativeTokenId
   );
+}
+
+/**
+ * The category to record: a null observation NEVER erases a known one.
+ *
+ * `classifyCategory` returns null for two situations a caller cannot tell
+ * apart — "this market belongs to no tracked category" and "this payload did
+ * not carry what the classifier needs". The second is a property of the
+ * REQUEST, not of the market: a Gamma response without the tag array demotes
+ * every market to the keyword fallback, and the fallback names only a handful
+ * of tickers. Writing that null closes a `crypto`/`macro` window and opens an
+ * uncategorized one, which the RFC-012 report then buckets as `unknown` and
+ * the G5 regime query drops entirely.
+ *
+ * So null means "not observed" and the open window's category carries forward.
+ * A market that genuinely leaves a category leaves the universe instead, and
+ * that is recorded in `polymarket_universe_log` — not by erasing history.
+ */
+function categoryToRecord(
+  open: OpenMetadataVersion | undefined,
+  observed: string | null,
+): string | null {
+  return observed ?? open?.category ?? null;
 }
 
 export interface MarketMetadataObservation {
@@ -413,7 +437,8 @@ export async function applyMarketMetadataObservation(
     [record.conditionId],
   );
   const open = current.rows[0];
-  if (open !== undefined && metadataMatches(open, record)) {
+  const category = categoryToRecord(open, record.category);
+  if (open !== undefined && metadataMatches(open, record, category)) {
     return;
   }
 
@@ -449,7 +474,7 @@ export async function applyMarketMetadataObservation(
       record.conditionId,
       version,
       record.question,
-      record.category,
+      category,
       JSON.stringify(record.clobTokenIds),
       record.affirmativeTokenId,
       observedAt,

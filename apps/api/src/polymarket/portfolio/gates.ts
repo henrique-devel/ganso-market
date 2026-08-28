@@ -244,7 +244,15 @@ export interface EvidenceBase {
   readonly closedInWindow: readonly ClosedPosition[];
   readonly closedPositions: number;
   readonly distinctMarkets: number;
+  /** Distinct NAMED categories. An uncategorized position is not one of them. */
   readonly distinctCategories: number;
+  /**
+   * Closed positions whose category is unknown, counted and never bucketed.
+   *
+   * Visible even when the gate passes: it is the number that says how much of
+   * the breadth evidence could not be attributed to anything.
+   */
+  readonly uncategorizedPositions: number;
   /** Distinct UTC days on which a position actually closed. */
   readonly distinctCloseDays: number;
   readonly shortfalls: Readonly<Record<string, unknown>>;
@@ -284,9 +292,20 @@ export function paperEvidenceBase(input: {
   const distinctMarkets = new Set(
     closedInWindow.map((position) => position.conditionId),
   ).size;
+  // An uncategorized position is NOT a category.
+  //
+  // This used to read `position.category ?? "unknown"`, which made the absence
+  // of a category behave as the presence of one: with `g2MinCategories` at 2
+  // and exactly two tracked categories in the universe, a book of nothing but
+  // crypto plus one market whose category had been lost satisfied the breadth
+  // requirement. The gate would have been reporting diversity it never saw.
+  const categorized = closedInWindow.filter(
+    (position) => position.category !== null,
+  );
   const distinctCategories = new Set(
-    closedInWindow.map((position) => position.category ?? "unknown"),
+    categorized.map((position) => position.category),
   ).size;
+  const uncategorizedPositions = closedInWindow.length - categorized.length;
   const distinctCloseDays = new Set(
     closedInWindow.map((position) => utcDayKey(position.closedAt)),
   ).size;
@@ -312,6 +331,7 @@ export function paperEvidenceBase(input: {
     shortfalls.categories = {
       have: distinctCategories,
       need: input.config.g2MinCategories,
+      uncategorized_positions: uncategorizedPositions,
     };
   }
   if (distinctCloseDays < input.config.g2MinDistinctCloseDays) {
@@ -327,6 +347,7 @@ export function paperEvidenceBase(input: {
     closedPositions: closedInWindow.length,
     distinctMarkets,
     distinctCategories,
+    uncategorizedPositions,
     distinctCloseDays,
     shortfalls,
     sufficient: Object.keys(shortfalls).length === 0,
@@ -417,6 +438,7 @@ export function evaluateG2(input: G2Input): G2Result {
     closed_positions: evidence.closedPositions,
     distinct_markets: evidence.distinctMarkets,
     categories: evidence.distinctCategories,
+    uncategorized_positions: evidence.uncategorizedPositions,
     distinct_close_days: evidence.distinctCloseDays,
     bootstrap_blocks: blocks,
     largest_position_pnl_share: largestShare,

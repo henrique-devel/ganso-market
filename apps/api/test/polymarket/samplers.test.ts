@@ -538,6 +538,129 @@ describe("resolution follow-up after a market leaves the universe", () => {
     expect(payload.raw.outcomePrices).toEqual(["1", "0"]);
   });
 
+  it("asks Gamma with include_tag=true, without which it erases categories", async () => {
+    // The sweep's payload does not merely inform the affirmative-token
+    // mapping — it is written to the metadata history as an observation. Gamma
+    // omits the tag array unless asked, tags are the PRIMARY classifier, and a
+    // tagless payload therefore demotes every market to the keyword fallback.
+    //
+    // Measured in production on 2026-08-27: 30 markets had a crypto/macro
+    // category replaced by NULL in two days this way, 29 of them still
+    // unresolved — every one destined for the report's `unknown` bucket and
+    // invisible to the G5 regime query in the meantime.
+    const urls: string[] = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        if (text.includes("WITH membership")) {
+          return Promise.resolve({
+            rows: [{ condition_id: "0xgone" } as unknown as R],
+            rowCount: 1,
+          });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const poller = createUmaStatusPoller({
+      pool: pool as never,
+      clock: () => Date.parse("2026-08-21T23:00:00.000Z"),
+      fetcher: ((url: string) => {
+        urls.push(url);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve([]),
+        });
+      }) as never,
+    });
+
+    await poller.pollPendingOnce();
+
+    expect(urls.length).toBeGreaterThan(0);
+    // EVERY call, not merely one of them: the open and closed queries both
+    // reach backfillMetadata.
+    for (const url of urls) {
+      expect(url).toContain("include_tag=true");
+    }
+  });
+
+  it("carries the category forward when the observed one is null", async () => {
+    // A null category is "not observed", never "no category". The sweep used to
+    // write it straight through, closing a crypto/macro window and opening an
+    // uncategorized one — irreversibly, since the registry re-observes only the
+    // CURRENT universe and these markets have already left it.
+    const captured: Array<{ text: string; params: unknown[] }> = [];
+    const pool = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<{ rows: R[]; rowCount: number }> {
+        captured.push({ text, params: [...(params ?? [])] });
+        if (text.includes("WITH membership")) {
+          return Promise.resolve({
+            rows: [{ condition_id: "0xgone" } as unknown as R],
+            rowCount: 1,
+          });
+        }
+        // The open window: this market is known to be crypto.
+        if (text.includes("FROM polymarket_market_metadata_versions")) {
+          return Promise.resolve({
+            rows: [
+              {
+                version: 4,
+                question: "Will STRC hit $100 by September 30?",
+                category: "crypto",
+                clob_token_ids: ["tokenYes", "tokenNo"],
+                affirmative_token_id: "tokenYes",
+                valid_from: new Date("2026-08-20T00:00:00.000Z"),
+              } as unknown as R,
+            ],
+            rowCount: 1,
+          });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    // A real in-universe market whose question the keyword list does not name,
+    // arriving WITHOUT tags — the exact payload that cost 30 categories.
+    const market = {
+      conditionId: "0xgone",
+      question: "Will STRC hit $100 by September 30?",
+      slug: "strc-100-sep-30",
+      clobTokenIds: '["tokenYes", "tokenNo"]',
+      description: "Resolves YES if the price prints at or above $100.",
+      outcomes: '["Yes", "No"]',
+      outcomePrices: '["0", "1"]',
+      umaResolutionStatus: "proposed",
+      closed: false,
+      resolved: false,
+      updatedAt: "2026-08-21T22:00:00.000Z",
+    };
+    const poller = createUmaStatusPoller({
+      pool: pool as never,
+      clock: () => Date.parse("2026-08-21T23:00:00.000Z"),
+      fetcher: ((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(url.includes("closed=true") ? [] : [market]),
+        })) as never,
+    });
+
+    await poller.pollPendingOnce();
+
+    // Nothing was written at all: with the category carried forward, the
+    // observation is identical to the open window and the write is skipped.
+    const insert = captured.find((query) =>
+      query.text.includes("INSERT INTO polymarket_market_metadata_versions"),
+    );
+    expect(insert).toBeUndefined();
+    const close = captured.find((query) => query.text.includes("SET valid_to"));
+    expect(close).toBeUndefined();
+  });
+
   it("backfills the affirmative-token mapping for markets that already left the universe", async () => {
     // Measured in production on 2026-08-25: 100/100 in-universe markets were
     // mapped and 99/99 recently-exited ones were not, because migration 0012 is
