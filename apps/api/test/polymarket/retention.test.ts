@@ -1741,4 +1741,320 @@ describe("retention job", () => {
       stderrLines().some((line) => line.includes("RETENTION_STEP_FAILED")),
     ).toBe(true);
   });
+
+  it("asks for no deletion when autovacuum zeroes the dead tuples on a bloated file", async () => {
+    // The 2026-08-28 production shape, verbatim: autovacuum finished
+    // (n_dead_tup = 0) and the file kept every page it ever grew, so the
+    // dead-fraction discount degenerates to live == physical — 104.5 GB "live"
+    // against a 52 GB quota, and the run asked to delete 33.9 M LIVE rows with
+    // the retained data actually ~20 GB. The width-based meter reads the rows,
+    // not the file, and must ask for nothing.
+    const config = RETENTION_TABLES[0];
+    if (config === undefined) {
+      throw new Error("missing book_deltas config");
+    }
+    expect(config.table).toBe("polymarket_book_deltas");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            {
+              bytes: "104557125632",
+              reltuples: "66135696",
+              live_tup: "66368290",
+              dead_tup: "0",
+              toast_live_tup: "0",
+              heap_width: "119",
+              index_count: "3",
+              index_key_width: "102",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    expect(pool.captured.some((q) => q.text.includes("DELETE FROM"))).toBe(
+      false,
+    );
+    expect(report.actions).toHaveLength(0);
+    const lines = stderrLines();
+    expect(lines.some((l) => l.includes("RETENTION_QUOTA_UNMET"))).toBe(false);
+    expect(lines.some((l) => l.includes("RETENTION_CUTOFF_HISTOGRAM"))).toBe(
+      false,
+    );
+    // The 84 GB of empty pages are surfaced as bloat, never as a prune.
+    const bloat = lines.filter((l) => l.includes("RETENTION_BLOAT"));
+    expect(bloat).toHaveLength(1);
+    expect(bloat[0]).toContain('"table":"polymarket_book_deltas"');
+  });
+
+  it("counts live TOAST chunks in the live bytes", async () => {
+    // jsonb-heavy rows keep most of their bytes in the TOAST relation, where
+    // pg_stats.avg_width cannot see them (measured in production: the decision
+    // log reads 1.4 kB by widths, 3.4 kB by pg_column_size). The toast side is
+    // counted from its own live-chunk stats, never from its file size.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const cutoff = new Date("2026-05-01T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // Heap-side live: 1000 x (100 + 28 + (8 + 16) / 0.9) = 154,667 bytes —
+        // far under the 900,000 trigger. The 500 live toast chunks add
+        // 1,024,000 bytes, and only with them does the quota trip.
+        return {
+          rows: [
+            {
+              bytes: "5000000",
+              reltuples: "1000",
+              live_tup: "1000",
+              dead_tup: "0",
+              toast_live_tup: "500",
+              heap_width: "100",
+              index_count: "1",
+              index_key_width: "8",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET")) {
+        return { rows: [{ cutoff }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 400 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    expect(report.actions).toHaveLength(1);
+    expect(report.actions[0]?.cause).toBe("quota");
+    // Live bytes carried the toast term into the report totals too.
+    expect(Math.round(report.totalLiveBytes)).toBe(1_178_667);
+  });
+
+  it("clamps the quota cutoff to the floor persisted in the retention log", async () => {
+    // The 13:37Z 2026-08-28 shape: a previous RUN had already pruned to
+    // 08-18T00:00 (recorded in polymarket_retention_log), the process
+    // restarted, and pg_stats still described the pre-prune table. The old
+    // code had no memory across runs: the stale histogram picked a cutoff
+    // 1.9 days behind the floor, deleted nothing and gave the run up.
+    const floorMs = Date.parse("2026-08-18T00:00:00Z");
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // 10 M live rows x 104.67 bytes/row = ~1.047 GB live, over the 0.966 GB
+        // trigger, and large enough for the estimated (non-OFFSET) cutoff path.
+        return {
+          rows: [
+            {
+              bytes: "9000000000",
+              reltuples: "10000000",
+              live_tup: "10000000",
+              dead_tup: "0",
+              toast_live_tup: "0",
+              heap_width: "50",
+              index_count: "1",
+              index_key_width: "8",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("max(pruned_before)")) {
+        return {
+          rows: [{ floor: new Date(floorMs) }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("histogram_bounds")) {
+        // Every bound predates the persisted floor: the histogram is a map of
+        // a table state that no longer exists.
+        return {
+          rows: [
+            {
+              bounds: [
+                new Date("2026-08-15T00:00:00Z"),
+                new Date("2026-08-16T00:00:00Z"),
+                new Date("2026-08-17T00:00:00Z"),
+              ],
+              null_frac: 0,
+              mcv_frac: 0,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("max(received_at)")
+      ) {
+        return {
+          rows: [
+            {
+              oldest: new Date("2026-08-10T00:00:00Z"),
+              newest: new Date("2026-08-19T11:00:00Z"),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 40_000 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      maxQuotaIterations: 1,
+    });
+    await job.runOnce();
+
+    // The floor was read from the log, and every DELETE landed beyond it.
+    expect(
+      pool.captured.some((q) => q.text.includes("max(pruned_before)")),
+    ).toBe(true);
+    const deletes = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    expect(deletes.length).toBeGreaterThan(0);
+    for (const del of deletes) {
+      const cutoffParam = del.params[0];
+      expect(cutoffParam).toBeInstanceOf(Date);
+      expect((cutoffParam as Date).getTime()).toBeGreaterThan(floorMs);
+    }
+    // The estimate re-anchored at the floor, not at the stale histogram.
+    expect(
+      stderrLines().some(
+        (l) =>
+          l.includes("RETENTION_CUTOFF_INTERPOLATED") &&
+          l.includes('"anchored_at":"2026-08-18T00:00:00.000Z"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("runs ANALYZE after a prune so the next cutoff sees the new distribution", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const cutoff = new Date("2026-05-01T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            { bytes: "2000", reltuples: "200", live_tup: "50", dead_tup: "50" },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET 9")) {
+        return { rows: [{ cutoff }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 15 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    const report = await job.runOnce();
+
+    expect(report.actions).toHaveLength(1);
+    const analyzeIndex = pool.captured.findIndex((q) =>
+      q.text.startsWith("ANALYZE polymarket_rtds_prices"),
+    );
+    const deleteIndex = pool.captured.findIndex((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    expect(analyzeIndex).toBeGreaterThan(deleteIndex);
+    expect(stderrLines().some((l) => l.includes("RETENTION_ANALYZE"))).toBe(
+      true,
+    );
+  });
+
+  it("logs the real error message when a retention step fails", async () => {
+    // The 2026-08-28 13:38Z failures logged only error_name "Error" — the
+    // same diagnosability hole PR #37 closed in the supervised jobs. The
+    // message names the cause (here: the statement timeout) without re-running
+    // the query by hand inside the container.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      if (
+        text.includes("min(received_at)") &&
+        text.includes("WHERE token_id = $1")
+      ) {
+        return {
+          rows: [
+            { oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000) },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("jsonb_array_elements_text")) {
+        return { rows: [{ token_id: "t1" }], rowCount: 1 };
+      }
+      if (text.includes("LEFT JOIN polymarket_series_1m")) {
+        return { rows: [{ first_uncovered: null }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        throw new Error("canceling statement due to statement timeout");
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const failure = stderrLines().find((l) =>
+      l.includes("RETENTION_STEP_FAILED"),
+    );
+    expect(failure).toBeDefined();
+    expect(failure).toContain("canceling statement due to statement timeout");
+  });
 });

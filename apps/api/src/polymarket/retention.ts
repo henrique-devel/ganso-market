@@ -64,6 +64,23 @@ const MAX_INTERPOLATED_FRACTION = 0.9;
  */
 const HISTOGRAM_MAX_EXCLUDED_FRAC = 0.05;
 /**
+ * Per-tuple storage constants for the width-based live-bytes estimate.
+ *
+ * HEAP_TUPLE_OVERHEAD: 24-byte tuple header (23 + pad, null bitmap folded in
+ * for the column counts here) plus the 4-byte line pointer.
+ * INDEX_TUPLE_OVERHEAD: 8-byte IndexTupleData header plus the 4-byte line
+ * pointer plus average alignment slack, per index entry.
+ * BTREE_LEAF_FILL: default btree leaf fillfactor — the estimate prices the
+ * index as if freshly rebuilt, which is the point: bloat is measured
+ * separately, never inherited into the retention decision.
+ * TOAST_CHUNK_BYTES: TOAST slices values into ~1996-byte chunks that pack
+ * four to a page, so one live chunk costs ~2048 bytes.
+ */
+const HEAP_TUPLE_OVERHEAD = 28;
+const INDEX_TUPLE_OVERHEAD = 16;
+const BTREE_LEAF_FILL = 0.9;
+const TOAST_CHUNK_BYTES = 2048;
+/**
  * Widest window a single coverage query may span for one token.
  *
  * The per-token check is an index-only scan, but its cost still grows with the
@@ -588,7 +605,7 @@ function log(
 interface TableSize {
   /** Physical bytes on disk (pg_total_relation_size): never shrinks on DELETE. */
   readonly bytes: number;
-  /** Live bytes: physical discounted by the dead-tuple fraction. */
+  /** Live bytes: live rows times the measured row width (see tableSize). */
   readonly liveBytes: number;
   readonly reltuples: number;
   /** Best available live row count (pg_stat, falling back to reltuples). */
@@ -616,32 +633,80 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   // Two different sizes, because they answer two different questions.
   //
   // `bytes` is physical (pg_total_relation_size) and answers "how much disk is
-  // this costing right now" — the global budget alarm. It does NOT shrink on
-  // DELETE: dead tuples keep their pages until VACUUM returns them to the free
-  // space map, and even then the file does not give space back to the OS.
+  // this costing right now" — the global budget alarm's bloat signal. It does
+  // NOT shrink on DELETE: dead tuples keep their pages until VACUUM returns
+  // them to the free space map, and even then the file does not give space
+  // back to the OS.
   //
-  // `liveBytes` discounts that bloat by the dead-tuple fraction and answers
-  // "how much data is actually retained" — the per-table quota. Using the
-  // physical size for the quota is a data-destroying bug: a table pruned from
-  // 76 GB to 48 GB of live rows still measures 76 GB, so the next run would
-  // delete another 28 GB of LIVE rows, and the run after that another 28 GB,
-  // until the table was empty. n_live_tup/n_dead_tup come from the stats
-  // collector and move immediately on DELETE, unlike pg_class.reltuples which
-  // only refreshes on VACUUM/ANALYZE.
+  // `liveBytes` answers "how much data is actually retained" — the per-table
+  // quota — and must not depend on the physical file AT ALL. The first fix
+  // discounted the physical size by the dead-tuple fraction, and that
+  // degenerates the moment autovacuum finishes: n_dead_tup drops to zero, the
+  // file keeps every empty page, and live_bytes == physical again. Measured in
+  // production 2026-08-28: polymarket_book_deltas at 104.5 GB physical with
+  // n_dead_tup = 0 read as 104.5 GB "live" against a 52 GB quota, so the run
+  // asked to delete 33.9 M LIVE rows — 53% of the table — with the retained
+  // data actually around 20 GB. The same degeneration had already deleted
+  // 1.39 M live rows (down to data 3 hours old) earlier that day.
+  //
+  // So live bytes are now built from per-row measurements only:
+  //
+  //   liveRows x (heap width + tuple overhead)        -- pg_stats.avg_width
+  // + liveRows x (index keys + entry overhead) / fill -- per live index entry
+  // + live TOAST chunks x chunk size                  -- toast pg_stat counts
+  //
+  // Every term scales with live rows (TOAST chunk counts move with vacuum,
+  // slightly behind deletes), so a prune moves the measure immediately and the
+  // estimate can never inherit empty pages or index bloat. The physical-live
+  // discrepancy is reported as RETENTION_BLOAT / RETENTION_GLOBAL_BLOAT and is
+  // never a reason to delete rows. Priced as freshly rebuilt (compact), which
+  // is exactly what a VACUUM FULL would leave.
+  //
+  // Fallbacks, in order, when the catalog has less to offer: no pg_stats row
+  // yet (never analyzed) -> the dead-fraction discount; no stats-collector row
+  // at all -> the physical size (the original behaviour, for freshly created
+  // tables the collector has not seen).
   async function tableSize(table: string): Promise<TableSize | null> {
     const result = await pool.query<{
       bytes: string | number | null;
       reltuples: string | number | null;
       live_tup: string | number | null;
       dead_tup: string | number | null;
+      toast_live_tup: string | number | null;
+      heap_width: string | number | null;
+      index_count: string | number | null;
+      index_key_width: string | number | null;
     }>(
       `SELECT pg_total_relation_size(c.oid)::bigint AS bytes,
               c.reltuples::float8 AS reltuples,
               s.n_live_tup::bigint AS live_tup,
-              s.n_dead_tup::bigint AS dead_tup
+              s.n_dead_tup::bigint AS dead_tup,
+              ts.n_live_tup::bigint AS toast_live_tup,
+              w.heap_width,
+              ix.index_count,
+              ix.index_key_width
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
+         LEFT JOIN pg_stat_all_tables ts ON ts.relid = c.reltoastrelid
+         LEFT JOIN LATERAL (
+           SELECT sum(st.avg_width)::float8 AS heap_width
+             FROM pg_stats st
+            WHERE st.schemaname = n.nspname AND st.tablename = c.relname
+         ) w ON true
+         LEFT JOIN LATERAL (
+           SELECT count(DISTINCT i.indexrelid)::float8 AS index_count,
+                  COALESCE(sum(st.avg_width), 0)::float8 AS index_key_width
+             FROM pg_index i
+             CROSS JOIN LATERAL unnest(i.indkey::int2[]) AS k(attnum)
+             LEFT JOIN pg_attribute a
+               ON a.attrelid = c.oid AND a.attnum = k.attnum
+             LEFT JOIN pg_stats st
+               ON st.schemaname = n.nspname
+              AND st.tablename = c.relname
+              AND st.attname = a.attname
+            WHERE i.indrelid = c.oid AND i.indisvalid
+         ) ix ON true
         WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = $1`,
       [table],
     );
@@ -654,13 +719,23 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     const liveTup = Math.max(Number(row.live_tup ?? 0), 0);
     const deadTup = Math.max(Number(row.dead_tup ?? 0), 0);
     const totalTup = liveTup + deadTup;
-    // No stats row (or a table the collector has never seen): fall back to the
-    // physical size, i.e. exactly the pre-fix behaviour.
-    const liveBytes =
-      Number.isFinite(totalTup) && totalTup > 0
-        ? (bytes * liveTup) / totalTup
-        : bytes;
     const liveRows = liveTup > 0 ? liveTup : reltuples;
+    const heapWidth = Number(row.heap_width ?? 0);
+    let liveBytes: number;
+    if (Number.isFinite(heapWidth) && heapWidth > 0) {
+      const indexCount = Math.max(Number(row.index_count ?? 0), 0);
+      const indexKeyWidth = Math.max(Number(row.index_key_width ?? 0), 0);
+      const toastLiveTup = Math.max(Number(row.toast_live_tup ?? 0), 0);
+      const perRow =
+        heapWidth +
+        HEAP_TUPLE_OVERHEAD +
+        (indexKeyWidth + indexCount * INDEX_TUPLE_OVERHEAD) / BTREE_LEAF_FILL;
+      liveBytes = liveRows * perRow + toastLiveTup * TOAST_CHUNK_BYTES;
+    } else if (Number.isFinite(totalTup) && totalTup > 0) {
+      liveBytes = (bytes * liveTup) / totalTup;
+    } else {
+      liveBytes = bytes;
+    }
     return { bytes, liveBytes, reltuples, liveRows };
   }
 
@@ -858,6 +933,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
             token_id: tokenId,
             slice_end: sliceEnd.toISOString(),
             error_name: error instanceof Error ? error.name : "UnknownError",
+            detail: error instanceof Error ? error.message : undefined,
           },
         );
         return total;
@@ -888,6 +964,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
             token_id: tokenId,
             cutoff: sliceCutoff.toISOString(),
             error_name: error instanceof Error ? error.name : "UnknownError",
+            detail: error instanceof Error ? error.message : undefined,
           },
         );
         return total;
@@ -1050,6 +1127,26 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     }
     const cutoff = bounds[index];
     if (cutoff === undefined) {
+      return null;
+    }
+    // Hard clamp: never hand back a cutoff at or behind the floor. The
+    // startIndex walk already respects the floor while the histogram is
+    // current, but pg_stats is only as fresh as the last ANALYZE — measured in
+    // production 2026-08-28, a stale histogram chose 08-26T14:36 when the table
+    // had already been pruned to 08-28T07:32. Such a cutoff deletes nothing,
+    // trips the unmet branch and costs the whole run; returning null instead
+    // lets the linear estimator (anchored at the floor) make real progress.
+    if (floor !== null && cutoff.getTime() <= floor.getTime()) {
+      log(
+        "warn",
+        "RETENTION_HISTOGRAM_STALE",
+        "polymarket_retention_histogram_stale",
+        {
+          table: config.table,
+          cutoff: cutoff.toISOString(),
+          floor: floor.toISOString(),
+        },
+      );
       return null;
     }
     log(
@@ -1231,10 +1328,10 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   async function pruneQuota(
     config: RetentionTableConfig,
     report: RetentionRunReport,
-  ): Promise<void> {
+  ): Promise<number> {
     const size = await tableSize(config.table);
     if (size === null) {
-      return;
+      return 0;
     }
     const trigger = config.quotaBytes * QUOTA_TRIGGER_RATIO;
     const target = config.quotaBytes * QUOTA_TARGET_RATIO;
@@ -1251,19 +1348,49 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           quota_bytes: config.quotaBytes,
         });
       }
-      return;
+      return 0;
     }
     const bytesPerRow = Math.max(
       size.liveBytes / Math.max(size.liveRows, 1),
       1,
     );
     let estimatedLiveBytes = size.liveBytes;
-    // Cutoff this run has already pruned to. Every later pass must advance
-    // beyond it — see the no-progress guard below.
+    let totalDeleted = 0;
+    // Cutoff already pruned to. Every later pass must advance beyond it — see
+    // the no-progress guard below. Seeded from the retention log so it
+    // SURVIVES restarts: the floor used to be per-run state, so a run that
+    // began with a stale histogram had no memory of what the previous run had
+    // already swept (measured 2026-08-28: cutoff chosen 1.9 days behind the
+    // previous run's pruned_before). Not seeded for closedRowsOnly tables,
+    // where rows below an old cutoff legitimately become eligible later.
     let floor: Date | null = null;
+    if (config.closedRowsOnly !== true) {
+      try {
+        const persisted = await pool.query<{ floor: Date | string | null }>(
+          `SELECT max(pruned_before) AS floor
+             FROM polymarket_retention_log
+            WHERE table_name = $1`,
+          [config.table],
+        );
+        floor = toDate(persisted.rows[0]?.floor ?? null);
+      } catch (error: unknown) {
+        // Degrades to the pre-fix behaviour (no cross-run memory), never
+        // silently: the estimators still cannot move backwards inside the run.
+        log(
+          "warn",
+          "RETENTION_FLOOR_UNAVAILABLE",
+          "polymarket_retention_floor_unavailable",
+          {
+            table: config.table,
+            error_name: error instanceof Error ? error.name : "UnknownError",
+            detail: error instanceof Error ? error.message : undefined,
+          },
+        );
+      }
+    }
     for (let iteration = 0; iteration < maxQuotaIterations; iteration += 1) {
       if (estimatedLiveBytes < target) {
-        return;
+        return totalDeleted;
       }
       const rowsToDelete = Math.max(
         Math.ceil((estimatedLiveBytes - target) / bytesPerRow),
@@ -1279,7 +1406,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         // No usable cutoff (stats overestimated the table): abort this
         // table's quota iteration — never fall back to `now`, which would
         // delete every row. quotaCutoff already logged the abort.
-        return;
+        return totalDeleted;
       }
       // Forward-only, and the reason is the bug this guard replaces.
       //
@@ -1306,10 +1433,11 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
             floor: floor.toISOString(),
           },
         );
-        return;
+        return totalDeleted;
       }
       const deleted = await pruneBefore(config, cutoff, "quota", report);
       floor = cutoff;
+      totalDeleted += deleted;
       if (deleted === 0) {
         // Blocked (e.g. missing aggregates) or already empty: stop iterating
         // so the job never spins; the skip was logged above.
@@ -1324,9 +1452,40 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
             quota_bytes: config.quotaBytes,
           },
         );
-        return;
+        return totalDeleted;
       }
       estimatedLiveBytes -= deleted * bytesPerRow;
+    }
+    return totalDeleted;
+  }
+
+  /**
+   * Refresh pg_stats after a prune. The histogram cutoff reads
+   * pg_stats.histogram_bounds, and those describe the table as of the LAST
+   * ANALYZE: after a mass delete they map row fractions onto a window that no
+   * longer exists, which is how the 2026-08-28 run picked a cutoff 1.9 days
+   * behind the previous prune. Sample-based, so it costs seconds even on the
+   * delta table; a failure is logged and never aborts the run.
+   */
+  async function analyzeAfterPrune(
+    config: RetentionTableConfig,
+  ): Promise<void> {
+    try {
+      await pool.query(`ANALYZE ${config.table}`, []);
+      log("info", "RETENTION_ANALYZE", "polymarket_retention_analyze", {
+        table: config.table,
+      });
+    } catch (error: unknown) {
+      log(
+        "warn",
+        "RETENTION_ANALYZE_FAILED",
+        "polymarket_retention_analyze_failed",
+        {
+          table: config.table,
+          error_name: error instanceof Error ? error.name : "UnknownError",
+          detail: error instanceof Error ? error.message : undefined,
+        },
+      );
     }
   }
 
@@ -1376,6 +1535,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
             {
               table: config.table,
               error_name: error instanceof Error ? error.name : "UnknownError",
+              detail: error instanceof Error ? error.message : undefined,
             },
           );
         }
@@ -1418,6 +1578,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         if (config.protected) {
           continue;
         }
+        let tableDeleted = 0;
         // (a) TTL prune.
         if (config.ttlDays !== null) {
           const effectiveTtlDays = globalAlarm
@@ -1433,7 +1594,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           }
           const cutoff = new Date(now.getTime() - effectiveTtlDays * DAY_MS);
           try {
-            await pruneBefore(config, cutoff, "ttl", report);
+            tableDeleted += await pruneBefore(config, cutoff, "ttl", report);
           } catch (error: unknown) {
             log(
               "error",
@@ -1443,13 +1604,14 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
                 table: config.table,
                 error_name:
                   error instanceof Error ? error.name : "UnknownError",
+                detail: error instanceof Error ? error.message : undefined,
               },
             );
           }
         }
         // (b) Quota prune (quota beats TTL — applies to no-TTL tables too).
         try {
-          await pruneQuota(config, report);
+          tableDeleted += await pruneQuota(config, report);
         } catch (error: unknown) {
           log(
             "error",
@@ -1458,8 +1620,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
             {
               table: config.table,
               error_name: error instanceof Error ? error.name : "UnknownError",
+              detail: error instanceof Error ? error.message : undefined,
             },
           );
+        }
+        // (c) A prune rewrote the row-fraction map the next cutoff reads.
+        if (tableDeleted > 0) {
+          await analyzeAfterPrune(config);
         }
       }
 
