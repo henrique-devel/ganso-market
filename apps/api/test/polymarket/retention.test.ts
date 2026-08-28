@@ -929,7 +929,7 @@ describe("retention job", () => {
     const config: RetentionTableConfig = {
       table: "polymarket_rtds_prices",
       ttlDays: null,
-      quotaBytes: 10_000_000_000,
+      quotaBytes: 160_000_000,
       timeColumn: "received_at",
       protected: false,
     };
@@ -937,12 +937,13 @@ describe("retention job", () => {
     const newest = new Date("2026-08-11T00:00:00Z");
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
-        // 10 GB over 10 M rows = 1 kB/row; target is 80% of the 10 GB quota,
-        // so 2 M rows must go — 20% of the table.
+        // 160 MB over 10 M rows = 16 B/row (so the byte-budgeted batch stays
+        // above the single 2 M-row batch this test wants); target is 80% of
+        // the quota, so 2 M rows must go — 20% of the table.
         return {
           rows: [
             {
-              bytes: "10000000000",
+              bytes: "160000000",
               reltuples: "10000000",
               live_tup: "10000000",
               dead_tup: "0",
@@ -1132,7 +1133,7 @@ describe("retention job", () => {
     const config: RetentionTableConfig = {
       table: "polymarket_rtds_prices",
       ttlDays: null,
-      quotaBytes: 2_500_000_000,
+      quotaBytes: 40_000_000,
       timeColumn: "received_at",
       protected: false,
     };
@@ -1142,10 +1143,12 @@ describe("retention job", () => {
     );
     const pool = fakePool((text, _params, captured) => {
       if (text.includes("pg_total_relation_size")) {
+        // 16 B rows: the byte-budgeted batch cap stays above the canned 1 M-row
+        // first pass, so the assertions read the cutoff walk, not the batching.
         return {
           rows: [
             {
-              bytes: "10000000000",
+              bytes: "160000000",
               reltuples: "10000000",
               live_tup: "10000000",
               dead_tup: "0",
@@ -2003,6 +2006,62 @@ describe("retention job", () => {
     expect(stderrLines().some((l) => l.includes("RETENTION_ANALYZE"))).toBe(
       true,
     );
+  });
+
+  it("sizes the quota DELETE batch by bytes, so fat rows fit the timeout", async () => {
+    // Measured 2026-08-28: 50 000 rows of portfolio_decisions are ~220 MB
+    // across six indexes plus TOAST, and the batch died on the pool's query
+    // timeout ("Query read timeout") on EVERY run — the fat tables' quotas
+    // were never enforced. 4096-byte rows against the 32 MiB budget must clamp
+    // the batch at 8192 rows; slim tables keep the full row-count batch.
+    const config: RetentionTableConfig = {
+      table: "portfolio_decisions",
+      ttlDays: null,
+      quotaBytes: 40_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const cutoff = new Date("2026-08-18T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // perRow = 4068 + 28 = 4096 bytes exactly; 10 000 live rows.
+        return {
+          rows: [
+            {
+              bytes: "90000000",
+              reltuples: "10000",
+              live_tup: "10000",
+              dead_tup: "0",
+              toast_live_tup: "0",
+              heap_width: "4068",
+              index_count: "0",
+              index_key_width: "0",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET")) {
+        return { rows: [{ cutoff }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM portfolio_decisions")) {
+        return { rows: [], rowCount: 2_188 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const del = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM portfolio_decisions"),
+    );
+    expect(del).toBeDefined();
+    expect(del?.text).toContain("LIMIT 8192");
+    expect(del?.text).not.toContain("LIMIT 50000");
   });
 
   it("logs the real error message when a retention step fails", async () => {

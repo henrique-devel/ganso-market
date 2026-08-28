@@ -29,6 +29,19 @@ export const DEFAULT_BATCH_SIZE = 50_000;
  * load. Smaller batches finish, and the loop simply runs more of them.
  */
 export const COVERAGE_BATCH_SIZE = 5_000;
+/**
+ * Byte budget for one quota DELETE batch. The row-count batch assumed slim
+ * rows: 50 000 rows of polymarket_rtds_prices move ~10 MB, but 50 000 rows of
+ * portfolio_decisions move ~220 MB across six indexes plus TOAST, and the
+ * statement dies on the pool's query timeout ("Query read timeout", measured
+ * 2026-08-28 on every retention run) — so the fat tables' quotas were never
+ * enforced at all. The quota path knows the measured bytes per row; sizing the
+ * batch by bytes makes every table's batch cost roughly the same, and slim
+ * tables keep their full-size batches via the row-count cap.
+ */
+export const QUOTA_DELETE_BYTE_BUDGET = 32 * 1024 * 1024;
+/** Floor so a pathological width estimate cannot degenerate to 1-row batches. */
+const MIN_QUOTA_BATCH_ROWS = 1_000;
 export const QUOTA_TRIGGER_RATIO = 0.9;
 export const QUOTA_TARGET_RATIO = 0.8;
 /**
@@ -747,6 +760,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     config: RetentionTableConfig,
     cutoff: Date,
     tokenId: string | null,
+    batchRowCap: number | null = null,
   ): Promise<number> {
     let total = 0;
     for (let i = 0; i < MAX_DELETE_BATCHES; i += 1) {
@@ -754,10 +768,12 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         config.closedRowsOnly === true ? " AND ended_at IS NOT NULL" : "";
       const filterSql = tokenId === null ? "" : " AND token_id = $2";
       const params: unknown[] = tokenId === null ? [cutoff] : [cutoff, tokenId];
-      const limit =
+      const rowLimit =
         config.requiresSeriesCoverage === true
           ? Math.min(batchSize, COVERAGE_BATCH_SIZE)
           : batchSize;
+      const limit =
+        batchRowCap === null ? rowLimit : Math.min(rowLimit, batchRowCap);
       const result = await pool.query(
         `DELETE FROM ${config.table}
           WHERE ctid IN (
@@ -869,11 +885,18 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     config: RetentionTableConfig,
     cutoff: Date,
     report: RetentionRunReport,
+    batchRowCap: number | null,
   ): Promise<number> {
     const tokenIds = await registryTokenIds();
     let total = 0;
     for (const tokenId of tokenIds) {
-      total += await pruneCoveredToken(config, tokenId, cutoff, report);
+      total += await pruneCoveredToken(
+        config,
+        tokenId,
+        cutoff,
+        report,
+        batchRowCap,
+      );
     }
     return total;
   }
@@ -892,6 +915,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     tokenId: string,
     cutoff: Date,
     report: RetentionRunReport,
+    batchRowCap: number | null,
   ): Promise<number> {
     let oldest: Date | null;
     try {
@@ -942,7 +966,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         return total;
       }
       try {
-        total += await batchedDelete(config, sliceCutoff, tokenId);
+        total += await batchedDelete(config, sliceCutoff, tokenId, batchRowCap);
       } catch (error: unknown) {
         // The DELETE has to be inside the per-slice guard too. Measured in
         // production on 2026-08-26: a batch on a heavy token exceeded the 30 s
@@ -999,11 +1023,12 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     cutoff: Date,
     cause: "ttl" | "quota",
     report: RetentionRunReport,
+    batchRowCap: number | null = null,
   ): Promise<number> {
     const rowsDeleted =
       config.requiresSeriesCoverage === true
-        ? await pruneCovered(config, cutoff, report)
-        : await batchedDelete(config, cutoff, null);
+        ? await pruneCovered(config, cutoff, report, batchRowCap)
+        : await batchedDelete(config, cutoff, null, batchRowCap);
     if (rowsDeleted > 0) {
       const action: RetentionAction = {
         table: config.table,
@@ -1354,6 +1379,11 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
       size.liveBytes / Math.max(size.liveRows, 1),
       1,
     );
+    // Batch sized by bytes moved, not rows counted — see QUOTA_DELETE_BYTE_BUDGET.
+    const batchRowCap = Math.max(
+      Math.floor(QUOTA_DELETE_BYTE_BUDGET / bytesPerRow),
+      MIN_QUOTA_BATCH_ROWS,
+    );
     let estimatedLiveBytes = size.liveBytes;
     let totalDeleted = 0;
     // Cutoff already pruned to. Every later pass must advance beyond it — see
@@ -1435,7 +1465,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         );
         return totalDeleted;
       }
-      const deleted = await pruneBefore(config, cutoff, "quota", report);
+      const deleted = await pruneBefore(
+        config,
+        cutoff,
+        "quota",
+        report,
+        batchRowCap,
+      );
       floor = cutoff;
       totalDeleted += deleted;
       if (deleted === 0) {
