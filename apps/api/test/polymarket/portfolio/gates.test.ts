@@ -376,6 +376,59 @@ describe("G2 — paper with realism", () => {
     ]);
   });
 
+  it("NEVER counts an uncategorized position as a category", () => {
+    // The degeneration this replaced: `position.category ?? "unknown"` made the
+    // ABSENCE of a category behave as the presence of one. With
+    // `g2MinCategories` at 2 and exactly two tracked categories in the
+    // universe, a book of nothing but crypto plus a single market whose
+    // category had been lost satisfied the breadth requirement — the gate
+    // reporting diversity it never saw.
+    //
+    // Both books below have the same 150 positions and the same shape; only
+    // the category of the odd-indexed ones differs.
+    const oneRealCategory = Array.from({ length: 150 }, (_unused, i) => ({
+      pnl: 2 + (i % 5) * 0.2,
+      conditionId: `0x${String(i % 40)}`,
+      category: i % 2 === 0 ? "crypto" : null,
+      closedAt: new Date(NOW.getTime() - (150 - i) * (DAY_MS / 2)),
+    }));
+
+    const result = evaluateG2({
+      closed: oneRealCategory,
+      clockStart,
+      now: NOW,
+      config: GATES,
+    });
+
+    // One NAMED category, and the uncategorized half counted rather than
+    // bucketed. The same book with `crypto`/`macro` PASSES (test above), so the
+    // only thing standing between this book and a pass is the missing category.
+    expect(result.metrics.categories).toBe(1);
+    expect(result.metrics.uncategorized_positions).toBe(75);
+    expect(result.status).toBe("INSUFFICIENT_DATA");
+    const shortfalls = result.metrics.shortfalls as Record<string, unknown>;
+    expect(shortfalls.categories).toEqual({
+      have: 1,
+      need: GATES.g2MinCategories,
+      uncategorized_positions: 75,
+    });
+  });
+
+  it("counts uncategorized positions even when the gate passes", () => {
+    // The number has to be visible on a PASS too: it is how a reader learns
+    // that breadth evidence went unattributed, and a metric that only appears
+    // on failure cannot be trended.
+    const result = evaluateG2({
+      closed: closed(150, (i) => 2 + (i % 5) * 0.2),
+      clockStart,
+      now: NOW,
+      config: GATES,
+    });
+    expect(result.status).toBe("PASS");
+    expect(result.metrics.categories).toBe(2);
+    expect(result.metrics.uncategorized_positions).toBe(0);
+  });
+
   it("PASSES a profitable run whose interval clears zero after the haircut", () => {
     const result = evaluateG2({
       closed: closed(150, (i) => 2 + (i % 5) * 0.2),

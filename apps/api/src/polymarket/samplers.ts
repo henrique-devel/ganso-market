@@ -605,8 +605,16 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         .map((id) => `condition_ids=${encodeURIComponent(id)}`)
         .join("&");
       const closedParam = closedOnly ? "&closed=true" : "";
+      // `include_tag=true` for the same reason the registry passes it: Gamma
+      // omits the tag array without it, and tags are the PRIMARY classifier.
+      // A tagless payload silently demotes every market to the keyword
+      // fallback, which returns null for anything the keyword list does not
+      // name — and this sweep feeds that result straight into the metadata
+      // history. Measured in production on 2026-08-27: 30 markets had a
+      // crypto/macro category replaced by NULL this way in two days.
       const response = await fetcher(
-        `${baseUrl}/markets?limit=${chunk.length}${closedParam}&${params}`,
+        `${baseUrl}/markets?limit=${chunk.length}${closedParam}` +
+          `&include_tag=true&${params}`,
         { headers: { accept: "application/json", "user-agent": USER_AGENT } },
       );
       if (!response.ok) {
