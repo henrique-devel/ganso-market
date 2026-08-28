@@ -1,13 +1,17 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-27 (madrugada — degenerações de G2/G3/G4
-  fechadas e **ativas em produção** com config 1.2.0, registro da aprovação do
-  G6 implementado, ponte de paper decidida em documento, segundo bloco de
-  checagem rodado pela primeira vez; **as quatro decisões de calibração do
-  proprietário registradas**, um achado novo saído da primeira delas — a
-  provenance da entrada expira antes da posição — e a **ponte decisão → ordem de
-  paper implementada** com migration 0015 e **ativa em produção** desde
-  2026-08-27 17:00Z)
+- Última atualização: 2026-08-28 (noite — **bloco de hotfixes autorizado pelo
+  proprietário executado de ponta a ponta e ativo em produção**: o medidor de
+  bytes vivos da retenção parou de herdar o arquivo físico e desarmou uma
+  exclusão de 33,9 M de linhas vivas (#50), o fingerprint do G2/G5 virou o
+  schedule da venue e os resets por rotação pararam (#51), o lag transitório do
+  runtime deixou de cancelar ordens paper (#52), o coletor onchain gravou as
+  primeiras linhas da sua história (#53), o batch da quota virou orçado por
+  bytes (#54) e o `VACUUM FULL` de `polymarket_book_deltas` recuperou **78 GB**
+  — banco de 116 → 38 GB. Um bloqueio novo com condição de parada: a poda de
+  `portfolio_decisions` exige um índice em
+  `portfolio_panel_snapshots(decision_id)` = migration 0016, pendente de
+  autorização)
 - Branch principal: `main`
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
@@ -523,7 +527,8 @@ que pareceria uma mudança de um caractere.
 - **RISCO:** não há TTL/retenção nas tabelas Polymarket; `polymarket_book_snapshots`
   cresce ~200 mil linhas/dia. Coberto pela RFC-007 reescrita (implementar).
 - **RISCO:** não há backup externo automático, HA ou recuperação garantida do
-  PostgreSQL, por decisão de escopo atual.
+  PostgreSQL. **Reafirmado pelo proprietário em 2026-08-28: a proposta de
+  backup mínimo foi recusada e o risco permanece aceito como está.**
 - **RISCO:** `ServiceHealth` é reproduzido manualmente entre linguagens; os
   schemas v1 são normativos, mas existe risco futuro de drift.
 - **RISCO:** o market-engine não possui `healthcheck` declarativo no Compose;
@@ -1331,6 +1336,224 @@ fica em ~3 dias, como no decision log.
 dias de histórico de painel que a quota não entrega. Medir `pg_column_size` da
 linha em produção e redeclarar o TTL — não inventar quota nova.
 
+## SESSÃO 2026-08-28 — BLOCO DE HOTFIXES: retenção, G2/G5, throughput, onchain
+
+Cinco PRs mergeados e **ativos em produção** (#50–#54, CI verde nos três jobs em
+cada um), mais a janela de manutenção autorizada. Cada fix entrou com teste de
+regressão **verificado falhando no código anterior** (padrão dos #40–#49), e
+cada defeito foi **re-medido em produção antes da correção**. Release final no
+servidor: `24e1c91` (confirmado por `/etc/ganso/release-sha` DENTRO de cada
+container de profile, nunca por `compose ps`).
+
+### #50 — o medidor de bytes vivos parou de herdar o arquivo físico (URGENTE)
+
+**FATO VERIFICADO (re-medição 2026-08-28 ~19:30Z, antes do fix):** o desconto
+por fração de tuplas mortas degenera quando o autovacuum zera `n_dead_tup` sem
+o arquivo encolher: `live_bytes == físico` de novo — a lente das degenerações
+dos gates aplicada à retenção. `polymarket_book_deltas` estava com **104,5 GB
+físicos e `n_dead_tup = 0`** (autovacuum às 19:04Z), lidos como 104,5 GB
+"vivos" contra quota de 52 GB. A rodada de 13:37Z pediu
+**`rows_to_delete: 33.926.410`** (~53% da tabela, vivo real ~20 GB) e só não
+executou porque o DELETE do token pesado estourou timeout. **Pior: às 10:28:32Z
+a mesma degeneração já havia apagado 1.390.106 linhas VIVAS** (`pruned_before =
+28/08 07:32` — dados com ~3 h de idade). E às 13:37Z o histograma defasado do
+`pg_stats` escolheu corte 26/08 14:36, **1,9 dia ATRÁS** do que a rodada das
+10:28 já tinha podado — o floor era estado por run e morria no restart.
+
+**Correção (#50):** bytes vivos = `linhas vivas × largura medida`
+(`pg_stats.avg_width` + overhead de tupla + parcela de índice por entrada viva
+
+- **chunks TOAST vivos × 2048 B** — medido: o decision log tem 1,4 kB por
+  larguras e 3,4 kB por `pg_column_size`; o resto é TOAST que o `avg_width` não
+  vê). Nunca o arquivo. O floor da quota agora é **persistido** (semeado de
+  `max(pruned_before)` do retention_log, exceto tabelas `closedRowsOnly`);
+  histograma que devolveria corte ≤ floor loga `RETENTION_HISTOGRAM_STALE` e cai
+  para o estimador linear ancorado no floor. `ANALYZE` após poda que apagou
+  linhas. `RETENTION_STEP_FAILED` ganhou `detail` com a mensagem real (padrão do
+  #37).
+
+**FATO VERIFICADO (produção, 19:52Z, primeira varredura com o fix):**
+`book_deltas` medido em **20,77 GB vivos** (o compacto real, medido depois pelo
+`VACUUM FULL`, é 19 GB — erro de ~9%) → `RETENTION_BLOAT`, **zero pedido de
+exclusão**; o pedido de 33,9 M desarmou. **O alarme global saiu**: live honesto
+36,28 GB contra gatilho de 99 GiB → `RETENTION_GLOBAL_BLOAT` (warn, 88,3 GB de
+inchaço) e **zero `QUOTA_GLOBAL_TTL_REDUCED`** — o corte de 25% nos TTLs de ~20
+tabelas parou.
+
+### #51 — o fingerprint de regime virou o schedule da venue (decisão de 28/08)
+
+**FATO VERIFICADO (re-medição):** 11 resets do relógio do G2 em ~44 h (6
+crypto, 5 macro; crypto resetou de novo às 16:18Z de 28/08), janela contínua
+máxima 19,5 h contra 60 DIAS exigidos. O hash cobria as tuplas fee/tick dos
+mercados ATUALMENTE em vigor, e o conjunto se move sem nenhuma mudança de
+venue: em 48 h de `param_versions`, **124 observações flipando `fee_base_bps`
+entre NULL e "1000"** (ruído do Gamma) e **93 flipando `tick_size`
+0.001↔0.01** (banda de preço); combos raros — `(NULL, 0.01, f)` tinha 11
+mercados — esvaziam e o hash muda.
+
+**Correção (#51), semântica decidida pelo proprietário:** regime = **schedule
+de fee/tick da venue por categoria**. Fingerprint = domínios de valores por
+parâmetro, do **último valor não-nulo de cada mercado, sobre todos os mercados
+já categorizados** (quem sai não retira o que atestou; observação sem o campo
+não diz nada; tick migrando de banda não cria valor novo). `negRisk` saiu do
+hash (estrutura por evento, não schedule). Validado contra produção: crypto
+`fee {1000} / tick {0.001, 0.01} / min {5}` (fee atestado por 649 mercados),
+macro `fee {0, 1000} / tick {0.001, 0.01}`. Nenhuma chave de config mudou.
+
+**FATO VERIFICADO (produção):** o deploy zerou o relógio **uma última vez**
+(crypto e macro às 20:38:47Z, fingerprints novos por definição — esperado e
+registrado; resets passados não são recuperáveis, correto). Desde então, **zero
+resets** sob rotação normal. A verificação plena é 24–48 h sem
+`PORTFOLIO_G2_CLOCK_RESET` (antes: ~5/dia) — **observação em curso**.
+
+### #52 — lag transitório do runtime deixou de cancelar ordem paper
+
+**FATO VERIFICADO (re-medição):** **7 das 9 ordens canceladas** da história
+tinham `RESOLUTION_RUNTIME_LAGGING` com lag de 1, 1, 1, 2, 11, 11 e 17
+input-ids; o journal de inputs anda a 49–286 entradas/hora e o runtime alcança
+no ciclo de ~1 min, então `processed < head` é rotineiramente verdade por
+instantes. Throughput: **1 fill na vida do sistema** (28/08 14:30Z) contra as
+~2–3/dia que o G2 precisa.
+
+**Correção (#52), sem afrouxar o fail-closed:** ordem aberta só é cancelada
+quando o lag **persiste** — a idade da entrada mais antiga não processada
+(`received_at` dos próprios journals; sem memória por ordem, sobrevive a
+restart) passa de **180 s** (~3 ciclos do runtime). Na graça, a claim é
+liberada e o tick loga `PAPER_ORDER_RUNTIME_LAG_GRACE`; idade imensurável cai
+no cancelamento. Runtime **morto** nunca espera (lease expira →
+`RESOLUTION_RUNTIME_STALE` imediato, inalterado). **FILL inalterado**: aceitação
+e revalidação continuam exigindo runtime alcançado em todos os heads — provado
+por teste que passa nas DUAS revisões. Verificação plena (proporção
+canceladas/criadas caindo, vida mediana subindo em `paper_orders`) exige 24 h
+de ordens novas — **observação em curso** (a ponte cria ordens raramente
+enquanto `entrable: 0`).
+
+### #53 — o coletor onchain coletou pela primeira vez na vida
+
+**FATO VERIFICADO (re-medição, com correção de diagnóstico):**
+`https://polygon-rpc.com` devolve 403 ("API key disabled, reason: tenant
+disabled") desde 24/08 ✓ como registrado. Mas o `-32701` do failover **não é
+limite de range/resultado** (hipótese anterior, refutada por sondagem): é
+**"History has been pruned for this block"**. O publicnode poda histórico
+(fronteira medida entre ~80 k e ~100 k blocos, difusa entre upstreams do
+balanceador) e o cursor vazio ancorava a primeira varredura em
+`target − 200.000` — toda rodada pedia blocos que o provedor **nunca mais vai
+servir**. Sondagens que fecharam o diagnóstico: range de 2.000 blocos recente
+funciona (2.399 logs numa chamada); os mesmos ranges a 100 k–200 k de
+profundidade devolvem -32701 nos dois tamanhos.
+
+**Correção (#53):** config: sai o endpoint 403; entram
+`polygon-bor-rpc.publicnode.com` + `gateway.tenderly.co/public/polygon`
+(failover **validado byte a byte**: mesma janela → 286 logs idênticos;
+recusados pela sondagem: drpc, 1rpc, meowrpc, blastapi, zan). `chunk_blocks`
+2000 → 500; `lookback_blocks` 200000 → **40000** (dentro do histórico servível
+— a correção da causa raiz). Coletor: chunk que falha é retentado com metade do
+span até piso de 125 blocos; poda de histórico no piso **salta o cursor para a
+âncora do lookback** (`ONCHAIN_RANGE_PRUNED`) em vez de falhar para sempre;
+outros erros continuam derrubando a rodada. `RpcError` carrega a mensagem do
+provedor. O hash do score cobre só material de score (teste existente), então
+nada cunhou versão; o rebuild saiu na mesma janela do CD (regra da janela
+única).
+
+**FATO VERIFICADO (produção, 20:43–20:48Z):** `ONCHAIN_POLLED` com
+`inserted: 10` e depois `inserted: 1` → **11 linhas em
+`resolution_onchain_events`** (eram 0 desde sempre); cursor dos 4 adapters
+avançando (92.794.799); `skipped_unmapped` ~2,9 k/poll (filtro de orçamento
+fazendo o que promete); **zero `JOB_FAILED job:"onchain"`**.
+
+### #54 — batch da quota orçado por bytes (bônus, saído do diagnóstico do #50)
+
+Com a mensagem real no log, o `RETENTION_STEP_FAILED` recorrente de
+`portfolio_decisions` revelou **"Query read timeout"**: 50.000 linhas de
+~4,3 kB movem ~220 MB por batch (seis índices + TOAST) e estouram o timeout do
+pool em toda varredura. O batch da quota virou
+`min(batch de linhas, 32 MiB / bytesPerRow)` com piso de 1.000 linhas; tabelas
+magras mantêm o batch cheio; caminho do TTL inalterado.
+
+### BLOQUEIO NOVO (condição de parada): a poda de `portfolio_decisions` exige migration
+
+**FATO VERIFICADO (produção, 21:22Z + probe com ROLLBACK):** mesmo com o batch
+por bytes, a poda de decisions continuou estourando timeout. A causa final,
+medida com `EXPLAIN ANALYZE` de um DELETE de UMA linha (em transação revertida):
+**125 ms por linha, dominados pelo trigger da FK
+`portfolio_panel_snapshots_decision_id_fkey` (ON DELETE SET NULL)** —
+`portfolio_panel_snapshots.decision_id` **não tem índice**, então cada linha
+apagada de decisions custa um seq scan de ~600 MB no panel. 7.600 linhas/batch
+× 125 ms ≈ 950 s: nenhum batch viável fecha.
+
+A cura é `CREATE INDEX` em `portfolio_panel_snapshots (decision_id)` —
+**migration 0016**, e migration é condição de parada deste bloco: **não foi
+implementada**. Registrado para autorização do proprietário. Enquanto não
+existe: a quota de `portfolio_decisions` (0,9 GB) **não fecha** e a tabela
+cresce ~0,5 GB/dia (1,19 GB físicos hoje); o TTL de 180 d bateria na mesma FK.
+Com o banco em 38 GB contra orçamento de 110, há semanas de folga — mas é o
+risco aberto número um da retenção. (A poda do panel_snapshots fecha
+normalmente: apagar o lado que REFERENCIA não paga a FK.)
+
+### Janela de manutenção — `VACUUM FULL` recuperou 78 GB
+
+**FATO VERIFICADO (2026-08-28 20:53–21:06Z):** `pg_repack` não existe na imagem
+`postgres:18.4-bookworm` (verificado) → caminho `VACUUM (FULL, ANALYZE)` com o
+recorder parado, como autorizado. Números:
+
+| Métrica                  | Antes           | Depois               |
+| ------------------------ | --------------- | -------------------- |
+| `polymarket_book_deltas` | 97 GB (42 + 56) | **19 GB (11 + 8,8)** |
+| `pg_database_size`       | 116 GB          | **38 GB**            |
+| Disco usado              | 124 G (44%)     | **43 G (15%)**       |
+
+Lock exclusivo: **7 min 34 s** (20:54:42 → 21:02:16Z). Gap do recorder:
+20:53:56 → 21:06:33Z (~12,6 min), registrado pelo próprio sistema — o desenho.
+Higiene docker: `builder prune` + imagens dangling = **2,33 GB**. O alarme
+global já tinha saído com o #50 (o vivo honesto nunca esteve perto de 99 GiB);
+pós-repack o físico também está longe. Primeira varredura pós-repack:
+`book_deltas` sumiu até do `RETENTION_BLOAT` (físico ≈ vivo).
+
+**Efeito colateral desenhado, com REARME PENDENTE:** o gap do recorder engatou
+o kill switch do paper às **20:59:32Z** (`RECORDER_STALE`, `orders_canceled: 0`
+— não havia ordem aberta). O gatilho automático funcionando como projetado. O
+recorder está saudável desde 21:06:33Z, mas o rearme por aqui foi
+deliberadamente NÃO executado: o endpoint exige sessão do proprietário (criar
+credencial está fora do que esta sessão pode fazer) e o caminho de código
+direto no servidor foi bloqueado pela política de execução. **É um clique no
+botão de rearme do painel (PR #46) — o botão existe exatamente para este
+cenário.** Enquanto engatado, nenhuma ordem paper é aceita e o soak do #52
+fica pausado.
+
+**DECISÃO DO PROPRIETÁRIO (28/08, registrada):** a quota de 52 GiB de
+`book_deltas` **não foi redeclarada** — a redeclaração é consciente, com dado,
+após **~1 semana de ingestão observada pós-repack** (ingestão do dia: ~18,7 M
+linhas ≈ 15 GB/dia física... a medir com o arquivo compacto). Também decidido
+em 28/08: **backup mínimo recusado** — o risco de perda total do PostgreSQL
+permanece aceito como está.
+
+### Bloco de checagem final (medido em produção, 2026-08-28 ~22:25Z)
+
+| Verificação                       | Resultado                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #50 retenção                      | varredura de boot: `book_deltas` vivo 20,77 GB < quota, **zero pedido de exclusão**; alarme global fora; **zero `QUOTA_GLOBAL_TTL_REDUCED`**                                                                                                                                                                                                                                                  |
+| #51 G2/G5                         | **0 resets** desde o reset final do deploy (20:38:47Z; antes: ~5/dia). Soak de 24–48 h em curso                                                                                                                                                                                                                                                                                               |
+| #52 lag                           | **0 cancelamentos** desde o deploy; soak de 24 h pausado pelo kill switch engatado (rearme pendente, 1 clique)                                                                                                                                                                                                                                                                                |
+| #53 onchain                       | **53 linhas** em `resolution_onchain_events` (0 na vida toda antes; 11 → 53 em ~1,5 h), cursor dos 4 adapters em 92.827.299 e avançando, **zero `JOB_FAILED job:"onchain"` em 1 h**                                                                                                                                                                                                           |
+| Banco                             | 38 GB (`book_deltas` 20 GB e ingerindo)                                                                                                                                                                                                                                                                                                                                                       |
+| RAM                               | recorder 242/832 MiB; resolution 84/192; paper 34/256; portfolio 32/192; postgres 357/1024 — nada perto do teto                                                                                                                                                                                                                                                                               |
+| Erros em ~1 h, por serviço tocado | portfolio **zero**; recorder **1** (decisions/FK — causa raiz achada, migration 0016 pendente); paper 15 × `FEATURES_WINDOW_FAILED` (pendência pré-existente de 27/08, taxa até menor) + o engate único do kill switch às 20:59; resolution 3 (burst único às 21:51 de `RESOLUTION_MARKET_METADATA_VERSION_MISSING` + cascata fail-closed de um ciclo, classe pré-existente, auto-recuperado) |
+
+**Zero erros novos causados pelo bloco.** Os quatro sinais de verificação do
+bloco: #50 e #53 **fechados**; #51 e #52 com evidência inicial positiva e soak
+de 24–48 h em curso (o do #52 depende do rearme).
+
+### Registro de execução
+
+Deploys desta sessão, todos pelos TRÊS passos (merge → CD → rebuild de
+profile, confirmado por grep no disco antes de cada rebuild e por
+`release-sha` dentro do container depois): recorder rebuildado 2× (#50 às
+19:50Z, #54 às 21:19Z), portfolio+paper+resolution juntos às 20:36Z (#51–#53,
+config + binário na mesma janela). Higiene: o worktree local usou
+`git stash push -u` com tag única e `apply` por SHA (o protocolo de stash
+compartilhado), e um `git checkout HEAD --` em branch errado custou uma
+reaplicação de edições — nada chegou ao servidor fora do CD.
+
 ## Próximo passo mínimo
 
 A RFC-012 está **ativa em produção**. A RFC-013 tem as fases A–D mergeadas na
@@ -1511,10 +1734,27 @@ do merge.
 
 ### 6. Pendências declaradas
 
-- **Coletor onchain** (`JOB_FAILED job:"onchain"`, `ONCHAIN_POLLED` zerado): o
-  `polygon-rpc.com` da config devolve 403 desde que a RFC-012 foi escrita; o
-  failover está correto e a segunda URL funciona, então a causa real é outra e o
-  #37 vai revelá-la. Considerar remover o endpoint morto da config.
+- **KILL SWITCH ENGATADO — rearme pendente (um clique)**: engatado às
+  2026-08-28 20:59:32Z por `RECORDER_STALE` durante a janela de manutenção
+  autorizada (gap de 12,6 min do recorder); o recorder está saudável desde
+  21:06:33Z. Rearmar pelo botão do painel (PR #46). Até lá o paper broker não
+  aceita ordens e o soak do #52 não anda.
+- **Coletor onchain** — **RESOLVIDO em 2026-08-28 (#53)**: a causa real era
+  histórico podado + lookback de 200 k blocos (seção da sessão 2026-08-28).
+  Coletando desde 20:43Z; observar o catch-up do lookback (~80 min) e a
+  primeira disputa capturada onchain.
+- **Migration 0016 pendente de autorização (bloqueio da retenção)**: índice em
+  `portfolio_panel_snapshots (decision_id)` para a FK `ON DELETE SET NULL` —
+  sem ele a poda de `portfolio_decisions` não fecha (125 ms/linha medidos no
+  trigger da FK) e a tabela cresce ~0,5 GB/dia. Condição de parada do bloco de
+  28/08; detalhe na seção da sessão.
+- **Redeclaração da quota de `book_deltas`**: decisão do proprietário de 28/08 —
+  redeclarar com dado, após ~1 semana de ingestão observada pós-repack. Até lá
+  a quota declarada segue 52 GiB com a tabela compacta em 19 GB.
+- **Soaks de 24–48 h dos fixes de 28/08** (em curso): G2 sem
+  `PORTFOLIO_G2_CLOCK_RESET` sob rotação normal (antes ~5/dia); proporção
+  canceladas/criadas caindo em `paper_orders`; `ONCHAIN_POLLED` estável com
+  cursor avançando.
 - **Cap de fonte de resolução** — **decidido** em 2026-08-27: manter 0,25 e
   trocar a **chave** do bucket para família de cláusula de regra, em vez do
   adapter (hoje o cap capeia o livro inteiro em 25% da banca porque 460 de 570
@@ -1580,9 +1820,11 @@ do merge.
     `totalLiveBytes`. Teste novo trava a invariante quotas-declaradas (95 GiB) <
     gatilho (99 GiB) — o que agora tem leitura operacional: **vivo acima do
     gatilho significa necessariamente quota não sendo cumprida**, como é o caso.
-  - **Segue de pé em produção**: o alarme dispara, então o corte de 25% nos TTLs
-    das tabelas TTL-bound continua acontecendo. Só sai quando `book_deltas`
-    voltar para dentro da quota.
+  - **Saiu de pé em 2026-08-28**: com o medidor de bytes vivos do #50 o vivo
+    honesto ficou em 36,28 GB e o alarme (e o corte de 25% nos TTLs) parou; o
+    inchaço físico foi para `RETENTION_GLOBAL_BLOAT` e o `VACUUM FULL` da
+    janela de manutenção o removeu (116 → 38 GB). Ver a seção da sessão
+    2026-08-28.
 - **Poda da quota de `book_deltas` — causa achada e corrigida em 2026-08-27.**
   Investigação do porquê a tabela ficava em 95 GB contra quota de 52 GB. São
   dois defeitos que se alimentam, os dois no caminho da quota.
@@ -1595,8 +1837,8 @@ do merge.
     histograma equi-depth é 24/08 22:10, ou seja **o corte pedido cobria ~23%
     quando pediu 56%** — déficit de 2,4× em toda rodada.
   - **(ii) O laço de correção andava para trás.** Uma passada curta deixa
-    déficit *maior*, mas o `rowsToDelete` é medido contra o alvo e algo foi
-    apagado, então a fração seguinte era *menor* e o corte seguinte **anterior**
+    déficit _maior_, mas o `rowsToDelete` é medido contra o alvo e algo foi
+    apagado, então a fração seguinte era _menor_ e o corte seguinte **anterior**
     ao que acabara de podar — apaga nada e cai no ramo `QUOTA_UNMET`. O
     orçamento de `MAX_QUOTA_ITERATIONS = 4` valia **uma** passada sempre que o
     primeiro chute errasse, o que com densidade enviesada é toda rodada. O log
