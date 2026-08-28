@@ -385,6 +385,180 @@ describe("pollOnchainOnce", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("walks past pruned history instead of failing every poll forever", async () => {
+    // The 2026-08-28 production shape: the cursor sat 200k blocks back, public
+    // Polygon RPCs prune history (publicnode: -32701 "History has been pruned
+    // for this block", boundary measured between ~80k and ~100k blocks), so
+    // EVERY chunk of every poll asked for blocks the provider will never
+    // serve again: JOB_FAILED each cycle, zero rows in the table, cursor
+    // frozen. Retrying a pruned range is a permanent outage — the collector
+    // has to move its cursor to history that still exists.
+    const record: PollRecord = { events: [], cursors: [], timeline: [] };
+    const rpcCalls: RpcCall[] = [];
+    // Everything older than target - lookback is pruned in this scenario.
+    const pruneBoundary = HEAD - 60n - 5_000n;
+    const fetchFn: FetchFn = (url, init) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        method?: string;
+        params?: unknown[];
+      };
+      const method = body.method ?? "";
+      rpcCalls.push({ url, method, params: body.params ?? [] });
+      const respond = (result: unknown): ReturnType<FetchFn> =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ result }),
+        });
+      if (method === "eth_blockNumber") {
+        return respond(`0x${HEAD.toString(16)}`);
+      }
+      if (method === "eth_getLogs") {
+        const filter = (body.params?.[0] ?? {}) as {
+          address?: string;
+          fromBlock?: string;
+          toBlock?: string;
+        };
+        const from = BigInt(filter.fromBlock ?? "0x0");
+        if (from < pruneBoundary) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                error: {
+                  code: -32701,
+                  message: "History has been pruned for this block",
+                },
+              }),
+          });
+        }
+        if (
+          filter.address === ADAPTER_A &&
+          from <= LOG_BLOCK &&
+          LOG_BLOCK <= BigInt(filter.toBlock ?? "0x0")
+        ) {
+          return respond([INITIALIZED_LOG]);
+        }
+        return respond([]);
+      }
+      if (method === "eth_getBlockByNumber") {
+        return respond({ timestamp: `0x${BLOCK_TS.toString(16)}` });
+      }
+      return respond(null);
+    };
+    // A legacy cursor deep inside the pruned zone, as production inherited.
+    const basePool = pollPool(record);
+    const pool: ResolutionPool = {
+      query<R extends Row>(
+        text: string,
+        params: readonly unknown[] = [],
+      ): Promise<QueryResult<R>> {
+        if (text.includes("FROM resolution_onchain_cursor")) {
+          return Promise.resolve({
+            rows: [
+              { last_block: (HEAD - 200_000n).toString() },
+            ] as unknown as R[],
+            rowCount: 1,
+          });
+        }
+        return basePool.query(text, params);
+      },
+    };
+
+    const summary = await pollOnchainOnce({
+      pool,
+      config: configOf(),
+      fetchFn,
+    });
+
+    // The poll completed, skipped to servable history and collected the log.
+    expect(summary).not.toBeNull();
+    expect(summary?.inserted).toBe(1);
+    const skips = record.cursors.filter(
+      (c) => BigInt(String(c.params[1])) >= pruneBoundary,
+    );
+    expect(skips.length).toBeGreaterThan(0);
+  });
+
+  it("halves a failing chunk until the provider accepts it", async () => {
+    // Result-size and range limits differ per provider and are not published;
+    // the chunk narrows itself instead of encoding any one provider's number.
+    const record: PollRecord = { events: [], cursors: [], timeline: [] };
+    const rpcCalls: RpcCall[] = [];
+    const maxSpan = 500n;
+    const fetchFn: FetchFn = (url, init) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        method?: string;
+        params?: unknown[];
+      };
+      const method = body.method ?? "";
+      rpcCalls.push({ url, method, params: body.params ?? [] });
+      const respond = (result: unknown): ReturnType<FetchFn> =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ result }),
+        });
+      if (method === "eth_blockNumber") {
+        return respond(`0x${HEAD.toString(16)}`);
+      }
+      if (method === "eth_getLogs") {
+        const filter = (body.params?.[0] ?? {}) as {
+          address?: string;
+          fromBlock?: string;
+          toBlock?: string;
+        };
+        const from = BigInt(filter.fromBlock ?? "0x0");
+        const to = BigInt(filter.toBlock ?? "0x0");
+        if (to - from + 1n > maxSpan) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                error: {
+                  code: -32005,
+                  message: "query returned more than 1000 results",
+                },
+              }),
+          });
+        }
+        if (
+          filter.address === ADAPTER_A &&
+          from <= LOG_BLOCK &&
+          LOG_BLOCK <= to
+        ) {
+          return respond([INITIALIZED_LOG]);
+        }
+        return respond([]);
+      }
+      if (method === "eth_getBlockByNumber") {
+        return respond({ timestamp: `0x${BLOCK_TS.toString(16)}` });
+      }
+      return respond(null);
+    };
+
+    const summary = await pollOnchainOnce({
+      pool: pollPool(record),
+      config: configOf(),
+      fetchFn,
+    });
+
+    expect(summary?.inserted).toBe(1);
+    // The chunk shrank (2000 -> 1000 -> 500) and every accepted call fit.
+    const spans = rpcCalls
+      .filter((c) => c.method === "eth_getLogs")
+      .map((c) => {
+        const filter = c.params[0] as { fromBlock?: string; toBlock?: string };
+        return (
+          BigInt(filter.toBlock ?? "0x0") - BigInt(filter.fromBlock ?? "0x0")
+        );
+      });
+    expect(spans.some((span) => span + 1n > maxSpan)).toBe(true);
+    expect(spans.some((span) => span + 1n <= maxSpan)).toBe(true);
+  });
 });
 
 // --- applyOnchainTimeline state semantics over a crafted event sequence ---
