@@ -54,6 +54,19 @@ interface RpcResponse {
   readonly error?: { code?: number; message?: string };
 }
 
+/** JSON-RPC failure that kept the provider's code and message. */
+export class RpcError extends Error {
+  readonly code: number | null;
+  constructor(method: string, code: number | null, message: string) {
+    // The provider message names the actual restriction (measured 2026-08-28:
+    // "History has been pruned for this block" behind a bare -32701) — without
+    // it every diagnosis starts by re-running the call by hand.
+    super(`rpc ${method} error ${code ?? ""}: ${message}`);
+    this.name = "RpcError";
+    this.code = code;
+  }
+}
+
 /** JSON-RPC call with URL failover; throws when every URL failed. */
 async function rpcCall(
   deps: OnchainDeps,
@@ -81,7 +94,11 @@ async function rpcCall(
       }
       const body = (await response.json()) as RpcResponse;
       if (body.error !== undefined) {
-        throw new Error(`rpc ${method} error ${body.error.code ?? ""}`);
+        throw new RpcError(
+          method,
+          typeof body.error.code === "number" ? body.error.code : null,
+          body.error.message ?? "",
+        );
       }
       return body.result;
     } catch (error: unknown) {
@@ -89,6 +106,28 @@ async function rpcCall(
     }
   }
   throw lastError;
+}
+
+/**
+ * Narrowest chunk the collector will retry before deciding the range itself is
+ * the problem. Halving from the configured chunk down to here absorbs
+ * result-size and timeout limits that differ per provider; a failure that
+ * survives even this span is not about the span.
+ */
+const MIN_CHUNK_BLOCKS = 125n;
+
+/**
+ * Does this failure say the provider no longer HAS those blocks? Public
+ * Polygon RPCs prune history (publicnode: code -32701, "History has been
+ * pruned for this block", boundary measured between ~80k and ~100k blocks and
+ * fuzzy across their fleet). A pruned range never becomes available by
+ * retrying, which is exactly what distinguishes it from an outage.
+ */
+function isPrunedHistory(error: unknown): boolean {
+  if (!(error instanceof RpcError)) {
+    return false;
+  }
+  return error.code === -32701 || /prune/i.test(error.message);
 }
 
 function hexQuantity(value: unknown): bigint | null {
@@ -197,18 +236,62 @@ export async function pollOnchainOnce(
       chunk < deps.config.maxChunksPerPoll && from <= target;
       chunk += 1
     ) {
-      const to =
+      let to =
         from + BigInt(deps.config.chunkBlocks) - 1n < target
           ? from + BigInt(deps.config.chunkBlocks) - 1n
           : target;
-      const logsRaw = await rpcCall(deps, "eth_getLogs", [
-        {
-          address: adapter,
-          fromBlock: `0x${from.toString(16)}`,
-          toBlock: `0x${to.toString(16)}`,
-          topics: [topics],
-        },
-      ]);
+      let logsRaw: unknown = null;
+      // A failing chunk is retried at half the span down to MIN_CHUNK_BLOCKS:
+      // per-provider result/size limits shrink away instead of failing the
+      // poll. What survives the floor is either pruned history — the provider
+      // will NEVER serve it, so waiting is a permanent outage (measured
+      // 2026-08-28: an empty cursor anchored 200k blocks back kept every poll
+      // inside publicnode's pruned zone; zero rows ever collected) — or a real
+      // outage, which keeps failing the poll exactly as before.
+      for (;;) {
+        try {
+          logsRaw = await rpcCall(deps, "eth_getLogs", [
+            {
+              address: adapter,
+              fromBlock: `0x${from.toString(16)}`,
+              toBlock: `0x${to.toString(16)}`,
+              topics: [topics],
+            },
+          ]);
+          break;
+        } catch (error: unknown) {
+          const span = to - from + 1n;
+          if (span > MIN_CHUNK_BLOCKS) {
+            to = from + span / 2n - 1n;
+            logJson("warn", "ONCHAIN_CHUNK_REDUCED", {
+              adapter,
+              from_block: from.toString(),
+              to_block: to.toString(),
+              detail: error instanceof Error ? error.message : undefined,
+            });
+            continue;
+          }
+          if (isPrunedHistory(error)) {
+            const anchor = target - BigInt(deps.config.lookbackBlocks);
+            // Jump to where a fresh boot would start; if already inside the
+            // retention anchor, give up only on this one floor-sized chunk.
+            // Either way the cursor advances past blocks that no longer
+            // exist, and the skipped span is on the record.
+            if (from < anchor) {
+              to = anchor;
+            }
+            logJson("warn", "ONCHAIN_RANGE_PRUNED", {
+              adapter,
+              from_block: from.toString(),
+              skipped_to_block: to.toString(),
+              detail: error instanceof Error ? error.message : undefined,
+            });
+            logsRaw = null;
+            break;
+          }
+          throw error;
+        }
+      }
       const logs = Array.isArray(logsRaw) ? logsRaw : [];
       const blockTimestamps = new Map<string, Date | null>();
       for (const rawLog of logs) {

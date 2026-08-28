@@ -70,8 +70,8 @@
   "onchain": {
     "enabled": true,
     "rpc_urls": [
-      "https://polygon-rpc.com",
-      "https://polygon-bor-rpc.publicnode.com"
+      "https://polygon-bor-rpc.publicnode.com",
+      "https://gateway.tenderly.co/public/polygon"
     ],
     "adapters": [
       "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",
@@ -80,9 +80,9 @@
       "0x69c47de9d4d3dad79590d61b9e05918e03775f24"
     ],
     "confirmations": 60,
-    "chunk_blocks": 2000,
+    "chunk_blocks": 500,
     "max_chunks_per_poll": 5,
-    "lookback_blocks": 200000,
+    "lookback_blocks": 40000,
     "request_timeout_ms": 10000
   }
 }
