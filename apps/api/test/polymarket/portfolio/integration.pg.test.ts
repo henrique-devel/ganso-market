@@ -531,7 +531,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(operational.soakDays).toBeGreaterThanOrEqual(0);
       expect(operational.killSwitchExercised).toBe(false);
       const params = await loadRegimeParamsByCategory(p);
-      expect(params.crypto?.length).toBeGreaterThan(0);
+      expect(Object.keys(params.crypto ?? {}).length).toBeGreaterThan(0);
       const approval = await loadOwnerApproval(p);
       // Not asserted as null, for the same reason the risk counts above are
       // not asserted as zero: this database is shared with the other suites
