@@ -99,6 +99,8 @@ interface World {
   runtimeCheckedAt: Date[];
   databaseTimeAfterNextAcceptanceAppend: Date | null;
   databaseTimeAfterNextFillAppend: Date | null;
+  /** received_at of the oldest journal entry the runtime has not processed. */
+  oldestUnprocessedAt: Date | null;
 }
 
 const RUNTIME_GENERATION = "11111111-1111-4111-8111-111111111111";
@@ -155,6 +157,7 @@ function emptyWorld(): World {
     runtimeCheckedAt: [],
     databaseTimeAfterNextAcceptanceAppend: null,
     databaseTimeAfterNextFillAppend: null,
+    oldestUnprocessedAt: null,
   };
 }
 
@@ -695,6 +698,9 @@ function worldPool(world: World): PaperPool {
               size: t.size,
               effective_ts: t.ts,
             }));
+        }
+        if (text.includes("AS oldest_unprocessed")) {
+          return [{ oldest_unprocessed: world.oldestUnprocessedAt }];
         }
         if (
           text.includes("FROM polymarket_resolution_events") &&
@@ -1968,6 +1974,107 @@ describe("RFC-012 circuit breaker over resting orders", () => {
         event["event_type"] === "cancel_effective",
     );
     expect((cancel?.["payload_json"] as Row)["reason"]).toBe(testCase.reason);
+  });
+
+  it("holds an open order through a transient runtime lag instead of canceling it", async () => {
+    // The 2026-08-28 production defect: the journals move all day (49-286
+    // input changes per hour) and the runtime catches up on its ~1-minute
+    // cycle, so "processed < head" is routinely true for a moment. That moment
+    // canceled 7 of the 9 paper orders ever canceled (lags of 1-17 input ids,
+    // lifetimes 14 s - 9 min) and throttled throughput to ~1 fill/day. A lag
+    // whose oldest unprocessed entry is seconds old is the journal advancing,
+    // not the runtime failing — the order must survive it.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    if (world.runtime !== null) {
+      world.runtime.input_head = world.runtime.processed_input_change_id + 1;
+    }
+    // The unprocessed entry arrived 5 s before this tick: transient.
+    world.oldestUnprocessedAt = at(-3_000);
+    const logs: string[] = [];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: (line) => logs.push(line),
+    });
+
+    expect(world.orders[0]?.["status"]).toBe("open");
+    // No fill either: the fill gate still requires the runtime caught up.
+    expect(fillsForOrder(world)).toHaveLength(0);
+    // The claim was released so the next tick re-examines the order.
+    expect(world.orders[0]?.["resolution_risk_check_pending"]).toBe(false);
+    expect(logs.join("\n")).toContain("PAPER_ORDER_RUNTIME_LAG_GRACE");
+  });
+
+  it("still cancels when the lag persists past the grace window", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    if (world.runtime !== null) {
+      world.runtime.input_head = world.runtime.processed_input_change_id + 1;
+    }
+    // The unprocessed entry has been waiting far beyond three runtime cycles
+    // (the 180 s RESOLUTION_LAG_CANCEL_GRACE_MS): the runtime is wedged, not
+    // catching up. Written as a literal so this file also runs against the
+    // pre-grace revision, where the constant does not exist.
+    world.oldestUnprocessedAt = at(2_000 - 180_000 - 1);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_LAGGING",
+    );
+  });
+
+  it("never fills while the runtime is behind, grace or no grace", async () => {
+    // The unchanged invariant, asserted on its own: whatever the cancel policy
+    // does with a lagging runtime, a fill against one is refused. This test
+    // passes before and after the grace change — the grace loosened only the
+    // CANCEL, never the fill gate.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    if (world.runtime !== null) {
+      world.runtime.input_head = world.runtime.processed_input_change_id + 1;
+    }
+    world.oldestUnprocessedAt = at(1_500);
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    expect(fillsForOrder(world)).toHaveLength(0);
   });
 
   it("cancels an order accepted by a previous runtime generation", async () => {

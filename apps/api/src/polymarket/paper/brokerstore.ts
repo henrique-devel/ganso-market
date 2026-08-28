@@ -47,6 +47,26 @@ export const RECORDER_STALE_MS = 5 * 60_000;
 
 /** A competing tick may reclaim a broker claim only after this gap. */
 export const RESOLUTION_RISK_CLAIM_STALE_MS = 5_000;
+/**
+ * How old the oldest UNPROCESSED journal entry may be before a lagging
+ * resolution runtime cancels open orders.
+ *
+ * "processed < head" alone does not distinguish "the journal advanced a tick
+ * and the runtime has not cycled yet" from "the runtime is wedged". The
+ * journals move all day (49-286 input changes per hour measured in production
+ * on 2026-08-28) and the runtime catches up on its ~1-minute cycle, so the
+ * instantaneous comparison is routinely behind by one entry. That routine
+ * canceled 7 of the 9 paper orders ever canceled — lags of 1 to 17 input ids,
+ * order lifetimes of 14 s to 9 min — throttling throughput to ~1 fill/day
+ * against the 2-3/day the G2 gate needs.
+ *
+ * Three runtime cycles of headroom: a runtime that has not caught up after
+ * that is genuinely stalled, and its orders are canceled exactly as before.
+ * A DEAD runtime never waits for this grace — its lease expires and
+ * RESOLUTION_RUNTIME_STALE cancels immediately. FILLS never use the grace:
+ * filling still requires the runtime caught up to every head, unchanged.
+ */
+export const RESOLUTION_LAG_CANCEL_GRACE_MS = 180_000;
 
 /** Default daily paper loss (USD) that engages the kill switch (D4). */
 export const DEFAULT_DAILY_LOSS_LIMIT_USD = "100";
@@ -1620,6 +1640,37 @@ async function lockToken(pool: PaperPool, tokenId: string): Promise<void> {
   ]);
 }
 
+/**
+ * When the oldest journal entry the runtime has not processed arrived.
+ *
+ * This is what "how long has the runtime been behind" means without any
+ * per-order memory: the journals are append-only and timestamped, so the age
+ * of the first unprocessed row IS the age of the lag, and it survives process
+ * restarts. Journals the runtime is caught up on contribute nothing (LEAST
+ * ignores their NULL).
+ */
+async function oldestUnprocessedReceivedAt(
+  pool: PaperPool,
+  runtime: ResolutionRuntimeSnapshot,
+): Promise<Date | null> {
+  const result = await pool.query(
+    `SELECT LEAST(
+        (SELECT min(received_at) FROM polymarket_resolution_events
+          WHERE resolution_event_id > $1),
+        (SELECT min(received_at) FROM polymarket_rule_versions
+          WHERE rule_version_id > $2),
+        (SELECT min(received_at) FROM polymarket_resolution_input_changes
+          WHERE input_change_id > $3)
+      ) AS oldest_unprocessed`,
+    [
+      runtime.processedEventId.toString(),
+      runtime.processedRuleVersionId.toString(),
+      runtime.processedInputChangeId.toString(),
+    ],
+  );
+  return toDate(result.rows[0]?.["oldest_unprocessed"] ?? null);
+}
+
 async function finalizePendingRiskCancellation(
   pool: PaperPool & Pick<DatabasePool, "transaction">,
   orderId: string,
@@ -1772,12 +1823,53 @@ export async function brokerTick(
           order.resolutionGeneration,
         );
         if (runtimeFailure !== null) {
+          let cancelDetails = runtimeFailure.details;
+          if (
+            runtimeFailure.reason === "RESOLUTION_RUNTIME_LAGGING" &&
+            runtime !== null
+          ) {
+            // An OPEN order under a lagging runtime is only canceled when the
+            // lag PERSISTS — the journal advancing one tick before the
+            // runtime's next cycle is routine, not a failure. FILLS are a
+            // different question and keep the strict rule: every fill path
+            // revalidates the runtime against every head and refuses while any
+            // journal is ahead, grace or no grace.
+            let lagSince: Date | null = null;
+            try {
+              lagSince = await oldestUnprocessedReceivedAt(tx, runtime);
+            } catch {
+              // Unmeasurable lag age: fall through to the cancel, as before.
+              lagSince = null;
+            }
+            const lagAgeMs =
+              lagSince === null
+                ? null
+                : Math.max(now.getTime() - lagSince.getTime(), 0);
+            if (
+              lagAgeMs !== null &&
+              lagAgeMs < RESOLUTION_LAG_CANCEL_GRACE_MS
+            ) {
+              await clearResolutionRiskCheck(tx, order.orderId);
+              log("warn", "PAPER_ORDER_RUNTIME_LAG_GRACE", {
+                order_id: order.orderId,
+                lag_age_ms: lagAgeMs,
+                grace_ms: RESOLUTION_LAG_CANCEL_GRACE_MS,
+                ...runtimeFailure.details,
+              });
+              return;
+            }
+            cancelDetails = {
+              ...runtimeFailure.details,
+              lag_age_ms: lagAgeMs,
+              grace_ms: RESOLUTION_LAG_CANCEL_GRACE_MS,
+            };
+          }
           await cancelForResolutionRisk(
             tx,
             order,
             runtimeFailure.reason,
             now,
-            runtimeFailure.details,
+            cancelDetails,
           );
           ordersCanceled += 1;
           return;
