@@ -31,7 +31,22 @@ export const DEFAULT_BATCH_SIZE = 50_000;
 export const COVERAGE_BATCH_SIZE = 5_000;
 export const QUOTA_TRIGGER_RATIO = 0.9;
 export const QUOTA_TARGET_RATIO = 0.8;
-/** Effective-TTL reduction per step when the global 40 GB budget alarms. */
+/**
+ * Effective-TTL reduction applied to every TTL table while the global budget
+ * alarms. One flat step, not a search: it is applied once per run against the
+ * DECLARED ttlDays, so the window settles at 75% of declared and does not
+ * compound across runs.
+ *
+ * Known limitation, measured in production 2026-08-27: this lever is inert on
+ * the table that holds the bytes. polymarket_book_deltas was 95 GB live over a
+ * 7d22h window — 80% of the whole live footprint, and 43 GB above its own 52 GB
+ * quota — yet 7d22h is still under both its 14-day TTL and the 10.5 days this
+ * factor would leave it, so the reduction deleted nothing there. A reduction
+ * only frees bytes where the TTL binds before the quota, which is the smaller
+ * audit tables; the alarm therefore takes its bytes from everywhere except the
+ * overshoot. Under real pressure the lever has to be the quota, not the TTL —
+ * and the quota has to actually be enforced. Both open (docs/HANDOFF.md).
+ */
 export const GLOBAL_ALARM_TTL_FACTOR = 0.75;
 const MAX_QUOTA_ITERATIONS = 4;
 /**
@@ -42,6 +57,12 @@ const MAX_QUOTA_ITERATIONS = 4;
 const INTERPOLATION_MIN_ROWS = 5_000_000;
 /** Hard clamp on the interpolated fraction: never "everything below newest". */
 const MAX_INTERPOLATED_FRACTION = 0.9;
+/**
+ * How much of a column the histogram may leave out (NULLs plus most-common
+ * values) before its bucket fractions stop describing the table and the cutoff
+ * falls back to the linear span.
+ */
+const HISTOGRAM_MAX_EXCLUDED_FRAC = 0.05;
 /**
  * Widest window a single coverage query may span for one token.
  *
@@ -527,7 +548,10 @@ export interface RetentionRunReport {
   readonly actions: RetentionAction[];
   readonly skipped: RetentionSkip[];
   readonly globalAlarm: boolean;
+  /** Physical bytes across the retention tables; never shrinks on DELETE. */
   readonly totalBytes: number;
+  /** Retained bytes across the retention tables: what a prune can move. */
+  readonly totalLiveBytes: number;
 }
 
 export interface RetentionJobDeps {
@@ -923,19 +947,142 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   }
 
   /**
-   * Time-interpolated cutoff for tables too large to probe by OFFSET.
+   * Cutoff read off the equi-depth histogram Postgres already keeps for the
+   * column (pg_stats.histogram_bounds). Preferred over the linear estimate
+   * below, because it is the same question asked correctly: the bounds map a
+   * row-fraction to a timestamp whatever the arrival rate did over the window.
    *
-   * Assumes a roughly uniform arrival rate over the retained window, which is
-   * what a continuously running recorder produces. The fraction is capped well
-   * below 1 so the estimate can never collapse to "delete everything below the
-   * newest row" — the failure mode the exact probe's COUNT fallback exists to
-   * prevent, kept here as a hard clamp instead.
+   * That distinction was worth ~2x in production. Measured 2026-08-27,
+   * polymarket_book_deltas ran from 0.5 M rows/day to 27 M rows/day inside one
+   * 8-day window as the recorded universe grew, so the linear estimate asked
+   * for 56% of the rows and picked a timestamp that held 23% of them. The table
+   * sat at 95 GB against a 52 GB quota because every pass under-deleted by that
+   * factor.
+   *
+   * `floor` is the cutoff this run already pruned to: those buckets are gone,
+   * so the walk starts there and can only move forward.
+   *
+   * Not used for closedRowsOnly tables — the histogram covers every row, not
+   * just the eligible ones. Those tables are small enough for the exact probe.
+   */
+  async function histogramCutoff(
+    config: RetentionTableConfig,
+    rowsToDelete: number,
+    liveRows: number,
+    floor: Date | null,
+  ): Promise<Date | null> {
+    const result = await pool.query<{
+      bounds: unknown;
+      null_frac: string | number | null;
+      mcv_frac: string | number | null;
+    }>(
+      `SELECT histogram_bounds::text::timestamptz[] AS bounds,
+              null_frac,
+              COALESCE(
+                (SELECT sum(f) FROM unnest(most_common_freqs) AS f), 0
+              ) AS mcv_frac
+         FROM pg_stats
+        WHERE schemaname = current_schema()
+          AND tablename = $1
+          AND attname = $2`,
+      [config.table, config.timeColumn],
+    );
+    const row = result.rows[0];
+    const raw = row?.bounds;
+    if (!Array.isArray(raw) || liveRows <= 0) {
+      return null;
+    }
+    // The histogram describes only the rows that are neither NULL nor a most
+    // common value, so its bucket fractions map to the whole table only while
+    // those two are negligible. They are, for a sub-second timestamp column
+    // that is NOT NULL — but that is a property of the data, not a guarantee,
+    // so check it instead of assuming it and fall back to the linear span.
+    const excluded =
+      Math.max(Number(row?.null_frac ?? 0), 0) +
+      Math.max(Number(row?.mcv_frac ?? 0), 0);
+    if (!Number.isFinite(excluded) || excluded > HISTOGRAM_MAX_EXCLUDED_FRAC) {
+      log(
+        "warn",
+        "RETENTION_HISTOGRAM_UNUSABLE",
+        "polymarket_retention_histogram_unusable",
+        {
+          table: config.table,
+          column: config.timeColumn,
+          excluded_frac: excluded,
+        },
+      );
+      return null;
+    }
+    const bounds: Date[] = [];
+    for (const value of raw) {
+      const parsed = toDate(value);
+      if (parsed !== null) {
+        bounds.push(parsed);
+      }
+    }
+    if (bounds.length < 2) {
+      return null;
+    }
+    const buckets = bounds.length - 1;
+    // Buckets already consumed by this run's earlier passes.
+    let startIndex = 0;
+    if (floor !== null) {
+      // >= , not >: a floor that IS a bound means the buckets below it are
+      // gone and this one is where the walk resumes. Using > skips it and
+      // costs the pass a whole bucket of headroom against the clamp.
+      const resumeAt = bounds.findIndex(
+        (bound) => bound.getTime() >= floor.getTime(),
+      );
+      startIndex = resumeAt === -1 ? buckets : resumeAt;
+    }
+    const rowsPerBucket = Math.max(liveRows / buckets, 1);
+    const steps = Math.max(Math.ceil(rowsToDelete / rowsPerBucket), 1);
+    // Same guarantee MAX_INTERPOLATED_FRACTION gives the linear path: a single
+    // pass can never collapse to "delete everything below the newest row".
+    const maxIndex = Math.max(
+      Math.floor(buckets * MAX_INTERPOLATED_FRACTION),
+      1,
+    );
+    const index = Math.min(startIndex + steps, maxIndex);
+    if (index <= startIndex) {
+      // Already at the clamp: this pass has taken everything it may.
+      return null;
+    }
+    const cutoff = bounds[index];
+    if (cutoff === undefined) {
+      return null;
+    }
+    log(
+      "info",
+      "RETENTION_CUTOFF_HISTOGRAM",
+      "polymarket_retention_cutoff_histogram",
+      {
+        table: config.table,
+        rows_to_delete: rowsToDelete,
+        buckets,
+        start_index: startIndex,
+        index,
+        cutoff: cutoff.toISOString(),
+      },
+    );
+    return cutoff;
+  }
+
+  /**
+   * Linear fallback for when the histogram is unavailable (no ANALYZE yet, or a
+   * closedRowsOnly table). Assumes a roughly uniform arrival rate, which is
+   * exactly the assumption histogramCutoff exists to stop relying on — keep it
+   * as a fallback, not as the default path. The fraction is capped well below 1
+   * so the estimate can never collapse to "delete everything below the newest
+   * row" — the failure mode the exact probe's COUNT fallback exists to prevent,
+   * kept here as a hard clamp instead.
    */
   async function interpolatedCutoff(
     config: RetentionTableConfig,
     rowsToDelete: number,
     liveRows: number,
     eligibleWhere: string,
+    floor: Date | null,
   ): Promise<Date | null> {
     const bounds = await pool.query<{
       oldest: Date | string | null;
@@ -957,7 +1104,19 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
       );
       return null;
     }
-    const spanMs = newest.getTime() - oldest.getTime();
+    // Anchor at what this run already pruned to, never at min(). min() is held
+    // wherever the oldest UNDELETABLE row sits, and that row need not be
+    // representative of anything: measured 2026-08-27, 82 of 681 delta tokens
+    // were frozen by a series_1m coverage hole, holding 0.5% of the rows but
+    // pinning min() four days behind the real mass. Every estimate anchored
+    // there is flattened by the empty span in front of it, and — because the
+    // anchor never moves — the loop's later passes re-derive a cutoff EARLIER
+    // than the one they just pruned to. Anchoring on the floor removes both.
+    const anchorMs =
+      floor === null
+        ? oldest.getTime()
+        : Math.max(oldest.getTime(), floor.getTime());
+    const spanMs = newest.getTime() - anchorMs;
     if (spanMs <= 0 || liveRows <= 0) {
       return null;
     }
@@ -966,7 +1125,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
       Math.max(rawFraction, 0),
       MAX_INTERPOLATED_FRACTION,
     );
-    const cutoff = new Date(oldest.getTime() + Math.floor(spanMs * fraction));
+    const cutoff = new Date(anchorMs + Math.floor(spanMs * fraction));
     log(
       "info",
       "RETENTION_CUTOFF_INTERPOLATED",
@@ -976,6 +1135,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         rows_to_delete: rowsToDelete,
         live_rows: liveRows,
         fraction,
+        anchored_at: new Date(anchorMs).toISOString(),
         cutoff: cutoff.toISOString(),
       },
     );
@@ -993,18 +1153,36 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     config: RetentionTableConfig,
     rowsToDelete: number,
     liveRows: number,
+    floor: Date | null,
   ): Promise<Date | null> {
     const eligibleWhere =
       config.closedRowsOnly === true ? " WHERE ended_at IS NOT NULL" : "";
     // The exact OFFSET probe is unusable on a large table: measured in
     // production on polymarket_book_deltas at 42.7 s for OFFSET 100 000 000,
     // against the recorder's 30 s statement_timeout. It threw, the quota step
-    // aborted, and the table kept growing. Above the threshold, interpolate the
-    // cutoff from the time range instead — both min() and max() are index
-    // lookups, and the quota loop re-measures what it actually deleted, so an
-    // imprecise first estimate self-corrects on the next iteration.
+    // aborted, and the table kept growing. Above the threshold, estimate the
+    // cutoff instead: first from the column's equi-depth histogram, which is a
+    // catalog read and survives a non-uniform arrival rate, and only then from
+    // the linear span if no histogram exists yet.
     if (liveRows > INTERPOLATION_MIN_ROWS) {
-      return interpolatedCutoff(config, rowsToDelete, liveRows, eligibleWhere);
+      if (eligibleWhere === "") {
+        const fromHistogram = await histogramCutoff(
+          config,
+          rowsToDelete,
+          liveRows,
+          floor,
+        );
+        if (fromHistogram !== null) {
+          return fromHistogram;
+        }
+      }
+      return interpolatedCutoff(
+        config,
+        rowsToDelete,
+        liveRows,
+        eligibleWhere,
+        floor,
+      );
     }
     const probe = async (offset: number): Promise<Date | null> => {
       const result = await pool.query<{ cutoff: Date | string }>(
@@ -1080,6 +1258,9 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
       1,
     );
     let estimatedLiveBytes = size.liveBytes;
+    // Cutoff this run has already pruned to. Every later pass must advance
+    // beyond it — see the no-progress guard below.
+    let floor: Date | null = null;
     for (let iteration = 0; iteration < maxQuotaIterations; iteration += 1) {
       if (estimatedLiveBytes < target) {
         return;
@@ -1088,14 +1269,47 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         Math.ceil((estimatedLiveBytes - target) / bytesPerRow),
         1,
       );
-      const cutoff = await quotaCutoff(config, rowsToDelete, size.liveRows);
+      const cutoff = await quotaCutoff(
+        config,
+        rowsToDelete,
+        size.liveRows,
+        floor,
+      );
       if (cutoff === null) {
         // No usable cutoff (stats overestimated the table): abort this
         // table's quota iteration — never fall back to `now`, which would
         // delete every row. quotaCutoff already logged the abort.
         return;
       }
+      // Forward-only, and the reason is the bug this guard replaces.
+      //
+      // A pass that deletes less than planned leaves a LARGER shortfall, but
+      // the old loop answered it with a SMALLER rowsToDelete (the shortfall is
+      // measured against the target, and something was deleted), hence a
+      // smaller fraction, hence a cutoff EARLIER than the one it had just
+      // pruned to. That deletes nothing and trips the unmet branch below, so
+      // the whole maxQuotaIterations budget was worth exactly one pass whenever
+      // the first estimate fell short — which, on a skewed arrival rate, was
+      // every run. Measured 2026-08-27: one action per run in
+      // polymarket_retention_log, never four, with the table at ~2x its quota.
+      //
+      // The estimators now take the floor into account, so reaching this guard
+      // means they genuinely have nothing left to offer. Stop rather than spin.
+      if (floor !== null && cutoff.getTime() <= floor.getTime()) {
+        log(
+          "warn",
+          "RETENTION_QUOTA_NO_PROGRESS",
+          "polymarket_retention_quota_no_progress",
+          {
+            table: config.table,
+            cutoff: cutoff.toISOString(),
+            floor: floor.toISOString(),
+          },
+        );
+        return;
+      }
       const deleted = await pruneBefore(config, cutoff, "quota", report);
+      floor = cutoff;
       if (deleted === 0) {
         // Blocked (e.g. missing aggregates) or already empty: stop iterating
         // so the job never spins; the skip was logged above.
@@ -1124,15 +1338,36 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         skipped: [],
         globalAlarm: false,
         totalBytes: 0,
+        totalLiveBytes: 0,
       };
 
-      // Global budget check first: at >= 90% of 40 GB, alarm and shrink the
-      // effective TTLs for this run, top-to-bottom, 25% per step.
+      // Global budget check first: at >= 90% of the budget, alarm and shrink
+      // the effective TTLs for this run.
+      //
+      // Measured on LIVE bytes, for the same reason the per-table quota is
+      // (see tableSize). The alarm's only lever is deleting rows, and deleting
+      // rows moves live bytes; physical bytes never come back on DELETE, since
+      // the pages stay in the file until a rewrite, which nothing here runs. An
+      // alarm armed on the physical total can therefore be raised by bloat it
+      // cannot clear, and it answers with deletes that destroy retained data
+      // without moving the number they are aimed at.
+      //
+      // Measured in production 2026-08-27: 114 GiB physical, 110 GiB live, so
+      // only ~4 GiB of the footprint was bloat and the alarm was NOT a false
+      // one — retained data really was over the 99 GiB trigger, because
+      // polymarket_book_deltas sat at 95 GB against its 52 GB quota. Switching
+      // the metric does not silence the alarm here; it makes the alarm mean
+      // what it says, and routes the bloat case to its own signal below.
+      // Note that the declared quotas sum to 95 GiB, under the trigger (a
+      // tested invariant) — so a live total above it always means a quota is
+      // not being enforced, or a protected table has overrun.
       let totalBytes = 0;
+      let totalLiveBytes = 0;
       for (const config of tables) {
         try {
           const size = await tableSize(config.table);
           totalBytes += size?.bytes ?? 0;
+          totalLiveBytes += size?.liveBytes ?? 0;
         } catch (error: unknown) {
           log(
             "error",
@@ -1145,7 +1380,8 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           );
         }
       }
-      const globalAlarm = totalBytes >= budgetBytes * QUOTA_TRIGGER_RATIO;
+      const globalTrigger = budgetBytes * QUOTA_TRIGGER_RATIO;
+      const globalAlarm = totalLiveBytes >= globalTrigger;
       if (globalAlarm) {
         log(
           "error",
@@ -1153,7 +1389,27 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           "polymarket_retention_global_quota_alarm",
           {
             total_bytes: totalBytes,
+            live_bytes: Math.round(totalLiveBytes),
             budget_bytes: budgetBytes,
+          },
+        );
+      } else if (totalBytes >= globalTrigger) {
+        // Retained data is inside the budget but the files are not: bloat that
+        // new inserts will reuse. Deliberately NOT an alarm and deliberately
+        // without a TTL reduction — no DELETE can shrink a file, so pruning
+        // here would only destroy retained data while the number it is aimed at
+        // stayed put. The remedy is VACUUM FULL / pg_repack on the bloated
+        // tables, which takes an exclusive lock and is the owner's call, not a
+        // daily job's. Same distinction as RETENTION_BLOAT, one level up.
+        log(
+          "warn",
+          "RETENTION_GLOBAL_BLOAT",
+          "polymarket_retention_global_bloat",
+          {
+            physical_bytes: totalBytes,
+            live_bytes: Math.round(totalLiveBytes),
+            budget_bytes: budgetBytes,
+            bloat_bytes: Math.round(totalBytes - totalLiveBytes),
           },
         );
       }
@@ -1207,7 +1463,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         }
       }
 
-      return { ...report, globalAlarm, totalBytes };
+      return { ...report, globalAlarm, totalBytes, totalLiveBytes };
     },
   };
 }

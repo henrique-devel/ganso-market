@@ -1547,15 +1547,100 @@ do merge.
 - **Kill switch do paper**: rearmado em 2026-08-27 20:48:54Z. O `engaged_at` de
   2026-08-26 permanece na linha, então o G3 continua enxergando que o switch foi
   exercitado. O rearme agora tem botão no painel (PR #46).
-- **Alarme global de quota ativo**: `QUOTA_GLOBAL_ALARM` a cada ciclo de
-  retenção — 121,5 GB medidos contra um orçamento de 110 GiB (`pg_database_size`
-  113 GB, disco em 43%). Não é desta mudança: o alarme dispara em 90% do
-  orçamento e o handoff já registrava 111 GB em 03:11Z. Enquanto ele estiver de
-  pé, o pruner encolhe os TTLs efetivos em 0,75 por passo, então **toda janela de
-  retenção deste projeto é menor do que o número declarado** — inclusive as que
-  a decisão 1 discute.
+- **Alarme global de quota** — **medido em produção em 2026-08-27, e o alarme
+  está certo.** A hipótese inicial desta sessão (o alarme seria artefato de
+  inchaço) foi **refutada pela medição**: 114 GiB físicos contra **110 GiB
+  vivos**, ou seja só ~4 GiB de inchaço. O dado retido realmente está acima do
+  gatilho de 99 GiB. Registrado aqui porque o handoff anterior e o começo desta
+  sessão diziam o contrário.
+  - **Causa única e dominante**: `polymarket_book_deltas` com **95 GB vivos
+    contra quota de 52 GB** — 43 GB acima da própria quota, 123 M linhas, e
+    ~86% de toda a pegada viva do banco (95 de 110 GiB). Nenhuma outra tabela chega perto
+    (segunda maior: `polymarket_book_snapshots`, 6,6 GB vivos sob quota de 8).
+  - **A poda roda, mas não fecha**: `polymarket_retention_log` mostra 86,8 M
+    linhas podadas em 26/08 (3 ações) e 52,6 M em 27/08 (**4 ações**, que é o
+    teto de `MAX_QUOTA_ITERATIONS` por rodada diária), sempre por `quota`. E o corte
+    pedido em 27/08 foi 24/08 13:03 enquanto a linha mais antiga da tabela é de
+    **20/08 01:26**: a janela real é de **7 d 22 h**, não os ~3,4 d que a quota
+    implica. A diferença é o portão de cobertura `series_1m` truncando a poda
+    nos tokens com buraco — eles ficam para trás e seguram a tabela acima da
+    quota. **Esse é o próximo item, e é o que está degradando de verdade.**
+  - **Confirmado pela medição**: a redução de TTL do alarme é mesmo inerte onde
+    estão os bytes. 7 d 22 h fica abaixo tanto do TTL de 14 d quanto dos 10,5 d
+    que o fator deixaria, então ela não apagou uma linha sequer de
+    `book_deltas` — só encurtou as tabelas pequenas de auditoria.
+  - **Unidades**: os "121,5 GB" que o alarme logava e os "113 GB" do
+    `pg_database_size` sempre foram o mesmo número — o alarme loga bytes crus e
+    o `pg_size_pretty` rotula GiB como "GB". Não havia dupla contagem.
+  - **Mudado no código**: o alarme passa a medir **bytes vivos**, igual à quota
+    por tabela. Isso **não silencia** o alarme em produção (110 ≥ 99) e não era
+    para silenciar — faz o alarme querer dizer o que diz, e manda o caso de
+    inchaço para sinal próprio `RETENTION_GLOBAL_BLOAT`, que não encolhe TTL
+    nenhum porque nenhum `DELETE` encolhe arquivo. `RetentionRunReport` ganha
+    `totalLiveBytes`. Teste novo trava a invariante quotas-declaradas (95 GiB) <
+    gatilho (99 GiB) — o que agora tem leitura operacional: **vivo acima do
+    gatilho significa necessariamente quota não sendo cumprida**, como é o caso.
+  - **Segue de pé em produção**: o alarme dispara, então o corte de 25% nos TTLs
+    das tabelas TTL-bound continua acontecendo. Só sai quando `book_deltas`
+    voltar para dentro da quota.
+- **Poda da quota de `book_deltas` — causa achada e corrigida em 2026-08-27.**
+  Investigação do porquê a tabela ficava em 95 GB contra quota de 52 GB. São
+  dois defeitos que se alimentam, os dois no caminho da quota.
+  - **(i) A interpolação assume taxa de chegada uniforme** e diz isso no próprio
+    docstring. A realidade medida é rampa de ~50× dentro da janela, porque o
+    universo de tokens cresceu: 542 416 linhas em 20/08, 4,3 M em 21/08, 4,7 M
+    em 22/08, 2,0 M em 23/08, **27,1 M em 26/08**. Reconstruindo a última poda:
+    precisava de 69,1 M de 123,1 M linhas → fração 0,561 → corte linear em
+    **24/08 12:57**, e o log registra 24/08 13:03. Mas o bound de 25% do
+    histograma equi-depth é 24/08 22:10, ou seja **o corte pedido cobria ~23%
+    quando pediu 56%** — déficit de 2,4× em toda rodada.
+  - **(ii) O laço de correção andava para trás.** Uma passada curta deixa
+    déficit *maior*, mas o `rowsToDelete` é medido contra o alvo e algo foi
+    apagado, então a fração seguinte era *menor* e o corte seguinte **anterior**
+    ao que acabara de podar — apaga nada e cai no ramo `QUOTA_UNMET`. O
+    orçamento de `MAX_QUOTA_ITERATIONS = 4` valia **uma** passada sempre que o
+    primeiro chute errasse, o que com densidade enviesada é toda rodada. O log
+    confirma: uma ação por rodada, nunca quatro, e as rodadas a horas de
+    distância são boots distintos (`runAtBoot`), não iterações.
+  - **O elo**: o laço só andava para trás porque a âncora `min()` não avançava.
+    Quem a segurava eram **82 de 681 tokens** travados em 20–23/08 pelo portão
+    de cobertura `series_1m` — apenas ~0,5% das linhas (20/08 inteiro tem 542 mil
+    de 123 M), mas ancorados na parte mais rala da janela. Os 0,5% que não podem
+    ser apagados desabilitavam a correção para os outros 99,5%.
+  - **Corrigido**: (1) o corte sai do `pg_stats.histogram_bounds`, que é o mapa
+    fração-de-linhas → timestamp e não depende de densidade uniforme — leitura
+    de catálogo, com guarda para `null_frac + most_common_freqs` acima de 5%
+    (fora disso o histograma não descreve a tabela e cai no linear); (2) o laço
+    é estritamente para a frente, com `floor` = último corte, e `QUOTA_UNMET`
+    passa a ser precedido por `RETENTION_QUOTA_NO_PROGRESS` quando o corte não
+    avança; (3) a âncora do fallback linear é `max(min(), floor)`, então tokens
+    travados não prendem mais a estimativa.
+  - **Validado contra o histograma real** (`null_frac` 0, `mcv_frac` 0, então o
+    caminho novo é o que roda): o corte que o código novo escolheria é
+    **26/08 10:04**, contra os 24/08 13:03 do antigo — **1,9 dia a mais** por
+    passada, que é exatamente a lacuna que mantinha a tabela em ~2× a quota.
+  - **Não medido**: o efeito em produção. Precisa de deploy e de uma rodada.
+  - **Redeclarar depois de estabilizar**: a ingestão real é ~27 M linhas/dia
+    (~21 GiB/dia), acima dos 15,3 GB/dia que os comentários assumem. A quota de
+    52 GB compra **~1,9 dia** de deltas, não os ~3,4 d documentados — o que bate
+    na leitura de microestrutura das RFC-011/013.
+- **Decision log: a janela é pior do que a decisão 1 registrou.**
+  `portfolio_decisions` tem 693 MB e 167 488 linhas em 1 d 6 h de operação
+  (engine subiu 26/08 16:50) — ~545 MB/dia, ainda sem nenhuma poda registrada.
+  Contra a quota de 0,9 GiB com alvo em 80%, a janela assenta em **~1,4 dia**,
+  não nos ~3 dias que a decisão 1 assumiu. Isso não muda a decisão, **reforça**
+  os itens (a)/(b)/(c) — em especial o (b), gravar só quando o veredito muda.
+  `portfolio_panel_snapshots` acompanha: 450 MB nas mesmas 167 488 linhas.
+- **`budget_used_pct` do painel mente pelo mesmo motivo, e ainda não foi
+  mexido**: `GET /polymarket/data-quality` e o `storage` da read API somam
+  `pg_total_relation_size` **só das tabelas `polymarket_*`** contra o orçamento
+  inteiro de 110 GiB — físico, e de um subconjunto. Nunca foi o mesmo número do
+  alarme (que soma a lista inteira de retenção), e agora diverge também na
+  definição. Mudar a resposta dos dois endpoints é contrato de API e ficou de
+  fora desta mudança de propósito.
 - **`portfolio_panel_snapshots` declara 30 dias de TTL** e, pela mesma
-  aritmética, retém a ordem de 3. Sem consumidor profundo (a API só lê a linha
+  aritmética do decision log (quota de 0,54 GB amarrando antes do TTL — nada a
+  ver com o alarme global), retém a ordem de 3. Sem consumidor profundo (a API só lê a linha
   mais nova por token), então é etiqueta errada e não perigo. Medir
   `pg_column_size` em produção e redeclarar.
 - **`custo_capital_anual`** — **decidido** em 2026-08-27: subir para tornar

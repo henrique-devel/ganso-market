@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueryResult } from "../../src/database.js";
 import {
   createRetentionJob,
+  DEFAULT_BUDGET_BYTES,
+  QUOTA_TRIGGER_RATIO,
   RETENTION_TABLES,
   type RetentionTableConfig,
 } from "../../src/polymarket/retention.js";
@@ -116,6 +118,31 @@ describe("retention config", () => {
       protected: false,
       closedRowsOnly: true,
     });
+  });
+
+  it("keeps the declared quotas inside the global alarm trigger", () => {
+    // The global alarm is a backstop, not a routine condition: a retention plan
+    // whose own declared quotas already reach the trigger would alarm forever
+    // while behaving exactly as designed. Asserted so a future quota raise has
+    // to move the budget with it instead of silently arming the alarm.
+    const GiB = 1024 ** 3;
+    const trigger = DEFAULT_BUDGET_BYTES * QUOTA_TRIGGER_RATIO;
+    const declared = RETENTION_TABLES.reduce((sum, t) => sum + t.quotaBytes, 0);
+    const prunable = RETENTION_TABLES.filter((t) => !t.protected).reduce(
+      (sum, t) => sum + t.quotaBytes,
+      0,
+    );
+    expect(declared / GiB).toBeCloseTo(95, 3);
+    expect(prunable / GiB).toBeCloseTo(85.875, 3);
+    expect(declared).toBeLessThan(trigger);
+
+    // What the pruner can actually reach is smaller still, and that is the
+    // point: with every prunable table pinned at quota the live total is
+    // 85.875 GiB against a 99 GiB trigger, so the alarm can only be raised by
+    // the protected tables overrunning their declared sizes — which the alarm's
+    // TTL reduction cannot touch, because protected tables are never pruned.
+    // The remedy therefore does not fit the only cause. Open for the owner.
+    expect(prunable).toBeLessThan(trigger);
   });
 });
 
@@ -956,6 +983,261 @@ describe("retention job", () => {
     expect(report.actions[0]?.rowsDeleted).toBe(2_000_000);
   });
 
+  it("reads the quota cutoff from the column histogram, not the linear span", async () => {
+    // Measured in production 2026-08-27: polymarket_book_deltas ran from 0.5 M
+    // rows/day to 27 M rows/day inside one 8-day window as the universe grew.
+    // The linear estimate assumes a uniform arrival rate, so it asked for 56%
+    // of the rows and picked a timestamp holding 23% of them — the table sat at
+    // 95 GB against a 52 GB quota. The equi-depth histogram answers correctly.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 10_000_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    // Ten equal-ROW buckets over a ten-day span, with the mass late: 20% of the
+    // rows are older than Aug 8, where a uniform reading would say Aug 3.
+    const bounds = [
+      new Date("2026-08-01T00:00:00Z"),
+      new Date("2026-08-07T00:00:00Z"),
+      new Date("2026-08-08T00:00:00Z"),
+      new Date("2026-08-09T00:00:00Z"),
+      new Date("2026-08-09T12:00:00Z"),
+      new Date("2026-08-10T00:00:00Z"),
+      new Date("2026-08-10T06:00:00Z"),
+      new Date("2026-08-10T12:00:00Z"),
+      new Date("2026-08-10T18:00:00Z"),
+      new Date("2026-08-10T21:00:00Z"),
+      new Date("2026-08-11T00:00:00Z"),
+    ];
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // 10 GB over 10 M rows = 1 kB/row; target is 80% of the quota, so 2 M
+        // rows must go — two of the ten equal-row buckets.
+        return {
+          rows: [
+            {
+              bytes: "10000000000",
+              reltuples: "10000000",
+              live_tup: "10000000",
+              dead_tup: "0",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("histogram_bounds")) {
+        return { rows: [{ bounds }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 2_000_000 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      batchSize: 3_000_000,
+    });
+    await job.runOnce();
+
+    const deletion = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    // bounds[2], the real 20% mark — not 2026-08-03, the uniform one.
+    expect(deletion?.params?.[0]).toEqual(new Date("2026-08-08T00:00:00Z"));
+    // The histogram answered, so the min()/max() span was never asked for.
+    expect(pool.captured.some((q) => q.text.includes("min(received_at)"))).toBe(
+      false,
+    );
+  });
+
+  it("falls back to the linear span when the histogram omits too many rows", async () => {
+    // histogram_bounds describes only the rows that are neither NULL nor a most
+    // common value. That is ~all of them for a sub-second timestamp column, but
+    // it is a property of the data, so it is checked rather than assumed.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 10_000_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const oldest = new Date("2026-08-01T00:00:00Z");
+    const newest = new Date("2026-08-11T00:00:00Z");
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            {
+              bytes: "10000000000",
+              reltuples: "10000000",
+              live_tup: "10000000",
+              dead_tup: "0",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("histogram_bounds")) {
+        // Half the column sits in most-common values: the bucket fractions no
+        // longer describe the table.
+        return {
+          rows: [
+            {
+              bounds: [oldest, newest],
+              null_frac: 0.1,
+              mcv_frac: 0.4,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("min(received_at)")) {
+        return { rows: [{ oldest, newest }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 2_000_000 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      batchSize: 3_000_000,
+    });
+    await job.runOnce();
+
+    expect(
+      stderrLines().some((line) =>
+        line.includes("RETENTION_HISTOGRAM_UNUSABLE"),
+      ),
+    ).toBe(true);
+    // 20% of the rows over the 10-day span: the linear answer, as before.
+    const deletion = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    expect(deletion?.params?.[0]).toEqual(new Date("2026-08-03T00:00:00Z"));
+  });
+
+  it("advances the cutoff when a pass deletes less than planned", async () => {
+    // Regression: the loop used to move BACKWARDS. A short pass leaves a larger
+    // shortfall, but rowsToDelete is measured against the target and something
+    // was deleted, so the next fraction was SMALLER and the next cutoff earlier
+    // than the one just pruned to — deleting nothing and aborting. The
+    // maxQuotaIterations budget was worth one pass, every run.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 2_500_000_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const bounds = Array.from(
+      { length: 11 },
+      (_, i) => new Date(Date.UTC(2026, 7, 1 + i)),
+    );
+    const pool = fakePool((text, _params, captured) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            {
+              bytes: "10000000000",
+              reltuples: "10000000",
+              live_tup: "10000000",
+              dead_tup: "0",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("histogram_bounds")) {
+        return { rows: [{ bounds }], rowCount: 1 };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        // The first pass under-delivers: 1 M rows against the 8 M it planned.
+        const previous = captured.filter((q) =>
+          q.text.includes("DELETE FROM polymarket_rtds_prices"),
+        ).length;
+        return { rows: [], rowCount: previous === 0 ? 1_000_000 : 0 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      batchSize: 9_000_000,
+    });
+    await job.runOnce();
+
+    const cutoffs = pool.captured
+      .filter((q) => q.text.includes("DELETE FROM polymarket_rtds_prices"))
+      .map((q) => q.params?.[0] as Date);
+    expect(cutoffs.length).toBeGreaterThanOrEqual(2);
+    // 8 of 10 equal-row buckets on the first pass, then strictly forward.
+    expect(cutoffs[0]).toEqual(bounds[8]);
+    expect(cutoffs[1]!.getTime()).toBeGreaterThan(cutoffs[0]!.getTime());
+  });
+
+  it("stops instead of spinning when the cutoff cannot advance", async () => {
+    // Backstop for the forward-only invariant on the exact-probe path, which
+    // has no floor of its own: if a later probe answers with an earlier row,
+    // the pass would re-delete nothing. Stop and say so.
+    const config: RetentionTableConfig = {
+      table: "polymarket_rtds_prices",
+      ttlDays: null,
+      quotaBytes: 1_000,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const late = new Date("2026-08-10T00:00:00Z");
+    const early = new Date("2026-08-02T00:00:00Z");
+    const pool = fakePool((text, _params, captured) => {
+      if (text.includes("pg_total_relation_size")) {
+        return {
+          rows: [
+            { bytes: "10000", reltuples: "10", live_tup: "10", dead_tup: "0" },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("OFFSET")) {
+        const previous = captured.filter((q) =>
+          q.text.includes("OFFSET"),
+        ).length;
+        return {
+          rows: [{ cutoff: previous === 0 ? late : early }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("DELETE FROM polymarket_rtds_prices")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+    await job.runOnce();
+
+    const deletions = pool.captured.filter((q) =>
+      q.text.includes("DELETE FROM polymarket_rtds_prices"),
+    );
+    expect(deletions).toHaveLength(1);
+    expect(deletions[0]?.params?.[0]).toEqual(late);
+    expect(
+      stderrLines().some((line) =>
+        line.includes("RETENTION_QUOTA_NO_PROGRESS"),
+      ),
+    ).toBe(true);
+  });
+
   it("clamps the interpolated cutoff so it can never reach the newest row", async () => {
     // The clamp is what stops an over-estimate from becoming "delete
     // everything below now" — the exact failure the COUNT fallback guards
@@ -1318,6 +1600,67 @@ describe("retention job", () => {
     ]);
   });
 
+  it("reports global bloat without alarming or shrinking TTLs", async () => {
+    // Physical over the trigger, retained data far under it. Production was
+    // NOT in this state on 2026-08-27 (114 GiB physical, 110 GiB live: the
+    // retained data really was over budget), but this is the state the old
+    // physical-bytes alarm could not tell apart from a real overshoot. Here the
+    // alarm must NOT fire: its only lever is deleting rows, no delete shrinks a
+    // file, so a haircut on every declared TTL would chase a number that cannot
+    // move.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_snapshots",
+      ttlDays: 90,
+      quotaBytes: 4 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        // 950 physical, 40% of tuples live => 380 live bytes.
+        return {
+          rows: [
+            {
+              bytes: "950",
+              reltuples: "100",
+              live_tup: "40",
+              dead_tup: "60",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("DELETE FROM")) {
+        return { rows: [], rowCount: 0 };
+      }
+      return null;
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+      budgetBytes: 1_000,
+    });
+    const report = await job.runOnce();
+
+    expect(report.globalAlarm).toBe(false);
+    expect(report.totalBytes).toBe(950);
+    expect(report.totalLiveBytes).toBe(380);
+    expect(
+      stderrLines().some((line) => line.includes("QUOTA_GLOBAL_ALARM")),
+    ).toBe(false);
+    expect(
+      stderrLines().some((line) => line.includes("RETENTION_GLOBAL_BLOAT")),
+    ).toBe(true);
+    // The declared 90-day TTL is honoured in full: no 67.5-day haircut.
+    const ttlDelete = pool.captured.find((q) =>
+      q.text.includes("DELETE FROM polymarket_book_snapshots"),
+    );
+    expect(ttlDelete?.params?.[0]).toEqual(
+      new Date(NOW.getTime() - 90 * DAY_MS),
+    );
+  });
+
   it("alarms at 90% of the global budget and shrinks effective TTLs by 25%", async () => {
     const config: RetentionTableConfig = {
       table: "polymarket_book_snapshots",
@@ -1328,7 +1671,21 @@ describe("retention job", () => {
     };
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
-        return { rows: [{ bytes: "950", reltuples: "100" }], rowCount: 1 };
+        // 1000 physical of which 95% is live => 950 live bytes, over the 900
+        // trigger. Stated as live tuples on purpose: the alarm is armed on
+        // retained bytes, and this is the case where retained data really is
+        // the thing over budget.
+        return {
+          rows: [
+            {
+              bytes: "1000",
+              reltuples: "100",
+              live_tup: "95",
+              dead_tup: "5",
+            },
+          ],
+          rowCount: 1,
+        };
       }
       if (text.includes("DELETE FROM")) {
         return { rows: [], rowCount: 0 };

@@ -72,8 +72,50 @@ docker compose exec postgres psql -U ganso_market -d ganso_market -c \
 ```
 
 A API autenticada expõe `GET /polymarket/data-quality` (gaps, lag p50/p99,
-bytes por tabela e % do orçamento de 110 GB) e os demais endpoints de leitura
-da RFC-007.
+bytes por tabela e % do orçamento de 110 GiB) e os demais endpoints de leitura
+da RFC-007. Atenção ao ler o `budget_used_pct` dali: ele soma **bytes físicos**
+e só das tabelas `polymarket_*`, contra o orçamento inteiro — não é o número que
+o alarme global usa.
+
+## Separar dado retido de inchaço
+
+O orçamento global é defendido em **bytes vivos**, porque podar linha é a única
+alavanca que a retenção tem e `DELETE` não encolhe arquivo. Antes de concluir
+que o banco estourou o orçamento, separar as duas coisas:
+
+```bash
+docker compose exec postgres psql -U ganso_market -d ganso_market -c \
+  "SELECT pg_size_pretty(sum(pg_total_relation_size(c.oid)))                AS fisico,
+          pg_size_pretty(sum(pg_total_relation_size(c.oid)
+            * s.n_live_tup / NULLIF(s.n_live_tup + s.n_dead_tup, 0))::bigint) AS vivo,
+          pg_size_pretty(pg_database_size(current_database()))               AS banco
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
+    WHERE n.nspname = 'public' AND c.relkind = 'r';"
+```
+
+`vivo` é o que o `QUOTA_GLOBAL_ALARM` compara com os 110 GiB. O plano declarado
+de retenção soma 95 GiB (85,875 GiB nas tabelas podáveis, 9,125 GiB nas
+protegidas), então `vivo` acima do gatilho de 99 GiB só é possível se as tabelas
+**protegidas** passarem do tamanho declarado — e a redução de TTL do alarme não
+alcança tabela protegida. Nesse caso o alarme está certo e o remédio não; é
+decisão do proprietário. `fisico - vivo` é o inchaço, e só um rewrite o devolve.
+
+Para ver de onde vem o inchaço, por tabela:
+
+```bash
+docker compose exec postgres psql -U ganso_market -d ganso_market -c \
+  "SELECT c.relname,
+          pg_size_pretty(pg_total_relation_size(c.oid)) AS fisico,
+          s.n_live_tup, s.n_dead_tup,
+          round(100.0 * s.n_dead_tup / NULLIF(s.n_live_tup + s.n_dead_tup, 0), 1) AS pct_morto
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     JOIN pg_stat_all_tables s ON s.relid = c.oid
+    WHERE n.nspname = 'public' AND c.relkind = 'r'
+    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 15;"
+```
 
 ## Incidentes conhecidos e resposta
 
@@ -87,8 +129,14 @@ da RFC-007.
 - **RTDS sem replay:** desconexão vira gap `rtds/ws_disconnect`; o buraco é
   real e permanente (não há como repor).
 - **Quota:** ao atingir 90% da quota de um tipo, poda até 80% com linha em
-  `polymarket_retention_log`; 90% dos 110 GB globais → alarme
-  `QUOTA_GLOBAL_ALARM` nos logs. Tabelas de metadados nunca são podadas.
+  `polymarket_retention_log`; 90% dos 110 GiB globais **de bytes vivos** →
+  alarme `QUOTA_GLOBAL_ALARM` nos logs. Tabelas de metadados nunca são podadas.
+- **`RETENTION_GLOBAL_BLOAT`:** o footprint físico passou de 90% do orçamento
+  mas o dado retido não. Não é alarme e **não** encolhe TTL nenhum: `DELETE` não
+  devolve página ao arquivo, então podar aqui só destruiria dado retido sem
+  mover o número. O remédio é `VACUUM FULL`/`pg_repack` na tabela inchada — lock
+  exclusivo, decisão do proprietário, nunca do job diário. Ver a query abaixo
+  para separar vivo de inchaço antes de decidir.
 - **Formato de frame RTDS/Data API mudou:** frames desconhecidos são contados
   (`rtds_unknown_frames` no STATUS) e não derrubam o processo; verificar a
   documentação oficial e ajustar os parsers.
