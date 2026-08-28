@@ -289,39 +289,42 @@ export function reconcile(
 // G5 inputs: the regime fingerprint, and when the G2 clock has to reset.
 // ---------------------------------------------------------------------------
 
-/** The venue parameters that define a regime for one market. */
-export interface RegimeParams {
-  readonly feeBaseBps: string | null;
-  readonly makerFeeBps: string | null;
-  readonly takerFeeBps: string | null;
-  readonly tickSize: string | null;
-  readonly minOrderSize: string | null;
-  readonly negRisk: boolean | null;
-}
+/**
+ * The venue schedule for one category: for each fee/tick parameter, the sorted
+ * distinct values in force — each market's most recent non-null observation,
+ * over every market ever categorised there (see loadRegimeParamsByCategory).
+ */
+export type RegimeSchedule = Readonly<Record<string, readonly string[]>>;
 
 /**
- * Fingerprint of a category's regime: the sorted set of DISTINCT parameter
- * tuples in force across that category's markets.
+ * Fingerprint of a category's regime: the venue's fee/tick SCHEDULE, never the
+ * composition of the universe (owner decision, 2026-08-28).
  *
- * Sorted and de-duplicated on purpose. A new market appearing with the same fee
- * schedule is not a regime change, and the gate must not reset a 59-day clock
- * because the universe grew. A fee schedule, tick or negRisk flag changing IS a
- * regime change, and resets it — the RFC is explicit that V2 killed strategies
- * that were live under V1.
+ * The first implementation hashed the set of distinct parameter tuples of the
+ * markets CURRENTLY holding a live param version. That set moves when the
+ * universe moves: a rare combination losing its last member — a market leaving,
+ * or one market's observation flipping between NULL and a value, or a tick
+ * changing with the price band — changed the hash with no venue change behind
+ * it. Measured in production: 11 resets in ~44 h (6 crypto, 5 macro), longest
+ * continuous window 19.5 h, against the 60 DAYS the G2 clock has to
+ * accumulate. G2/G5 were unpassable by construction.
+ *
+ * Hashing the per-parameter value domains instead makes membership invisible:
+ * a market joining, leaving or being re-observed with values the venue already
+ * applies changes nothing; a genuinely new fee/tick value in the category — the
+ * venue changing its schedule, which is what the RFC means by "mudança de fee
+ * schedule/regras/protocolo" — changes the hash and resets the clock.
+ *
+ * negRisk is deliberately no longer part of the fingerprint: it is per-event
+ * STRUCTURE (which markets exist), not venue schedule, and it never changes for
+ * a given market — its only effect on the old hash was to make composition
+ * visible again.
  */
-export function regimeFingerprint(params: readonly RegimeParams[]): string {
-  const tuples = params.map((p) =>
-    [
-      p.feeBaseBps ?? "",
-      p.makerFeeBps ?? "",
-      p.takerFeeBps ?? "",
-      p.tickSize ?? "",
-      p.minOrderSize ?? "",
-      p.negRisk === null ? "" : String(p.negRisk),
-    ].join(":"),
-  );
-  const distinct = [...new Set(tuples)].sort();
-  return createHash("sha256").update(JSON.stringify(distinct)).digest("hex");
+export function regimeFingerprint(schedule: RegimeSchedule): string {
+  const canonical = Object.keys(schedule)
+    .sort()
+    .map((param) => [param, [...(schedule[param] ?? [])].sort()]);
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
 export interface ClockResetPlan {

@@ -196,17 +196,12 @@ function world(options: WorldOptions = {}): World {
       if (text.includes("FROM portfolio_g2_clock")) {
         return respond([]);
       }
-      if (text.includes("FROM polymarket_param_versions p")) {
+      if (text.includes("polymarket_param_versions")) {
         return respond([
-          {
-            category: "crypto",
-            fee_base_bps: "700",
-            maker_fee_bps: "0",
-            taker_fee_bps: "700",
-            tick_size: "0.01",
-            min_order_size: "5",
-            neg_risk: false,
-          },
+          { category: "crypto", param: "fee_base_bps", value: "700" },
+          { category: "crypto", param: "taker_fee_bps", value: "700" },
+          { category: "crypto", param: "tick_size", value: "0.01" },
+          { category: "crypto", param: "min_order_size", value: "5" },
         ]);
       }
       if (text.includes("FROM fundamental_labels")) {

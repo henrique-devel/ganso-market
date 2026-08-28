@@ -19,55 +19,206 @@ import {
   selectForecasts,
   type ForecastRow,
   type MeasureGatesInput,
-  type RegimeParams,
+  type RegimeSchedule,
 } from "../../../src/polymarket/portfolio/measure.js";
+import { loadRegimeParamsByCategory } from "../../../src/polymarket/portfolio/gatestore.js";
 import { BREAKER_KINDS } from "../../../src/polymarket/portfolio/types.js";
 
 const NOW = new Date("2026-08-26T12:00:00Z");
 const GATES = DEFAULT_PORTFOLIO_CONFIG.gates;
 
-const CRYPTO_PARAMS: RegimeParams[] = [
-  {
-    feeBaseBps: "700",
-    makerFeeBps: "0",
-    takerFeeBps: "700",
-    tickSize: "0.01",
-    minOrderSize: "5",
-    negRisk: false,
-  },
-];
+const CRYPTO_PARAMS: RegimeSchedule = {
+  fee_base_bps: ["700"],
+  maker_fee_bps: ["0"],
+  taker_fee_bps: ["700"],
+  tick_size: ["0.01"],
+  min_order_size: ["5"],
+};
 
 describe("regime fingerprint (G5)", () => {
-  it("is stable when a market joins with the same parameters", () => {
-    // The universe growing is not a regime change, and resetting a 59-day clock
-    // because it grew would throw away evidence for nothing.
+  it("hashes the schedule, not how it was assembled", () => {
+    // Key and value order are presentation; the schedule is a set of sets.
     const one = regimeFingerprint(CRYPTO_PARAMS);
-    const two = regimeFingerprint([...CRYPTO_PARAMS, ...CRYPTO_PARAMS]);
+    const two = regimeFingerprint({
+      min_order_size: ["5"],
+      tick_size: ["0.01"],
+      taker_fee_bps: ["700"],
+      maker_fee_bps: ["0"],
+      fee_base_bps: ["700"],
+    });
     expect(two).toBe(one);
+    const shuffled = regimeFingerprint({
+      ...CRYPTO_PARAMS,
+      tick_size: ["0.01"],
+    });
+    expect(shuffled).toBe(one);
   });
 
   it("changes when the fee schedule changes", () => {
-    const changed = regimeFingerprint([
-      { ...CRYPTO_PARAMS[0]!, takerFeeBps: "300" },
-    ]);
+    const changed = regimeFingerprint({
+      ...CRYPTO_PARAMS,
+      taker_fee_bps: ["300"],
+    });
     expect(changed).not.toBe(regimeFingerprint(CRYPTO_PARAMS));
   });
 
-  it("changes when the tick size changes", () => {
-    const changed = regimeFingerprint([
-      { ...CRYPTO_PARAMS[0]!, tickSize: "0.001" },
-    ]);
+  it("changes when a new tick value enters the category", () => {
+    const changed = regimeFingerprint({
+      ...CRYPTO_PARAMS,
+      tick_size: ["0.001", "0.01"],
+    });
     expect(changed).not.toBe(regimeFingerprint(CRYPTO_PARAMS));
   });
 });
 
+describe("regime fingerprint against the store (the 2026-08-28 flap)", () => {
+  // Measured in production: 11 clock resets in ~44 h with ZERO venue changes —
+  // 124 fee_base observations flipping between NULL and "1000", 93 tick_size
+  // observations moving with the price band, and universe rotation vacating
+  // rare tuples. The fingerprint must be a function of the venue's fee/tick
+  // schedule for the category, never of which markets currently attest it.
+  //
+  // The fake pool serves both the released query (keyed on its
+  // "p.valid_to IS NULL" filter, rows per market) and the schedule query
+  // (rows per category/param/value), so this test expresses the semantics
+  // rather than one implementation's SQL.
+
+  interface MarketState {
+    readonly condition: string;
+    readonly fee: string | null;
+    readonly tick: string;
+  }
+
+  function rowsFor(
+    markets: readonly MarketState[],
+    text: string,
+  ): Record<string, unknown>[] {
+    if (!text.includes("polymarket_param_versions")) {
+      return [];
+    }
+    if (text.includes("p.valid_to IS NULL")) {
+      // The released shape: one row per market currently in force.
+      return markets.map((m) => ({
+        category: "crypto",
+        fee_base_bps: m.fee,
+        maker_fee_bps: null,
+        taker_fee_bps: null,
+        tick_size: m.tick,
+        min_order_size: "5",
+        neg_risk: false,
+      }));
+    }
+    // The schedule shape: distinct (category, param, value) from each
+    // market's latest non-null observation.
+    const domains = new Map<string, Set<string>>();
+    for (const m of markets) {
+      if (m.fee !== null) {
+        const fees = domains.get("fee_base_bps") ?? new Set<string>();
+        fees.add(m.fee);
+        domains.set("fee_base_bps", fees);
+      }
+      const ticks = domains.get("tick_size") ?? new Set<string>();
+      ticks.add(m.tick);
+      domains.set("tick_size", ticks);
+      const minimums = domains.get("min_order_size") ?? new Set<string>();
+      minimums.add("5");
+      domains.set("min_order_size", minimums);
+    }
+    const rows: Record<string, unknown>[] = [];
+    for (const [param, values] of domains) {
+      for (const value of values) {
+        rows.push({ category: "crypto", param, value });
+      }
+    }
+    return rows;
+  }
+
+  function poolFor(markets: readonly MarketState[]): {
+    query: <R extends Record<string, unknown>>(
+      text: string,
+      params?: readonly unknown[],
+    ) => Promise<{ rows: R[]; rowCount: number }>;
+  } {
+    return {
+      query<R extends Record<string, unknown>>(text: string) {
+        const rows = rowsFor(markets, text) as R[];
+        return Promise.resolve({ rows, rowCount: rows.length });
+      },
+    };
+  }
+
+  async function fingerprintOf(
+    markets: readonly MarketState[],
+  ): Promise<string> {
+    const byCategory = await loadRegimeParamsByCategory(poolFor(markets));
+    const crypto = byCategory["crypto"];
+    expect(crypto).toBeDefined();
+    if (crypto === undefined) {
+      throw new Error("unreachable");
+    }
+    // Typed through the function's own parameter so the test file compiles on
+    // either side of the schedule change and measures behaviour, not types.
+    return regimeFingerprint(crypto as Parameters<typeof regimeFingerprint>[0]);
+  }
+
+  it("holds the fingerprint under rotation and observation noise", async () => {
+    // t0: A attests fee 1000 / tick 0.001; B's observation omits the fee and
+    // sits in the 0.01 band. Both values of tick are venue schedule.
+    const before = await fingerprintOf([
+      { condition: "A", fee: "1000", tick: "0.001" },
+      { condition: "B", fee: null, tick: "0.01" },
+    ]);
+    // t1: A left the universe but its attestation stands (schedule queries read
+    // every market ever seen — modelled here by keeping A's last observation),
+    // B was re-observed WITH the fee and its price moved into the 0.001 band,
+    // and C joined with values the venue already applies. No venue change.
+    const after = await fingerprintOf([
+      { condition: "A", fee: "1000", tick: "0.01" },
+      { condition: "B", fee: "1000", tick: "0.001" },
+      { condition: "C", fee: "1000", tick: "0.001" },
+    ]);
+    expect(after).toBe(before);
+  });
+
+  it("still resets when the venue really changes the fee", async () => {
+    const before = await fingerprintOf([
+      { condition: "A", fee: "1000", tick: "0.001" },
+      { condition: "B", fee: "1000", tick: "0.01" },
+    ]);
+    // The venue moves the category fee to 700: re-observed markets attest the
+    // new value while A's departed attestation keeps the old one in history.
+    const after = await fingerprintOf([
+      { condition: "A", fee: "1000", tick: "0.001" },
+      { condition: "B", fee: "700", tick: "0.01" },
+      { condition: "C", fee: "700", tick: "0.001" },
+    ]);
+    expect(after).not.toBe(before);
+    const plans = planClockResets({
+      clocks: [
+        {
+          category: "crypto",
+          clockStart: new Date("2026-06-01T00:00:00Z"),
+          regimeFingerprint: before,
+          lastResetReason: null,
+        },
+      ],
+      currentFingerprints: { crypto: after },
+      now: NOW,
+    });
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.reason).toBe("regime_fingerprint_changed");
+  });
+});
+
 describe("the G2 clock resets on a regime change", () => {
-  const fingerprint = regimeFingerprint(CRYPTO_PARAMS);
+  // Computed lazily (inside each test) so a revision where regimeFingerprint
+  // rejects this shape fails the tests, never the file's collection.
+  const fingerprint = () => regimeFingerprint(CRYPTO_PARAMS);
 
   it("starts a clock for a category that has none", () => {
     const plans = planClockResets({
       clocks: [],
-      currentFingerprints: { crypto: fingerprint },
+      currentFingerprints: { crypto: fingerprint() },
       now: NOW,
     });
     expect(plans).toHaveLength(1);
@@ -81,11 +232,11 @@ describe("the G2 clock resets on a regime change", () => {
         {
           category: "crypto",
           clockStart: new Date("2026-06-01T00:00:00Z"),
-          regimeFingerprint: fingerprint,
+          regimeFingerprint: fingerprint(),
           lastResetReason: null,
         },
       ],
-      currentFingerprints: { crypto: fingerprint },
+      currentFingerprints: { crypto: fingerprint() },
       now: NOW,
     });
     expect(plans).toEqual([]);
@@ -95,16 +246,17 @@ describe("the G2 clock resets on a regime change", () => {
     // The RFC's mandatory test. A reset is not a smaller number averaged in: it
     // throws the elapsed days away, because they were measured under a regime
     // that no longer exists.
-    const changed = regimeFingerprint([
-      { ...CRYPTO_PARAMS[0]!, takerFeeBps: "300" },
-    ]);
+    const changed = regimeFingerprint({
+      ...CRYPTO_PARAMS,
+      taker_fee_bps: ["300"],
+    });
     const clockStart = new Date("2026-06-01T00:00:00Z");
     const plans = planClockResets({
       clocks: [
         {
           category: "crypto",
           clockStart,
-          regimeFingerprint: fingerprint,
+          regimeFingerprint: fingerprint(),
           lastResetReason: null,
         },
       ],
@@ -115,32 +267,33 @@ describe("the G2 clock resets on a regime change", () => {
     expect(plans[0]?.reason).toBe("regime_fingerprint_changed");
     expect(plans[0]?.previousStart).toEqual(clockStart);
     expect(plans[0]?.newStart).toEqual(NOW);
-    expect(plans[0]?.previousFingerprint).toBe(fingerprint);
+    expect(plans[0]?.previousFingerprint).toBe(fingerprint());
     expect(plans[0]?.newFingerprint).toBe(changed);
   });
 
   it("resets only the affected category", () => {
     // "reseta o relógio do G2 para as categorias afetadas" — the RFC is precise
     // about the scope, and fees differ by category.
-    const changed = regimeFingerprint([
-      { ...CRYPTO_PARAMS[0]!, takerFeeBps: "300" },
-    ]);
+    const changed = regimeFingerprint({
+      ...CRYPTO_PARAMS,
+      taker_fee_bps: ["300"],
+    });
     const plans = planClockResets({
       clocks: [
         {
           category: "crypto",
           clockStart: new Date("2026-06-01T00:00:00Z"),
-          regimeFingerprint: fingerprint,
+          regimeFingerprint: fingerprint(),
           lastResetReason: null,
         },
         {
           category: "macro",
           clockStart: new Date("2026-06-01T00:00:00Z"),
-          regimeFingerprint: fingerprint,
+          regimeFingerprint: fingerprint(),
           lastResetReason: null,
         },
       ],
-      currentFingerprints: { crypto: changed, macro: fingerprint },
+      currentFingerprints: { crypto: changed, macro: fingerprint() },
       now: NOW,
     });
     expect(plans.map((plan) => plan.category)).toEqual(["crypto"]);

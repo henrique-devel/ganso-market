@@ -18,7 +18,7 @@ import type {
   ClockResetPlan,
   ForecastRow,
   GateMeasurement,
-  RegimeParams,
+  RegimeSchedule,
 } from "./measure.js";
 import type { PersistedDecision } from "./replay.js";
 import type {
@@ -437,35 +437,78 @@ export async function loadOperationalEvidence(
 // G5: the regime fingerprint and the per-category G2 clock.
 // ---------------------------------------------------------------------------
 
-/** Venue parameters in force, grouped by the category they belong to. */
+/**
+ * The venue fee/tick schedule per category: for each parameter, the distinct
+ * values from each market's most recent NON-NULL observation, over every
+ * market ever categorised there.
+ *
+ * Three properties, each carrying a production lesson (2026-08-28):
+ *
+ * - "every market ever", not the current universe: a market leaving cannot
+ *   remove its attested values, so rotation is invisible to the fingerprint.
+ * - "most recent non-null" per market and parameter: Gamma observations flip
+ *   fields between NULL and a value (124 fee_base flips in 48 h measured, with
+ *   zero venue changes behind them); an observation that omits a field says
+ *   nothing about the schedule and must not move the hash.
+ * - value domains per parameter, not per-market tuples: a market's tick moving
+ *   with its price band (93 flips in 48 h) re-combines tuples without any new
+ *   VALUE existing in the category. Only a value the venue never applied
+ *   before — a real schedule change — extends a domain.
+ */
 export async function loadRegimeParamsByCategory(
   pool: PortfolioPool,
-): Promise<Record<string, RegimeParams[]>> {
+): Promise<Record<string, RegimeSchedule>> {
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT meta.category, p.fee_base_bps, p.maker_fee_bps, p.taker_fee_bps,
-            p.tick_size, p.min_order_size, p.neg_risk
-       FROM polymarket_param_versions p
+    `WITH latest AS (
+       (SELECT DISTINCT ON (condition_id) condition_id,
+               'fee_base_bps' AS param, fee_base_bps AS value
+          FROM polymarket_param_versions WHERE fee_base_bps IS NOT NULL
+         ORDER BY condition_id, version DESC)
+       UNION ALL
+       (SELECT DISTINCT ON (condition_id) condition_id,
+               'maker_fee_bps', maker_fee_bps
+          FROM polymarket_param_versions WHERE maker_fee_bps IS NOT NULL
+         ORDER BY condition_id, version DESC)
+       UNION ALL
+       (SELECT DISTINCT ON (condition_id) condition_id,
+               'taker_fee_bps', taker_fee_bps
+          FROM polymarket_param_versions WHERE taker_fee_bps IS NOT NULL
+         ORDER BY condition_id, version DESC)
+       UNION ALL
+       (SELECT DISTINCT ON (condition_id) condition_id,
+               'tick_size', tick_size
+          FROM polymarket_param_versions WHERE tick_size IS NOT NULL
+         ORDER BY condition_id, version DESC)
+       UNION ALL
+       (SELECT DISTINCT ON (condition_id) condition_id,
+               'min_order_size', min_order_size
+          FROM polymarket_param_versions WHERE min_order_size IS NOT NULL
+         ORDER BY condition_id, version DESC)
+     )
+     SELECT meta.category, l.param, l.value
+       FROM latest l
        JOIN LATERAL (
          SELECT category FROM polymarket_market_metadata_versions v
-          WHERE v.condition_id = p.condition_id AND v.valid_to IS NULL
+          WHERE v.condition_id = l.condition_id AND v.valid_to IS NULL
           ORDER BY v.version DESC LIMIT 1
        ) meta ON TRUE
-      WHERE p.valid_to IS NULL AND meta.category IS NOT NULL
-      ORDER BY meta.category`,
+      WHERE meta.category IS NOT NULL
+      GROUP BY meta.category, l.param, l.value
+      ORDER BY meta.category, l.param, l.value`,
   );
-  const grouped: Record<string, RegimeParams[]> = {};
+  const grouped: Record<string, Record<string, string[]>> = {};
   for (const row of result.rows) {
     const category = String(row.category);
-    const list = grouped[category] ?? [];
-    list.push({
-      feeBaseBps: text(row.fee_base_bps),
-      makerFeeBps: text(row.maker_fee_bps),
-      takerFeeBps: text(row.taker_fee_bps),
-      tickSize: text(row.tick_size),
-      minOrderSize: text(row.min_order_size),
-      negRisk: row.neg_risk === null ? null : row.neg_risk === true,
-    });
-    grouped[category] = list;
+    const param = String(row.param);
+    const value = text(row.value);
+    if (value === null) {
+      continue;
+    }
+    const schedule = grouped[category] ?? {};
+    const values = schedule[param] ?? [];
+    values.push(value);
+    schedule[param] = values;
+    grouped[category] = schedule;
   }
   return grouped;
 }
