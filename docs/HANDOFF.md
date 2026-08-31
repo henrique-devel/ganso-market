@@ -1,6 +1,20 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-31 (noite) — **hotfix do
+- Última atualização: 2026-08-31 (noite, 2) — **nowcast oficial no calendário
+  macro + sync com retry (PR #63)**. A entrega veio junto de uma **medição que
+  desmente a premissa do trabalho**: rodando o parser real contra os 22 mercados
+  macro de produção, os 22 falham em `UNRECOGNIZED_VARIABLE` **antes** de o
+  consenso ser lido — 20 são mercados de MUDANÇA de juros (o modelo precifica
+  NÍVEL), 1 é Bank of England, 1 é Estreito de Ormuz, e **nenhum** é de CPI ou
+  emprego. O consenso faltando **não era o gargalo**, e este PR não destrava
+  nenhum dos 22; o valor do dado é prospectivo. Entregue mesmo assim, com fonte:
+  `cpi-2026-09` carrega o nowcast do Cleveland Fed lido em 31/08 (`cpi_yoy` 3.37,
+  `cpi_mom` 0.36, `core_cpi_yoy` 2.38), keyed por variável para não servir a
+  escala errada a um mercado irmão; as outras 14 entradas seguem sem consenso, de
+  propósito, com o motivo de cada uma no arquivo. E o sync do calendário passou a
+  rodar no job de 10 min além do boot — a fragilidade de 23/08, cuja ocorrência
+  mais recente é de `20:53:49Z` desta mesma noite. **Deployado e verificado às
+  22:08–22:20Z.** Ver "SESSÃO 2026-08-31 (noite, 2)". Registro anterior do dia: **hotfix do
   `RESOLUTION_MARKET_METADATA_VERSION_MISSING` recorrente (PR #61)**: causa raiz
   medida em produção (78 falhas/24 h em duas populações — 674 rejeições/dia
   journalizadas indevidamente e a corrida entre o `enter` e a primeira versão de
@@ -1837,6 +1851,179 @@ agora (medido às 20:01Z, duas requisições). Não é módulo adjacente a este 
 fica para prompt próprio, com a observação de que qualquer investigação precisa
 de log preservado ou de reprodução ao vivo.
 
+## SESSÃO 2026-08-31 (noite, 2) — NOWCAST OFICIAL NO CALENDÁRIO MACRO + SYNC COM RETRY (PR #63)
+
+Duas entregas e **uma medição que desmente a premissa do trabalho**. A medição
+vem primeiro porque muda o que se pode prometer.
+
+### A medição: o consenso faltando NÃO era o gargalo da categoria macro
+
+A premissa herdada era "`macro_scheduled` abstém em TODO mercado por falta de
+consenso". Rodei o parser real (`parseMacroMarket`) contra os **22 mercados
+macro de produção**, com as regras e a metadata puxadas do banco. Resultado:
+
+```
+ 22  UNRECOGNIZED_VARIABLE
+```
+
+Os 22 falham no **primeiro portão** do parser, muito antes de o consenso ser
+lido:
+
+- **20** são mercados de **MUDANÇA** de juros ("decrease by 25 bps", "N Fed rate
+  cuts in 2026"). O texto casa `hasFed`, mas dispara o veto
+  `RATE_CHANGE_PHRASES` — este modelo precifica **nível**, não variação. O veto
+  está **certo**; o mercado é que é de outra natureza.
+- **1** é Bank of England (não é o Fed).
+- **1** é "Strait of Hormuz traffic returns to normal" (não é variável macro).
+- **0** são de CPI ou de emprego. Não existe mercado de nível no universo.
+
+Ou seja: encher o calendário de consenso **não destrava nenhum dos 22**. É a
+lente de degeneração de gate aplicada a um prompt de dado — a verificação
+prometida ("`macro_scheduled` passa a emitir estimativa") passaria vazia, porque
+não há mercado elegível para comparar. Está registrado no PR e aqui em vez de
+ser contornado.
+
+**O gargalo real, e é decisão do proprietário:** o modelo precifica nível e o
+universo macro da Polymarket é de mudança. Destravar de verdade exige variável
+nova (`fed_rate_change_bps` ou equivalente, com o parser lendo brackets de
+25 bps) — escopo de RFC, não de PR de dado. Enquanto isso a categoria macro
+segue sem produzir evidência de modelo, e a segunda categoria do G2 continua
+dependendo de entradas por baseline.
+
+### Entrega 1 — nowcast oficial, keyed por variável (sem migration)
+
+`config/macro-calendar.json` não tinha consenso em nenhuma das 15 entradas.
+Agora **uma** tem, a única com fonte oficial hoje: `cpi-2026-09` (que publica o
+dado de **agosto**/2026, `period: M08`), com o nowcast do **Cleveland Fed** lido
+em 2026-08-31 (tabela atualizada em 08/31):
+
+| variável       | valor |
+| -------------- | ----- |
+| `cpi_yoy`      | 3.37  |
+| `cpi_mom`      | 0.36  |
+| `core_cpi_yoy` | 2.38  |
+
+URL, publicador, DOI, data de atualização da fonte e data de leitura ficam em
+`_consensus_source`, na própria entrada. **Sem `consensus_std`**: o publicador
+não divulga dispersão para o nowcast, então o modelo cai em
+`macro.default_sigma` e grava `macroSigmaSource: "config_default"`. Inventar
+sigma seria inventar input.
+
+As outras 14 seguem **sem** consenso, de propósito, com o motivo de cada família
+registrado em `_consensus_absent` no próprio arquivo:
+
+- `cpi-2026-10..12` — o Cleveland Fed faz nowcast só do **período corrente**;
+  em 31/08 as tabelas traziam agosto/2026 e 2026:Q3 e nada além;
+- `nfp-*` — nenhum publicador oficial de consenso de payrolls/desemprego é
+  nomeado na RFC-010 nem neste handoff;
+- `fomc-*` — a **CME FedWatch publica distribuição sobre faixas de 25 bps**, não
+  nível com dispersão. Em 31/08 estava **bimodal** (~66% em 3,75–4,00%, ~34% em
+  3,50–3,75%), **sem massa na média das duas**. Espremer isso na normal que o
+  modelo centra no consenso seria estimativa nossa, não número do publicador;
+- `gdp-*` — BEA não é variável de `macro_scheduled` 1.0.0.
+
+**Por que keyed e não um número solto** (isto é um defeito latente que o PR
+fecha antes de abrir): `matchCalendar` casa mercado e entrada por **família**, e
+um release publica várias variáveis — o CPI carrega `cpi_yoy`, `cpi_mom` e
+`core_cpi_yoy` de uma vez. Um `consensus: 3.37` solto seria servido às três, e
+um mercado de `cpi_mom` (limiar ~0,3) sairia com mu=3,37 → q travado em 0,999,
+**em silêncio**: o guarda de `MACRO_RELEASE_MAX_SIGMAS` só existe no regime
+pós-release. `readConsensus` passa a ler `consensus_by_variable[variable]` antes
+das chaves soltas, que seguem válidas para família de uma variável só (FOMC).
+`MACRO_FEATURE_SET_VERSION` **1.0.0 → 1.1.0** (o `FEATURE_SET_VERSION`
+compartilhado de `features.ts` continua 1.0.0 — são versões diferentes, e a
+linha `ESTIMATOR_CYCLE` loga a compartilhada).
+
+### Entrega 2 — sync do calendário no job de 10 min (a fragilidade de 23/08)
+
+O sync rodava **só no boot e sem retry**; o CD reinicia os profiles a cada
+merge, então `MACRO_CALENDAR_SYNC_FAILED` recorria em todo boot que perdesse a
+corrida com o postgres, e a edição do arquivo se perdia em silêncio até um
+restart seguinte ganhar a corrida. **A ocorrência mais recente está no log e é
+de uma hora antes deste PR: `2026-08-31T20:53:49Z`, no CD do #62.**
+
+`createCalendarSync` (em `macro.ts`) roda agora também dentro do job
+`macro_releases` (10 min), **mantendo** o sync de boot. Logging pensado para
+operação: **falha loga em toda passada** (senão "zero não-recuperado em 24 h"
+não é verificável); **sucesso loga** no boot, quando versionou algo, ou quando
+recuperou (`recovered: true`); regime estável fica silencioso. Ambas as linhas
+ganham `trigger` (`boot` | `scheduled`).
+
+### FATO VERIFICADO — deployado em produção (2026-08-31 22:08–22:20Z)
+
+Três passos na mesma janela, com a guarda de confirmar o código no disco antes
+de rebuildar:
+
+1. **Merge + CD** (22:08:21Z, sucesso). A config chegou ao servidor e o boot
+   sync da imagem **antiga** já gravou `cpi-2026-09` **versão 2** às
+   `22:11:48Z` — a ordem é segura nos dois sentidos: estimator velho + config
+   nova lê chave solta, não acha, e abstém.
+2. **Rebuild de `polymarket-recorder` E `polymarket-estimator`** (22:19:33Z). O
+   estimator entrou porque o código do modelo foi tocado — o prompt previa que
+   não seria, e a razão medida está acima.
+3. **Confirmado no runtime**: o boot log novo traz
+   `MACRO_CALENDAR_SYNCED {"inserted":0,"trigger":"boot","recovered":false}` —
+   os campos novos provam que a imagem nova está de pé. O bundle deployado tem
+   as duas chamadas (`runOnce("boot")` na linha 318 e `runOnce("scheduled")` na
+   366 de `dist/polymarket/orchestrator.js`).
+4. **A passada AGENDADA foi observada rodando**, e sem log — que é o
+   comportamento desenhado. Prova positiva por contador de catálogo:
+   `pg_stat_user_tables.idx_scan` de `polymarket_macro_calendar` saiu de **2250**
+   (22:20:25Z) para **2266** (22:30:04Z), +16 exatamente no tique de
+   `macro_releases` de ~22:29:33Z — 10 min após o boot das 22:19:33Z; 15 SELECTs
+   do `syncCalendar` (um por entrada) mais o `DISTINCT ON` do `pollOnce`. E o
+   container tem **uma única** linha `MACRO_CALENDAR` na vida: a do boot. Ou
+   seja, o sync agendado roda, não escreve nada quando nada mudou, e fica
+   silencioso — sem as 144 linhas/dia que a alternativa produziria.
+
+Banco, medido às 22:20Z:
+
+| medida                          | valor                                                    |
+| ------------------------------- | -------------------------------------------------------- |
+| linhas em `polymarket_macro_calendar` | 16 (15 v1 + `cpi-2026-09` v2)                      |
+| entradas com `consensus_by_variable`  | 1                                                  |
+| conteúdo                        | `{"cpi_mom": 0.36, "cpi_yoy": 3.37, "core_cpi_yoy": 2.38}` |
+| `read_at` da proveniência       | `2026-08-31`                                             |
+
+### Testes
+
+- `createCalendarSync`: falha no boot (postgres frio) + sucesso no ciclo
+  seguinte → banco **converge com o arquivo**, `recovered: true`; edição do
+  arquivo com o processo de pé é capturada; falha persistente continua logando
+  e nunca lança; arquivo ausente vira `MACRO_CALENDAR_FILE_MISSING`.
+- Modelo: a mesma entrada serve `cpi_yoy`/`cpi_mom`/`core_cpi_yoy` com os três
+  valores certos (o `cpi_mom` fica em 0,773 em vez de saturar em 0,999 — que é
+  exatamente o erro que a forma keyed evita); silêncio sobre uma variável faz
+  **abster** em vez de pegar a irmã; keyed tem precedência sobre solto; solto
+  segue funcionando para FOMC.
+- **Forma do arquivo, em CI**: todo consenso publicado tem de ser keyed, com
+  variável conhecida, `url` https e `read_at` datado. O PR que colocar chave
+  solta ou valor sem fonte **reprova**. É onde a invariante da RFC-010 passa a
+  ser executável em vez de prosa.
+- `make verify` verde; **1408 testes da API** passam.
+
+### Processo registrado (o nowcast envelhece)
+
+`docs/runbooks/polymarket-fundamental.md` ganhou a seção "Atualizar o
+consenso/nowcast do calendário macro": forma do campo, **quando** atualizar (na
+semana anterior a cada release; depois de cada release publicado; quando a fonte
+revisa o método), o passo a passo, e por que a FedWatch não vira consenso de
+`fed_target_rate`. `docs/runbooks/polymarket-recorder.md` ganhou o verbete de
+incidente do `MACRO_CALENDAR_SYNC_FAILED` (deixou de ser terminal; só agir se
+repetir por mais de ~20 min). **Nenhuma coleta automática de site externo foi
+criada** — dependência nova é decisão do proprietário.
+
+### O que fica aberto desta sessão
+
+- **Soak de 24 h**: zero `MACRO_CALENDAR_SYNC_FAILED` **não-recuperado**. O job
+  de 10 min converge sozinho; a linha a procurar é uma falha que persista sem
+  o `MACRO_CALENDAR_SYNCED {"recovered":true}` depois.
+- **Nenhuma estimativa macro de modelo é esperada** — e isso não é regressão. A
+  verificação prometida no prompt ("linhas `MODEL/shadow` macro") **não pode**
+  passar com o universo atual, pela medição acima. Não foi forçada.
+- **Decisão do proprietário**: variável de mudança de juros para o
+  `macro_scheduled` (ou aceitar que a categoria macro não produz evidência).
+
 
 ## Próximo passo mínimo
 
@@ -2187,7 +2374,18 @@ do merge.
 - **PnL realizado por janela**: total exato; janelas diária/semanal atribuem pelo
   `resolved_at`, então realização por fechamento antecipado entra tarde. Detalhe
   e motivo em `docs/test-results/RFC-013-portfolio-engine.md` §9.
-- `consensus`/`nowcast` no `config/macro-calendar.json` continua pendente.
+- **`consensus`/`nowcast` no `config/macro-calendar.json`** — **entregue em
+  2026-08-31 (PR #63), com a ressalva que importa**: `cpi-2026-09` carrega o
+  nowcast do Cleveland Fed (keyed por variável, com fonte e data de leitura); as
+  outras 14 entradas seguem sem consenso porque **não há fonte oficial** para
+  elas, e o motivo de cada família está no próprio arquivo (`_consensus_absent`).
+  A ressalva: a medição mostrou que **isto não destrava a categoria macro** — os
+  22 mercados macro de produção falham em `UNRECOGNIZED_VARIABLE` antes de o
+  consenso ser lido, porque são mercados de MUDANÇA de juros e o modelo
+  precifica NÍVEL. Fica aberto, e é **decisão do proprietário**: criar variável
+  de mudança (`fed_rate_change_bps`, com brackets de 25 bps no parser) ou aceitar
+  que `macro_scheduled` não produz evidência com o universo atual. Nowcast
+  envelhece — o processo de atualização manual está no runbook fundamental.
 
 Nenhum modelo é promovido antes de um gate PASS com os 100 mercados resolvidos
 
