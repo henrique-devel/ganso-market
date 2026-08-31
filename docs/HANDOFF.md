@@ -1,6 +1,14 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-28 (noite — **bloco de hotfixes autorizado pelo
+- Última atualização: 2026-08-31 (**re-medição do bloco de 28/08 em produção,
+  regra de parada honrada**: os quatro defeitos re-medidos e nenhum existe
+  mais — zero código/config/migration/deploy nesta sessão. Soak do #51
+  **fechado**: zero resets do G2 em ~65 h; #50 e #53 saudáveis e contínuos;
+  soak do #52 segue **impossível de medir** porque o kill switch está engatado
+  desde 28/08 20:59Z — o rearme é um clique do proprietário no painel. Dado
+  novo para a redeclaração da quota: `book_deltas` cresce ~3,3 GB/dia físico
+  pós-repack)
+- Sessão 2026-08-28 (noite — **bloco de hotfixes autorizado pelo
   proprietário executado de ponta a ponta e ativo em produção**: o medidor de
   bytes vivos da retenção parou de herdar o arquivo físico e desarmou uma
   exclusão de 33,9 M de linhas vivas (#50), o fingerprint do G2/G5 virou o
@@ -1554,6 +1562,65 @@ config + binário na mesma janela). Higiene: o worktree local usou
 compartilhado), e um `git checkout HEAD --` em branch errado custou uma
 reaplicação de edições — nada chegou ao servidor fora do CD.
 
+## SESSÃO 2026-08-31 — RE-MEDIÇÃO DO BLOCO DE 28/08 (regra de parada honrada)
+
+O prompt do bloco de hotfixes (retenção, fingerprint G2/G5, throughput de
+fills, coletor onchain) foi recebido de novo em 2026-08-31. A regra 2 do
+próprio bloco manda re-medir cada defeito em produção antes de corrigir e
+**parar a correção se a medição contradisser o defeito** — foi o que aconteceu
+nas quatro: todas já estavam corrigidas pelos PRs #50–#54 de 2026-08-28.
+**Nenhum código, config, migration ou deploy nesta sessão.** O que segue é a
+verificação contínua, medida em produção somente leitura (2026-08-31
+~13:10–13:25Z), que fecha os soaks pendentes do bloco.
+
+Release verificado DENTRO dos containers (`/etc/ganso/release-sha`, nunca
+`compose ps`): recorder `24e1c91` (#54); portfolio, paper e resolution
+`fbf3cd6` (#51–#53) — exatamente o registrado em 28/08; nada mudou no servidor
+desde então.
+
+| Re-medição   | Resultado (produção, 2026-08-31)                                                                                                                                                                                                                                                                                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #50 retenção | Defeito ausente. `book_deltas` está com `n_dead_tup = 0` e 28 GB físicos — o cenário exato da degeneração antiga — e mesmo assim **zero `RETENTION_QUOTA_UNMET`, zero pedido de exclusão e zero `QUOTA_GLOBAL_TTL_REDUCED`** em 24 h, com 96.757.954 linhas vivas. Varredura de 30/08 22:09Z: `RETENTION_BLOAT` informativo nos dois snapshots (físico > vivo medido, quota satisfeita) |
+| #51 G2/G5    | **SOAK FECHADO.** Os únicos 2 `PORTFOLIO_G2_CLOCK_RESET` na vida do container são o reset final do deploy (28/08 20:38:47Z, crypto+macro, `regime_fingerprint_changed`). Desde então, **zero resets em ~65 h** sob rotação normal do universo (antes: ~5/dia). O relógio do G2 acumula janela contínua desde 20:38:47Z                                                                  |
+| #52 lag      | Fix no ar; **soak segue impossível de medir**: kill switch engatado desde 28/08 20:59:32Z (`RECORDER_STALE`), **zero ordens paper criadas em ~2,7 dias**. Zero cancelamentos no período. Rearme é 1 clique do proprietário no painel (PR #46)                                                                                                                                           |
+| #53 onchain  | Saudável e contínuo: **195 linhas** em `resolution_onchain_events` (53 → 195 desde 28/08), cursor dos 4 adapters em 92.985.016 e avançando, `ONCHAIN_POLLED` inserindo às 13:14Z, **zero `JOB_FAILED job:"onchain"` em 24 h**                                                                                                                                                           |
+| Banco        | 50 GB (`book_deltas` 28 GB físicos; `portfolio_decisions` 2,42 GB; `portfolio_panel_snapshots` 796 MB). Disco do host: 54 G/301 G (19%)                                                                                                                                                                                                                                                 |
+| RAM          | recorder 182/832 MiB; portfolio 43/192; resolution 136/192; paper 31/256; postgres 800 MiB/1 GiB (era 357 MiB em 28/08 — observar)                                                                                                                                                                                                                                                      |
+| Erros em 1 h | recorder, portfolio e paper: **zero**; resolution: 6, todos da classe pré-existente abaixo                                                                                                                                                                                                                                                                                              |
+
+### Dado para a redeclaração da quota de `book_deltas` (decisão do proprietário, pendente)
+
+Pós-repack (28/08 21:06Z, 19 GB físicos) → 31/08 13:20Z, 28 GB físicos:
+**+9 GB em ~2,7 dias ≈ 3,3 GB/dia físico líquido** — bem abaixo dos ~15 GB/dia
+pré-repack (arquivo compacto, sem herdar bloat). 96,76 M linhas vivas. A
+semana de observação decidida em 28/08 fecha **~2026-09-04**; redeclarar com
+esse dado.
+
+### Classe pré-existente virou recorrente (registrada; fora do escopo do bloco)
+
+O `RESOLUTION_MARKET_METADATA_VERSION_MISSING` que em 28/08 21:51Z apareceu
+como burst único auto-recuperado agora recorre: **63 falhas de `state_tick` em
+24 h**, espalhadas 1–5/hora, com **91 `condition_id` distintos, cada um
+falhando UMA vez** (não é poison pill: é mercado entrando no escopo terminal
+antes de a versão de metadado as-of existir; no ciclo seguinte passa). Cada
+falha derruba em cascata fail-closed o `graph_eval` e o `heartbeat` daquele
+ciclo (57 + 57 em 24 h) e se auto-recupera: na última hora foram 72
+`GRAPH_EVALUATED`, 58 `RESOLUTION_HEARTBEAT`, 13 `GRAPH_BUILT` e 8
+`SCORES_RECOMPUTED` contra 6 falhas. O gap de um ciclo é exatamente o
+transitório que a graça de 180 s do #52 absorve sem cancelar ordem. A taxa é
+provavelmente proporcional a mercados indo a terminal (~90/dia). Corrigir a
+classe é trabalho novo, fora deste bloco — registrado para priorização.
+
+### Itens de observação da retenção (warn, não erro)
+
+- `RETENTION_QUOTA_NO_PROGRESS` em `paper_feature_windows` (após podar 304.487
+  linhas) e `portfolio_panel_snapshots` (após 93.493), ambos com
+  `cutoff == floor` — a poda converge por varredura diária sem passar do floor
+  persistido do #50. Observar se as duas quotas fecham nas próximas varreduras.
+- O `RETENTION_STEP_FAILED` diário de `portfolio_decisions` ("Query read
+  timeout") continua — é o bloqueio da **migration 0016** (pendente de
+  autorização); a tabela está em 2,42 GB e cresce ~0,45 GB/dia como previsto.
+
 ## Próximo passo mínimo
 
 A RFC-012 está **ativa em produção**. A RFC-013 tem as fases A–D mergeadas na
@@ -1738,7 +1805,8 @@ do merge.
   2026-08-28 20:59:32Z por `RECORDER_STALE` durante a janela de manutenção
   autorizada (gap de 12,6 min do recorder); o recorder está saudável desde
   21:06:33Z. Rearmar pelo botão do painel (PR #46). Até lá o paper broker não
-  aceita ordens e o soak do #52 não anda.
+  aceita ordens e o soak do #52 não anda. **2026-08-31: segue engatado
+  (~2,7 dias; zero ordens paper no período).**
 - **Coletor onchain** — **RESOLVIDO em 2026-08-28 (#53)**: a causa real era
   histórico podado + lookback de 200 k blocos (seção da sessão 2026-08-28).
   Coletando desde 20:43Z; observar o catch-up do lookback (~80 min) e a
@@ -1747,14 +1815,18 @@ do merge.
   `portfolio_panel_snapshots (decision_id)` para a FK `ON DELETE SET NULL` —
   sem ele a poda de `portfolio_decisions` não fecha (125 ms/linha medidos no
   trigger da FK) e a tabela cresce ~0,5 GB/dia. Condição de parada do bloco de
-  28/08; detalhe na seção da sessão.
+  28/08; detalhe na seção da sessão. **2026-08-31: 2,42 GB; um
+  `RETENTION_STEP_FAILED` por varredura diária, como esperado.**
 - **Redeclaração da quota de `book_deltas`**: decisão do proprietário de 28/08 —
   redeclarar com dado, após ~1 semana de ingestão observada pós-repack. Até lá
   a quota declarada segue 52 GiB com a tabela compacta em 19 GB.
-- **Soaks de 24–48 h dos fixes de 28/08** (em curso): G2 sem
-  `PORTFOLIO_G2_CLOCK_RESET` sob rotação normal (antes ~5/dia); proporção
-  canceladas/criadas caindo em `paper_orders`; `ONCHAIN_POLLED` estável com
-  cursor avançando.
+  **2026-08-31: 28 GB físicos, ~3,3 GB/dia líquido; a semana fecha
+  ~2026-09-04.**
+- **Soaks de 24–48 h dos fixes de 28/08** — **fechados em 2026-08-31, exceto
+  o do #52**: G2 com zero `PORTFOLIO_G2_CLOCK_RESET` em ~65 h (antes ~5/dia);
+  `ONCHAIN_POLLED` estável com cursor avançando (195 eventos). O do #52
+  (proporção canceladas/criadas em `paper_orders`) segue sem dado — zero
+  ordens enquanto o kill switch estiver engatado.
 - **Cap de fonte de resolução** — **decidido** em 2026-08-27: manter 0,25 e
   trocar a **chave** do bucket para família de cláusula de regra, em vez do
   adapter (hoje o cap capeia o livro inteiro em 25% da banca porque 460 de 570
