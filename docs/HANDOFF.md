@@ -13,8 +13,10 @@
   escala errada a um mercado irmão; as outras 14 entradas seguem sem consenso, de
   propósito, com o motivo de cada uma no arquivo. E o sync do calendário passou a
   rodar no job de 10 min além do boot — a fragilidade de 23/08, cuja ocorrência
-  mais recente é de `20:53:49Z` desta mesma noite. **Deployado e verificado às
-  22:08–22:20Z.** Ver "SESSÃO 2026-08-31 (noite, 2)". Registro anterior do dia: **hotfix do
+  mais recente era de `20:53:49Z` desta mesma noite. **Deployado às 22:08–22:20Z
+  e provado de ponta a ponta às 22:49Z**, num caso que não foi induzido: o CD do
+  #64 reiniciou o recorder, o boot sync falhou às `22:39:14Z` — e o job de 10 min
+  recuperou sozinho às `22:49:15Z` com `recovered: true`. Ver "SESSÃO 2026-08-31 (noite, 2)". Registro anterior do dia: **hotfix do
   `RESOLUTION_MARKET_METADATA_VERSION_MISSING` recorrente (PR #61)**: causa raiz
   medida em produção (78 falhas/24 h em duas populações — 674 rejeições/dia
   journalizadas indevidamente e a corrida entre o `enter` e a primeira versão de
@@ -2013,11 +2015,30 @@ incidente do `MACRO_CALENDAR_SYNC_FAILED` (deixou de ser terminal; só agir se
 repetir por mais de ~20 min). **Nenhuma coleta automática de site externo foi
 criada** — dependência nova é decisão do proprietário.
 
+### FATO VERIFICADO — a recuperação aconteceu sozinha, em produção, 20 min depois
+
+O ciclo completo do defeito e da correção foi observado **sem ser provocado**,
+no CD do PR #64 (docs-only — e o CD reinicia os profiles até em docs-only):
+
+| instante | linha |
+| --- | --- |
+| `22:39:14.525Z` | `MACRO_CALENDAR_SYNC_FAILED` `{"trigger":"boot"}` — o recorder reiniciou pelo CD e o boot sync **perdeu a corrida com o postgres**. É exatamente a falha de 23/08. Antes deste PR, terminal até o próximo restart. |
+| `22:49:15.516Z` | `MACRO_CALENDAR_SYNCED` `{"inserted":0,"trigger":"scheduled","recovered":true}` — **um único ciclo de 10 min depois**, o job convergiu e marcou a recuperação. |
+
+`inserted: 0` porque nada tinha mudado no arquivo desde a v2 — o ponto é que a
+passada agendada **rodou e fechou o buraco** que o boot deixou aberto. Se o
+arquivo tivesse mudado naquela janela, a mudança teria entrado ali em vez de se
+perder em silêncio, que era o comportamento antigo.
+
+Isso é evidência melhor do que o teste unitário: a falha não foi induzida, foi o
+CD normal do projeto produzindo a corrida que produz há semanas.
+
 ### O que fica aberto desta sessão
 
-- **Soak de 24 h**: zero `MACRO_CALENDAR_SYNC_FAILED` **não-recuperado**. O job
-  de 10 min converge sozinho; a linha a procurar é uma falha que persista sem
-  o `MACRO_CALENDAR_SYNCED {"recovered":true}` depois.
+- **Soak de 24 h**: zero `MACRO_CALENDAR_SYNC_FAILED` **não-recuperado**. O
+  primeiro par falha→recuperação já foi observado (22:39:14Z → 22:49:15Z, seção
+  acima); o que resta é confirmar que nenhum caso fica sem o
+  `MACRO_CALENDAR_SYNCED {"recovered":true}` depois.
 - **Nenhuma estimativa macro de modelo é esperada** — e isso não é regressão. A
   verificação prometida no prompt ("linhas `MODEL/shadow` macro") **não pode**
   passar com o universo atual, pela medição acima. Não foi forçada.
