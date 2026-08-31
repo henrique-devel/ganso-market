@@ -7,7 +7,10 @@
   soak do #52 segue **impossível de medir** porque o kill switch está engatado
   desde 28/08 20:59Z — o rearme é um clique do proprietário no painel. Dado
   novo para a redeclaração da quota: `book_deltas` cresce ~3,3 GB/dia físico
-  pós-repack)
+  pós-repack. **Na mesma sessão o proprietário autorizou a migration 0016**,
+  aplicada pelo protocolo da 0013: a poda de `portfolio_decisions` fechou
+  pela primeira vez na vida — 449.553 linhas por quota em segundos, zero
+  `RETENTION_STEP_FAILED`)
 - Sessão 2026-08-28 (noite — **bloco de hotfixes autorizado pelo
   proprietário executado de ponta a ponta e ativo em produção**: o medidor de
   bytes vivos da retenção parou de herdar o arquivo físico e desarmou uma
@@ -1478,7 +1481,7 @@ pool em toda varredura. O batch da quota virou
 `min(batch de linhas, 32 MiB / bytesPerRow)` com piso de 1.000 linhas; tabelas
 magras mantêm o batch cheio; caminho do TTL inalterado.
 
-### BLOQUEIO NOVO (condição de parada): a poda de `portfolio_decisions` exige migration
+### BLOQUEIO NOVO (condição de parada): a poda de `portfolio_decisions` exige migration — **RESOLVIDO em 2026-08-31 (migration 0016 autorizada; seção da sessão 2026-08-31)**
 
 **FATO VERIFICADO (produção, 21:22Z + probe com ROLLBACK):** mesmo com o batch
 por bytes, a poda de decisions continuou estourando timeout. A causa final,
@@ -1640,6 +1643,49 @@ classe é trabalho novo, fora deste bloco — registrado para priorização.
   (sync só no boot, sem retry; o postgres reiniciou junto). **Sem perda**:
   arquivo e banco têm as mesmas 15 entradas. Resolution pós-restart: **zero
   erros**.
+
+### Migration 0016 AUTORIZADA E APLICADA (mesma sessão, 14:26–14:40Z) — a poda de decisions fechou pela primeira vez
+
+**FATO INFORMADO:** o proprietário autorizou a migration 0016 (o bloqueio com
+condição de parada registrado em 28/08).
+
+**Re-medição antes da correção (regra do bloco):** índice ausente em produção
+(só `pkey`, `UNIQUE(token_id, computed_at)`, `received_at_idx` e
+`latest_idx`); `portfolio_decisions` em 2.443 MB / 596.751 linhas contra
+quota de 0,9 GB; um `RETENTION_STEP_FAILED` por varredura — dois só em 31/08
+("Query read timeout" às 13:44Z, "canceling statement due to statement
+timeout" às 13:55Z). Panel com 214.979 linhas, todas com `decision_id`
+preenchido.
+
+**Execução (PR #58, CI verde, `make verify` verde):**
+
+- Migration `0016_portfolio_panel_snapshots_decision_id_index.sql`: um
+  `CREATE INDEX IF NOT EXISTS` em `portfolio_panel_snapshots (decision_id)`;
+  0014/0015 intocadas. Validada pelo protocolo do `apply.sh` em PostgreSQL
+  18.4 descartável: 0001–0015 sem o índice (regressão demonstrada no código
+  anterior), 0001–0016 cria e registra (`schema_versions` = 16), re-execução
+  idempotente, e o UPDATE com o shape do RI trigger passa a usar o índice.
+- **Protocolo da 0013 para banco grande**: índice construído em produção com
+  `CREATE INDEX CONCURRENTLY` ANTES do merge — **0,42 s**, `indisvalid = t`,
+  4,75 MB (215 k linhas). O statement da migration virou no-op inerte via
+  `IF NOT EXISTS`; o CD aplicou e registrou a versão 16 às 14:35:07Z.
+  Nenhum rebuild de profile (mudança só de banco).
+
+**FATO VERIFICADO (produção, 14:35:43Z, varredura de boot pós-CD):** a poda
+de `portfolio_decisions` fechou **pela primeira vez na vida do sistema** —
+`RETENTION_PRUNE cause:"quota" rows_deleted: 449.553` (76% da tabela) em
+segundos, seguido do `ANALYZE` do #50, **zero `RETENTION_STEP_FAILED`**.
+Estado final: 143.106 linhas vivas (~0,6 GB vivo < quota de 0,9 GB); o físico
+segue 2.447 MB até o autovacuum reciclar (o medidor do #50 não herda arquivo,
+então isso é bloat, não decisão). A FK fez o `SET NULL` desenhado em 67.829
+das 215.942 linhas do panel. Um `RETENTION_QUOTA_NO_PROGRESS` logo após o
+prune (`cutoff == floor`, corte interpolado limitado a 0,9 por rodada +
+stats defasadas) — a varredura diária de ~22:09Z deve sair silenciosa; se
+repetir com quota não satisfeita, converge por varredura como nas outras
+tabelas. Terceiro restart do dia e o relógio do G2 continua sem reset (os 2
+da vida seguem sendo os do deploy de 28/08); único erro pós-deploy é o
+`MACRO_CALENDAR_SYNC_FAILED` de boot (classe de 23/08, sem perda — 15
+entradas no arquivo e no banco).
 
 ## Próximo passo mínimo
 
@@ -1831,12 +1877,11 @@ do merge.
   histórico podado + lookback de 200 k blocos (seção da sessão 2026-08-28).
   Coletando desde 20:43Z; observar o catch-up do lookback (~80 min) e a
   primeira disputa capturada onchain.
-- **Migration 0016 pendente de autorização (bloqueio da retenção)**: índice em
-  `portfolio_panel_snapshots (decision_id)` para a FK `ON DELETE SET NULL` —
-  sem ele a poda de `portfolio_decisions` não fecha (125 ms/linha medidos no
-  trigger da FK) e a tabela cresce ~0,5 GB/dia. Condição de parada do bloco de
-  28/08; detalhe na seção da sessão. **2026-08-31: 2,42 GB; um
-  `RETENTION_STEP_FAILED` por varredura diária, como esperado.**
+- **Migration 0016** — **RESOLVIDA em 2026-08-31**: autorizada pelo
+  proprietário e aplicada (índice CONCURRENTLY em 0,42 s + CD registrando a
+  versão 16). A poda de `portfolio_decisions` fechou pela primeira vez:
+  449.553 linhas por quota, zero `RETENTION_STEP_FAILED`. Checagem residual:
+  a varredura diária de ~22:09Z deve sair silenciosa para decisions.
 - **Redeclaração da quota de `book_deltas`**: decisão do proprietário de 28/08 —
   redeclarar com dado, após ~1 semana de ingestão observada pós-repack. Até lá
   a quota declarada segue 52 GiB com a tabela compacta em 19 GB.
