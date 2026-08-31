@@ -157,7 +157,7 @@ que invalida calibrações que citavam a versão antiga.
 | `INTERVAL_VERSION`           | `1.0.0`                  | composição de `[q_lo, q_hi]`: piso estrutural, z(90%), alargamentos   |
 | `FEATURE_SET_VERSION`        | `1.0.0`                  | camada as-of compartilhada (`features.ts`)                            |
 | `CRYPTO_FEATURE_SET_VERSION` | `1.0.0`                  | conteúdo e ordem da linha de features do `crypto_updown`              |
-| `MACRO_FEATURE_SET_VERSION`  | `1.0.0`                  | chaves de consenso/dispersão, matching de calendário, regime macro    |
+| `MACRO_FEATURE_SET_VERSION`  | `1.1.0`                  | chaves de consenso/dispersão, matching de calendário, regime macro    |
 | `model_version` (semver)     | por linha do registry    | hiperparâmetros, seed e janelas de treino daquela versão              |
 | `git_sha`                    | revisão do código        | o binário que produziu a linha                                        |
 

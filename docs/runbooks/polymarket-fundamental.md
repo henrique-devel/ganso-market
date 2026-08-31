@@ -152,6 +152,88 @@ boot.
 > `FUNDAMENTAL_CONFIG_SCHEMA_UNSUPPORTED`, `FUNDAMENTAL_CONFIG_FILE_UNREADABLE`,
 > `FUNDAMENTAL_CONFIG_FILE_INVALID_JSON`) fica na mensagem da exceção.
 
+## Atualizar o consenso/nowcast do calendário macro
+
+Sem consenso na entrada de calendário, `macro_scheduled` **abstém** naquele
+mercado e a linha fica no baseline. Isso é o comportamento correto: um consenso
+inventado é um input fabricado, e a RFC-010 proíbe. O consenso vive em
+`config/macro-calendar.json`, e é **atualização manual do proprietário** — este
+repositório não coleta site externo automaticamente (dependência nova é decisão
+do proprietário, não do implementador).
+
+### Forma do campo
+
+Consenso é **por variável do modelo**, nunca um número solto:
+
+```json
+"consensus_by_variable": { "cpi_yoy": 3.37, "cpi_mom": 0.36, "core_cpi_yoy": 2.38 },
+"_consensus_source": {
+  "publisher": "Federal Reserve Bank of Cleveland — Inflation Nowcasting",
+  "url": "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting",
+  "source_updated": "2026-08-31",
+  "read_at": "2026-08-31"
+}
+```
+
+O motivo é mecânico: `matchCalendar` casa mercado e entrada por **família**, e
+um mesmo release publica várias variáveis — o relatório do CPI carrega
+`cpi_yoy`, `cpi_mom` e `core_cpi_yoy` de uma vez. Um `consensus` solto seria
+servido às três, e duas seriam precificadas na escala errada, em silêncio, no
+regime pré-release (onde o guarda de `MACRO_RELEASE_MAX_SIGMAS` não enxerga).
+As chaves soltas (`consensus`, `nowcast`, `forecast`) continuam válidas no
+modelo para uma família de uma variável só, mas **este arquivo não as usa**, e o
+teste `keeps every shipped consensus keyed, sourced and dated` reprova o PR que
+as introduzir, ou que introduza valor sem `url` e `read_at`.
+
+Dispersão (`consensus_std_by_variable`) só entra se o **publicador** divulgar
+uma. Sem isso o modelo cai em `macro.default_sigma` e grava
+`macroSigmaSource: "config_default"` — que é o caso hoje, porque o Cleveland Fed
+não publica dispersão do nowcast.
+
+### Quando atualizar
+
+Nowcast envelhece: o do Cleveland Fed é **diário**. A entrada gravada é um
+retrato datado, não uma assinatura.
+
+| Quando                                  | O que fazer                                                        |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| Na semana anterior a cada release do calendário | reler a fonte e atualizar o valor da entrada correspondente |
+| Depois de cada release publicado        | remover o consenso da entrada vencida e abrir a próxima, se a fonte já a cobrir |
+| Sempre que a fonte revisar o método     | reler a nota da fonte antes de copiar o número                     |
+
+Entre atualizações o valor fica velho, e isso é visível: `data_refs`
+carrega `macroConsensus`, `macroConsensusKey` e o `calendarSourceTs` da versão
+usada. Um consenso velho degrada a estimativa — não a corrompe — e a alternativa
+(abster) já é o padrão quando o campo não existe.
+
+### Como atualizar, passo a passo
+
+1. Ler a fonte oficial e anotar **valor, data de leitura e data de atualização
+   da fonte**. Fontes que o RFC-010/handoff nomeiam: Cleveland Fed (nowcast de
+   inflação; cobre CPI e core CPI, MoM e YoY) e CME FedWatch.
+2. Editar `config/macro-calendar.json`: `consensus_by_variable` e
+   `_consensus_source` na entrada certa. **Confirmar o mês do DADO, não o do
+   release** — `cpi-2026-09` publica o dado de agosto (`"period": "M08"`), então
+   o que vale é o nowcast de agosto.
+3. `make verify` — o teste de forma do arquivo roda aqui.
+4. Merge. O CD entrega o `config/`, e o job `macro_releases` sincroniza o
+   calendário em até 10 minutos; **não é preciso rebuild do recorder** só para o
+   valor chegar ao banco (era preciso antes do sync agendado).
+5. Conferir a nova versão no banco:
+
+```sh
+docker exec ganso-market-postgres-1 sh -lc \
+  'psql -U $POSTGRES_USER -d $POSTGRES_DB -c "SELECT event_key, version, payload_json->'"'"'consensus_by_variable'"'"' FROM polymarket_macro_calendar ORDER BY event_key, version"'
+```
+
+> **CME FedWatch não vira consenso de `fed_target_rate` diretamente.** Ela
+> publica distribuição de probabilidade sobre **faixas** de 25 bps, não um nível
+> com dispersão; em 2026-08-31 estava bimodal (~66% em 3,75–4,00% e ~34% em
+> 3,50–3,75%), sem massa na média das duas. Espremer isso na normal que o modelo
+> centra no consenso seria estimativa nossa, não número do publicador. Por isso
+> as entradas `fomc-*` seguem sem consenso — e o motivo está registrado em
+> `_consensus_absent`, no próprio arquivo.
+
 ## Proveniência: como o `git_sha` chega ao container
 
 Toda linha `source = 'MODEL'` exige `git_sha` — é constraint de banco, não

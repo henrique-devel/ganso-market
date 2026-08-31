@@ -3,13 +3,11 @@
 // the quality/reconciliation jobs, and retention into one supervised process.
 // Public data only — no trading auth, wallet, signer, or order path.
 
-import { readFile } from "node:fs/promises";
-
 import type { DatabasePool } from "../database.js";
 import { createBookPipeline, type BookPipeline } from "./bookpipe.js";
 import { createDualMarketSocket, type DualMarketSocket } from "./dualws.js";
 import { parseMarketFrame } from "./messages.js";
-import { createReleaseCollector, syncCalendar } from "./macro.js";
+import { createCalendarSync, createReleaseCollector } from "./macro.js";
 import {
   createGapWriter,
   createFeedHealth,
@@ -398,24 +396,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     }
   }
 
-  async function loadMacroCalendar(): Promise<void> {
-    const file =
-      deps.macroCalendarFile ?? process.env.GANSO_MACRO_CALENDAR_FILE;
-    if (file === undefined || file === "") {
-      logJson("warn", "MACRO_CALENDAR_FILE_MISSING", {});
-      return;
-    }
-    try {
-      const raw: unknown = JSON.parse(await readFile(file, "utf8"));
-      // syncCalendar parses/validates the raw JSON itself.
-      const inserted = await syncCalendar(pool, raw, new Date());
-      logJson("info", "MACRO_CALENDAR_SYNCED", { inserted });
-    } catch (error: unknown) {
-      logJson("error", "MACRO_CALENDAR_SYNC_FAILED", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
-      });
-    }
-  }
+  const macroCalendar = createCalendarSync({
+    pool,
+    file: () => deps.macroCalendarFile ?? process.env.GANSO_MACRO_CALENDAR_FILE,
+    log: logJson,
+  });
 
   function statusReport(): void {
     const pipe = pipeline.stats();
@@ -432,7 +417,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   return {
     async start(): Promise<void> {
       logJson("info", "ORCHESTRATOR_STARTING", {});
-      await loadMacroCalendar();
+      await macroCalendar.runOnce("boot");
       await gammaCycle().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "gamma_boot",
@@ -492,6 +477,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         "macro_releases",
         intervals.macroReleaseMs ?? 600_000,
         async () => {
+          // Sync first: a boot that lost the race with postgres leaves the
+          // table behind the file, and an entry that is not in the table
+          // cannot be polled for its release.
+          await macroCalendar.runOnce("scheduled");
           await macroReleases.pollOnce();
         },
       );

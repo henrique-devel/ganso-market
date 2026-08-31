@@ -516,7 +516,125 @@ describe("estimateMacroScheduled (pre-release)", () => {
     expect(output.refs.macroEventKey).toBe("cpi-2026-09");
     expect(MACRO_MODEL_FAMILY).toBe("macro_scheduled_consensus");
     expect(MACRO_MODEL_VERSION).toBe("1.0.0");
-    expect(MACRO_FEATURE_SET_VERSION).toBe("1.0.0");
+    expect(MACRO_FEATURE_SET_VERSION).toBe("1.1.0");
+  });
+
+  it("reads the consensus of the market's own variable, not the entry's first number", () => {
+    // One CPI release publishes three of this model's variables, and
+    // matchCalendar pairs a market with the entry by FAMILY. The keyed form is
+    // what lets the same entry serve a year-over-year and a month-over-month
+    // market without either being priced on the other's scale.
+    const payload = {
+      series_id: "CUSR0000SA0",
+      year: "2026",
+      period: "M08",
+      consensus_by_variable: {
+        cpi_yoy: 3.37,
+        cpi_mom: 0.36,
+        core_cpi_yoy: 2.38,
+      },
+    };
+
+    const yoy = expectOk(
+      estimateMacroScheduled(
+        modelInput({
+          calendar: calendarEntry({ payload }),
+          spec: spec({ variable: "cpi_yoy", threshold: 3.0 }),
+        }),
+      ),
+    );
+    // consensus 3.37, default sigma 0.15, threshold 3.0, "gt":
+    // q = Phi((3.37 - 3.0) / 0.15) = Phi(2.46667) = 0.993181.
+    expect(yoy.q).toBeCloseTo(0.993181, 6);
+    expect(yoy.refs.macroConsensusKey).toBe("consensus_by_variable.cpi_yoy");
+    expect(yoy.refs.macroSigmaSource).toBe("config_default");
+
+    const mom = expectOk(
+      estimateMacroScheduled(
+        modelInput({
+          calendar: calendarEntry({ payload }),
+          spec: spec({ variable: "cpi_mom", threshold: 0.3 }),
+        }),
+      ),
+    );
+    // consensus 0.36, default sigma 0.08, threshold 0.3, "gt":
+    // q = Phi((0.36 - 0.3) / 0.08) = Phi(0.75) = 0.773373. Had the model read
+    // the year-over-year 3.37 here, q would have been pinned at the 0.999 cap.
+    expect(mom.q).toBeCloseTo(0.773373, 6);
+    expect(mom.refs.macroConsensusKey).toBe("consensus_by_variable.cpi_mom");
+    expect(mom.q).toBeLessThan(0.999);
+
+    const core = expectOk(
+      estimateMacroScheduled(
+        modelInput({
+          calendar: calendarEntry({ payload }),
+          spec: spec({ variable: "core_cpi_yoy", threshold: 3.0 }),
+        }),
+      ),
+    );
+    // 2.38 is BELOW the 3.0 threshold, so the same "gt" market that is nearly
+    // certain on headline is nearly certain the other way on core.
+    expect(core.q).toBeLessThan(0.001 + 1e-9);
+  });
+
+  it("abstains on a variable the entry's keyed consensus is silent about", () => {
+    // Silence is not a licence to reach for a sibling variable's number.
+    const result = estimateMacroScheduled(
+      modelInput({
+        calendar: calendarEntry({
+          payload: { consensus_by_variable: { cpi_yoy: 3.37 } },
+        }),
+        spec: spec({ variable: "cpi_mom", threshold: 0.3 }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("MODEL_ABSTAINED");
+    }
+  });
+
+  it("prefers the keyed consensus over a flat one and reads the keyed sigma", () => {
+    const output = expectOk(
+      estimateMacroScheduled(
+        modelInput({
+          calendar: calendarEntry({
+            payload: {
+              consensus: 9.9,
+              consensus_std: 5,
+              consensus_by_variable: { cpi_yoy: 3.1 },
+              consensus_std_by_variable: { cpi_yoy: 0.15 },
+            },
+          }),
+        }),
+      ),
+    );
+    expect(output.q).toBeCloseTo(0.747507, 6);
+    expect(output.refs.macroConsensusKey).toBe("consensus_by_variable.cpi_yoy");
+    expect(output.refs.macroSigmaKey).toBe("consensus_std_by_variable.cpi_yoy");
+    expect(output.refs.macroSigmaSource).toBe("payload");
+  });
+
+  it("still accepts the flat keys, which stay unambiguous for a one-variable family", () => {
+    const output = expectOk(
+      estimateMacroScheduled(
+        modelInput({
+          calendar: calendarEntry({
+            source: "fomc",
+            eventKey: "fomc-2026-09",
+            payload: { consensus: 3.875 },
+          }),
+          spec: spec({
+            variable: "fed_target_rate",
+            source: "fomc",
+            eventKey: "fomc-2026-09",
+            threshold: 3.75,
+          }),
+        }),
+      ),
+    );
+    expect(output.refs.macroConsensusKey).toBe("consensus");
+    expect(output.refs.macroSigmaSource).toBe("config_default");
+    expect(output.q).toBeGreaterThan(0.5);
   });
 
   it("moves q with the consensus, the threshold and the dispersion", () => {

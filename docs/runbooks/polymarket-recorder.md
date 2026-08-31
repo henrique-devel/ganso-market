@@ -140,4 +140,13 @@ docker compose exec postgres psql -U ganso_market -d ganso_market -c \
 - **Formato de frame RTDS/Data API mudou:** frames desconhecidos são contados
   (`rtds_unknown_frames` no STATUS) e não derrubam o processo; verificar a
   documentação oficial e ajustar os parsers.
+- **`MACRO_CALENDAR_SYNC_FAILED`:** o sync do calendário perdeu a corrida com o
+  postgres no boot (o CD reinicia os profiles a cada merge, então a corrida se
+  repete a cada deploy). **Deixou de ser terminal:** o sync também roda no job
+  `macro_releases`, de 10 em 10 minutos, e converge o banco com o arquivo
+  sozinho. A linha traz `trigger` (`boot` ou `scheduled`); a recuperação aparece
+  como `MACRO_CALENDAR_SYNCED` com `recovered: true`. Só age se a linha de falha
+  se repetir por mais de ~20 min — aí o problema não é a corrida, é o arquivo
+  (JSON inválido) ou o banco. Em regime normal o `MACRO_CALENDAR_SYNCED` é
+  silencioso enquanto nada muda, e reaparece quando o arquivo muda de fato.
 - O recorder grava dados públicos; nada aqui executa ordens nem toca wallet.

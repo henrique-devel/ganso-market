@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { QueryResult, SqlExecutor } from "../../src/database.js";
 import {
+  createCalendarSync,
   createReleaseCollector,
   extractBlsValue,
   parseMacroCalendar,
@@ -219,6 +220,191 @@ describe("macro calendar sync", () => {
       expect(typeof entry.payload.year).toBe("string");
       expect(typeof entry.payload.period).toBe("string");
     }
+  });
+
+  it("keeps every shipped consensus keyed, sourced and dated", () => {
+    // The RFC-010 invariant, enforced on the file the owner edits by hand.
+    //
+    // Keyed, because matchCalendar pairs a market with an entry by FAMILY: the
+    // CPI report publishes cpi_yoy, cpi_mom and core_cpi_yoy at once, so a
+    // flat `consensus` on that entry would be served to all three and two of
+    // them would be priced on the wrong scale. The flat keys stay legal in the
+    // model for a one-variable family; this file does not use them at all.
+    //
+    // Sourced and dated, because a consensus with no publisher is our own
+    // estimate, which is exactly what the model must never price.
+    const FLAT_KEYS = ["consensus", "nowcast", "forecast"];
+    const MODEL_VARIABLES = [
+      "cpi_yoy",
+      "cpi_mom",
+      "core_cpi_yoy",
+      "nonfarm_payrolls",
+      "unemployment_rate",
+      "fed_target_rate",
+    ];
+    for (const entry of parseMacroCalendar(realCalendarJson)) {
+      for (const flat of FLAT_KEYS) {
+        expect(entry.payload[flat]).toBeUndefined();
+      }
+      const keyed = entry.payload.consensus_by_variable;
+      if (keyed === undefined) {
+        continue;
+      }
+      expect(typeof keyed).toBe("object");
+      const values = keyed as Record<string, unknown>;
+      expect(Object.keys(values).length).toBeGreaterThan(0);
+      for (const [variable, value] of Object.entries(values)) {
+        // A key the model does not know is dead weight that reads as support.
+        expect(MODEL_VARIABLES).toContain(variable);
+        expect(typeof value).toBe("number");
+        expect(Number.isFinite(value)).toBe(true);
+      }
+      const provenance = entry.payload._consensus_source as
+        Record<string, unknown> | undefined;
+      expect(provenance).toBeDefined();
+      expect(typeof provenance?.url).toBe("string");
+      expect(String(provenance?.url)).toMatch(/^https:\/\//);
+      expect(String(provenance?.read_at)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+});
+
+describe("createCalendarSync", () => {
+  /** FakeMacroDb that refuses every query until `up` is set — a cold postgres. */
+  class GatedDb extends FakeMacroDb {
+    public up = false;
+    public override query<R extends Record<string, unknown>>(
+      text: string,
+      params?: readonly unknown[],
+    ): Promise<QueryResult<R>> {
+      if (!this.up) {
+        return Promise.reject(
+          Object.assign(new Error("the database system is starting up"), {
+            name: "PostgresError",
+          }),
+        );
+      }
+      return super.query<R>(text, params);
+    }
+  }
+
+  interface LoggedLine {
+    level: string;
+    reasonCode: string;
+    extra: Record<string, unknown>;
+  }
+
+  function harness(fileJson: () => unknown): {
+    db: GatedDb;
+    lines: LoggedLine[];
+    sync: ReturnType<typeof createCalendarSync>;
+  } {
+    const db = new GatedDb();
+    const lines: LoggedLine[] = [];
+    const sync = createCalendarSync({
+      pool: db,
+      file: () => "/config/macro-calendar.json",
+      log: (level, reasonCode, extra) => {
+        lines.push({ level, reasonCode, extra });
+      },
+      clock: () => NOW,
+      readCalendarFile: () => Promise.resolve(JSON.stringify(fileJson())),
+    });
+    return { db, lines, sync };
+  }
+
+  it("converges on the next cycle after the boot sync lost the postgres race", async () => {
+    // The production failure, verbatim: the recorder boots, the database is
+    // not accepting connections yet, MACRO_CALENDAR_SYNC_FAILED is logged —
+    // and before this job existed, that was terminal until the next restart.
+    const { db, lines, sync } = harness(() => realCalendarJson);
+
+    await sync.runOnce("boot");
+    expect(db.calendar).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.reasonCode).toBe("MACRO_CALENDAR_SYNC_FAILED");
+    expect(lines[0]?.extra.trigger).toBe("boot");
+
+    db.up = true;
+    await sync.runOnce("scheduled");
+
+    const expected = parseMacroCalendar(realCalendarJson).length;
+    expect(db.calendar).toHaveLength(expected);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.reasonCode).toBe("MACRO_CALENDAR_SYNCED");
+    expect(lines[1]?.extra).toMatchObject({
+      trigger: "scheduled",
+      inserted: expected,
+      recovered: true,
+    });
+  });
+
+  it("stays quiet once converged, and picks up a later edit to the file", async () => {
+    // The other half of the same regression: the file changes while the
+    // process keeps running, and nothing restarts to notice.
+    let calendar: unknown = { entries: [CPI_ENTRY] };
+    const { db, lines, sync } = harness(() => calendar);
+    db.up = true;
+
+    await sync.runOnce("boot");
+    expect(db.calendar).toHaveLength(1);
+    // Boot always leaves a receipt.
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.extra).toMatchObject({ inserted: 1, recovered: false });
+
+    // A steady state writes nothing and says nothing.
+    await sync.runOnce("scheduled");
+    await sync.runOnce("scheduled");
+    expect(db.calendar).toHaveLength(1);
+    expect(lines).toHaveLength(1);
+
+    calendar = {
+      entries: [{ ...CPI_ENTRY, consensus_by_variable: { cpi_yoy: 3.37 } }],
+    };
+    await sync.runOnce("scheduled");
+    expect(db.calendar).toHaveLength(2);
+    expect(db.calendar[1]?.version).toBe(2);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.extra).toMatchObject({ inserted: 1, recovered: false });
+  });
+
+  it("keeps logging a failure that persists, and never throws", async () => {
+    // "No unrecovered MACRO_CALENDAR_SYNC_FAILED in 24 h" is only checkable
+    // if a still-broken sync keeps saying so.
+    const { lines, sync } = harness(() => realCalendarJson);
+
+    await expect(sync.runOnce("boot")).resolves.toBeUndefined();
+    await expect(sync.runOnce("scheduled")).resolves.toBeUndefined();
+    await expect(sync.runOnce("scheduled")).resolves.toBeUndefined();
+
+    expect(lines).toHaveLength(3);
+    expect(
+      lines.every((line) => line.reasonCode === "MACRO_CALENDAR_SYNC_FAILED"),
+    ).toBe(true);
+    expect(lines.map((line) => line.extra.trigger)).toEqual([
+      "boot",
+      "scheduled",
+      "scheduled",
+    ]);
+  });
+
+  it("reports a missing file instead of syncing an empty calendar", async () => {
+    const db = new GatedDb();
+    db.up = true;
+    const lines: LoggedLine[] = [];
+    const sync = createCalendarSync({
+      pool: db,
+      file: () => undefined,
+      log: (level, reasonCode, extra) => {
+        lines.push({ level, reasonCode, extra });
+      },
+    });
+
+    await sync.runOnce("scheduled");
+
+    expect(db.calendar).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.reasonCode).toBe("MACRO_CALENDAR_FILE_MISSING");
   });
 });
 

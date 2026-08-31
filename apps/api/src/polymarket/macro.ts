@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import type { SqlExecutor } from "../database.js";
 
@@ -165,6 +166,97 @@ export async function syncCalendar(
     });
   }
   return inserted;
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled calendar sync
+// ---------------------------------------------------------------------------
+
+/** What made this pass run; carried on every line so a boot race is legible. */
+export type CalendarSyncTrigger = "boot" | "scheduled";
+
+export type CalendarSyncLogger = (
+  level: "info" | "warn" | "error",
+  reasonCode: string,
+  extra: Record<string, unknown>,
+) => void;
+
+export interface CalendarSyncDeps {
+  readonly pool: SqlExecutor;
+  /**
+   * Resolved on every pass rather than captured once, so the file the
+   * recorder is told about late is still picked up.
+   */
+  readonly file: () => string | undefined;
+  readonly log: CalendarSyncLogger;
+  readonly clock?: () => Date;
+  readonly readCalendarFile?: (path: string) => Promise<string>;
+}
+
+export interface CalendarSync {
+  /** One pass: read the file, version what changed. Never throws. */
+  runOnce(trigger: CalendarSyncTrigger): Promise<void>;
+}
+
+/**
+ * The curated calendar reaches the database through a job, not only through
+ * process start.
+ *
+ * The failure this fixes was observed repeatedly in production: the recorder
+ * boots, races the postgres container, loses, logs
+ * `MACRO_CALENDAR_SYNC_FAILED` — and then never tries again, because the sync
+ * only ever ran at boot. Continuous deployment restarts the profiles on every
+ * merge, so the race recurs on every deploy, and any edit to the file made in
+ * that window is silently absent from the database until the NEXT restart
+ * happens to win the race.
+ *
+ * Re-running on the `macro_releases` cadence makes the failure transient by
+ * construction: `syncCalendar` versions by payload hash, so a pass that finds
+ * nothing new writes nothing, and the first pass after the database comes up
+ * converges the table with the file.
+ *
+ * Logging follows what an operator needs to see. A failure is logged EVERY
+ * pass — an outage that persists must stay visible, and "no unrecovered
+ * `MACRO_CALENDAR_SYNC_FAILED` in 24 h" is only checkable if the line keeps
+ * coming. A success is logged at boot, when it actually versioned something,
+ * or when it is the pass that recovered from a failure; a quiet steady state
+ * does not need 144 identical lines a day.
+ */
+export function createCalendarSync(deps: CalendarSyncDeps): CalendarSync {
+  const clock = deps.clock ?? ((): Date => new Date());
+  const read = deps.readCalendarFile ?? ((path) => readFile(path, "utf8"));
+  let failing = false;
+
+  return {
+    async runOnce(trigger: CalendarSyncTrigger): Promise<void> {
+      const file = deps.file();
+      if (file === undefined || file === "") {
+        // A misconfiguration, not a transient fault: it stays loud.
+        deps.log("warn", "MACRO_CALENDAR_FILE_MISSING", { trigger });
+        return;
+      }
+      try {
+        const raw: unknown = JSON.parse(await read(file));
+        // syncCalendar parses/validates the raw JSON itself.
+        const inserted = await syncCalendar(deps.pool, raw, clock());
+        const recovered = failing;
+        failing = false;
+        if (trigger === "boot" || inserted > 0 || recovered) {
+          deps.log("info", "MACRO_CALENDAR_SYNCED", {
+            inserted,
+            trigger,
+            recovered,
+          });
+        }
+      } catch (error: unknown) {
+        failing = true;
+        deps.log("error", "MACRO_CALENDAR_SYNC_FAILED", {
+          error_name: error instanceof Error ? error.name : "UnknownError",
+          trigger,
+        });
+      }
+    },
+  };
 }
 
 type JsonFetcher = (
