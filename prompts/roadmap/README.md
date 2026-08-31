@@ -38,7 +38,7 @@ trabalho concluído — **todo prompt desta pasta manda re-medir antes de agir; 
 | # | Prompt | Tipo | Depende de | Status |
 |---|--------|------|------------|--------|
 | 01 ∥ | [Metadata version missing recorrente](01-hotfix-metadata-version-missing.md) | hotfix | — | **CONCLUÍDO** (PR #61, 31/08 20:45Z) — causa raiz medida, corrigida sem migration, **verificada em produção** (~78/dia → 0, as duas causas confirmadas com o input que as disparava); soak de 24 h confirmatório |
-| 02 ∥ | [Nowcasts no calendário macro + sync com retry](02-dados-nowcasts-macro.md) | dado + hardening | — | pendente |
+| 02 ∥ | [Nowcasts no calendário macro + sync com retry](02-dados-nowcasts-macro.md) | dado + hardening | — | **CONCLUÍDO com ressalva** (PR #63, 31/08 22:20Z) — nowcast do Cleveland Fed em `cpi-2026-09` (keyed por variável, com fonte); 14 entradas seguem sem consenso **por falta de fonte oficial**, motivo de cada uma no arquivo; sync do calendário agora no job de 10 min. **A medição desmentiu a premissa**: os 22 mercados macro de produção falham em `UNRECOGNIZED_VARIABLE` antes do consenso — são mercados de MUDANÇA de juros e o modelo precifica NÍVEL. Não destrava a categoria; virou decisão do proprietário (ver HANDOFF) |
 | 03 | [RFC-016 — horizonte intradia](03-rfc-016-horizonte-intradia.md) | RFC | — | pendente |
 | 04 | [RFC-019 — cobertura de modelo (barreira + updown)](04-rfc-019-cobertura-modelo.md) | RFC | 03 | pendente |
 | 05 | [RFC-017 — shadow replay (dois modos)](05-rfc-017-shadow-replay.md) | RFC | ideal após 04 | pendente |
