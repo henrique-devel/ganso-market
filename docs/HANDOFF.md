@@ -1569,7 +1569,8 @@ fills, coletor onchain) foi recebido de novo em 2026-08-31. A regra 2 do
 próprio bloco manda re-medir cada defeito em produção antes de corrigir e
 **parar a correção se a medição contradisser o defeito** — foi o que aconteceu
 nas quatro: todas já estavam corrigidas pelos PRs #50–#54 de 2026-08-28.
-**Nenhum código, config, migration ou deploy nesta sessão.** O que segue é a
+**Nenhum código, config ou migration nesta sessão; o único deploy foi o do
+próprio registro (docs-only, PR #56).** O que segue é a
 verificação contínua, medida em produção somente leitura (2026-08-31
 ~13:10–13:25Z), que fecha os soaks pendentes do bloco.
 
@@ -1620,6 +1621,25 @@ classe é trabalho novo, fora deste bloco — registrado para priorização.
 - O `RETENTION_STEP_FAILED` diário de `portfolio_decisions` ("Query read
   timeout") continua — é o bloqueio da **migration 0016** (pendente de
   autorização); a tabela está em 2,42 GB e cresce ~0,45 GB/dia como previsto.
+
+### Pós-merge do registro (PR #56, 13:39–13:45Z): o CD reiniciou os profiles — e isso virou verificação extra
+
+- O CD do merge docs-only **reiniciou** os containers de profile sem trocar
+  imagem (`release-sha` idênticos antes/depois: recorder `24e1c91`, demais
+  `fbf3cd6`; logs preservados — foi restart, não recreate).
+- **Bônus do #51**: o relógio do G2 **sobreviveu ao reboot sem reset** — o
+  fingerprint determinístico do schedule foi reconstruído igual no boot; os
+  únicos 2 `PORTFOLIO_G2_CLOCK_RESET` da vida seguem sendo os do deploy de
+  28/08 20:38:47Z.
+- Varredura de boot da retenção (13:41–13:44Z) coerente com o vivo real:
+  podas por quota de 894.170 linhas em `book_snapshots` (cutoff 26/08
+  10:09Z) e 297.840 em `book_snapshots_full` (até o floor, depois
+  `NO_PROGRESS`); o `RETENTION_STEP_FAILED` de `portfolio_decisions`
+  (migration 0016) recorreu como esperado. **Nenhum pedido acima do vivo.**
+- `MACRO_CALENDAR_SYNC_FAILED` no boot — a fragilidade conhecida de 23/08
+  (sync só no boot, sem retry; o postgres reiniciou junto). **Sem perda**:
+  arquivo e banco têm as mesmas 15 entradas. Resolution pós-restart: **zero
+  erros**.
 
 ## Próximo passo mínimo
 
