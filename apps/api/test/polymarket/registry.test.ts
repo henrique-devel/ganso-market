@@ -14,6 +14,45 @@ import {
 } from "../../src/polymarket/registry.js";
 import { applyParamObservation } from "../../src/polymarket/versioning.js";
 import { FakeDb } from "./fixtures/registry-fake-db.js";
+import type { QueryResult, SqlExecutor } from "../../src/database.js";
+
+/** FakeDb that records every statement with the transaction depth it ran at. */
+class TracingFakeDb extends FakeDb {
+  public readonly trace: Array<{ text: string; depth: number }> = [];
+  private depth = 0;
+
+  public override query<R extends Record<string, unknown>>(
+    text: string,
+    params?: readonly unknown[],
+  ): Promise<QueryResult<R>> {
+    this.trace.push({ text, depth: this.depth });
+    return super.query<R>(text, params);
+  }
+
+  public override async transaction<T>(
+    run: (tx: SqlExecutor) => Promise<T>,
+  ): Promise<T> {
+    this.depth += 1;
+    try {
+      return await super.transaction(run);
+    } finally {
+      this.depth -= 1;
+    }
+  }
+}
+
+/** FakeDb whose metadata-version insert always fails. */
+class MetadataFailingFakeDb extends FakeDb {
+  public override query<R extends Record<string, unknown>>(
+    text: string,
+    params?: readonly unknown[],
+  ): Promise<QueryResult<R>> {
+    if (text.includes("INSERT INTO polymarket_market_metadata_versions")) {
+      return Promise.reject(new Error("simulated metadata insert failure"));
+    }
+    return super.query<R>(text, params);
+  }
+}
 
 const NOW = new Date("2026-08-19T12:00:00.000Z");
 
@@ -314,6 +353,61 @@ describe("runGammaCycle", () => {
       (row) => row.condition_id === "0xbtc",
     );
     expect(btcParams).toMatchObject({ tick_size: "0.001", neg_risk: false });
+  });
+
+  // RESOLUTION_MARKET_METADATA_VERSION_MISSING, measured in production on
+  // 2026-08-31: 34 of the 78 daily failures were markets whose `enter` row had
+  // committed 0,41 s before their first metadata version. Migration 0011
+  // publishes the log insert to the resolution input journal the instant it
+  // commits, and loadScoreableMarkets then reads a member it cannot map.
+  it("logs the entry in the same transaction and instant as the first metadata version", async () => {
+    const db = new TracingFakeDb();
+    const { fetcher } = stubFetcher(() => ({ ok: true, body: [gammaRow()] }));
+
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+    });
+
+    expect(result.entered).toEqual(["0xbtc"]);
+    const metadataInsert = db.trace.findIndex((entry) =>
+      entry.text.includes("INSERT INTO polymarket_market_metadata_versions"),
+    );
+    const enterInsert = db.trace.findIndex((entry) =>
+      entry.text.includes("INSERT INTO polymarket_universe_log"),
+    );
+    expect(metadataInsert).toBeGreaterThanOrEqual(0);
+    // Ordered AND inside the transaction: nothing can observe the membership
+    // before the mapping, because they become visible in the same commit.
+    expect(enterInsert).toBeGreaterThan(metadataInsert);
+    expect(db.trace[enterInsert]?.depth).toBe(1);
+    // Same instant, so an as-of read at the entry sees valid_from <= asOf.
+    expect(db.universeLog).toEqual([
+      expect.objectContaining({
+        condition_id: "0xbtc",
+        action: "enter",
+        at: NOW,
+      }),
+    ]);
+    expect(db.metadataVersions[0]?.valid_from).toEqual(NOW);
+  });
+
+  it("does not log the entry when the metadata observation fails", async () => {
+    const db = new MetadataFailingFakeDb();
+    const { fetcher } = stubFetcher(() => ({ ok: true, body: [gammaRow()] }));
+
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+    });
+
+    // Fail-closed on entry: a market only becomes a universe member once its
+    // mapping is persisted. It is retried in the next cycle.
+    expect(result.entered).toEqual([]);
+    expect(db.universeLog.filter((row) => row.action === "enter")).toEqual([]);
+    expect(db.metadataVersions).toEqual([]);
   });
 
   it("versions market metadata only when its content changes", async () => {

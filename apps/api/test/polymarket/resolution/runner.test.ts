@@ -66,6 +66,8 @@ interface RunnerWorld {
   events: Row[];
   rules: Row[];
   changes: Row[];
+  /** polymarket_universe_log rows the journal's source_key points at. */
+  universeLog: Row[];
   statements: string[];
   runtimeLockHook: (() => Promise<void> | void) | null;
 }
@@ -183,8 +185,15 @@ function runnerPool(world: RunnerWorld): DatabasePool {
             const rule = world.rules.find(
               (row) => String(row["rule_version_id"]) === sourceKey,
             );
+            const universe = world.universeLog.find(
+              (row) => String(row["universe_log_id"]) === sourceKey,
+            );
             return {
               ...change,
+              universe_action:
+                change["source"] === "universe_membership"
+                  ? (universe?.["action"] ?? null)
+                  : null,
               resolution_event_id:
                 change["source"] === "resolution_event"
                   ? (event?.["resolution_event_id"] ?? null)
@@ -306,6 +315,7 @@ function emptyWorld(): RunnerWorld {
     events: [],
     rules: [],
     changes: [],
+    universeLog: [],
     statements: [],
     runtimeLockHook: null,
   };
@@ -787,6 +797,135 @@ describe("resolution runtime durability", () => {
     expect(mocked.evaluateGraph.mock.calls).toHaveLength(evaluationsBefore + 1);
     expect(mocked.sanityCheck.mock.calls).toHaveLength(sanityBefore + 1);
     expect(world.runtime?.processed_input_change_id).toBe(2n);
+    await runner.stop();
+  });
+
+  // RESOLUTION_MARKET_METADATA_VERSION_MISSING, measured in production on
+  // 2026-08-31: 44 of the 78 daily failures were `rejected_filter` rows.
+  // Migration 0011 journals EVERY polymarket_universe_log insert, so markets
+  // the universe selection threw away — never in the registry, no metadata
+  // version, and outside the scoring scope by construction — were named as
+  // recompute targets, where the fail-closed mapping check aborted the tick.
+  it("consumes a rejection membership change without ever naming it a recompute target", async () => {
+    const world = emptyWorld();
+    // Stands in for the real fail-closed loader: naming a market with no
+    // as-of metadata version aborts the whole tick.
+    mocked.recompute.mockImplementation(
+      (_deps: unknown, _trigger: unknown, _asOf: unknown, only: unknown) => {
+        const named = (only ?? []) as readonly string[];
+        if (named.includes("0xrejected")) {
+          return Promise.reject(
+            new Error("RESOLUTION_MARKET_METADATA_VERSION_MISSING:0xrejected"),
+          );
+        }
+        return Promise.resolve({ scored: named.length, failed: 0 });
+      },
+    );
+    const runner = createResolutionRunner({
+      pool: runnerPool(world),
+      config: DEFAULT_RESOLUTION_CONFIG,
+      lexicon: DEFAULT_RESOLUTION_LEXICON,
+      curatedEdges: [],
+      executionMode: "paper",
+      clock: () => NOW,
+      generationFactory: () => GENERATION_A,
+    });
+    await runner.start();
+    world.statements.length = 0;
+    world.universeLog.push(
+      {
+        universe_log_id: 91,
+        action: "rejected_filter",
+        condition_id: "0xrejected",
+      },
+      { universe_log_id: 92, action: "enter", condition_id: "0xmember" },
+    );
+    world.changes.push(
+      {
+        input_change_id: 1,
+        source: "universe_membership",
+        source_key: "91",
+        condition_id: "0xrejected",
+      },
+      {
+        input_change_id: 2,
+        source: "universe_membership",
+        source_key: "92",
+        condition_id: "0xmember",
+      },
+    );
+    const buildsBefore = mocked.buildGraph.mock.calls.length;
+
+    await runner.tickOnce("state_tick");
+
+    // The in-scope entry is still recomputed; the rejection never is.
+    const incremental = mocked.recompute.mock.calls.find(
+      (call) => call[1] === "rule_change",
+    );
+    expect(incremental?.[3]).toEqual(["0xmember"]);
+    // The change is consumed all the same: the cursor advances past it and the
+    // batch still counts as one graph revision.
+    expect(world.runtime?.processed_input_change_id).toBe(2n);
+    expect(mocked.buildGraph.mock.calls).toHaveLength(buildsBefore + 1);
+    expect(world.runtime?.failure_reason).toBeNull();
+    // Skipped, never silent.
+    const written = (
+      process.stderr.write as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes("RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE"));
+    expect(written).toHaveLength(1);
+    expect(JSON.parse(written[0] ?? "{}")).toMatchObject({
+      reason_code: "RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE",
+      source: "universe_membership",
+      skipped: 1,
+    });
+    await runner.stop();
+  });
+
+  it("still fails closed when an in-universe membership change has no as-of mapping", async () => {
+    const world = emptyWorld();
+    mocked.recompute.mockImplementation(
+      (_deps: unknown, _trigger: unknown, _asOf: unknown, only: unknown) => {
+        const named = (only ?? []) as readonly string[];
+        if (named.includes("0xunmapped")) {
+          return Promise.reject(
+            new Error("RESOLUTION_MARKET_METADATA_VERSION_MISSING:0xunmapped"),
+          );
+        }
+        return Promise.resolve({ scored: named.length, failed: 0 });
+      },
+    );
+    const runner = createResolutionRunner({
+      pool: runnerPool(world),
+      config: DEFAULT_RESOLUTION_CONFIG,
+      lexicon: DEFAULT_RESOLUTION_LEXICON,
+      curatedEdges: [],
+      executionMode: "paper",
+      clock: () => NOW,
+      generationFactory: () => GENERATION_A,
+    });
+    await runner.start();
+    world.statements.length = 0;
+    world.universeLog.push({
+      universe_log_id: 93,
+      action: "enter",
+      condition_id: "0xunmapped",
+    });
+    world.changes.push({
+      input_change_id: 1,
+      source: "universe_membership",
+      source_key: "93",
+      condition_id: "0xunmapped",
+    });
+
+    // A genuine member without a mapping is NOT tolerated: the tick fails, the
+    // market stays out of the cycle and no mapping is invented.
+    await expect(runner.tickOnce("state_tick")).rejects.toThrow(
+      "RESOLUTION_MARKET_METADATA_VERSION_MISSING:0xunmapped",
+    );
+    expect(world.runtime?.processed_input_change_id).toBe(0n);
+    expect(world.runtime?.failure_reason).toBe("STATE_TICK_FAILED");
     await runner.stop();
   });
 

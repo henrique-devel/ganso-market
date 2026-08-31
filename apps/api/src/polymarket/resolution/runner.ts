@@ -475,7 +475,8 @@ export function createResolutionRunner(
         );
         const changes = await tx.query<Record<string, unknown>>(
           `SELECT c.input_change_id, c.source, c.source_key, c.condition_id,
-                  e.resolution_event_id, e.event_type, r.rule_version_id
+                  e.resolution_event_id, e.event_type, r.rule_version_id,
+                  u.action AS universe_action
              FROM polymarket_resolution_input_changes c
              LEFT JOIN polymarket_resolution_events e
                ON c.source = 'resolution_event'
@@ -483,6 +484,9 @@ export function createResolutionRunner(
              LEFT JOIN polymarket_rule_versions r
                ON c.source = 'rule_version'
               AND r.rule_version_id::text = c.source_key
+             LEFT JOIN polymarket_universe_log u
+               ON c.source = 'universe_membership'
+              AND u.universe_log_id::text = c.source_key
             WHERE c.input_change_id > $1
             ORDER BY c.input_change_id ASC
         LIMIT 500`,
@@ -498,6 +502,7 @@ export function createResolutionRunner(
         );
         const statusTouched = new Set<string>();
         const ruleTouched = new Set<string>();
+        let rejectionsSkipped = 0;
         let fullTrigger: "rule_change" | "status_change" | null = null;
         let nextEventId = lastEventId;
         let nextRuleVersionId = lastRuleVersionId;
@@ -520,6 +525,26 @@ export function createResolutionRunner(
             }
           }
           const conditionId = String(change.condition_id);
+          if (
+            change.source === "universe_membership" &&
+            change.universe_action !== "enter" &&
+            change.universe_action !== "exit"
+          ) {
+            // Migration 0011 journals EVERY polymarket_universe_log insert,
+            // and the log also records `rejected_filter` / `rejected_cap` —
+            // markets the universe selection threw away. Those are outside the
+            // scoring scope by construction (loadScoreableMarkets reads only
+            // 'enter'/'exit'), they never reach the registry, and so they have
+            // no metadata version and never will. Targeting them by id sent
+            // them to marketsByIds, whose fail-closed check then aborted the
+            // whole tick: 674 rejections a day in production on 2026-08-31,
+            // 44 of the 78 daily RESOLUTION_MARKET_METADATA_VERSION_MISSING.
+            // The change is still consumed — the cursor advances above and the
+            // batch still counts as one graph revision — it just cannot name a
+            // recompute target.
+            rejectionsSkipped += 1;
+            continue;
+          }
           if (change.source === "market_metadata") {
             // Category changes alter measured priors for every market. A full
             // rule-style recompute supersedes every incremental set below.
@@ -647,10 +672,19 @@ export function createResolutionRunner(
             "resolution runtime generation changed before cursor commit",
           );
         }
-        return { logged, graph, graphSafety, nextStreaks };
+        return { logged, graph, graphSafety, nextStreaks, rejectionsSkipped };
       });
       if (summaries.nextStreaks !== null) {
         publishStreaks(summaries.nextStreaks);
+      }
+      if (summaries.rejectionsSkipped > 0) {
+        // Typed and counted, never silent: this is the population that used to
+        // abort the tick. A rising count with no other change is the signal
+        // that the universe filter is churning.
+        logJson("info", "RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE", {
+          source: "universe_membership",
+          skipped: summaries.rejectionsSkipped,
+        });
       }
       for (const summary of summaries.logged) {
         logJson("info", "SCORES_RECOMPUTED", summary);
