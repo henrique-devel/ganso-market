@@ -1,6 +1,11 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-31 (**re-medição do bloco de 28/08 em produção,
+- Última atualização: 2026-08-31 (noite) — **hotfix do
+  `RESOLUTION_MARKET_METADATA_VERSION_MISSING` recorrente (PR #61)**: causa raiz
+  medida em produção (78 falhas/24 h em duas populações — 674 rejeições/dia
+  journalizadas indevidamente e a corrida entre o `enter` e a primeira versão de
+  metadata), corrigida sem migration e sem afrouxar o fail-closed. Ver a seção
+  "SESSÃO 2026-08-31 (noite)". Registro anterior do dia: **re-medição do bloco de 28/08 em produção,
   regra de parada honrada**: os quatro defeitos re-medidos e nenhum existe
   mais — zero código/config/migration/deploy nesta sessão. Soak do #51
   **fechado**: zero resets do G2 em ~65 h; #50 e #53 saudáveis e contínuos;
@@ -1686,6 +1691,105 @@ tabelas. Terceiro restart do dia e o relógio do G2 continua sem reset (os 2
 da vida seguem sendo os do deploy de 28/08); único erro pós-deploy é o
 `MACRO_CALENDAR_SYNC_FAILED` de boot (classe de 23/08, sem perda — 15
 entradas no arquivo e no banco).
+
+## SESSÃO 2026-08-31 (noite) — HOTFIX do `RESOLUTION_MARKET_METADATA_VERSION_MISSING` recorrente
+
+A classe registrada de manhã como "pré-existente virou recorrente" foi
+diagnosticada, medida e corrigida (PR #61). **Sem migration**: a 0011 e a 0012
+seguem intocadas, e o fail-closed do mapeamento não foi afrouxado em nenhum
+ponto.
+
+### Re-medição antes de codar (regra de parada honrada — o defeito EXISTIA)
+
+Produção somente leitura, 2026-08-31 ~19:53–20:00Z, container de resolution com
+log contínuo desde 28/08 20:38Z:
+
+| Medida                                   | Valor                                                       |
+| ---------------------------------------- | ----------------------------------------------------------- |
+| Falhas de `state_tick` em 24 h           | **78** (233 na vida do container: 9 em 28/08, 85, 77, 62)    |
+| `condition_id` distintos nas 78          | **75** — cada mercado falha uma vez, não é poison pill        |
+| Mercados scoreable AGORA sem metadata    | **0 de 171** — nenhum mercado legítimo pendente              |
+| Estados não-`NONE` fora do scoreable sem metadata | **0** — sem risco de crash-loop no boot            |
+
+### Causa raiz medida — DUAS populações, um mesmo trigger
+
+O trigger `universe_membership_input_change_trg` (migration 0011) journaliza
+**todo** insert em `polymarket_universe_log`. O `state_tick` transforma o
+`condition_id` de cada mudança em alvo de recompute; alvo fora do conjunto
+scoreable cai no `marketsByIds`, cujo fail-closed de mapeamento **aborta o tick
+inteiro** (e em cascata o `graph_eval` e o `heartbeat` daquele ciclo).
+
+1. **44 de 78 (56%) — linhas `rejected_filter`.** Mercados que a seleção de
+   universo descartou: **não estão em `polymarket_markets`**, nunca chegam ao
+   registry e **nunca terão versão de metadata**. Não é corrida — é escopo: o
+   `loadScoreableMarkets` lê só `enter`/`exit`, mas o journal captura a rejeição
+   também. Volume: **674 rejeições/dia**; e as **9.925 mudanças sem metadata
+   desde 20/08 vêm TODAS de `universe_membership`** — nenhuma outra fonte
+   (`resolution_event`, `param_version`, `rule_version`, `event_membership`,
+   `market_metadata`) jamais produziu uma. O erro dispara ~4,2 s depois da
+   linha de rejeição.
+2. **34 de 78 (44%) — corrida na entrada.** O `enter` era logado para todos os
+   entrantes **antes** do laço que persiste registry e metadata. Medido: o erro
+   dispara **0,41 s depois do `enter`** e **0,43 s antes da primeira versão de
+   metadata** (`version = 1` em todos). Em 3 dos 34 o `valid_from` já era
+   anterior ao erro por ~30 ms — carimbo antes do COMMIT, mesma corrida.
+
+**Por que cada mercado falha só uma vez:** o tick que falha não avança o cursor
+(o UPDATE é da mesma transação), mas marca `recoveryRequired`; o tick seguinte
+entra em `bootGenerationUnlocked`, que faz **recompute completo** e salta
+`processed_input_change_id` direto para o `MAX(input_change_id)`. Nada é
+perdido — a varredura de boot cobre todo o conjunto scoreable — mas a mudança
+ofensora é pulada, o que explica o "auto-recuperado no ciclo seguinte" e
+absorve as ~630 rejeições/dia que não chegam a virar erro.
+
+### Correção (PR #61)
+
+- **`resolution/runner.ts`** — a leitura do journal passa a resolver a ação do
+  `polymarket_universe_log` (mesmo `LEFT JOIN` que já resolvia evento e regra) e
+  uma mudança que não seja `enter`/`exit` **não nomeia alvo de recompute**. A
+  mudança continua consumida: o cursor avança e o lote segue contando como uma
+  revisão de grafo (cadência de `GRAPH_BUILT` preservada de propósito). O skip é
+  tipado e contado — `RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE {source, skipped}`.
+- **`registry.ts`** — o `enter` passa a ser inserido **dentro da transação** que
+  aplica a observação de metadata, no **mesmo instante** (`enter.at ==
+  metadata.valid_from`). Uma leitura as-of que enxerga a associação enxerga o
+  mapeamento. Efeito colateral desejado: entrante cuja metadata falha **não vira
+  membro** naquele ciclo (antes virava, com `logSafely` engolindo a falha) — é
+  retentado no ciclo seguinte, e `entered` passa a contar entradas commitadas.
+
+**O fail-closed não mudou:** `loadScoreableMarkets` e `marketsByIds` continuam
+lançando `RESOLUTION_MARKET_METADATA_VERSION_MISSING`, e há teste novo provando
+que um membro (`enter`) sem mapeamento **ainda derruba o tick** e **não avança o
+cursor**. Nenhum mapeamento de token é inventado em lugar nenhum.
+
+### Testes
+
+- `registry.test.ts`: o `enter` é inserido na mesma transação (profundidade 1) e
+  **depois** da versão de metadata, com `at == valid_from`; e um entrante cuja
+  metadata falha **não** vira membro. As duas **falham no código anterior**.
+- `runner.test.ts`: uma mudança `rejected_filter` é consumida (cursor avança,
+  grafo reconstrói, evento tipado emitido) sem nunca virar alvo, enquanto um
+  `enter` no mesmo lote continua sendo recomputado — **falha no código
+  anterior**; e o teste de fail-closed acima, que passa nos dois (é invariante).
+- `make verify` verde; suíte de resolution + registry + samplers + recorder:
+  337 testes.
+
+### Verificação em produção
+
+Pendente do merge → CD → **rebuild de `polymarket-resolution` E de
+`polymarket-recorder`** (o fix toca os dois serviços). Alvo: a taxa de
+`RESOLUTION_MARKET_METADATA_VERSION_MISSING` cai de **~78/dia para 0** — as duas
+populações medidas somam 100% das ocorrências e nenhuma outra fonte de mudança
+jamais produziu a classe; zero regressão em `SCORES_RECOMPUTED`/`GRAPH_BUILT`.
+
+### Carona não executada — o 500 do `GET /polymarket/decisions`
+
+Não reproduzível: o container `ganso-market-api-1` foi **recriado às 19:17:33Z**
+(CD do PR #60) e o log de 18:21:11Z não existe mais. O endpoint responde **200**
+agora (medido às 20:01Z, duas requisições). Não é módulo adjacente a este fix —
+fica para prompt próprio, com a observação de que qualquer investigação precisa
+de log preservado ou de reprodução ao vivo.
+
 
 ## Próximo passo mínimo
 

@@ -690,17 +690,16 @@ export async function runGammaCycle(
     }
   };
 
-  // Entries: selected now, not a member before.
-  for (const record of selection.selected) {
-    if (!previousMembers.has(record.conditionId)) {
-      entered.push(record.conditionId);
-      await logSafely(
-        record.conditionId,
-        "enter",
-        `priority_${String(capPriority(record, now()))}_${record.category ?? "unknown"}`,
-      );
-    }
-  }
+  // Entries are NOT logged here. The `enter` row is what puts a market inside
+  // the RFC-012 scoring scope, and migration 0011 publishes it to the
+  // resolution input journal the instant it commits — so logging it before the
+  // market's first metadata version exists opens a window in which the score
+  // sees a member it cannot map (RESOLUTION_MARKET_METADATA_VERSION_MISSING,
+  // measured in production on 2026-08-31: the error fired 0,41 s after the
+  // `enter` row and 0,43 s BEFORE the first metadata version). The insert
+  // moved into the per-market persist transaction below, next to
+  // applyMarketMetadataObservation, so membership and mapping become visible
+  // in the same commit.
   // Exits and rejection transitions are skipped on a PARTIAL fetch failure:
   // an unseen market may simply live in a page that failed, and a mass exit
   // would silently stop collection for it.
@@ -737,8 +736,12 @@ export async function runGammaCycle(
     }
   }
 
-  // Persist registry rows and versioned rules/params per member. A failure on
-  // one market is logged and never aborts the cycle.
+  // Persist registry rows and versioned rules/params per member, and log the
+  // membership entry of a new member in the SAME transaction as its metadata
+  // observation. A failure on one market is logged and never aborts the cycle:
+  // an entrant whose metadata could not be written is simply not logged as a
+  // member this cycle and is retried in the next one — never a member without
+  // an as-of mapping.
   const universe: UniverseMember[] = [];
   for (const record of selection.selected) {
     universe.push({
@@ -746,6 +749,7 @@ export async function runGammaCycle(
       tokenIds: [...record.clobTokenIds],
       category: record.category ?? "unknown",
     });
+    const entering = !previousMembers.has(record.conditionId);
     try {
       const observedAt = now();
       await pool.transaction(async (tx) => {
@@ -762,7 +766,21 @@ export async function runGammaCycle(
           },
           observedAt,
         );
+        if (entering) {
+          // Same instant as the metadata version's valid_from: an as-of read
+          // that sees the membership always sees the mapping too.
+          await insertUniverseLog(
+            tx,
+            record.conditionId,
+            "enter",
+            `priority_${String(capPriority(record, observedAt))}_${record.category ?? "unknown"}`,
+            observedAt,
+          );
+        }
       });
+      if (entering) {
+        entered.push(record.conditionId);
+      }
       await upsertEvents(pool, record, observedAt);
       await applyRuleObservation(pool, ruleObservationFrom(record), observedAt);
       await applyParamFields(
