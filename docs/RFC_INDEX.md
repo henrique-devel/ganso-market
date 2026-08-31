@@ -24,6 +24,7 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 | [RFC-013](rfcs/RFC-013-polymarket-portfolio-engine.md)     | Motor de portfólio e gates                  | RFC-010, RFC-011 e RFC-012 | EV mínimo, Kelly fracionário, limites, painel e gates da execução — **código completo, fases A–E (2026-08-26); ativação pendente** |
 | [RFC-009](rfcs/RFC-009-polymarket-live-execution.md)       | Execução Polymarket maker-side              | RFC-013 + aprovação        | live V2 maker-first com burn wallet na Polygon                                                                              |
 | [RFC-014](rfcs/RFC-014-polymarket-first-passage.md)        | Variante de primeira passagem (barreira)    | RFC-010                    | cobertura dos mercados "reach"/"dip to" da categoria crypto (incremento, não bloqueia)                                      |
+| [RFC-016](rfcs/RFC-016-polymarket-intraday-horizon.md)     | Horizonte intradia e universo rápido        | RFC-007, RFC-010           | instante real de fim legível por todos os consumidores; a evidência da última hora de vida deixa de ser descartada          |
 
 ## Descopo — 2026-08-18
 

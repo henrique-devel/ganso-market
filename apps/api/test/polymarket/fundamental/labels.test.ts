@@ -46,17 +46,31 @@ class FakeLabelDb {
   public failNextQueries = false;
   #nextEventId = 1;
 
+  /**
+   * RFC-016: the loader now selects
+   * `COALESCE(m.end_ts, r.end_date, m.end_date_iso::timestamptz) AS end_instant`,
+   * so the fake resolves the same three sources in the same order and hands
+   * back the same single column. `endTs` and `ruleEndDate` default to absent,
+   * which is the shape of the archive the rule-version fallback exists to
+   * repair.
+   */
   public addMarket(
     conditionId: string,
     category: string | null,
     tokenIds: readonly string[],
     endDateIso: string | null,
+    sources: { endTs?: string | null; ruleEndDate?: string | null } = {},
   ): void {
+    const endInstant =
+      sources.endTs ?? sources.ruleEndDate ?? endDateIso ?? null;
     this.markets.push({
       condition_id: conditionId,
       category,
       clob_token_ids: [...tokenIds],
       end_date_iso: endDateIso,
+      end_ts: sources.endTs ?? null,
+      rule_end_date: sources.ruleEndDate ?? null,
+      end_instant: endInstant === null ? null : new Date(endInstant),
     });
   }
 
@@ -735,5 +749,78 @@ describe("loadLabels", () => {
     expect(window[0]?.onchainResolutionTs).toEqual(
       new Date("2026-08-02T00:00:00Z"),
     );
+  });
+});
+
+describe("RFC-016: the knowable instant comes from the real end, not the date", () => {
+  /**
+   * A market that closes at 23:00Z, seen through each of the three sources the
+   * loader coalesces. Only the date-only one is wrong, and it is the one the
+   * store read until this RFC.
+   */
+  function seedUpdown(
+    db: FakeLabelDb,
+    sources: { endTs?: string | null; ruleEndDate?: string | null },
+  ): void {
+    db.addMarket(
+      "cond-updown",
+      "crypto",
+      ["tok-up", "tok-down"],
+      "2026-08-18T00:00:00Z",
+      sources,
+    );
+    db.addEvent(
+      "cond-updown",
+      "market_resolved",
+      { event_type: "market_resolved", winning_asset_id: "tok-up" },
+      new Date("2026-08-19T01:10:00Z"),
+      new Date("2026-08-19T01:10:30Z"),
+    );
+  }
+
+  it("scores the last hour of life instead of discarding it", async () => {
+    // Production, 2026-08-31: 1,572 of 1,670 labels carried a midnight
+    // knowable instant, and calibration's `decision_ts < publicly_knowable_ts`
+    // filter therefore dropped 0 of 8,063 last-hour estimates into the
+    // evidence set. This is that failure, and its fix, at unit scale.
+    const db = new FakeLabelDb();
+    seedUpdown(db, { endTs: "2026-08-18T23:00:00Z" });
+    await syncLabels({ pool: db, clock: () => NOW });
+
+    const knowable = db.labels.get("tok-up")?.publicly_knowable_ts;
+    expect((knowable as Date).toISOString()).toBe("2026-08-18T23:00:00.000Z");
+
+    // An estimate made 30 minutes before the close is now inside the window.
+    const lastHourDecision = new Date("2026-08-18T22:30:00Z");
+    expect(lastHourDecision.getTime()).toBeLessThan(
+      (knowable as Date).getTime(),
+    );
+  });
+
+  it("repairs the archive from the rule version when end_ts is absent", async () => {
+    // The markets already in fundamental_labels have RESOLVED: they left the
+    // universe and Gamma will never be asked about them again, so `end_ts`
+    // stays NULL for them forever. The rule-version fallback is what turns
+    // 36,212 scoreable estimates into 74,412 on the day of the deploy, with no
+    // retroactive UPDATE anywhere.
+    const db = new FakeLabelDb();
+    seedUpdown(db, { endTs: null, ruleEndDate: "2026-08-18T23:00:00Z" });
+    await syncLabels({ pool: db, clock: () => NOW });
+
+    expect(
+      (db.labels.get("tok-up")?.publicly_knowable_ts as Date).toISOString(),
+    ).toBe("2026-08-18T23:00:00.000Z");
+  });
+
+  it("falls back to the date-only column only when nothing else is known", async () => {
+    // Fail-closed rather than fail-absent: a market with no instant anywhere
+    // keeps behaving exactly as it did before, never losing its label.
+    const db = new FakeLabelDb();
+    seedUpdown(db, {});
+    await syncLabels({ pool: db, clock: () => NOW });
+
+    expect(
+      (db.labels.get("tok-up")?.publicly_knowable_ts as Date).toISOString(),
+    ).toBe("2026-08-18T00:00:00.000Z");
   });
 });

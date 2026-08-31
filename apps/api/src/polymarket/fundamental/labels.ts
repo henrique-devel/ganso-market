@@ -458,9 +458,33 @@ async function loadMarketRows(
     return markets;
   }
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT condition_id, category, clob_token_ids, end_date_iso
-       FROM polymarket_markets
-      WHERE condition_id = ANY($1::text[])`,
+    // RFC-016 horizon order, CURRENT flavour: `end_ts` is the instant Gamma
+    // published, the versioned rule is the fallback that repairs the archive,
+    // and the date-only `end_date_iso` is the last resort.
+    //
+    // The rule-version fallback is not cosmetic. `end_ts` is filled
+    // prospectively, and a market in this table has RESOLVED: it left the
+    // universe and Gamma will never be asked about it again, so most of the
+    // existing archive can only be repaired from the rule chain. Every one of
+    // those markets has a rule version carrying the instant.
+    //
+    // No `valid_to IS NULL` filter and no as-of bound: labels describe what
+    // happened AFTER the decision, so there is no decision instant to join
+    // against, and a resolved market's chain may have been closed already.
+    // The newest version is the best-known end instant.
+    `SELECT m.condition_id, m.category, m.clob_token_ids,
+            COALESCE(m.end_ts, r.end_date, m.end_date_iso::timestamptz)
+              AS end_instant
+       FROM polymarket_markets m
+       LEFT JOIN LATERAL (
+         SELECT end_date
+           FROM polymarket_rule_versions
+          WHERE condition_id = m.condition_id
+            AND end_date IS NOT NULL
+          ORDER BY version DESC
+          LIMIT 1
+       ) r ON TRUE
+      WHERE m.condition_id = ANY($1::text[])`,
     [[...conditionIds]],
   );
   for (const row of result.rows) {
@@ -469,7 +493,7 @@ async function loadMarketRows(
         typeof row.category === "string" ? row.category : null,
       ),
       tokenIds: toStringArray(row.clob_token_ids),
-      endDate: toDate(row.end_date_iso),
+      endDate: toDate(row.end_instant),
     });
   }
   return markets;

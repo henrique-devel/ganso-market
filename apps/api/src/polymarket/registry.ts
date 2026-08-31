@@ -26,6 +26,27 @@ const MAX_PAGES = 5;
 const MIN_RULES_LENGTH = 10;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1_000;
 
+/**
+ * RFC-016: a market resolving within this window is "short horizon" — the two
+ * finest estimator cadence buckets (`lt_1h` at 10 s and `1h_6h` at 60 s).
+ */
+export const SHORT_HORIZON_MS = 6 * 60 * 60 * 1_000;
+
+/**
+ * Slots of the 100-market cap held for short-horizon markets.
+ *
+ * OPPORTUNISTIC, never wasteful: if fewer than this many short markets are
+ * eligible, the unused slots go straight back to the general queue. The
+ * reserve exists so that the day the cap starts binding again (it last bound
+ * on 2026-08-29) the fast universe is not the first thing evicted — the
+ * failure mode the old unconditional priority 3 built in.
+ *
+ * Sized at a quarter of the cap: enough that a whole day of hourly updown
+ * series fits, small enough that scheduled macro and the daily/weekly crypto
+ * threshold markets keep three quarters of the universe.
+ */
+export const SHORT_HORIZON_RESERVED_MARKETS = 25;
+
 const USER_AGENT = "GansoMarketRecorder/1.0 (+public-data-recorder)";
 
 // Hard exclusions applied to question/slug regardless of tag classification.
@@ -136,9 +157,71 @@ export function exclusionReason(record: ExtendedMarketRecord): string | null {
 }
 
 /**
+ * Milliseconds until the market's real end instant, or null when Gamma did not
+ * publish one. Negative for a market already past its end.
+ */
+export function horizonMs(
+  record: ExtendedMarketRecord,
+  now: Date,
+): number | null {
+  const end = parseIsoDate(record.endDate);
+  return end === null ? null : end.getTime() - now.getTime();
+}
+
+/** A market inside the reserved short-horizon window (RFC-016). */
+export function isShortHorizon(
+  record: ExtendedMarketRecord,
+  now: Date,
+): boolean {
+  const horizon = horizonMs(record, now);
+  return horizon !== null && horizon > 0 && horizon <= SHORT_HORIZON_MS;
+}
+
+/**
+ * Horizon bucket label stamped on the `enter` row of the membership log. The
+ * names match the estimator's cadence buckets so the two can be read together;
+ * an unknown or elapsed horizon is named as such rather than folded into a
+ * real bucket.
+ */
+export function horizonBucketLabel(
+  record: ExtendedMarketRecord,
+  now: Date,
+): string {
+  const horizon = horizonMs(record, now);
+  if (horizon === null) {
+    return "unknown";
+  }
+  if (horizon <= 0) {
+    return "past";
+  }
+  if (horizon <= 60 * 60 * 1_000) {
+    return "lt_1h";
+  }
+  if (horizon <= SHORT_HORIZON_MS) {
+    return "1h_6h";
+  }
+  if (horizon <= 24 * 60 * 60 * 1_000) {
+    return "6h_24h";
+  }
+  if (horizon <= 7 * 24 * 60 * 60 * 1_000) {
+    return "1d_7d";
+  }
+  return "gt_7d";
+}
+
+/**
  * Cap priority (lower sorts first): 1 = scheduled macro with endDate within
- * 30 days, 2 = crypto daily/weekly threshold, 3 = crypto short series
- * (5min/15min/1h), 4 = remaining macro (no near catalyst).
+ * 30 days, 2 = crypto daily/weekly threshold OR any crypto market resolving
+ * within 6 h, 3 = crypto short series (5min/15min/1h) still far from its end,
+ * 4 = remaining macro (no near catalyst).
+ *
+ * RFC-016 changed one line of this: a short-series market used to sit at 3
+ * unconditionally, which made the 5min/15min/1h markets the FIRST thing the
+ * cap dropped — the exact population the owner's 10 s cadence exists to price.
+ * The pattern is a name test, not a clock: "Bitcoin Up or Down - August 31,
+ * 6PM ET" matches it three weeks before it is worth anything. The horizon is
+ * the clock, so a short series inside the reserved window rises to 2 and a
+ * distant one stays at 3.
  */
 export function capPriority(record: ExtendedMarketRecord, now: Date): number {
   if (record.category === "macro") {
@@ -147,6 +230,9 @@ export function capPriority(record: ExtendedMarketRecord, now: Date): number {
       return 1;
     }
     return 4;
+  }
+  if (isShortHorizon(record, now)) {
+    return 2;
   }
   const haystack = `${record.question} ${record.slug ?? ""}`;
   return SHORT_SERIES_PATTERN.test(haystack) ? 3 : 2;
@@ -160,12 +246,17 @@ export interface UniverseSelection {
 
 /**
  * Apply hard exclusions, then the 100-market/200-token caps in priority
- * order (stable within a tier, preserving the fetch's volume ordering).
+ * order (stable within a tier, preserving the fetch's volume ordering), with
+ * a reserved block of slots for short-horizon markets (RFC-016).
  */
 export function selectUniverse(
   records: readonly ExtendedMarketRecord[],
   now: Date,
-  caps: { maxMarkets: number; maxTokens: number } = {
+  caps: {
+    maxMarkets: number;
+    maxTokens: number;
+    reservedShortHorizon?: number;
+  } = {
     maxMarkets: MAX_UNIVERSE_MARKETS,
     maxTokens: MAX_UNIVERSE_TOKENS,
   },
@@ -194,26 +285,67 @@ export function selectUniverse(
     return priorityDiff !== 0 ? priorityDiff : a.index - b.index;
   });
 
+  // RFC-016: the reserved short-horizon block is filled FIRST, soonest-first
+  // rather than by the fetch's volume ordering — inside six hours, "resolves
+  // next" beats "traded most". Everything it does not take stays in the
+  // general queue below, in its original priority order, so an unused reserve
+  // costs nothing. A market can only be taken once (`taken`).
+  const reserved = Math.max(
+    0,
+    caps.reservedShortHorizon ?? SHORT_HORIZON_RESERVED_MARKETS,
+  );
+  const shortQueue = eligible
+    .filter((entry) => isShortHorizon(entry.record, now))
+    .sort((a, b) => {
+      const aEnd = horizonMs(a.record, now) ?? Number.POSITIVE_INFINITY;
+      const bEnd = horizonMs(b.record, now) ?? Number.POSITIVE_INFINITY;
+      return aEnd !== bEnd ? aEnd - bEnd : a.index - b.index;
+    })
+    .slice(0, Math.min(reserved, caps.maxMarkets));
+
   const selected: ExtendedMarketRecord[] = [];
+  const taken = new Set<string>();
   let tokenCount = 0;
-  for (const { record } of eligible) {
+  // `recordRejection` is false for the reserved pass: a short market the
+  // reserve could not fit is retried in the general pass below and rejected
+  // there, once. Recording it twice would put the same condition_id in
+  // rejectedCap two times over.
+  const admit = (
+    record: ExtendedMarketRecord,
+    recordRejection: boolean,
+  ): void => {
     const tokens = record.clobTokenIds.length;
     if (selected.length >= caps.maxMarkets) {
-      rejectedCap.push({
-        conditionId: record.conditionId,
-        reason: "cap_markets_exceeded",
-      });
-      continue;
+      if (recordRejection) {
+        rejectedCap.push({
+          conditionId: record.conditionId,
+          reason: "cap_markets_exceeded",
+        });
+      }
+      return;
     }
     if (tokenCount + tokens > caps.maxTokens) {
-      rejectedCap.push({
-        conditionId: record.conditionId,
-        reason: "cap_tokens_exceeded",
-      });
-      continue;
+      if (recordRejection) {
+        rejectedCap.push({
+          conditionId: record.conditionId,
+          reason: "cap_tokens_exceeded",
+        });
+      }
+      return;
     }
     selected.push(record);
+    taken.add(record.conditionId);
     tokenCount += tokens;
+  };
+
+  for (const { record } of shortQueue) {
+    admit(record, false);
+  }
+  for (const { record } of eligible) {
+    if (taken.has(record.conditionId)) {
+      continue;
+    }
+    admit(record, true);
   }
 
   return { selected, rejectedFilter, rejectedCap };
@@ -483,6 +615,47 @@ export async function applyMarketMetadataObservation(
   );
 }
 
+/**
+ * RFC-016: record the market's real end INSTANT on the flat registry row, from
+ * a call site that does not own the rest of the row.
+ *
+ * The registry cycle writes `end_ts` inside its full upsert, but it only ever
+ * observes markets that are currently IN the universe. The pending sweep in
+ * `samplers.ts` is the only path that re-observes the ones that left — and it
+ * fetches with `closed=true`, a query the registry never makes. That asymmetry
+ * between the two Gamma call sites is exactly what caused the category bug of
+ * PR #49, so both of them capture the instant.
+ *
+ * Deliberately narrow: this touches `end_ts` and nothing else. Writing the
+ * whole registry row from the sweep would import the rest of the upsert's
+ * semantics (rules_version bumping, category, token ids) into a path that was
+ * never designed to own them.
+ *
+ * A payload without `endDate` leaves the known value standing. Null means "not
+ * observed", never "this market has no end" — the same rule
+ * `categoryToRecord` applies to categories, and the reason the UPDATE is
+ * guarded rather than unconditional. A market absent from the registry is a
+ * no-op, not an insert: this function records a fact about a row, it does not
+ * create one.
+ */
+export async function applyMarketEndTsObservation(
+  db: SqlExecutor,
+  conditionId: string,
+  endTs: Date | null,
+  now: Date,
+): Promise<void> {
+  if (endTs === null) {
+    return;
+  }
+  await db.query(
+    `UPDATE polymarket_markets
+        SET end_ts = $2, updated_at = $3
+      WHERE condition_id = $1
+        AND (end_ts IS NULL OR end_ts IS DISTINCT FROM $2)`,
+    [conditionId, endTs, now],
+  );
+}
+
 // Same registry upsert the recorder used, adapted to the extended record and
 // carrying source_ts (Gamma updatedAt). The orchestrator migrates to this one.
 async function upsertMarket(
@@ -494,9 +667,9 @@ async function upsertMarket(
     `INSERT INTO polymarket_markets
        (condition_id, question, slug, category, neg_risk, clob_token_ids,
         affirmative_token_id, rules, tick_size, min_order_size,
-        rewards_min_size, rewards_max_spread, fee_type, end_date_iso, active,
-        closed, question_id, source_ts, received_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19)
+        rewards_min_size, rewards_max_spread, fee_type, end_date_iso, end_ts,
+        active, closed, question_id, source_ts, received_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
      ON CONFLICT (condition_id) DO UPDATE SET
        question = EXCLUDED.question,
        slug = EXCLUDED.slug,
@@ -513,6 +686,10 @@ async function upsertMarket(
        rewards_max_spread = EXCLUDED.rewards_max_spread,
        fee_type = EXCLUDED.fee_type,
        end_date_iso = EXCLUDED.end_date_iso,
+       -- RFC-016: a payload without endDate means "not observed", never "this
+       -- market has no end". COALESCE keeps the known instant standing, the
+       -- same reason categoryToRecord never erases a known category.
+       end_ts = COALESCE(EXCLUDED.end_ts, polymarket_markets.end_ts),
        active = EXCLUDED.active,
        closed = EXCLUDED.closed,
        question_id = COALESCE(EXCLUDED.question_id, polymarket_markets.question_id),
@@ -533,6 +710,10 @@ async function upsertMarket(
       record.rewardsMaxSpread,
       record.feeType,
       record.endDateIso ?? record.endDate,
+      // The SAME value that feeds the versioned rule below
+      // (ruleObservationFrom), so the flat column and the as-of chain cannot
+      // disagree at the source.
+      parseIsoDate(record.endDate),
       record.active,
       record.closed,
       record.questionId,
@@ -773,7 +954,11 @@ export async function runGammaCycle(
             tx,
             record.conditionId,
             "enter",
-            `priority_${String(capPriority(record, observedAt))}_${record.category ?? "unknown"}`,
+            // RFC-016 appends the horizon bucket, so "how much of the turnover
+            // is the fast universe" is answerable from the membership log
+            // alone — no join against a rule chain that has moved on by the
+            // time anyone asks.
+            `priority_${String(capPriority(record, observedAt))}_${record.category ?? "unknown"}_${horizonBucketLabel(record, observedAt)}`,
             observedAt,
           );
         }

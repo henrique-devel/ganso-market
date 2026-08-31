@@ -153,7 +153,10 @@ export function registerResolutionRoutes(
     { preHandler: guard },
     wrap(async (_request, reply) => {
       const states = await pool.query(
-        `SELECT s.condition_id, m.question, m.category, m.neg_risk,
+        // RFC-016: `m.end_ts` is the market's real end instant, exposed here
+        // so a reader can rank by horizon (the future "Rápidos" tab of
+        // RFC-015) without a second round trip. No new route in this RFC.
+        `SELECT s.condition_id, m.question, m.category, m.neg_risk, m.end_ts,
                 s.score, s.score_version, s.action, s.effective_action,
                 s.resolution_buffer, s.p_5050, s.expected_lockup_s,
                 s.p95_lockup_s, s.dispute_active, s.suspect_jump,

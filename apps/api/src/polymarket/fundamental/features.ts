@@ -263,7 +263,7 @@ export async function loadMarketContexts(
   // the decision instant out of the batch.
   const markets = await pool.query<Record<string, unknown>>(
     `SELECT condition_id, question, slug, category, clob_token_ids,
-            end_date_iso, rules, tick_size
+            end_ts, end_date_iso, rules, tick_size
        FROM polymarket_markets
       WHERE condition_id = ANY($1::text[])
         AND received_at <= $2`,
@@ -343,9 +343,18 @@ export async function loadMarketContexts(
       slug: typeof row.slug === "string" ? row.slug : null,
       gammaCategory: typeof row.category === "string" ? row.category : null,
       tokenIds: parseStringArray(row.clob_token_ids),
-      // The versioned rule's end date wins: it is the value that was in force
-      // at the decision instant.
-      endDate: toDate(rule?.end_date) ?? toDate(row.end_date_iso),
+      // RFC-016 horizon order, AS-OF flavour. The versioned rule's end date
+      // wins, always: it is the value that was in force at the decision
+      // instant, and it is the only one of the three that can say so.
+      // `polymarket_markets.end_ts` is mutable in place — it holds the CURRENT
+      // instant, not the one that was in force — so it may only ever displace
+      // the date-only `end_date_iso` as the fallback, never the as-of chain.
+      // Both fallbacks are for markets observed before their rule chain had an
+      // end date; a member of the universe always has one.
+      endDate:
+        toDate(rule?.end_date) ??
+        toDate(row.end_ts) ??
+        toDate(row.end_date_iso),
       rulesText:
         typeof rule?.description === "string"
           ? rule.description

@@ -9,7 +9,11 @@
 import type { SqlExecutor } from "../database.js";
 import { parseExtendedMarket } from "./gamma.js";
 import { sourceTsToDate } from "./recorder.js";
-import { applyMarketMetadataObservation, parseIsoDate } from "./registry.js";
+import {
+  applyMarketEndTsObservation,
+  applyMarketMetadataObservation,
+  parseIsoDate,
+} from "./registry.js";
 
 export const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 export const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
@@ -663,6 +667,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
     let unparseable = 0;
     let mapped = 0;
     let unmappable = 0;
+    let endTsObserved = 0;
     let failed = 0;
     for (const item of raw) {
       const record = parseExtendedMarket(item);
@@ -677,6 +682,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         mapped += 1;
       }
       try {
+        const observedAt = new Date(deps.clock());
         await applyMarketMetadataObservation(
           deps.pool,
           {
@@ -687,8 +693,21 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
             affirmativeTokenId: record.affirmativeTokenId,
             sourceTs: parseIsoDate(record.updatedAt),
           },
-          new Date(deps.clock()),
+          observedAt,
         );
+        // RFC-016: the same payload carries the market's real end instant, and
+        // this sweep is the ONLY path that re-observes markets which already
+        // left the universe. Capturing it here is what keeps the two Gamma
+        // call sites symmetric (the lesson of PR #49).
+        await applyMarketEndTsObservation(
+          deps.pool,
+          record.conditionId,
+          parseIsoDate(record.endDate),
+          observedAt,
+        );
+        if (record.endDate !== null) {
+          endTsObserved += 1;
+        }
       } catch (error: unknown) {
         // One market never aborts the sweep: the UMA status transitions this
         // poller exists for matter more than the backfill.
@@ -718,6 +737,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
         unparseable,
         mapped,
         unmappable,
+        end_ts_observed: endTsObserved,
         failed,
       },
     );

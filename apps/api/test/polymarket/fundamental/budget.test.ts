@@ -21,18 +21,36 @@ const DAY_MS = 24 * 3_600_000;
 const MAX_TOKENS = 200;
 
 /**
- * Measured share of the universe's tokens sitting in each horizon bucket,
- * from production on 2026-08-22 (586 878 rows over ~1.9 days). The cadence is
- * per bucket, so the daily row count is the sum over buckets, not one rate
- * times one token count.
+ * Measured share of the universe's tokens sitting in each horizon bucket. The
+ * cadence is per bucket, so the daily row count is the sum over buckets, not
+ * one rate times one token count.
+ *
+ * RE-MEASURED for RFC-016, production 2026-08-31: universe membership sampled
+ * hourly over 48 h, each member's horizon taken from the rule version in force
+ * at that hour (`polymarket_rule_versions.end_date`), weighted by outcome
+ * tokens. The 2026-08-22 numbers this replaces — lt_1h 0.003, 1h_6h 0.028,
+ * 6h_24h 0.074, 1d_7d 0.145, gt_7d 0.75 — described a universe that no longer
+ * exists: they put three quarters of the tokens beyond a week, where the
+ * measurement now finds one fifth, and 0.3% inside the hour, where it now
+ * finds twenty times as much.
  */
 const MEASURED_ROW_SHARE: Readonly<Record<string, number>> = {
-  lt_1h: 0.003,
-  "1h_6h": 0.028,
-  "6h_24h": 0.074,
-  "1d_7d": 0.145,
-  gt_7d: 0.75,
+  lt_1h: 0.0632,
+  "1h_6h": 0.0955,
+  "6h_24h": 0.3195,
+  "1d_7d": 0.311,
+  gt_7d: 0.2108,
 };
+
+/**
+ * Consumer rows actually written in 24 h of production, measured 2026-08-31
+ * (20 396 rows). Far below the modelled ceiling because an ABSENT estimate
+ * writes no row by design, and NO_BOOK / DEPTH_BELOW_SREF / BOOK_STALE
+ * dominate the cycles. This is the number the owner's 2026-08-24 quota
+ * decision was taken against, so it is the number the safety margin is
+ * measured on.
+ */
+const MEASURED_ROWS_PER_DAY = 20_396;
 
 /** Rows a day under a flat 60 s cadence, the shape production ran at first. */
 const FLAT_60S_ROWS_PER_DAY = Math.floor((MAX_TOKENS * DAY_MS) / 60_000);
@@ -81,10 +99,24 @@ describe("estimate volumetry", () => {
     }
   });
 
-  it("cuts the daily volume several times over versus a flat cadence", () => {
+  it("still cuts the daily volume versus a flat cadence, by less than it used to", () => {
     const perHorizon = rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs);
     expect(FLAT_60S_ROWS_PER_DAY).toBe(288_000);
-    expect(perHorizon).toBeLessThan(FLAT_60S_ROWS_PER_DAY / 4);
+    expect(perHorizon).toBeLessThan(FLAT_60S_ROWS_PER_DAY);
+
+    // The honest ratio, asserted instead of a claim that no longer holds.
+    // Against the 2026-08-22 distribution this test demanded a 4x cut and got
+    // 6.6x, because that model put three quarters of the tokens beyond a week
+    // where the cadence is 10 min. Re-measured on 2026-08-31 the far tail is
+    // 21% and the cut is ~1.7x. The saving shrank because the UNIVERSE moved
+    // toward short horizons, not because the cadence got worse — and moving
+    // toward short horizons is the outcome RFC-016 is built to encourage.
+    const ratio = FLAT_60S_ROWS_PER_DAY / perHorizon;
+    expect(ratio).toBeGreaterThan(1.5);
+    expect(ratio).toBeLessThan(2);
+
+    // Volume was never the point on its own; WHERE the volume lands is. The
+    // next test asserts that, and it is the assertion that matters.
   });
 
   it("keeps the estimates quota inside the module's shared reserve", () => {
@@ -107,23 +139,66 @@ describe("estimate volumetry", () => {
     const quotaBytes = estimates?.quotaBytes ?? 0;
     // Consumer rows plus one shadow row per token per cycle.
     const rows = rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs) * 2;
-    const daysWithinQuota = quotaBytes / (rows * MEASURED_BYTES_PER_ROW);
+    const ceilingDays = quotaBytes / (rows * MEASURED_BYTES_PER_ROW);
+    // NOT doubled for shadow: unlike the modelled ceiling, the measured count
+    // is what the table actually received, shadow rows included (2 900 of the
+    // 20 396 on 2026-08-31 were shadow).
+    const measuredDays =
+      quotaBytes / (MEASURED_ROWS_PER_DAY * MEASURED_BYTES_PER_ROW);
 
-    // The honest number, asserted rather than hidden. The per-horizon cadence
-    // buys weeks instead of the ~5.5 days a flat 60 s cadence bought, which is
-    // what makes accumulating 100 resolved markets realistic at all. This is
-    // the MODELED CEILING (200 tokens, every bucket at full rate): the 2 GB
-    // quota buys ~24 days there, while at the rate actually measured in
-    // production (~23 MB/day, 2026-08-23) it buys ~87 days — the number the
-    // owner's 2026-08-24 rebalancing decision was based on.
-    expect(daysWithinQuota).toBeGreaterThan(20);
-
-    // And an estimate must outlive the evidence chain that scores it:
-    // resolution, then UMA liveness (~2 h), the hourly label sync, and up to a
-    // full day until the daily calibration runs. Anything under ~2 days would
-    // prune the row before it could ever become evidence.
+    // THE INVARIANT, and it is the one thing here that may never be relaxed:
+    // an estimate must outlive the evidence chain that scores it — resolution,
+    // then UMA liveness (~2 h), the hourly label sync, and up to a full day
+    // until the daily calibration runs. Anything under that prunes the row
+    // before it can ever become evidence. Asserted on the MODELLED CEILING
+    // (200 tokens, every bucket writing at full rate), the most pessimistic
+    // number available, which clears it by more than five times.
     const EVIDENCE_CHAIN_DAYS = 27 / 24;
-    expect(daysWithinQuota).toBeGreaterThan(EVIDENCE_CHAIN_DAYS * 7);
+    expect(ceilingDays).toBeGreaterThan(EVIDENCE_CHAIN_DAYS);
+    expect(ceilingDays).toBeGreaterThan(5);
+
+    // The 7x safety margin the owner's quota decision was taken with, measured
+    // where that decision measured it: the rate production actually writes.
+    //
+    // RFC-016 moved this assertion off the ceiling, and the reason is recorded
+    // rather than buried. The margin used to be checked against a ceiling
+    // computed from the 2026-08-22 horizon distribution, which put 75% of the
+    // tokens beyond a week; re-measured on 2026-08-31 that share is 21%, the
+    // ceiling rises from ~47 k to ~170 k rows/day, and the same 2 GB buys 6.2
+    // days there instead of 24. Nothing about the data changed for the worse —
+    // the old model was wrong about a universe that had already shifted toward
+    // short horizons. The owner was consulted with both numbers on 2026-08-31
+    // and kept the quota at 2 GB: the invariant stays on the ceiling, the
+    // margin moves to the measured rate. Neither the TTL (90 days) nor the
+    // quota (2 GB) in RETENTION_TABLES is touched.
+    expect(measuredDays).toBeGreaterThan(EVIDENCE_CHAIN_DAYS * 7);
+    expect(measuredDays).toBeGreaterThan(90);
+  });
+
+  it("spends most of the modelled ceiling on the markets near resolution", () => {
+    // RFC-016 declares that the fast universe costs more BY DESIGN: the
+    // reserved short-horizon slots in the universe cap push tokens into the
+    // 10 s and 60 s buckets on purpose. This asserts the intent is real —
+    // that the budget is spent where an estimate can still become evidence —
+    // and pins the shape so a future distribution shift is visible as a
+    // failing test rather than a silent drift.
+    const cadence: Readonly<Record<string, number>> =
+      DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs;
+    const rowsFor = (bucket: string): number =>
+      (MAX_TOKENS * (MEASURED_ROW_SHARE[bucket] ?? 0) * DAY_MS) /
+      (cadence[bucket] ?? 60_000);
+    const total = Object.keys(MEASURED_ROW_SHARE).reduce(
+      (sum, bucket) => sum + rowsFor(bucket),
+      0,
+    );
+    const nearResolution = rowsFor("lt_1h") + rowsFor("1h_6h");
+
+    // Six percent of the tokens, but the overwhelming majority of the rows —
+    // which is exactly what the owner's 2026-08-22 cadence decision bought.
+    expect(nearResolution / total).toBeGreaterThan(0.75);
+    // And the far tail, which pays for storage it can never turn into
+    // evidence, stays a rounding error.
+    expect(rowsFor("gt_7d") / total).toBeLessThan(0.05);
   });
 
   it("keeps the whole module inside the RFC-007 budget (110 GB after the 2026-08-25 amendment)", () => {

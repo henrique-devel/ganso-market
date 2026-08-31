@@ -464,12 +464,24 @@ export function computeFeatureRow(inputs: FeatureInputs): FeatureRow {
  * Cadence gate, mirroring the owner's per-horizon estimator cadence: fine
  * windows only where a decision can actually happen. Tokens with no known end
  * date get the coarse cadence.
+ *
+ * RFC-016: a NEGATIVE horizon means the end instant is already past — an
+ * expired market, or a caller that could not resolve the real instant. It gets
+ * the coarse cadence, not the fine one. The `<= 1 h` test alone accepted every
+ * negative number and handed the most expensive window set to exactly the
+ * tokens with nothing left to price; with the date-only end date upstream that
+ * was most of the universe, most of the day. Same rule as `horizonBucket`,
+ * which buckets a negative horizon as `gt_7d`: an unknown or elapsed horizon is
+ * never rewarded with finer resolution.
  */
 export function windowKindsForHorizon(msToEnd: number | null): WindowKind[] {
-  if (msToEnd !== null && msToEnd <= 60 * 60_000) {
+  if (msToEnd === null || msToEnd < 0) {
+    return ["1m"];
+  }
+  if (msToEnd <= 60 * 60_000) {
     return ["1s", "10s", "1m"];
   }
-  if (msToEnd !== null && msToEnd <= 6 * 60 * 60_000) {
+  if (msToEnd <= 6 * 60 * 60_000) {
     return ["10s", "1m"];
   }
   return ["1m"];

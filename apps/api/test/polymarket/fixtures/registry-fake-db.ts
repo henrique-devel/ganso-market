@@ -207,15 +207,44 @@ export class FakeDb implements DatabasePool {
       return [...latest.values()];
     }
     if (text.includes("INSERT INTO polymarket_markets")) {
-      this.markets.push({
+      // ON CONFLICT DO UPDATE is emulated, not ignored: RFC-016's `end_ts`
+      // carries `COALESCE(EXCLUDED.end_ts, polymarket_markets.end_ts)`, and a
+      // fake that always inserted a fresh row could never show that a second
+      // observation without `endDate` leaves the known instant standing.
+      const next: Row = {
         condition_id: params[0],
         question: params[1],
         category: params[3],
         clob_token_ids: parseJsonParam(params[5]),
         affirmative_token_id: params[6],
         rules: params[7],
-        source_ts: params[17],
+        end_date_iso: params[13],
+        end_ts: params[14],
+        source_ts: params[18],
+      };
+      const existing = this.markets.find(
+        (row) => row.condition_id === params[0],
+      );
+      if (existing === undefined) {
+        this.markets.push(next);
+        return [];
+      }
+      Object.assign(existing, next, {
+        end_ts: next.end_ts ?? existing.end_ts ?? null,
       });
+      return [];
+    }
+    // RFC-016 applyMarketEndTsObservation: the narrow, additive write the
+    // pending sweep uses. Never inserts a row, never erases a known instant.
+    if (
+      text.includes("UPDATE polymarket_markets") &&
+      text.includes("SET end_ts")
+    ) {
+      const target = this.markets.find((row) => row.condition_id === params[0]);
+      if (target !== undefined && params[1] != null) {
+        target.end_ts = params[1];
+        target.updated_at = params[2];
+      }
       return [];
     }
     if (text.includes("INSERT INTO polymarket_event_markets")) {
