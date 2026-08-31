@@ -37,7 +37,7 @@ trabalho concluído — **todo prompt desta pasta manda re-medir antes de agir; 
 
 | # | Prompt | Tipo | Depende de | Status |
 |---|--------|------|------------|--------|
-| 01 ∥ | [Metadata version missing recorrente](01-hotfix-metadata-version-missing.md) | hotfix | — | **entregue** (PR #61, 31/08 noite) — causa raiz medida, corrigida sem migration; verificação de 24 h em curso |
+| 01 ∥ | [Metadata version missing recorrente](01-hotfix-metadata-version-missing.md) | hotfix | — | **CONCLUÍDO** (PR #61, 31/08 20:45Z) — causa raiz medida, corrigida sem migration, **verificada em produção** (~78/dia → 0, as duas causas confirmadas com o input que as disparava); soak de 24 h confirmatório |
 | 02 ∥ | [Nowcasts no calendário macro + sync com retry](02-dados-nowcasts-macro.md) | dado + hardening | — | pendente |
 | 03 | [RFC-016 — horizonte intradia](03-rfc-016-horizonte-intradia.md) | RFC | — | pendente |
 | 04 | [RFC-019 — cobertura de modelo (barreira + updown)](04-rfc-019-cobertura-modelo.md) | RFC | 03 | pendente |
