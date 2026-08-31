@@ -1,5 +1,12 @@
 {
   "_comment": "Curated official macro calendar, H2-2026, all times UTC. Entries with \"estimated\": true follow the usual publication pattern (CPI mid-month ~08:30 ET, Employment Situation first Friday ~08:30 ET, BEA GDP ~08:30 ET) and MUST be reviewed by the owner against the official schedules in each entry's _source before relying on them (see runbook). Never put release values here; values are collected from the official APIs or entered manually for BEA/FOMC.",
+  "_consensus_comment": "\"consensus_by_variable\" is the FORECAST of a release, not its value, and it is keyed by the model variable because one release publishes several: the CPI report carries cpi_yoy, cpi_mom and core_cpi_yoy at once, and a flat number could not say which scale it is on. Every value MUST come from an official publisher and MUST carry \"_consensus_source\" with the URL and the date it was read — never our own estimate. An entry with no such source simply has no consensus and macro_scheduled abstains on its markets, which is the correct behaviour and not a bug. Nowcasts age: see docs/runbooks/polymarket-fundamental.md for when and how the owner refreshes them.",
+  "_consensus_absent": {
+    "cpi-2026-10, cpi-2026-11, cpi-2026-12": "The Cleveland Fed nowcasts only the CURRENT period — on 2026-08-31 the tables carried August 2026 and 2026:Q3 and nothing further out. These entries get a consensus when their data month becomes the current one.",
+    "nfp-*": "No official publisher of a payrolls or unemployment-rate consensus is named in RFC-010 or the handoff, and the Cleveland Fed nowcasts prices only. Left without consensus rather than sourced from a vendor survey we cannot cite.",
+    "fomc-*": "CME FedWatch publishes a probability distribution over 25bp TARGET RANGES, not a level with a dispersion. Collapsing it into the normal this model centres on a consensus would misstate its shape — on 2026-08-31 it was bimodal, ~66% at 3.75-4.00% and ~34% at 3.50-3.75%, with no mass at the mean of the two. Reading a level out of it would be our estimate, not the publisher's number.",
+    "gdp-*": "BEA GDP is not a variable of macro_scheduled 1.0.0, so a consensus here would never be read. Calendar-only, as RFC-007 records it."
+  },
   "entries": [
     {
       "source": "bls",
@@ -10,7 +17,21 @@
       "year": "2026",
       "period": "M08",
       "estimated": true,
-      "_source": "https://www.bls.gov/schedule/news_release/cpi.htm"
+      "_source": "https://www.bls.gov/schedule/news_release/cpi.htm",
+      "consensus_by_variable": {
+        "cpi_yoy": 3.37,
+        "cpi_mom": 0.36,
+        "core_cpi_yoy": 2.38
+      },
+      "_consensus_source": {
+        "publisher": "Federal Reserve Bank of Cleveland — Inflation Nowcasting",
+        "url": "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting",
+        "doi": "https://doi.org/10.26509/frbc-inflationnowcast",
+        "nowcast_for": "August 2026 data month, which is what this release publishes",
+        "source_updated": "2026-08-31",
+        "read_at": "2026-08-31",
+        "note": "Headline CPI and core CPI, month-over-month and year-over-year, read from the published nowcast tables. The publisher states no dispersion for these nowcasts, so consensus_std is deliberately absent and the model falls back to macro.default_sigma. core_cpi_mom (0.20 on the same table) is omitted because it is not a variable of macro_scheduled 1.0.0."
+      }
     },
     {
       "source": "bls",

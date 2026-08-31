@@ -51,7 +51,7 @@ export const MACRO_MODEL_VERSION = "1.0.0";
  * calendar matching, regime boundary). Bump it whenever any of them changes,
  * independently of the shared as-of feature layer's own version.
  */
-export const MACRO_FEATURE_SET_VERSION: string = "1.0.0";
+export const MACRO_FEATURE_SET_VERSION: string = "1.1.0";
 
 /** Official variables the parser is allowed to recognise. */
 export type MacroVariable =
@@ -990,6 +990,31 @@ const CONSENSUS_SIGMA_KEYS: readonly string[] = [
   "sigma",
 ];
 
+/**
+ * Per-variable consensus maps, read BEFORE the flat keys above.
+ *
+ * One calendar entry publishes several of this model's variables at once —
+ * the September CPI release carries cpi_yoy, cpi_mom AND core_cpi_yoy, and
+ * the Employment Situation carries nonfarm_payrolls AND unemployment_rate —
+ * while `matchCalendar` pairs a market with an entry by FAMILY, not by
+ * variable. A single flat number therefore cannot say which scale it is on,
+ * and a year-over-year nowcast served to a month-over-month market would be a
+ * silent unit mismatch in the pre-release regime, where the post-release
+ * `MACRO_RELEASE_MAX_SIGMAS` guard cannot see it.
+ *
+ * The keyed form removes the ambiguity by naming the variable. The flat keys
+ * stay valid and unchanged — they are unambiguous for a family with exactly
+ * one variable (FOMC) — and `config/macro-calendar.json` is held to the keyed
+ * form for the multi-variable families by its own shape test.
+ */
+const CONSENSUS_MAP_KEYS: readonly string[] = [
+  "consensus_by_variable",
+  "nowcast_by_variable",
+];
+const CONSENSUS_SIGMA_MAP_KEYS: readonly string[] = [
+  "consensus_std_by_variable",
+];
+
 const DECIMAL_PATTERN = /^-?\d+(?:\.\d+)?$/;
 
 /** JSONB round-trips numbers as numbers or as strings; accept both, exactly. */
@@ -1015,17 +1040,47 @@ interface ConsensusReading {
   readonly sigmaKey: string | null;
 }
 
+/**
+ * Read `variable`'s entry out of one of `mapKeys`, as "<mapKey>.<variable>".
+ * A map that is absent, not an object, or silent about this variable simply
+ * does not answer — it never falls through to another variable's number.
+ */
+function readFromVariableMap(
+  payload: Record<string, unknown>,
+  mapKeys: readonly string[],
+  variable: MacroVariable,
+): { readonly value: number; readonly key: string } | null {
+  for (const mapKey of mapKeys) {
+    const map = payload[mapKey];
+    if (typeof map !== "object" || map === null || Array.isArray(map)) {
+      continue;
+    }
+    const parsed = readNumeric((map as Record<string, unknown>)[variable]);
+    if (parsed !== null) {
+      return { value: parsed, key: `${mapKey}.${variable}` };
+    }
+  }
+  return null;
+}
+
 function readConsensus(
   payload: Record<string, unknown>,
+  variable: MacroVariable,
 ): ConsensusReading | null {
   let value: number | null = null;
   let key: string | null = null;
-  for (const candidate of CONSENSUS_KEYS) {
-    const parsed = readNumeric(payload[candidate]);
-    if (parsed !== null) {
-      value = parsed;
-      key = candidate;
-      break;
+  const keyed = readFromVariableMap(payload, CONSENSUS_MAP_KEYS, variable);
+  if (keyed !== null) {
+    value = keyed.value;
+    key = keyed.key;
+  } else {
+    for (const candidate of CONSENSUS_KEYS) {
+      const parsed = readNumeric(payload[candidate]);
+      if (parsed !== null) {
+        value = parsed;
+        key = candidate;
+        break;
+      }
     }
   }
   if (value === null || key === null) {
@@ -1033,12 +1088,22 @@ function readConsensus(
   }
   let sigma: number | null = null;
   let sigmaKey: string | null = null;
-  for (const candidate of CONSENSUS_SIGMA_KEYS) {
-    const parsed = readNumeric(payload[candidate]);
-    if (parsed !== null && parsed > 0) {
-      sigma = parsed;
-      sigmaKey = candidate;
-      break;
+  const keyedSigma = readFromVariableMap(
+    payload,
+    CONSENSUS_SIGMA_MAP_KEYS,
+    variable,
+  );
+  if (keyedSigma !== null && keyedSigma.value > 0) {
+    sigma = keyedSigma.value;
+    sigmaKey = keyedSigma.key;
+  } else {
+    for (const candidate of CONSENSUS_SIGMA_KEYS) {
+      const parsed = readNumeric(payload[candidate]);
+      if (parsed !== null && parsed > 0) {
+        sigma = parsed;
+        sigmaKey = candidate;
+        break;
+      }
     }
   }
   return { value, key, sigma, sigmaKey };
@@ -1135,7 +1200,7 @@ function evaluate(input: MacroModelInput): MacroEvaluation | ModelResult {
   // so it is never routed through the guard.
   guard.record("macro_calendar", calendar.sourceTs, calendar.eventKey);
 
-  const consensus = readConsensus(calendar.payload);
+  const consensus = readConsensus(calendar.payload, spec.variable);
   if (consensus === null) {
     return { ok: false, reason: "MODEL_ABSTAINED" };
   }
