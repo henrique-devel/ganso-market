@@ -4,8 +4,11 @@
   `RESOLUTION_MARKET_METADATA_VERSION_MISSING` recorrente (PR #61)**: causa raiz
   medida em produção (78 falhas/24 h em duas populações — 674 rejeições/dia
   journalizadas indevidamente e a corrida entre o `enter` e a primeira versão de
-  metadata), corrigida sem migration e sem afrouxar o fail-closed. Ver a seção
-  "SESSÃO 2026-08-31 (noite)". Registro anterior do dia: **re-medição do bloco de 28/08 em produção,
+  metadata), corrigida sem migration e sem afrouxar o fail-closed. **Deployada e
+  verificada em produção às 20:45Z**: as duas causas confirmadas com o input que
+  as disparava (rejeições absorvidas com evento tipado; `enter` e primeira
+  versão de metadata no mesmo instante), taxa **~78/dia → 0**, zero erros nos
+  dois serviços. Ver a seção "SESSÃO 2026-08-31 (noite)". Registro anterior do dia: **re-medição do bloco de 28/08 em produção,
   regra de parada honrada**: os quatro defeitos re-medidos e nenhum existe
   mais — zero código/config/migration/deploy nesta sessão. Soak do #51
   **fechado**: zero resets do G2 em ~65 h; #50 e #53 saudáveis e contínuos;
@@ -1774,13 +1777,57 @@ cursor**. Nenhum mapeamento de token é inventado em lugar nenhum.
 - `make verify` verde; suíte de resolution + registry + samplers + recorder:
   337 testes.
 
-### Verificação em produção
+### FATO VERIFICADO — deployado e confirmado em produção (2026-08-31 20:14–20:45Z)
 
-Pendente do merge → CD → **rebuild de `polymarket-resolution` E de
-`polymarket-recorder`** (o fix toca os dois serviços). Alvo: a taxa de
-`RESOLUTION_MARKET_METADATA_VERSION_MISSING` cai de **~78/dia para 0** — as duas
-populações medidas somam 100% das ocorrências e nenhuma outra fonte de mudança
-jamais produziu a classe; zero regressão em `SCORES_RECOMPUTED`/`GRAPH_BUILT`.
+Deploy nos três passos: merge (PR #61, CI verde) → CD (`8b0b5b7`, run verde,
+migrations sem mudança — nenhuma migration nesta entrega) → **rebuild dos DOIS
+containers de profile** (`polymarket-resolution` e `polymarket-recorder`, ambos
+tocados pelo fix). Código confirmado no disco por grep antes do rebuild
+(`universe_action` ×3 e `RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE` no runner, o
+`enter` transacional no registry) e `release-sha` **`8b0b5b7`** conferido
+**dentro** dos três containers (resolution, recorder e api) — nunca por
+`compose ps`. Boot limpo: `SCORES_RECOMPUTED trigger:"boot" scored:171
+failed:0`, zero erros.
+
+**As duas causas foram verificadas com o input que as disparava, não por
+ausência de erro:**
+
+- **Causa 1 (rejeições).** 20:29:17Z o ciclo Gamma gravou 3 `rejected_filter`
+  para mercados com **0 linhas em `polymarket_markets` e 0 versões de
+  metadata** — a população exata. 11 s depois o tick consumiu as 3 e registrou
+  `RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE {source:"universe_membership",
+  skipped:3}`, **sem `JOB_FAILED`**. Antes do fix esse input produzia
+  exatamente um `RESOLUTION_MARKET_METADATA_VERSION_MISSING` e derrubava o
+  `graph_eval` e o `heartbeat` do ciclo.
+- **Causa 2 (corrida na entrada).** O mercado `0x05f71a3164a3` entrou às
+  **20:39:18.304Z** e sua **primeira versão de metadata (`version = 1`) tem
+  `valid_from` idêntico — 20:39:18.304Z**. Mesmo instante, mesma transação.
+- **O lote misto que a regressão modela aconteceu de verdade**, às 20:39:27.841Z
+  num único tick: `RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE skipped:8` +
+  `SCORES_RECOMPUTED trigger:"rule_change" scored:171 failed:0` +
+  `GRAPH_BUILT nodes:62` (subiu de 61 — o entrante entrou no grafo). As
+  rejeições foram absorvidas e a entrada real foi pontuada no mesmo lote.
+
+| Medida (janela de 26 min pós-deploy)      | Antes                 | Depois        |
+| ----------------------------------------- | --------------------- | ------------- |
+| `RESOLUTION_MARKET_METADATA_VERSION_MISSING` | ~78/dia (~1,4 na janela) | **0**      |
+| `JOB_FAILED job:"state_tick"`             | idem                  | **0**         |
+| Erros (`level:error`) no resolution        | 6/h                   | **0**         |
+| Erros no recorder                          | 0 na classe           | **0**         |
+| `SCORES_RECOMPUTED` / `GRAPH_BUILT`        | 9 / 15 por ~45 min    | 3 / 5 por 26 min — cadência preservada |
+| `GRAPH_EVALUATED` / `RESOLUTION_HEARTBEAT` | 76 / 61 por ~45 min   | 30 / 25 por 26 min |
+| `REGISTRY_PERSIST_FAILED` / `UNIVERSE_LOG_FAILED` | 0             | **0** — entradas não foram bloqueadas pela transação nova |
+
+Os inputs que disparavam as duas causas **chegaram** na janela (11 rejeições e
+1 entrada) e nenhum virou erro. A verificação de 24 h que resta é confirmatória:
+o alvo é taxa 0 sustentada — qualquer reaparecimento seria uma terceira
+população, e a medição de 20/08–31/08 diz que ela não existe (as 9.925 mudanças
+sem metadata do histórico vêm 100% de `universe_membership`).
+
+**Ponto a observar:** com o `enter` dentro da transação de metadata, um entrante
+cujo `applyMarketMetadataObservation` falhar **não vira membro** naquele ciclo
+(antes virava, com `logSafely` engolindo a falha) — é retentado 10 min depois e
+aparece como `REGISTRY_PERSIST_FAILED`. Zero ocorrências até agora.
 
 ### Carona não executada — o 500 do `GET /polymarket/decisions`
 
