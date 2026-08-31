@@ -59,7 +59,7 @@ function universeResponder(): Responder {
         {
           token_id: "token-1",
           condition_id: "0xcond",
-          end_date_iso: new Date(NOW.getTime() + 30 * 60_000).toISOString(),
+          end_instant: new Date(NOW.getTime() + 30 * 60_000),
         },
       ];
     }
@@ -255,7 +255,7 @@ describe("paper runner feature pipeline", () => {
     const responder: Responder = (text) => {
       if (text.includes("FROM polymarket_book_snapshots s")) {
         return [
-          { token_id: "token-1", condition_id: "0xcond", end_date_iso: null },
+          { token_id: "token-1", condition_id: "0xcond", end_instant: null },
         ];
       }
       throw new Error("loader exploded");

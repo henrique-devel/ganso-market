@@ -280,6 +280,10 @@ function serializeMarket(row: Row): Row {
     min_order_size: row["min_order_size"] ?? null,
     fee_type: row["fee_type"] ?? null,
     end_date_iso: row["end_date_iso"] ?? null,
+    // RFC-016: the real end INSTANT. `end_date_iso` stays alongside it —
+    // it is the record of what Gamma returned in `endDateIso`, not a
+    // derived value, and removing it would rewrite history.
+    end_ts: toIso(row["end_ts"]),
     active: row["active"] ?? null,
     closed: row["closed"] ?? null,
     source_ts: toIso(row["source_ts"]),
@@ -370,8 +374,8 @@ const PARAM_VERSION_COLUMNS =
 
 const MARKET_COLUMNS =
   "condition_id, question, slug, category, neg_risk, clob_token_ids, rules, " +
-  "rules_version, tick_size, min_order_size, fee_type, end_date_iso, active, " +
-  "closed, source_ts, received_at, updated_at";
+  "rules_version, tick_size, min_order_size, fee_type, end_date_iso, end_ts, " +
+  "active, closed, source_ts, received_at, updated_at";
 
 // Latest enter/exit per condition_id up to a point in time; membership is
 // "latest action is enter".

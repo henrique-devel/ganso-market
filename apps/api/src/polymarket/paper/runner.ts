@@ -60,12 +60,30 @@ export const ACTIVE_TOKEN_WINDOW_MS = 10 * 60_000;
  */
 export const MAX_WINDOW_BACKLOG = 5;
 
-/** Operational query (current state, not a feature input). */
+/**
+ * Operational query (current state, not a feature input).
+ *
+ * RFC-016 horizon order, CURRENT flavour: `end_ts` is the instant Gamma
+ * published, the newest rule version is the fallback that covers markets not
+ * yet re-observed, and the date-only `end_date_iso` is the last resort.
+ *
+ * Reading the date-only column here was not merely imprecise, it inverted the
+ * budget: `endDate - now` went NEGATIVE for most of the day, and a negative
+ * horizon satisfies the `<= 1 h` test in `windowKindsForHorizon`, so a market
+ * with 13 h of life got the most expensive window set instead of the cheapest.
+ * Measured in production on 2026-08-31: 75% of the 10s windows computed in
+ * six hours belonged to markets whose real horizon exceeded 6 h.
+ */
 const ACTIVE_TOKENS_SQL =
   "SELECT s.token_id, MAX(s.condition_id) AS condition_id, " +
-  "MAX(m.end_date_iso) AS end_date_iso " +
+  "MAX(COALESCE(m.end_ts, r.end_date, m.end_date_iso::timestamptz)) AS end_instant " +
   "FROM polymarket_book_snapshots s " +
   "LEFT JOIN polymarket_markets m ON m.condition_id = s.condition_id " +
+  "LEFT JOIN LATERAL (" +
+  "  SELECT end_date FROM polymarket_rule_versions" +
+  "   WHERE condition_id = m.condition_id AND end_date IS NOT NULL" +
+  "   ORDER BY version DESC LIMIT 1" +
+  ") r ON TRUE " +
   "WHERE s.received_at > $1 " +
   "GROUP BY s.token_id";
 
@@ -201,10 +219,14 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         continue;
       }
       const conditionId = row["condition_id"];
-      const endDateIso = row["end_date_iso"];
+      // TIMESTAMPTZ now, so the driver hands back a Date; the string branch
+      // stays for the `end_date_iso` last resort inside the COALESCE.
+      const endInstant = row["end_instant"];
       let endDate: Date | null = null;
-      if (typeof endDateIso === "string" && endDateIso.length > 0) {
-        const parsed = new Date(endDateIso);
+      if (endInstant instanceof Date) {
+        endDate = Number.isNaN(endInstant.getTime()) ? null : endInstant;
+      } else if (typeof endInstant === "string" && endInstant.length > 0) {
+        const parsed = new Date(endInstant);
         endDate = Number.isNaN(parsed.getTime()) ? null : parsed;
       }
       tokens.push({

@@ -166,11 +166,17 @@ export function registerPortfolioRoutes(
     { preHandler: guard },
     wrap(async (_request, reply) => {
       const rows = await pool.query(
-        `SELECT DISTINCT ON (token_id)
-                snapshot_id, condition_id, token_id, computed_at, panel_json,
-                decision_id, entrable, vetoed, veto_reason, config_version
-           FROM portfolio_panel_snapshots
-          ORDER BY token_id, computed_at DESC
+        // RFC-016: `end_ts` rides along so the panel can be ranked by
+        // horizon — the data half of the future "Rápidos" tab (RFC-015).
+        // LEFT JOIN, because a snapshot must never disappear from the panel
+        // just because its registry row has not been re-observed yet.
+        `SELECT DISTINCT ON (p.token_id)
+                p.snapshot_id, p.condition_id, p.token_id, p.computed_at,
+                p.panel_json, p.decision_id, p.entrable, p.vetoed,
+                p.veto_reason, p.config_version, m.end_ts
+           FROM portfolio_panel_snapshots p
+           LEFT JOIN polymarket_markets m ON m.condition_id = p.condition_id
+          ORDER BY p.token_id, p.computed_at DESC
           LIMIT ${String(LIST_LIMIT)}`,
       );
       return reply.send({
