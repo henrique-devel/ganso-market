@@ -290,7 +290,7 @@ E o schema no banco de produção:
 | Estimativas `MODEL` pontuáveis                          | **36.212 de 74.412**        | **74.412 de 74.412 (100%)**      |
 | Estimativas da última hora de vida, pontuáveis          | **0 de 8.063**              | **8.063 de 8.063 (100%)**        |
 | Gap de estimativa na última hora de vida                | 10 s (já funcionava)        | **10,0 s** (mercado das 00:00Z)  |
-| Janelas `10s` em mercado com horizonte real > 6 h       | **63.951 de 84.772 (75%)**  | **0 de 14**                      |
+| Janelas `10s` em mercado com horizonte real > 6 h       | **63.951 de 84.772 (75%)**  | **0 de 3.868** (amostra de 1 h 40) |
 | Janelas `1s` idem                                       | **3.936 de 10.481 (38%)**   | **0 de 2**                       |
 | Erros novos (6 serviços)                                | —                           | **0 em todos**, acumulado em 37 min |
 | RAM                                                     | —                           | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
@@ -316,14 +316,19 @@ depois dele:
 
 Normalizado por hora, a taxa de janelas `10s` cai de ~14.400/h para ~38/h.
 
-### Taxa de volume — medida curta, a re-medir em 48 h
+### Taxa de volume — duas janelas, ambas curtas
 
-Nos primeiros **21,6 min** pós-deploy: **443 linhas**, que projetam
-~**29,5 k/dia**, contra **20.818** nas 24 h anteriores ao deploy. **A janela é
-curta e enviesada**: contém o vencimento das 00:00Z de vários updown horários,
-que é exatamente o pico do bucket de 10 s. Mesmo tomando a projeção pelo valor
-de face, a quota de 2 GB compraria ~71 dias — 63× o piso de 27 h — e
-`fundamental_estimates` está em **911 MB (44,5% da quota)**.
+| Janela pós-deploy | Linhas | Projeção/dia |
+| ------------------- | ------ | ------------ |
+| 21,6 min            | 443    | ~29,5 k      |
+| 1 h 40              | 1.889  | **~27,0 k**  |
+
+Contra **20.818** nas 24 h anteriores ao deploy. As duas janelas ainda são
+curtas e a primeira é enviesada pelo vencimento das 00:00Z de vários updown
+horários, que é o pico do bucket de 10 s; a projeção cai conforme a janela
+cresce, o que é o esperado. Mesmo tomando ~27 k/dia pelo valor de face, a quota
+de 2 GB compra ~78 dias — 69× o piso de 27 h — e `fundamental_estimates` está
+em **913 MB (44,6% da quota)**.
 
 **Ação para a próxima sessão:** re-medir a taxa em 48 h e comparar com o modelo
 do `budget.test.ts`.
@@ -344,11 +349,18 @@ do `budget.test.ts`.
   O motivo passou a carregar o bucket de horizonte, então o giro por bucket é
   legível direto do log de membresia, sem join com uma cadeia de regras que já
   andou quando alguém for perguntar.
-- **`paper_feature_windows` continua em 1095 MB contra 0,6 GB de quota (178%)**,
-  e a poda por quota bate no piso (`RETENTION_QUOTA_NO_PROGRESS`, cutoff =
-  floor). É **anterior** a esta RFC; o que ela fez foi fechar a torneira. A
-  expectativa é que a tabela desça abaixo da quota conforme o acervo envelhece —
-  **verificar em 48 h**; se não descer, é decisão de quota do proprietário.
+- **`paper_feature_windows` está descendo, como previsto.** Entrou no deploy em
+  1095 MB contra 0,6 GB de quota (178%), com a poda batendo no piso
+  (`RETENTION_QUOTA_NO_PROGRESS`, cutoff = floor). Uma hora e quarenta depois:
+  **722 MB (117%)**. O acervo é **anterior** a esta RFC; o que ela fez foi
+  fechar a torneira, e a poda voltou a fazer progresso. **Verificar em 48 h** se
+  fecha abaixo da quota; se não fechar, é decisão de quota do proprietário.
+- **Um erro no recorder na última hora, e não é regressão:**
+  `MACRO_CALENDAR_SYNC_FAILED` com `trigger: "boot"` às 01:37:50Z, quando o CD
+  do PR #67 (docs) reiniciou os containers. É a fragilidade conhecida que o PR
+  #63 endereçou, e o job de 10 min a recuperou sozinho às **01:47:52Z** com
+  `MACRO_CALENDAR_SYNCED {"recovered": true}` — o mesmo padrão registrado no
+  PR #65.
 
 
 ## 8. Não verificado
