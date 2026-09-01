@@ -1,17 +1,99 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-01 — **RFC-014 + RFC-019: o modelo deixa de calar
-  em barreira e updown (PR #70), DEPLOYADA E VERIFICADA EM PRODUÇÃO às
-  12:15:51Z** (`/etc/ganso/release-sha` no container do estimator =
-  `c8327a86`, era `4bae1b92`). A `crypto_updown_gbm@1.1.0` nasceu em `shadow`
-  no boot e cobre agora **todo mercado BTC com livro válido e forma
-  reconhecida**: barreira **0 → 18 de 18**, updown **0 → 1 de 1**, terminal
-  **14 = 14** (contagens idênticas às da 1.0.0 — zero regressão medida em
-  produção, não só em teste). Cobertura do universo **14 → 33 mercados
-  (2,36×)**; os descobertos são exatamente os previstos (não-BTC sem feed e as
-  recusas deliberadas). Consumidor 100% em `MARKET_BASELINE`/`MODEL_IN_SHADOW`
-  (1.603 linhas), zero erros nos seis serviços, 142 ciclos, RAM 37,45 MiB de
-  192. A categoria crypto estava em **31,9%** de
+- Última atualização: 2026-09-01 — **RFC-015: o painel do operador (PR #76)**.
+  A faixa de PnL passa a existir em **todas** as abas, "Visão geral" vira a aba
+  default com um agregador (`GET /polymarket/overview`) e um feed keyset
+  (`GET /polymarket/events?after=`), o vocabulário de máquina ganha dicionário
+  em português **sem esconder o código**, e o `unknown` cru some da tela.
+  **Nada do que a faixa mostra é dado novo** — `realized_pnl_day_usd`,
+  `_week_usd`, banca, equity e drawdown já eram publicados e já eram PARSEADOS
+  por `portfolio.ts`, e nunca renderizados; não-realizado e fees vinham de
+  `/paper/performance`, que existia e estava fechado no Nginx.
+  **O achado da sessão não estava no escopo:** o 500 do
+  `GET /polymarket/decisions` de 31/08 18:21Z, registrado como "não
+  reproduzível", é aritmética. Não existe índice em `decision_ts` sozinho, então
+  `ORDER BY decision_ts DESC LIMIT 500` era um parallel seq scan de **715 ms com
+  cache frio** (12 ms quente) — e a API roda com **`statement_timeout = 1000
+  ms`**, porque `database.ts` reusa `connect_timeout_ms` como timeout de query e
+  **todo worker sobrescreve para 30–120 s menos a API**, que é justamente quem
+  serve o painel. Ordenar por `decision_id DESC` (a PK, monotônica com a
+  inserção e uma ordem TOTAL onde `decision_ts` empata dentro de um ciclo):
+  **0,17 ms**, e **2,2 ms medidos em produção depois do deploy**.
+  `GET /polymarket/opportunities` tinha o mesmo defeito um passo atrás —
+  `DISTINCT ON` que não usava o índice, **786 ms** com sort externo derramando
+  9,5 MB por worker em disco, na aba que fica aberta com poll de 30 s. Reescrito
+  como loose index scan: **24 ms medidos em produção**. Estava fora do escopo
+  até a aba "Rápidos" precisar da consulta.
+  **`budget_used_pct` foi corrigido antes de `data-quality` ser publicado**: era
+  bytes FÍSICOS de um SUBCONJUNTO (`polymarket_%`) contra o orçamento inteiro,
+  enquanto `QUOTA_GLOBAL_ALARM` soma bytes VIVOS da lista INTEIRA de retenção.
+  Dois erros somados. A medição saiu do fecho de `createRetentionJob` e virou
+  `measureTableSizes` exportada — um segundo estimador seria repetir o defeito
+  com outro nome — e a leitura das 74 tabelas passou a ser **uma** consulta de
+  catálogo, 16 ms.
+  Perímetro **verificado de dentro do servidor**: `overview`, `events`,
+  `data-quality` e `paper/performance` respondem **401 sem sessão** e **404 em
+  POST/PUT/DELETE/PATCH**; `POST /paper/intents`, `/paper/orders`,
+  `/paper/kill-switch`, `/portfolio/halt` e `/portfolio/resume` seguem **404**.
+  `make verify` verde, **1538 testes na API e 82 no web, zero migration**.
+  Detalhe em [`docs/rfcs/RFC-015-operator-dashboard.md`](rfcs/RFC-015-operator-dashboard.md).
+  **ACHADO NÃO CAUSADO POR ESTA SESSÃO, e o mais acionável dela:**
+  `polymarket_book_deltas` ficou **53 minutos sem uma única linha**
+  (22:43:47Z → 23:36Z), começando ~30 min ANTES do merge. Sobreviveu ao rebuild
+  do profile às 23:19Z e só voltou no restart seguinte, recuperando o regime
+  cheio (8.892 deltas/min em 186 tokens). Durante a parada, `book_snapshots`,
+  `book_snapshots_full` e `rtds_prices` seguiram gravando e o universo tinha 92
+  mercados vivos — é o caminho **incremental** do livro, não a conexão. **E
+  `polymarket_data_gaps` não abriu uma única lacuna**: 53 minutos de
+  microestrutura perdida sem nenhum alarme. Seção própria abaixo.
+  Registro anterior: **RFC-017: o shadow replay nos dois modos, e
+  três premissas do escopo de 28/08 desmentidas pela própria ferramenta (PRs #72
+  e #73)**. Um CLI **read-only por construção** (allowlist de statement mais
+  `SET TRANSACTION READ ONLY` por leitura) que varre uma chave de config sobre o
+  decision log gravado, e que troca a FONTE da estimativa pelas linhas shadow
+  as-of o `decision_ts`. Rodado em produção sobre a janela inteira — **224.647
+  decisões, 100% admitidas pelo replay de baseline, zero mismatch**.
+  **(1) O denominador honesto não é o log, são 9,05% dele.** `evaluateMarket`
+  recusa em escada e as recusas de cima são decididas por escalares já
+  persistidos que nenhuma troca de config recomputa; só **20.340 linhas, em 65
+  dos 322 mercados**, chegam à conta. Metade do log é
+  `PORTFOLIO_CIRCUIT_BREAKER`. Dividir flips por 224 mil daria um número **11×
+  menor que o real** e chamaria de "impacto zero" o que é "população errada".
+  **(2) `capitalCostAnnual` não é "quase inerte": não muda NENHUMA decisão.**
+  Em 0,15, 0,183, 0,20, 0,25, 0,30, 0,365 e 0,40 a coluna AÇÃO
+  (`ACCEPTED ↔ REJECTED`) é **0 linhas / 0 mercados**, e a busca de valor de
+  virada não acha mudança de ação em todo o bracket **[0,12; 1000] — nem a
+  100.000% a.a.** A causa é o lockup: o log tem dois (**38 min** e **3,67 h**), e
+  com o hurdle do buffer em 0,0005/dia a carga máxima a r=0,40 é
+  **0,0000827/ação**, 0,41% do `edgeLiqMin`. O maior candidato consome **0,4284%**
+  da folga da decisão mais apertada. Isso corrige o registro de que na saída "os
+  12% já são vinculantes": o critério 6 compara contra 0,000159/ação enquanto o
+  critério 1 dispara em 0,01 — está **63× dentro** dele. **A cunhagem da 1.3.0
+  continua sendo decisão do proprietário, e a medição a transforma numa decisão
+  sobre o UNIVERSO negociado, não sobre a taxa.**
+  **(3) Parte das decisões JÁ usa o shadow — defeito ativo.** `estimateAsOf`
+  (`store.ts:178`) não filtra `status` nem desempata, e cada instante tem uma
+  linha ativa mais uma por modelo shadow com o **mesmo `decision_ts`**. Com
+  **zero modelos promovidos**, **5 decisões** de 01/09 gravaram
+  `estimate_source='MODEL'` com os números exatos da linha shadow (a 698296 tem
+  `q_lo=0,990385` do `estimate_id` 837093, não `0,997632` da ativa 837092).
+  Nenhuma foi aceita, mas a invariante da RFC-010 está quebrada. **É área da
+  RFC-010, fica fora deste escopo e vira decisão do proprietário.**
+  **Modo B:** das 2.576 decisões que chegaram à estimativa com shadow as-of,
+  **519 (20,1%) em 9 de 22 mercados (40,9%)** teriam agido diferente — **511
+  entradas só do shadow contra 8 só do baseline**. O **PnL contrafactual ainda
+  não é medível**: 0 das 515 entradas tem label final. A ferramenta reporta isso
+  em vez de inventar um número. **A própria rodada seca pegou dois defeitos de
+  medição na ferramenta** antes de qualquer número chegar ao proprietário: AÇÃO
+  estava somada a MOTIVO (uma troca de PERNA reescrevia o rótulo de 284 rejeições
+  que continuavam rejeições), e os deltas vinham das colunas de 6 casas enquanto
+  o motor decide em 9 (a 0,183 a carga que vira a perna é 2,5e-7). Determinismo
+  provado em produção: duas rodadas sobre a janela fechada no `decision_id
+  703817` deram agregados idênticos. `make verify` verde, **1518 testes na API**.
+  Sem migration. Evidência:
+  [`docs/test-results/RFC-017-shadow-replay.md`](test-results/RFC-017-shadow-replay.md).
+  Registro anterior do dia: **RFC-014 + RFC-019: o modelo deixa de calar
+  em barreira e updown (PR #70)**. A categoria crypto estava em **31,9%** de
   cobertura (36 de 113 mercados com linha MODEL em 24 h) porque o modelo recusa,
   corretamente, tudo que não é terminal: **barreira 0 de 51, updown 0 de 13**.
   As duas formas entram como **uma** versão nova da mesma família —
@@ -2840,3 +2922,188 @@ Para localizar o commit corrente sem manter hash autorreferente neste arquivo:
 ```sh
 git log -1 --oneline
 ```
+
+## SESSÃO 2026-09-01 — RFC-015: O PAINEL DO OPERADOR (PR #76)
+
+**FATO INFORMADO:** escopo aprovado pelo proprietário em 2026-08-28,
+reposicionado por decisão dele para **depois** da cobertura de modelo.
+
+**FATO VERIFICADO (produção, `release-sha` `18000c1c63133eeeefe3afe2d1dfc60c2e0768aa`,
+deploy 2026-09-01 23:14Z, rebuild do profile `polymarket` às 23:19Z):** as
+quatro publicações novas respondem no perímetro, os dois endpoints novos estão
+registrados na API, e as duas consultas que ameaçavam o orçamento de 1 s foram
+medidas de novo **depois** do deploy.
+
+### O que a re-medição desmentiu, antes de qualquer linha de código
+
+| Premissa de 28/08 | Medido em 01/09 |
+| --- | --- |
+| "os 308 terminais `unknown` são permanentes por design" | **confirmado, e agora com a data**: os 308 estão entre `2026-08-22 01:38Z` e `2026-08-25 01:33Z`, todos anteriores ao primeiro `valid_from` de `polymarket_market_metadata_versions` (`2026-08-25 01:42:43Z`). O rótulo "anterior a 25/08" é medido, não estimado. |
+| "categorias: crypto, macro, weather" | confirmado: 1294 / 55 / 1, mais 34 sem categoria no histórico |
+| "o 500 do `/decisions` não foi investigado" | **causa-raiz encontrada** (abaixo) |
+| "`/opportunities` a ~505 ms, fica para outro escopo" | **786 ms** ao medir o plano, com sort externo em disco — entrou no escopo |
+| "RFC-016 em produção → a aba Rápidos entra" | entra, **e o universo tem 0 mercados com horizonte < 6 h** neste instante |
+| "`end_ts` serve para ranquear por horizonte" | **falso onde importa**: cobre 219 dos 372 tokens do painel; a cadeia versionada cobre 372, e onde ambos existem discordam em 0 |
+
+### O 500 de 31/08 não era irreproduzível — era um orçamento de 1 segundo
+
+```
+Limit  (actual time=710.738..714.966 rows=500)
+  -> Sort (decision_ts DESC, top-N heapsort)
+       -> Parallel Seq Scan on portfolio_decisions   Buffers: shared read=92199
+Execution Time: 715.150 ms
+```
+
+Não existe índice em `decision_ts` sozinho: os três que existem são compostos e
+liderados por `decision_kind` / `condition_id` / `token_id`. E o orçamento:
+
+```ts
+// database.ts
+const queryTimeoutMs = overrides.queryTimeoutMs ?? config.database.connectTimeoutMs;
+//                                                  ^ config/runtime.json: 1000
+poolConfig.statement_timeout = queryTimeoutMs;
+```
+
+Estimator, portfolio e resolution sobrescrevem para 60 s; paper e recorder para
+30 s; o shadow-replay para 120 s. **A API não sobrescreve** — e é a única que
+serve o painel. 715 ms frio contra 12 ms quente é exatamente a forma de um 500
+que "não reproduz": o custo depende do cache, e a tabela crescia ~545 MB/dia sem
+poda até a migration 0016. Em 31/08 18:21Z, antes da poda de 449 mil linhas, a
+mesma varredura era múltiplos disso.
+
+| consulta | antes | depois | medido em produção pós-deploy |
+| --- | --- | --- | --- |
+| `/polymarket/decisions` | seq scan + sort, 92.199 buffers lidos, **715 ms** | index only scan backward na PK, 104 acertos | **2,2 ms** |
+| `/polymarket/opportunities` | `DISTINCT ON` sem usar o índice, sort externo 9,5 MB/worker, **786 ms** | loose index scan (1 lookup por token + lateral) | **23,8 ms**, e 200/200 linhas com instante de fim |
+
+`decision_id DESC` também conserta um defeito latente de paginação: um ciclo do
+motor grava várias decisões com o **mesmo** `decision_ts`, então a ordem antiga
+era ambígua entre empates. As duas listas coincidem em 490 das 500 linhas.
+
+### `budget_used_pct`: a definição, antes da publicação
+
+O endpoint somava `pg_total_relation_size` (**físico**) das tabelas
+`polymarket_%` (**subconjunto**) contra o orçamento inteiro de 110 GiB, enquanto
+`QUOTA_GLOBAL_ALARM` soma bytes **vivos** da lista **inteira** de retenção
+(que inclui `paper_*`, `resolution_*`, `portfolio_*`). Base errada e população
+errada: o número do painel nunca foi o número do alarme.
+
+A correção não foi um segundo estimador — foi **extrair o primeiro**.
+`measureTableSizes` sai do fecho de `createRetentionJob`, vira exportada, e
+tanto o alarme quanto a read API a chamam. De quebra, a leitura das 74 tabelas
+passou de 37 idas ao banco para **uma** consulta de catálogo: **16 ms**. A
+resposta publica `live_bytes`, `physical_bytes` e `bloat_bytes` lado a lado,
+porque "quanto está retido" e "quanto custa de disco" são perguntas diferentes.
+
+### Perímetro — verificado de dentro do servidor
+
+| location (todos `location =`, GET-only) | sem sessão | método errado |
+| --- | --- | --- |
+| `/api/polymarket/overview` | 401 | 404 em POST/PUT/DELETE/PATCH |
+| `/api/polymarket/events` | 401 | 404 em POST/PUT/DELETE/PATCH |
+| `/api/polymarket/data-quality` | 401 | 404 em POST/PUT/DELETE/PATCH |
+| `/api/polymarket/paper/performance` | 401 | 404 em POST/PUT/DELETE/PATCH |
+
+E as escritas seguem fechadas: `POST /paper/intents`, `/paper/orders`,
+`/paper/kill-switch`, `/portfolio/halt` e `/portfolio/resume` → **404**. Controle
+positivo de que a API tem as rotas (e não que o Nginx está mentindo): direto em
+`api:3000`, as quatro devolvem `MISSING_BEARER_TOKEN`/`AUTH_UNAUTHENTICATED`
+enquanto um caminho inventado devolve `ROUTE_NOT_FOUND`.
+
+`scripts/tests/test_nginx_perimeter.py` passa a guardar uma **allowlist** de
+caminhos sob `/paper` (rearme + performance) em vez de "só o rearme", com o
+método permitido de cada um.
+
+### O feed: cursor por fonte, não por instante
+
+`GET /polymarket/events?after=` é keyset sobre tabelas que já existem — sem
+migration. O cursor é `fonte:id,fonte:id,…`, um id monotônico por fonte, e não
+um instante global: duas fontes gravando no mesmo milissegundo fariam um cursor
+de instante **perder uma linha em silêncio**. Um cursor com fonte desconhecida
+é **descartado**, não rejeitado, para sobreviver a um deploy que renomeie uma
+fonte. Decisões só entram quando `outcome = 'ACCEPTED'` — são **262 de 234.571**;
+as outras são `ENTRY/REJECTED` e enterrariam o resto.
+
+### A aba "Rápidos" entra, e é verificada VAZIA na fatia que importa
+
+A RFC-016 está em produção, então a condição do escopo está satisfeita e a aba
+entrou. O que a medição obriga a dizer junto: **o universo não tinha nenhum
+mercado com horizonte < 6 h** no instante da verificação — nem por `end_ts` nem
+pela cadeia versionada (1121 versões abertas, 1121 com instante cheio, 0
+vencendo em 6 h, próxima em `2026-09-02 04:00Z`). Não é defeito: 142 mercados
+venceram **naquele dia** e as janelas de 10 s e 1 s rodaram até ~16:00Z. É um
+vale entre lotes diários, e a aba diz isso na tela em vez de mostrar uma lista
+vazia sem explicação.
+
+O custo de ida-e-volta é `spread + 2 × (fee + slippage)` por cota, com os
+componentes na tela ao lado do total — em produção hoje `fee` e `slippage` são
+`0.000000` em toda linha do painel, então o ida-e-volta **é** o spread, e isso
+precisa ser visível em vez de ser uma suposição.
+
+### Controles positivos (a lente de degeneração, aplicada às verificações)
+
+| verificação | controle rodado |
+| --- | --- |
+| perímetro exato sob `/paper` | trocar `location =` por `^~` na performance → o teste falha com 2 erros |
+| trava de método nos locations novos | remover o `if ($request_method != GET)` de `/events` → o teste falha |
+| aviso de "recarregue" | escrever um sha diferente em `deploy/release-sha` e recarregar → o aviso aparece na tela com os dois shas |
+| rotas registradas na API | um caminho inventado devolve `ROUTE_NOT_FOUND`, as quatro novas devolvem 401 |
+| `budget_used_pct` em bytes vivos | a fixture dá `live_tup`/`dead_tup` de forma que vivo ≠ físico e inclui `portfolio_decisions`, que a definição antiga não enxergava |
+
+### Limite honesto da verificação de navegador
+
+**O login do proprietário não é meu.** A verificação de navegador rodou contra
+um stub local servindo os valores **medidos no banco de produção neste dia**,
+com a forma exata que os endpoints devolvem. Isso verifica a **renderização** de
+números reais — PnL nas quatro abas, cards sem transbordo, textos em português,
+`unknown` rotulado como "Sem categoria (anterior a 25/08)" com `<code>unknown</code>`
+ao lado, faixa fixa ao rolar, aviso de recarregar. **Não verifica o fio.** O fio
+foi verificado à parte, no servidor: perímetro, registro de rotas e as consultas
+medidas direto no banco.
+
+### ABERTO — `polymarket_book_deltas` parou às 22:43:47Z (não é desta sessão)
+
+Encontrado durante a verificação, e a aba "Visão geral" nova é justamente onde
+ele apareceria primeiro (card **Coleta**, "Último livro").
+
+| fluxo | último registro | linhas nos últimos 5 min |
+| --- | --- | --- |
+| `polymarket_book_deltas` | **2026-09-01 22:43:47Z** | **0** |
+| `polymarket_book_snapshots` | 23:19:48Z | 186 |
+| `polymarket_book_snapshots_full` | 23:22:47Z | 557 |
+| `polymarket_rtds_prices` | 23:23:39Z | 548 |
+| `polymarket_trades` | 23:04:51Z | 0 |
+
+Universo com **93 membros, 92 ainda vivos**, próximo fim em `2026-09-02 04:00Z`.
+Nenhum `WS_SINGLE_CONNECTION_DOWN` nem `WS_BOTH_CONNECTIONS_DOWN` no período, e
+`polymarket_data_gaps` não tem lacuna aberta — o rastreio de lacunas **não está
+vendo** este buraco.
+
+**Recuperou sozinho, no segundo restart.** O arco completo, medido:
+
+| instante | fato |
+| --- | --- |
+| `22:43:47Z` | último delta. O regime até ali era de ~9.000/min |
+| `23:14Z` | merge do PR #76 e CD — o recorder ainda roda a imagem de 31/08 |
+| `23:19Z` | rebuild do profile `polymarket`. **Não recuperou** |
+| `23:34Z` | restart dos containers pelo CD do PR #77 |
+| `23:36Z` | 3.662 deltas |
+| `23:38Z` | **8.892 deltas em 186 tokens** — regime cheio de volta |
+
+**Por que não é desta sessão:** a parada começou 30 min antes do merge e até
+23:19Z o recorder rodava a imagem de 31/08. E ela **sobreviveu a um restart**,
+o que é o detalhe comportamental que interessa a quem for investigar: um
+rebuild não bastou, o seguinte bastou.
+
+**O defeito real não é a parada — é o silêncio.** Nenhum
+`WS_SINGLE_CONNECTION_DOWN`, nenhum `WS_BOTH_CONNECTIONS_DOWN`, e
+`polymarket_data_gaps` **sem uma única lacuna aberta** durante os 53 minutos. O
+rastreio de lacunas não enxerga este modo de falha, então 53 minutos de
+microestrutura sumiram sem que nada disparasse. A microestrutura das RFC-011/013
+lê deltas: uma repetição mais longa faria a evidência do G2 parar de acumular em
+silêncio. É área da RFC-007 e precisa de prompt próprio.
+
+**O que o painel novo faz com isso:** o card **Coleta** da aba "Visão geral"
+mostra `last_book_delta_age_ms` — durante a parada teria marcado "53 min" na
+primeira coisa que o operador vê ao abrir o painel. É a primeira vez que este
+modo de falha teria sido visível sem alguém rodar SQL.

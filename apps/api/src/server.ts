@@ -7,6 +7,7 @@ import { registerFundamentalRoutes } from "./polymarket/fundamental/api.js";
 import { registerPaperRoutes } from "./polymarket/paper/api.js";
 import { registerPortfolioRoutes } from "./polymarket/portfolio/api.js";
 import { registerResolutionRoutes } from "./polymarket/resolution/api.js";
+import { registerOverviewRoutes } from "./polymarket/overview.js";
 import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig } from "./config.js";
@@ -209,6 +210,14 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     registerPortfolioRoutes(app, {
       pool: options.pool,
       authService: options.authService,
+    });
+    // RFC-015 operator dashboard: the overview aggregate and the event feed.
+    // Read-only over the tables the surfaces above already expose; it exists so
+    // the panel makes one call per cycle instead of eleven.
+    registerOverviewRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
+      clock,
     });
   }
 

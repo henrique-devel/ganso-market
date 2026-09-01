@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { DatabasePool, QueryResult } from "../../src/database.js";
+import { RETENTION_TABLES } from "../../src/polymarket/retention.js";
 import {
   registerPolymarketReadRoutes,
   type AuthSessionService,
@@ -692,8 +693,35 @@ describe("GET /polymarket/resolution-events", () => {
 });
 
 describe("GET /polymarket/data-quality", () => {
+  // RFC-015 §9. The old answer summed PHYSICAL bytes over tables matching
+  // `polymarket_%` and divided by the whole budget, while QUOTA_GLOBAL_ALARM
+  // summed LIVE bytes over the WHOLE retention list against that same budget.
+  // Two errors stacked, so `budget_used_pct` was never the number the alarm
+  // acts on. These tests are written so that reverting either half fails.
+
+  function catalogRow(
+    table: string,
+    bytes: string,
+    liveTup: string,
+    deadTup: string,
+  ): Record<string, unknown> {
+    return {
+      table_name: table,
+      bytes,
+      reltuples: liveTup,
+      live_tup: liveTup,
+      dead_tup: deadTup,
+      toast_live_tup: "0",
+      // No pg_stats width: measureTableSizes falls back to the dead-tuple
+      // discount, which is arithmetic this test can state exactly.
+      heap_width: null,
+      index_count: null,
+      index_key_width: null,
+    };
+  }
+
   it("aggregates gaps, lag percentiles and storage against the module budget", async () => {
-    const { pool } = fakePool((text) => {
+    const { pool, calls } = fakePool((text) => {
       if (text.includes("polymarket_data_gaps")) {
         return [
           { source: "clob_ws", gap_count: "3", total_gap_seconds: "12.5" },
@@ -705,8 +733,11 @@ describe("GET /polymarket/data-quality", () => {
       }
       if (text.includes("pg_total_relation_size")) {
         return [
-          { table_name: "polymarket_book_deltas", bytes: "10737418240" },
-          { table_name: "polymarket_trades", bytes: "1073741824" },
+          // 20 GiB of file, half of it dead: 10 GiB retained.
+          catalogRow("polymarket_book_deltas", "21474836480", "50", "50"),
+          // A retention-list table that does NOT match `polymarket_%`. Under
+          // the old definition this contributed nothing at all.
+          catalogRow("portfolio_decisions", "1073741824", "10", "0"),
         ];
       }
       return [];
@@ -725,11 +756,54 @@ describe("GET /polymarket/data-quality", () => {
       { source: "rtds", count: 1, total_duration_ms: 60000 },
     ]);
     expect(body.ingest_lag_ms_last_hour).toEqual({ p50: 45.5, p99: 900 });
-    expect(body.storage.total_bytes).toBe(10737418240 + 1073741824);
-    // (10 GiB + 1 GiB) of the 110 GiB budget the owner approved on 2026-08-25
-    // (RFC-007 amendment) = 10%.
+
+    // 10 GiB live (half of 20) + 1 GiB live = 11 GiB of the 110 GiB budget.
+    expect(body.storage.total_bytes).toBe(11 * 1024 ** 3);
     expect(body.storage.budget_used_pct).toBe(10);
     expect(body.storage.budget_bytes).toBe(110 * 1024 ** 3);
+
+    // Physical and bloat are reported alongside, because "how much is
+    // retained" and "how much disk is this costing" are different questions
+    // and the panel needs both. 21 GiB of file for 11 GiB of data.
+    expect(body.storage.physical_bytes).toBe(21 * 1024 ** 3);
+    expect(body.storage.bloat_bytes).toBe(10 * 1024 ** 3);
+    expect(body.storage.basis).toContain("vivos");
+
+    // The population: the whole retention list, asked for by name.
+    const sizeCall = calls.find((call) =>
+      call.text.includes("pg_total_relation_size"),
+    );
+    const requested = sizeCall?.params[0] as string[];
+    expect(requested).toEqual(RETENTION_TABLES.map((config) => config.table));
+    expect(requested).toContain("portfolio_decisions");
+    expect(requested).toContain("paper_ledger_events");
+    // And the old predicate is gone: nothing selects by name pattern any more.
+    expect(sizeCall?.text).not.toContain("LIKE");
+  });
+
+  it("counts a retention table the catalog does not know as zero", async () => {
+    const { pool } = fakePool((text) =>
+      text.includes("pg_total_relation_size")
+        ? [catalogRow("polymarket_trades", "1073741824", "10", "0")]
+        : [],
+    );
+    const server = await buildApp({ pool });
+    const body = (
+      await server.inject({
+        method: "GET",
+        url: "/polymarket/data-quality",
+        headers: AUTH,
+      })
+    ).json();
+    // Every retention table still gets a row; the absent ones are zero rather
+    // than missing, so the panel never has to reason about a hole.
+    expect(body.storage.tables).toHaveLength(RETENTION_TABLES.length);
+    expect(body.storage.total_bytes).toBe(1024 ** 3);
+    const absent = body.storage.tables.find(
+      (table: { table_name: string }) =>
+        table.table_name === "portfolio_decisions",
+    );
+    expect(absent).toMatchObject({ live_bytes: 0, physical_bytes: 0 });
   });
 });
 

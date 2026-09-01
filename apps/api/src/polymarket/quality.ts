@@ -5,7 +5,11 @@
 
 import type { SqlExecutor } from "../database.js";
 import { OrderBook } from "./book.js";
-import { DEFAULT_BUDGET_BYTES } from "./retention.js";
+import {
+  DEFAULT_BUDGET_BYTES,
+  RETENTION_TABLES,
+  measureTableSizes,
+} from "./retention.js";
 import type { PriceLevel } from "./types.js";
 
 /** Minimal query surface so tests can inject a fake pool. */
@@ -433,8 +437,12 @@ export interface QualityMetrics {
     readonly p99Ms: number | null;
   };
   readonly updatesLastHour: number;
+  /** Live bytes per retention table (see measureTableSizes). */
   readonly bytesByTable: Record<string, number>;
+  /** Live bytes over the whole retention list — what budgetUsedPct divides. */
   readonly totalBytes: number;
+  /** Physical bytes over the same list; the difference is bloat. */
+  readonly physicalBytes: number;
   readonly budgetBytes: number;
   readonly budgetUsedPct: number;
 }
@@ -479,18 +487,13 @@ export async function metricsSnapshot(
     [since1h],
   );
 
-  const sizeRows = await pool.query<{
-    table_name: string;
-    bytes: string | number;
-  }>(
-    `SELECT c.relname AS table_name,
-            pg_total_relation_size(c.oid)::bigint AS bytes
-       FROM pg_class c
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public'
-        AND c.relkind = 'r'
-        AND c.relname LIKE 'polymarket\\_%'`,
-    [],
+  // RFC-015 §9: live bytes over the retention list, from the one function that
+  // defines them, so this number and QUOTA_GLOBAL_ALARM cannot disagree. It
+  // used to be physical bytes over `polymarket_%` only — wrong basis, wrong
+  // population.
+  const sizes = await measureTableSizes(
+    pool,
+    RETENTION_TABLES.map((config) => config.table),
   );
 
   const gapsLast24h: Record<string, GapSourceMetrics> = {};
@@ -504,10 +507,13 @@ export async function metricsSnapshot(
   const lag = lagRows.rows[0];
   const bytesByTable: Record<string, number> = {};
   let totalBytes = 0;
-  for (const row of sizeRows.rows) {
-    const bytes = Number(row.bytes);
-    bytesByTable[row.table_name] = bytes;
-    totalBytes += bytes;
+  let physicalBytes = 0;
+  for (const config of RETENTION_TABLES) {
+    const size = sizes.get(config.table);
+    const liveBytes = Math.round(size?.liveBytes ?? 0);
+    bytesByTable[config.table] = liveBytes;
+    totalBytes += liveBytes;
+    physicalBytes += size?.bytes ?? 0;
   }
 
   return {
@@ -521,6 +527,7 @@ export async function metricsSnapshot(
     updatesLastHour: Number(lag?.updates ?? 0),
     bytesByTable,
     totalBytes,
+    physicalBytes,
     budgetBytes: BUDGET_BYTES,
     budgetUsedPct: (totalBytes / BUDGET_BYTES) * 100,
   };

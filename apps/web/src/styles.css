@@ -275,7 +275,7 @@ h1 {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
@@ -335,6 +335,7 @@ h1 {
 
 .badge {
   display: inline-block;
+  max-width: 100%;
   padding: 0.15rem 0.5rem;
   border: 1px solid;
   border-radius: 999px;
@@ -342,6 +343,13 @@ h1 {
   font-weight: 700;
   letter-spacing: 0.06em;
   white-space: nowrap;
+}
+
+/* Inside a card the badge yields to the column instead of overflowing it. */
+.card .badge,
+.pnl-badges .badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .badge--veto {
@@ -705,4 +713,325 @@ h1 {
   border-radius: 0.4rem;
   background: #0f1813;
   font-size: 0.75rem;
+}
+
+/* --- RFC-015: faixa de PnL, visão geral, rodapé de build ----------------- */
+
+.pnl {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1.1rem 0.9rem;
+  border: 1px solid #28372e;
+  border-radius: 1rem;
+  background: rgb(15 24 19 / 96%);
+  backdrop-filter: blur(6px);
+}
+
+.pnl-banner {
+  margin: 0 0 0.7rem;
+  color: #e6c86e;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+.pnl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.5rem 1.25rem;
+}
+
+.pnl-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.pnl-cell--wide {
+  grid-column: span 2;
+}
+
+.pnl-titulo {
+  color: #8eaa98;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.pnl-valor {
+  color: #f6faf7;
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.pnl-valor[data-direcao="up"] {
+  color: #7fc79a;
+}
+
+.pnl-valor[data-direcao="down"] {
+  color: #eb8a90;
+}
+
+.pnl-nota {
+  color: #8eaa98;
+  font-size: 0.7rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.drawdown-bar {
+  height: 0.4rem;
+  margin: 0.25rem 0;
+  overflow: hidden;
+  border: 1px solid #28372e;
+  border-radius: 999px;
+  background: #0f1813;
+}
+
+.drawdown-fill {
+  display: block;
+  height: 100%;
+  background: #57d68d;
+  transition: width 0.4s ease;
+}
+
+.drawdown-fill[data-near="true"] {
+  background: #eb8a90;
+}
+
+.pnl-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+/* Tons do dicionário. `neutro` é o padrão de um código sem verbete: ele
+   aparece com o próprio texto, sem cor que sugira um julgamento que ninguém
+   fez. */
+.badge--ok {
+  color: #7fc79a;
+  border-color: rgb(87 214 141 / 32%);
+  background: rgb(87 214 141 / 9%);
+}
+
+.badge--atencao {
+  color: #e6c86e;
+  border-color: rgb(214 178 86 / 45%);
+  background: rgb(214 178 86 / 12%);
+}
+
+.badge--alerta {
+  color: #eb8a90;
+  border-color: rgb(179 73 79 / 55%);
+  background: rgb(179 73 79 / 16%);
+}
+
+.badge--neutro {
+  color: #a9bcb0;
+  border-color: #28372e;
+  background: rgb(142 170 152 / 8%);
+}
+
+.badge code {
+  margin-left: 0.3rem;
+  opacity: 0.62;
+  font-size: 0.9em;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* --- Cards da visão geral ------------------------------------------------ */
+
+.card[data-tom="alerta"] {
+  border-color: rgb(179 73 79 / 45%);
+}
+
+.card[data-tom="atencao"] {
+  border-color: rgb(214 178 86 / 40%);
+}
+
+/* Two rows, not a wrapping flex line: the note is often a whole sentence and
+   in a 15rem card it has to sit UNDER the value, never beside it. */
+.card-linha {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.1rem 0.5rem;
+  align-items: baseline;
+  margin: 0 0 0.55rem;
+}
+
+.card-rot {
+  min-width: 0;
+  color: #8eaa98;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.card-val {
+  min-width: 0;
+  color: #f6faf7;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.card-linha .card-nota {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.cards .grid--compacta {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.cards .grid--compacta th,
+.cards .grid--compacta td {
+  padding: 0.2rem 0.35rem;
+}
+
+.celula-motivo {
+  color: #a9bcb0;
+}
+
+/* --- Feed de eventos ----------------------------------------------------- */
+
+.feed-titulo {
+  margin: 1.5rem 0 0.4rem;
+  color: #f6faf7;
+  font-size: 1rem;
+}
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.feed li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  padding: 0.4rem 0.7rem;
+  border-left: 3px solid #28372e;
+  border-radius: 0 0.4rem 0.4rem 0;
+  background: rgb(19 30 24 / 60%);
+  font-size: 0.82rem;
+}
+
+.feed li[data-severidade="warn"] {
+  border-left-color: #e6c86e;
+}
+
+.feed li[data-severidade="alert"] {
+  border-left-color: #eb8a90;
+}
+
+.feed-quando {
+  color: #8eaa98;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.feed-fonte {
+  color: #a9bcb0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.feed-resumo {
+  flex: 1 1 12rem;
+  color: #f6faf7;
+  overflow-wrap: anywhere;
+}
+
+.feed details pre {
+  max-width: 40rem;
+  max-height: 12rem;
+  overflow: auto;
+  margin: 0.4rem 0 0;
+  padding: 0.5rem;
+  border-radius: 0.4rem;
+  background: #0f1813;
+  font-size: 0.72rem;
+}
+
+/* --- Tabelas compactas e linha expansível -------------------------------- */
+
+.grid--compacta {
+  font-size: 0.82rem;
+}
+
+.grid--compacta th,
+.grid--compacta td {
+  padding: 0.3rem 0.5rem;
+}
+
+.linha-detalhe td {
+  padding-top: 0;
+  border-top: none;
+}
+
+.detalhe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0.25rem 1.5rem;
+  margin-top: 0.4rem;
+}
+
+.detalhe-grid p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  align-items: baseline;
+  margin: 0;
+}
+
+/* --- Rodapé de build ----------------------------------------------------- */
+
+.rodape {
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #28372e;
+}
+
+.rodape-aviso {
+  margin: 0 0 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid rgb(224 138 74 / 55%);
+  border-radius: 0.6rem;
+  background: rgb(224 138 74 / 12%);
+  color: #f0a869;
+  font-size: 0.85rem;
+}
+
+.rodape-linha {
+  margin: 0;
+  color: #6f8778;
+  font-size: 0.72rem;
+}
+
+/* The gates table lives in the narrowest card on the page. */
+.cards .grid--compacta th[scope="row"] {
+  width: 2.2rem;
+  color: #8eaa98;
+  text-align: left;
+}
+
+.cards .grid--compacta .celula-motivo {
+  overflow-wrap: anywhere;
 }

@@ -54,6 +54,13 @@ export interface Opportunity {
   readonly vetoed: boolean;
   readonly veto_reason: string | null;
   readonly config_version: string | null;
+  /**
+   * RFC-016 real end instant, versioned chain first (see the endpoint).
+   *
+   * `null` means the market has no recorded end instant at all — NOT that it
+   * has no deadline. The "Rápidos" tab says so rather than sorting it last.
+   */
+  readonly end_ts: string | null;
   readonly panel: OpportunityPanel;
 }
 
@@ -253,6 +260,7 @@ function parseOpportunity(row: unknown): Opportunity | null {
     vetoed: row.vetoed === true,
     veto_reason: asString(row.veto_reason),
     config_version: asString(row.config_version),
+    end_ts: asString(row.end_ts),
     panel: parsePanel(row.panel_json),
   };
 }
