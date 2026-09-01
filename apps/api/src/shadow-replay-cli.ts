@@ -157,10 +157,19 @@ async function runSweep(input: {
     values,
   });
 
-  // Near-misses, kept for the breakeven pass: the decisions whose slack the
-  // candidates came closest to consuming. Bounded so a full window cannot turn
-  // the "keep only aggregates" rule into a lie.
-  const nearMisses: { decision: PersistedDecision; slack: number }[] = [];
+  // Near-misses, kept for the breakeven pass, ranked by how much of their slack
+  // the candidates actually consumed — NOT by how little slack they had.
+  //
+  // The two orderings are different and the difference matters. A decision with
+  // a hair of slack and a 38-minute lockup needs a rate in the tens of thousands
+  // of percent to flip; one with more slack and a longer lockup flips far
+  // sooner. "How close did the biggest candidate get" is the quantity that
+  // actually ranks decisions by their distance to a flip in the KEY's units,
+  // which is what the breakeven is asked to report.
+  //
+  // Bounded, so a full window cannot turn the "keep only aggregates" rule into
+  // a lie.
+  const nearMisses: { decision: PersistedDecision; consumed: number }[] = [];
 
   await streamDecisions(pool, window, (batch) => {
     for (const decision of batch) {
@@ -175,16 +184,18 @@ async function runSweep(input: {
         continue;
       }
       accumulator.add(swept);
-      if (swept.baselineAcceptSlack !== null) {
-        const slack = Math.abs(swept.baselineAcceptSlack);
-        if (
-          nearMisses.length < BREAKEVEN_SAMPLE ||
-          slack < (nearMisses[nearMisses.length - 1]?.slack ?? Infinity)
-        ) {
-          nearMisses.push({ decision, slack });
-          nearMisses.sort((a, b) => a.slack - b.slack);
-          nearMisses.length = Math.min(nearMisses.length, BREAKEVEN_SAMPLE);
-        }
+      const consumed = swept.candidates.reduce(
+        (best, candidate) => Math.max(best, candidate.slackConsumed ?? 0),
+        swept.baselineAcceptSlack === null ? -1 : 0,
+      );
+      if (
+        consumed >= 0 &&
+        (nearMisses.length < BREAKEVEN_SAMPLE ||
+          consumed > (nearMisses[nearMisses.length - 1]?.consumed ?? -Infinity))
+      ) {
+        nearMisses.push({ decision, consumed });
+        nearMisses.sort((a, b) => b.consumed - a.consumed);
+        nearMisses.length = Math.min(nearMisses.length, BREAKEVEN_SAMPLE);
       }
     }
   });
@@ -329,7 +340,7 @@ function renderSweepTable(
   lines.push("## Margin — what a row of zeros actually means");
   lines.push("");
   lines.push(
-    `  breakeven searched on the ${String(report.breakevenSearched)} decisions with the smallest slack; found ${String(report.breakevenFound)}.`,
+    `  breakeven searched on the ${String(report.breakevenSearched)} decisions whose slack the candidates consumed most; found ${String(report.breakevenFound)}.`,
   );
   if (report.breakevens.length === 0) {
     lines.push(
