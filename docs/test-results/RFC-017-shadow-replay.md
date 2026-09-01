@@ -186,6 +186,126 @@ escritas depois da proveniência, e duas rodadas nunca bateriam.
 
 ---
 
+## Controle — a MESMA população, uma chave que MORDE
+
+O zero do `capitalCostAnnual` só significa alguma coisa se a ferramenta for
+capaz de achar um flip quando existe um. A prova é rodar **a mesma janela, a
+mesma população, o mesmo binário** contra uma chave diferente:
+
+```sh
+docker compose --env-file deploy/server.env exec -T api \
+  node apps/api/dist/shadow-replay-cli.js sweep costs.edgeLiqMin \
+  --values 0.02,0.03 --to 2026-09-01T14:25:00Z
+```
+
+```text
+# RFC-017 mode A — sweep of costs.edgeLiqMin
+
+## Population (the denominator, stated three ways)
+
+  decisions in window           224647
+  admitted (baseline MATCHED)   224647  100.000%
+  reached the arithmetic        20340  9.054%   <- the only rows a cost key can move
+  markets: seen / admitted / reaching   322 / 322 / 65
+
+  exclusions:
+    BASELINE_MISMATCH            0
+    NO_REPLAY_BLOCK              0
+    UNSUPPORTED_KIND             0
+    CONFIG_UNAVAILABLE           0
+
+  recorded value: 0.02
+
+## Per candidate
+
+  ACTION = ACCEPTED<->REJECTED. REASON = the label moved, the action did not.
+
+  value      action(ln/mkt)  reason(ln/mkt)  side  binding  cap>0   med d(edge_net)  max slack used
+  0.0200     0/0             0/0             0     0        0           0.000000000         0.0000%
+  0.0300     7/2             7/2             0     7        0           0.000000000      2032.5203%
+
+  Counts are absolute. The denominator for ACTION and REASON is the 20340 rows / 65 markets that reached the arithmetic, NOT the 224647 rows in the window.
+
+  side/verdict transitions at 0.03:
+           4  YES/ACCEPTED:- -> YES/REJECTED:EDGE_BELOW_MIN
+           3  NO/ACCEPTED:- -> NO/REJECTED:EDGE_BELOW_MIN
+  binding transitions at 0.03:
+           1  DEPTH_TAKE_PCT -> NOT_SIZED
+           6  CORRELATION_FACTOR -> NOT_SIZED
+
+## Margin — what a row of zeros actually means
+
+  searched on the 20 decisions whose slack the candidates consumed most, inside the bracket [0.02,1000].
+
+  ACTION (ACCEPTED <-> REJECTED) — the number the config needs:
+    decision 598667: ACCEPTED -> REJECTED at costs.edgeLiqMin = 0.0204929
+    decision 702129: ACCEPTED -> REJECTED at costs.edgeLiqMin = 0.0214201
+    decision 696949: ACCEPTED -> REJECTED at costs.edgeLiqMin = 0.0223213
+    decision 692976: ACCEPTED -> REJECTED at costs.edgeLiqMin = 0.0234751
+    decision 603583: ACCEPTED -> REJECTED at costs.edgeLiqMin = 0.0251381
+
+  LABEL (side and reason only) — diagnostic, not the headline:
+    decision 598667: YES/ACCEPTED:- -> YES/REJECTED:EDGE_BELOW_MIN at costs.edgeLiqMin = 0.0204929
+    decision 702129: NO/ACCEPTED:- -> NO/REJECTED:EDGE_BELOW_MIN at costs.edgeLiqMin = 0.0214201
+    decision 696949: NO/ACCEPTED:- -> NO/REJECTED:EDGE_BELOW_MIN at costs.edgeLiqMin = 0.0223213
+
+## Provenance
+
+{
+  "mode": "A",
+  "analysis_mode": "audit",
+  "reads": [
+    "portfolio_decisions",
+    "portfolio_config_versions"
+  ],
+  "window_requested": {
+    "from": null,
+    "to": "2026-09-01T14:25:00.000Z"
+  },
+  "window_covered": {
+    "oldest": "2026-08-30T09:44:16.637Z",
+    "newest": "2026-09-01T14:24:44.936Z",
+    "rows": 224647,
+    "markets": 322,
+    "decision_id_range": [
+      479171,
+      703817
+    ],
+    "closed_at_decision_id": 703817,
+    "note": "the scan is pinned to this decision_id, so rows written during the run are outside it and two runs over the same range agree"
+  },
+  "config_versions": [
+    "1.2.0"
+  ],
+  "config_hashes": {
+    "1.2.0": "1c8a331685828c144959600831634262cf482c0099c8a44f7eb60bf876f31faf"
+  },
+  "engine_default_config_version": "1.2.0",
+  "breakeven_bracket": [
+    0.02,
+    1000
+  ],
+  "shadow_rows_in_window": 82357
+}
+
+SIMULAÇÃO — SEM EXECUÇÃO REAL. Nothing was written.
+```
+
+Mesmas 224 647 decisões, mesmas 20 340 alcançáveis, mesmos 65 mercados — e
+subir `edgeLiqMin` de 0,02 para 0,03 **muda a AÇÃO de 7 linhas em 2 mercados**
+(4 na perna YES, 3 na NO), com o binding constraint saindo de `DEPTH_TAKE_PCT`
+para `NOT_SIZED`. A busca de AÇÃO acha os valores de virada um a um —
+**0,0204929**, **0,0214201**, **0,0223213**, **0,0234751**, **0,0251381** — em
+vez de devolver `NONE`.
+
+**É isso que fecha a lente de degeneração.** A varredura não "passou porque não
+havia contra o que comparar": ela encontra flips e valores de virada na mesma
+população, com a mesma amostra de 20 decisões, quando a chave é capaz de
+produzi-los. O zero do `capitalCostAnnual` é, portanto, um fato sobre o
+parâmetro — não sobre a ferramenta, nem sobre o tamanho da amostra.
+
+---
+
 ## Modo B — replay de fonte (verbatim)
 
 Comando:
