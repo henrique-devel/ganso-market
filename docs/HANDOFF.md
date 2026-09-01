@@ -37,12 +37,15 @@
   `/paper/kill-switch`, `/portfolio/halt` e `/portfolio/resume` seguem **404**.
   `make verify` verde, **1538 testes na API e 82 no web, zero migration**.
   Detalhe em [`docs/rfcs/RFC-015-operator-dashboard.md`](rfcs/RFC-015-operator-dashboard.md).
-  **ABERTO e NÃO causado por esta sessão:** `polymarket_book_deltas` parou de
-  receber linhas às **22:43:47Z**, ~30 min ANTES do deploy, e não voltou depois
-  do rebuild — enquanto `book_snapshots` (186/5 min), `book_snapshots_full`
-  (557/5 min) e `rtds_prices` (548/5 min) seguem gravando e o universo tem 92
-  mercados vivos. É o caminho **incremental** do livro, não a conexão. Seção
-  própria abaixo.
+  **ACHADO NÃO CAUSADO POR ESTA SESSÃO, e o mais acionável dela:**
+  `polymarket_book_deltas` ficou **53 minutos sem uma única linha**
+  (22:43:47Z → 23:36Z), começando ~30 min ANTES do merge. Sobreviveu ao rebuild
+  do profile às 23:19Z e só voltou no restart seguinte, recuperando o regime
+  cheio (8.892 deltas/min em 186 tokens). Durante a parada, `book_snapshots`,
+  `book_snapshots_full` e `rtds_prices` seguiram gravando e o universo tinha 92
+  mercados vivos — é o caminho **incremental** do livro, não a conexão. **E
+  `polymarket_data_gaps` não abriu uma única lacuna**: 53 minutos de
+  microestrutura perdida sem nenhum alarme. Seção própria abaixo.
   Registro anterior: **RFC-017: o shadow replay nos dois modos, e
   três premissas do escopo de 28/08 desmentidas pela própria ferramenta (PRs #72
   e #73)**. Um CLI **read-only por construção** (allowlist de statement mais
@@ -3076,11 +3079,31 @@ Nenhum `WS_SINGLE_CONNECTION_DOWN` nem `WS_BOTH_CONNECTIONS_DOWN` no período, e
 `polymarket_data_gaps` não tem lacuna aberta — o rastreio de lacunas **não está
 vendo** este buraco.
 
-**Por que não é desta sessão:** a parada começou às 22:43Z, ~30 min antes do
-merge (23:14Z), e até 23:19Z o recorder ainda rodava a imagem de 31/08. O
-rebuild do profile às 23:19Z **não recuperou** o fluxo. É o caminho
-**incremental** do livro (deltas), não a conexão — os snapshots vêm do mesmo
-recorder e seguem gravando. É área da RFC-007 e precisa de prompt próprio.
+**Recuperou sozinho, no segundo restart.** O arco completo, medido:
 
-**Consequência a considerar:** a microestrutura das RFC-011/013 lê deltas. Se o
-buraco persistir, a evidência do G2 para de acumular sem que nada dispare.
+| instante | fato |
+| --- | --- |
+| `22:43:47Z` | último delta. O regime até ali era de ~9.000/min |
+| `23:14Z` | merge do PR #76 e CD — o recorder ainda roda a imagem de 31/08 |
+| `23:19Z` | rebuild do profile `polymarket`. **Não recuperou** |
+| `23:34Z` | restart dos containers pelo CD do PR #77 |
+| `23:36Z` | 3.662 deltas |
+| `23:38Z` | **8.892 deltas em 186 tokens** — regime cheio de volta |
+
+**Por que não é desta sessão:** a parada começou 30 min antes do merge e até
+23:19Z o recorder rodava a imagem de 31/08. E ela **sobreviveu a um restart**,
+o que é o detalhe comportamental que interessa a quem for investigar: um
+rebuild não bastou, o seguinte bastou.
+
+**O defeito real não é a parada — é o silêncio.** Nenhum
+`WS_SINGLE_CONNECTION_DOWN`, nenhum `WS_BOTH_CONNECTIONS_DOWN`, e
+`polymarket_data_gaps` **sem uma única lacuna aberta** durante os 53 minutos. O
+rastreio de lacunas não enxerga este modo de falha, então 53 minutos de
+microestrutura sumiram sem que nada disparasse. A microestrutura das RFC-011/013
+lê deltas: uma repetição mais longa faria a evidência do G2 parar de acumular em
+silêncio. É área da RFC-007 e precisa de prompt próprio.
+
+**O que o painel novo faz com isso:** o card **Coleta** da aba "Visão geral"
+mostra `last_book_delta_age_ms` — durante a parada teria marcado "53 min" na
+primeira coisa que o operador vê ao abrir o painel. É a primeira vez que este
+modo de falha teria sido visível sem alguém rodar SQL.
