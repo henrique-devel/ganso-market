@@ -168,6 +168,7 @@ function metrics(
     deltaBrier: { point: -0.003, lower: -0.006, upper: -0.0005 },
     deltaLogLoss: { point: -0.007, lower: -0.012, upper: -0.001 },
     horizonSlices: [slice("lt_1h", -0.05), slice("1h_6h", 0.1)],
+    formSlices: [],
     reliabilityModel: [],
     reliabilityBaseline: [],
     intervalCoverage: 0.902,

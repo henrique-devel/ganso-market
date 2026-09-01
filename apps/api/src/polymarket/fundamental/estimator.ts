@@ -10,6 +10,8 @@
 import type { DatabasePool } from "../../database.js";
 import { horizonBucket } from "./interval.js";
 import {
+  isExcluded,
+  openPriceKey,
   planMarket,
   runCategoryModel,
   symbolsOf,
@@ -298,6 +300,41 @@ async function loadCycleData(
     );
   }
 
+  // RFC-019: one strike sample per DISTINCT (symbol, window open) among the
+  // due updown plans. Hourly markets share their open instants, so this is a
+  // handful of point queries per cycle, not one per market. A window that has
+  // not opened yet is not queried: its strike does not exist.
+  const openPrices = new Map<string, FeedSample>();
+  const openRequests = new Map<string, { symbol: string; at: Date }>();
+  for (const plan of plans) {
+    if (
+      !isExcluded(plan) &&
+      plan.category === "crypto_updown" &&
+      plan.spec.form === "updown" &&
+      plan.spec.windowStartTs !== null &&
+      plan.spec.windowStartTs.getTime() <= decisionTs.getTime()
+    ) {
+      const key = openPriceKey(plan.spec.symbol, plan.spec.windowStartTs);
+      openRequests.set(key, {
+        symbol: plan.spec.symbol,
+        at: plan.spec.windowStartTs,
+      });
+    }
+  }
+  for (const [key, request] of openRequests) {
+    const sample = (
+      await loadFeedSamples(
+        pool,
+        [request.symbol],
+        request.at,
+        config.crypto.maxStrikeAgeMs,
+      )
+    ).get(request.symbol);
+    if (sample !== undefined) {
+      openPrices.set(key, sample);
+    }
+  }
+
   const needsMacro = plans.some((plan) => plan.category === "macro_scheduled");
   const calendar: MacroCalendarContext[] = needsMacro
     ? await loadMacroCalendar(pool, decisionTs, config.macro.maxCalendarAgeMs)
@@ -306,7 +343,7 @@ async function loadCycleData(
     ? await loadMacroReleases(pool, decisionTs)
     : new Map();
 
-  return { feeds, series, calendar, releases };
+  return { feeds, series, calendar, releases, openPrices };
 }
 
 interface CategoryModels {
@@ -555,6 +592,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
                 cycle,
                 config: deps.config,
                 hyperparams: model.hyperparams,
+                featureSetVersion: model.featureSetVersion,
                 thinBook,
                 guard,
               });

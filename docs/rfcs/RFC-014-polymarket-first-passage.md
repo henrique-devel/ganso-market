@@ -1,7 +1,7 @@
 # RFC-014 — Polymarket: variante de primeira passagem (mercados de barreira)
 
-**Status:** draft
-**Dependências:** RFC-010 (modelo fundamental: microprice, intervalo, fallback, label store, walk-forward e gate já implementados e ativos)
+**Status:** in-progress (aceita em 2026-08-28 pela decisão do proprietário "alpha primeiro" — prompt 04 do roadmap; implementação iniciada em 2026-09-01 junto da RFC-019, como a MESMA versão de modelo `crypto_updown_gbm@1.1.0`)
+**Dependências:** RFC-010 (modelo fundamental: microprice, intervalo, fallback, label store, walk-forward e gate já implementados e ativos); RFC-016 (instante real de fim, ativa — o horizonte e as janelas derivam dele)
 **Habilita:** nada novo — amplia a cobertura da categoria `crypto_updown` para que o gate da própria RFC-010 tenha como acumular evidência
 
 ## Prompt a executar
@@ -151,3 +151,131 @@ Pare se:
   baixa;
 - a correção de discretização for tratada como obrigatória em vez de variante
   candidata a ser julgada pelo walk-forward.
+
+---
+
+## Estado verificado das dependências e emendas de implementação (2026-09-01)
+
+Re-medição em produção (leitura por SSH, 2026-09-01 02:00–02:40Z) antes de
+qualquer código, como o processo exige. Três premissas do texto acima mudaram
+de estado; nenhuma muda o objetivo, todas mudam detalhes do desenho.
+
+### E1 — a fonte de resolução é a Binance, não o Chainlink TWAP (premissa REFUTADA)
+
+O texto da RFC-010 (e o cabeçalho de `crypto-updown.ts`) diz que o Chainlink
+TWAP "é o feed que resolve os mercados crypto". Medido nas regras versionadas
+da população atual, isso **não vale mais para nenhuma das formas dominantes**:
+
+| Forma | Regra medida (verbatim das rule_versions) |
+| ----- | ------------------------------------------ |
+| terminal ("be above K on D") | "the **Binance** 1 minute candle for BTC/USDT 12:00 ET ... final **Close**" |
+| barreira ("dip to K") | "any **Binance** 1 minute candle ... has a final '**Low**' price equal to or lower than" |
+| updown horário ("Up or Down - 9PM ET") | "close ≥ open for the BTC/USDT **1 hour candle**" (fonte: Binance) |
+| updown por faixa ("4:00PM-8:00PM ET") | **TWAP Chainlink da faixa** ≥ preço no início da faixa (único caso Chainlink — e é payoff asiático, não terminal) |
+
+O que o recorder grava continua sendo o RTDS (twap30/twap60 Chainlink) — o
+feed `spot` (Binance) está subscrito no código mas **nunca produziu uma linha**
+em produção. Consequência registrada, não escondida:
+
+- **O insumo do modelo continua sendo twap30/twap60** — é a única fonte
+  gravada e as-of. "Zero basis risk" deixa de ser verdade literal; o viés vira
+  parte da assunção registrada.
+- Para **barreira**, a detecção de toque lê o **high/low** dos buckets de 1 min
+  da série TWAP; a resolução real usa o high/low do candle Binance. O TWAP
+  alisa pavios ⇒ o toque detectado/precificado é **subestimado** nas pontas,
+  enquanto o monitoramento contínuo da fórmula 2·Φ **superestima**. Os dois
+  vieses são registrados; quem decide se o líquido presta é o walk-forward.
+- Para **updown**, strike e nível corrente saem do MESMO feed TWAP, então o
+  offset estrutural Binance↔Chainlink **cancela na razão K/S**; o resíduo é o
+  alisamento do TWAP contra o open/close de candle, registrado.
+- A forma "updown por faixa" (TWAP da faixa vs início — payoff asiático) é
+  **recusada** nesta versão e registrada como variante candidata futura.
+
+### E2 — janelas de barreira medidas, e a derivação sem `event_start_ts`
+
+A RFC-016 (D2) mediu que `eventStartTime` vem `null` em 100/100 mercados — não
+existe coluna de início de janela. As janelas reais, medidas nas regras:
+
+| Família de título | Janela (regra verbatim) | Derivação usada |
+| ----------------- | ----------------------- | ---------------- |
+| "on August 31" | "from 12:00 AM ET ... to 11:59 PM ET" (1 dia) | `windowOpens = deadline − 24 h` |
+| "August 31-September 6" | idem, N dias | `windowOpens = deadline − N·24 h` |
+| "in August" | o mês inteiro | `windowOpens = deadline − diasDoMês·24 h` |
+| "by December 31, 2026" | aberta desde a listagem | `windowOpens = null` (aberta) |
+
+O `deadline` vem da cadeia as-of da RFC-016 (`rule_versions.end_date`). A
+subtração por dias de calendário NÃO é conservadora sozinha: na virada de
+março (spring-forward) a janela ET é 1 h mais curta que N dias, e
+`deadline − N·24h` cairia 1 h ANTES da abertura real — uma hora em que um
+toque contaria sem pagar. Por isso toda família fechada carrega um **pad de
++1 h em direção ao deadline**: a abertura derivada nunca antecede a real, ao
+custo de no máximo a primeira hora da janela em varredura e serviço. O
+mercado só é servido com `decision_ts ≥ windowOpens`, e a varredura de toque
+começa em `windowOpens` (janela fechada) ou no primeiro avistamento do
+mercado (`polymarket_markets.received_at`, janela aberta) — nunca antes.
+Título que não casa com nenhuma família ⇒ recusa (baseline), como manda a
+condição de parada.
+
+### E2b — limites registrados da varredura de toque e da calibração
+
+- **A varredura é limitada à série carregada** (1.440 min, a mesma da
+  RFC-010, como o texto original desta RFC exige). Um toque mais antigo que
+  isso em mercado ainda aberto é perdido e o mercado volta ao mapa de difusão
+  — direção **conservadora** (subestima q; nunca fabrica um toque). O
+  resíduo é pequeno porque as regras destes mercados resolvem
+  "immediately" no toque; `data_refs.touchScanBuckets` registra o que foi
+  efetivamente varrido.
+- **Toque observado não passa pela calibração logística.** Um toque é fato,
+  não previsão; a correção da walk-forward existe para recalibrar o mapa de
+  difusão e não pode rebaixar uma certeza observada. Com `calibration`
+  presente, o bypass vale apenas para o caso `touchDetected`.
+
+### E2c — o que a revisão adversarial mudou no desenho
+
+- **Direção neutra permanece neutra.** "hit"/"touch" não ganha lado derivado
+  do nível corrente: um lado re-derivado a cada ciclo **inverte** depois de um
+  cruzamento (o mercado que tocou passaria a ser lido como "dip" e responderia
+  "não tocou" sobre a travessia que o liquidou). O mapa precisa apenas de
+  `|ln(B/S)|`; o teste de toque neutro vira **containment** do bucket
+  (`low ≤ B ≤ high`), estável e sem inversão.
+- **Cross-check título × deadline.** Toda família fechada confere a data final
+  do título contra o ancoradouro `deadline − 12 h`; divergência ⇒ recusa. Sem
+  isso, um deadline fora de família (mudança de regra, fallback date-only)
+  faria a varredura inventar toque fora da janela.
+- **"by" é testado por último.** Um "by" incidental num título fechado não
+  pode alargar a janela para "aberta desde a listagem".
+- **Formas novas exigem `rule_version` em vigor.** A aritmética da janela e o
+  piso da varredura dependem do deadline as-of. O **terminal não** é gateado
+  por isso — a população servida pela 1.0.0 não muda.
+- **Família ambígua recusa.** "dip **below** X" (verbo de caminho, preposição
+  terminal) não existe na população medida e nenhuma regra decide sua família:
+  fica no baseline, conforme a condição de parada desta RFC.
+
+### E3 — direção do toque
+
+`reach` ⇒ `touch_up`; `dip to` ⇒ `touch_down`; `hit`/`touch` (neutros) são
+resolvidos no instante da estimativa contra o nível corrente (B > S ⇒ para
+cima; B < S ⇒ para baixo; B no nível ⇒ toque agora, q = 1), com a direção
+resolvida gravada em `data_refs`. Preço corrente já além da barreira na
+direção do payoff ⇒ toque em curso ⇒ q = 1 (janela aberta por construção,
+pois o instante corrente pertence a ela).
+
+### E4 — teto de cobertura: o RTDS só entrega BTC
+
+Medido sobre TODA a tabela `polymarket_rtds_prices` (7 dias e histórico
+integral): só existem linhas `twap30`/`twap60` de `btc/usd`. As subscrições de
+eth/sol/xrp e do tópico spot estão no código do recorder e nunca renderam uma
+linha. TODO mercado não-BTC continua abstendo por feed ausente — dos 82
+membros crypto do universo em 2026-09-01, 58 são BTC. O teto desta RFC é a
+população BTC; destravar eth/sol/xrp é investigação do recorder (RFC-007),
+registrada no HANDOFF, fora deste escopo.
+
+### E5 — entrega como versão única com a RFC-019
+
+A variante updown (strike = preço de abertura da janela, lido do feed gravado)
+é especificada pela **RFC-019** e entra na MESMA versão nova
+`crypto_updown_gbm@1.1.0`, com as formas suportadas declaradas no hyperparam
+imutável `forms`. Motivo: a promoção é one-active-per-category — promover um
+modelo só-barreira tiraria terminal e updown do consumidor; e esta RFC já diz
+que "o gate avalia o modelo inteiro". A v1.0.0 (terminal-only, `forms`
+ausente ⇒ `["terminal"]`) continua em shadow, intocada, e as duas coexistem.

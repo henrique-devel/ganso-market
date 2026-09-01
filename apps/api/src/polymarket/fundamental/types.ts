@@ -231,6 +231,12 @@ export interface ScoredObservation {
   readonly disputed: boolean;
   /** Baseline outside [0.01, 0.99]: excluded from headline metrics. */
   readonly degenerate: boolean;
+  /**
+   * RFC-019: question form stamped on the estimate's data_refs. Null on rows
+   * written before the stamp existed — all of which came from terminal-payoff
+   * maps (crypto 1.0.0 and macro), so consumers read null as "terminal".
+   */
+  readonly form: string | null;
 }
 
 export interface ScoreSummary {
@@ -269,6 +275,13 @@ export interface CalibrationMetrics {
   readonly deltaBrier: ConfidenceInterval;
   readonly deltaLogLoss: ConfidenceInterval;
   readonly horizonSlices: readonly HorizonSlice[];
+  /**
+   * RFC-019: the same slice mechanics keyed by question form
+   * (terminal/barrier/updown). Descriptive only — the gate's criteria are
+   * unchanged; a form dragging the whole model down must be VISIBLE, and the
+   * gate still judges the model whole.
+   */
+  readonly formSlices: readonly HorizonSlice[];
   readonly reliabilityModel: readonly ReliabilityBin[];
   readonly reliabilityBaseline: readonly ReliabilityBin[];
   /** Empirical share of outcomes inside the 90% interval; target ~0.90. */

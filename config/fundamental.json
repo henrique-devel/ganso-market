@@ -30,7 +30,8 @@
     "ewma_lambdas": [0.94, 0.97],
     "student_df": 4,
     "min_history_minutes": 120,
-    "max_feed_age_ms": 120000
+    "max_feed_age_ms": 120000,
+    "max_strike_age_ms": 300000
   },
   "macro": {
     "default_sigma": {

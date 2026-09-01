@@ -23,8 +23,9 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 | [RFC-012](rfcs/RFC-012-polymarket-resolution-graph.md)     | Risco de resolução e grafo lógico           | RFC-007                    | score de resolução (UMA) e consistência entre mercados — **ativa em produção (2026-08-26)**                                 |
 | [RFC-013](rfcs/RFC-013-polymarket-portfolio-engine.md)     | Motor de portfólio e gates                  | RFC-010, RFC-011 e RFC-012 | EV mínimo, Kelly fracionário, limites, painel e gates da execução — **código completo, fases A–E (2026-08-26); ativação pendente** |
 | [RFC-009](rfcs/RFC-009-polymarket-live-execution.md)       | Execução Polymarket maker-side              | RFC-013 + aprovação        | live V2 maker-first com burn wallet na Polygon                                                                              |
-| [RFC-014](rfcs/RFC-014-polymarket-first-passage.md)        | Variante de primeira passagem (barreira)    | RFC-010                    | cobertura dos mercados "reach"/"dip to" da categoria crypto (incremento, não bloqueia)                                      |
+| [RFC-014](rfcs/RFC-014-polymarket-first-passage.md)        | Variante de primeira passagem (barreira)    | RFC-010                    | cobertura dos mercados "reach"/"dip to" da categoria crypto (incremento, não bloqueia) — **in-progress (2026-09-01), entregue como `crypto_updown_gbm@1.1.0` junto da RFC-019** |
 | [RFC-016](rfcs/RFC-016-polymarket-intraday-horizon.md)     | Horizonte intradia e universo rápido        | RFC-007, RFC-010           | instante real de fim legível por todos os consumidores — evidência pontuável 36.212 → 74.412, última hora de vida 0 → 8.063 — **implementada e ativa em produção (2026-08-31)** |
+| [RFC-019](rfcs/RFC-019-polymarket-updown-strike.md)        | Variante updown (strike = abertura) e cobertura por forma | RFC-014, RFC-016 | strike derivado do feed gravado as-of na abertura da janela; relatório com fatias e cobertura por forma — **in-progress (2026-09-01)** |
 
 ## Descopo — 2026-08-18
 

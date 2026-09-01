@@ -237,6 +237,20 @@ export interface MarketContext {
   /** VETO input, never a feature: an open UMA dispute at the decision instant. */
   readonly umaDisputeActive: boolean;
   readonly ruleChangedRecently: boolean;
+  /**
+   * RFC-014: when WE first recorded the market (`polymarket_markets.received_at`,
+   * written once on insert and never updated). It is the conservative lower
+   * bound of the touch scan for open-window barrier markets: the true window
+   * opens at or before listing, so any touch after this instant is certainly
+   * inside the window.
+   */
+  readonly firstSeenAt: Date | null;
+  /**
+   * RFC-019: the recorded affirmative outcome token, when Gamma provided one.
+   * The estimator prices the FIRST token with the model's q, so a form whose
+   * affirmative is not the first token must refuse rather than invert.
+   */
+  readonly affirmativeTokenId: string | null;
 }
 
 /**
@@ -263,7 +277,8 @@ export async function loadMarketContexts(
   // the decision instant out of the batch.
   const markets = await pool.query<Record<string, unknown>>(
     `SELECT condition_id, question, slug, category, clob_token_ids,
-            end_ts, end_date_iso, rules, tick_size
+            end_ts, end_date_iso, rules, tick_size, received_at,
+            affirmative_token_id
        FROM polymarket_markets
       WHERE condition_id = ANY($1::text[])
         AND received_at <= $2`,
@@ -376,6 +391,11 @@ export async function loadMarketContexts(
             : null,
       umaDisputeActive: disputedIds.has(conditionId),
       ruleChangedRecently: changedIds.has(conditionId),
+      firstSeenAt: toDate(row.received_at),
+      affirmativeTokenId:
+        typeof row.affirmative_token_id === "string"
+          ? row.affirmative_token_id
+          : null,
     });
   }
   return contexts;
@@ -464,6 +484,13 @@ export async function loadFeedSamples(
 export interface FeedSeriesPoint {
   readonly bucketStart: Date;
   readonly close: number;
+  /**
+   * Extremes of the bucket, for the RFC-014 touch scan. They fall back to the
+   * close when the stored aggregate is unusable, which can only UNDERSTATE a
+   * touch — the conservative direction.
+   */
+  readonly high: number;
+  readonly low: number;
 }
 
 export interface FeedSeries {
@@ -500,7 +527,7 @@ export async function loadFeedSeries(
   );
   const from = new Date(lastComplete.getTime() - minutes * MINUTE_MS);
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT bucket_start, close
+    `SELECT bucket_start, close, high, low
        FROM polymarket_rtds_1m
       WHERE symbol = $1 AND feed = $2
         AND bucket_start >= $3 AND bucket_start <= $4
@@ -520,8 +547,15 @@ export async function loadFeedSeries(
     if (bucket === null) {
       continue;
     }
+    // An unusable extreme degrades to the close, never to a fabricated number:
+    // the touch scan can then only miss a touch, not invent one.
+    const rawHigh = Number(row.high);
+    const rawLow = Number(row.low);
+    const high = Number.isFinite(rawHigh) && rawHigh >= close ? rawHigh : close;
+    const low =
+      Number.isFinite(rawLow) && rawLow > 0 && rawLow <= close ? rawLow : close;
     closes.push(close);
-    points.push({ bucketStart: bucket, close });
+    points.push({ bucketStart: bucket, close, high, low });
     firstBucket ??= bucket;
     lastBucket = bucket;
   }

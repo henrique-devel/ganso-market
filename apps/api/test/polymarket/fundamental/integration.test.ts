@@ -343,6 +343,174 @@ describe.skipIf(DATABASE_URL === undefined)(
       }
     });
 
+    it("RFC-014/019: 1.1.0 covers barrier and updown in shadow while 1.0.0 abstains", async () => {
+      // Two hours after the base fixture, with fresh markets of the two new
+      // forms. The catalog is already registered (both crypto versions).
+      const t2 = new Date(DECISION_TS.getTime() + 2 * 3_600_000); // 14:00Z
+      const enterAt = new Date(t2.getTime() - 3_600_000);
+      const UPDOWN_ID = "0xrfc019updown";
+      const UPDOWN_UP =
+        "3333333333333333333333333333333333333333333333333333333";
+      const UPDOWN_DOWN =
+        "4444444444444444444444444444444444444444444444444444444";
+      const BARRIER_ID = "0xrfc014barrier";
+      const BARRIER_YES =
+        "5555555555555555555555555555555555555555555555555555555";
+      const BARRIER_NO =
+        "6666666666666666666666666666666666666666666666666666666";
+
+      // Hourly updown: deadline 14:30Z, window open = 13:30Z, strike = the
+      // recorded feed at the open.
+      const updownDeadline = new Date(t2.getTime() + 30 * 60_000);
+      const windowStart = new Date(updownDeadline.getTime() - 3_600_000);
+      await pool.query(
+        `INSERT INTO polymarket_markets
+           (condition_id, question, slug, category, clob_token_ids,
+            affirmative_token_id, rules, tick_size, end_date_iso, end_ts,
+            active, closed, source_ts, received_at)
+         VALUES ($1, $2, $3, 'crypto', $4::jsonb, $5, $6, '0.01', $7, $8,
+                 TRUE, FALSE, $9, $9)`,
+        [
+          UPDOWN_ID,
+          "Bitcoin Up or Down - August 19, 9AM ET",
+          "bitcoin-up-or-down-august-19-9am",
+          JSON.stringify([UPDOWN_UP, UPDOWN_DOWN]),
+          UPDOWN_UP,
+          "Resolves Up if the close price is greater than or equal to the open price.",
+          "2026-08-19",
+          updownDeadline,
+          enterAt,
+        ],
+      );
+      await pool.query(
+        `INSERT INTO polymarket_rule_versions
+           (condition_id, version, content_hash, description,
+            resolution_source, end_date, valid_from, source_ts, received_at)
+         VALUES ($1, 1, 'hash-updown-1', 'up or down rules', 'binance', $2, $3, $3, $3)`,
+        [UPDOWN_ID, updownDeadline, enterAt],
+      );
+
+      // Barrier "on <date>": one-day window already open at t2.
+      const barrierDeadline = new Date("2026-08-20T04:00:00.000Z");
+      await pool.query(
+        `INSERT INTO polymarket_markets
+           (condition_id, question, slug, category, clob_token_ids,
+            affirmative_token_id, rules, tick_size, end_date_iso, end_ts,
+            active, closed, source_ts, received_at)
+         VALUES ($1, $2, $3, 'crypto', $4::jsonb, $5, $6, '0.01', $7, $8,
+                 TRUE, FALSE, $9, $9)`,
+        [
+          BARRIER_ID,
+          "Will Bitcoin reach $102,000 on August 19?",
+          "bitcoin-reach-102000-august-19",
+          JSON.stringify([BARRIER_YES, BARRIER_NO]),
+          BARRIER_YES,
+          "Resolves Yes if any candle high reaches the level.",
+          "2026-08-19",
+          barrierDeadline,
+          enterAt,
+        ],
+      );
+      await pool.query(
+        `INSERT INTO polymarket_rule_versions
+           (condition_id, version, content_hash, description,
+            resolution_source, end_date, valid_from, source_ts, received_at)
+         VALUES ($1, 1, 'hash-barrier-1', 'barrier rules', 'binance', $2, $3, $3, $3)`,
+        [BARRIER_ID, barrierDeadline, enterAt],
+      );
+
+      for (const conditionId of [UPDOWN_ID, BARRIER_ID]) {
+        await pool.query(
+          `INSERT INTO polymarket_universe_log (condition_id, action, reason, at)
+           VALUES ($1, 'enter', 'priority_2_crypto', $2)`,
+          [conditionId, enterAt],
+        );
+      }
+      for (const tokenId of [UPDOWN_UP, UPDOWN_DOWN, BARRIER_YES, BARRIER_NO]) {
+        await pool.query(
+          `INSERT INTO polymarket_book_snapshots_full
+             (token_id, reason, bids_json, asks_json, source_ts, received_at)
+           VALUES ($1, 'anchor', $2::jsonb, $3::jsonb, $4, $4)`,
+          [
+            tokenId,
+            JSON.stringify([
+              { price: "0.50", size: "1000" },
+              { price: "0.40", size: "5000" },
+            ]),
+            JSON.stringify([
+              { price: "0.52", size: "1000" },
+              { price: "0.60", size: "5000" },
+            ]),
+            new Date(t2.getTime() - 5_000),
+          ],
+        );
+      }
+      // Current level at t2, and the window-open sample that becomes the
+      // updown strike (30 s before the open, well inside max_strike_age_ms).
+      await pool.query(
+        `INSERT INTO polymarket_rtds_prices (feed, symbol, price, source_ts, received_at)
+         VALUES ('twap30', 'btc/usd', '101000', $1, $1),
+                ('twap30', 'btc/usd', '100500', $2, $2)`,
+        [
+          new Date(t2.getTime() - 10_000),
+          new Date(windowStart.getTime() - 30_000),
+        ],
+      );
+
+      const estimator = createEstimator({
+        pool,
+        config: DEFAULT_FUNDAMENTAL_CONFIG,
+        gitSha: GIT_SHA,
+        clock: () => t2,
+      });
+      const report = await estimator.runCycle();
+      expect(report.shadowRows).toBeGreaterThan(0);
+
+      const shadowRows = await pool.query<Record<string, unknown>>(
+        `SELECT token_id, model_version, feature_set_version,
+                data_refs->>'form' AS form, data_refs->>'strike' AS strike,
+                data_refs->>'direction' AS direction, fallback_reason
+           FROM fundamental_estimates
+          WHERE status = 'shadow' AND token_id = ANY($1::text[])
+          ORDER BY token_id, model_version`,
+        [[UPDOWN_UP, UPDOWN_DOWN, BARRIER_YES, BARRIER_NO]],
+      );
+      // Exactly one shadow row per token, all from 1.1.0: the terminal-only
+      // 1.0.0 abstained on both new forms, and abstention writes no row.
+      expect(shadowRows.rowCount).toBe(4);
+      for (const row of shadowRows.rows) {
+        expect(row.model_version).toBe("1.1.0");
+        expect(row.feature_set_version).toBe("1.1.0");
+      }
+      const updownRow = shadowRows.rows.find(
+        (row) => row.token_id === UPDOWN_UP,
+      );
+      expect(updownRow?.form).toBe("updown");
+      expect(updownRow?.direction).toBe("up");
+      // The strike is the recorded feed at the window open — not the current
+      // level, not the question (which has no strike at all).
+      expect(Number(updownRow?.strike)).toBe(100_500);
+      const barrierRow = shadowRows.rows.find(
+        (row) => row.token_id === BARRIER_YES,
+      );
+      expect(barrierRow?.form).toBe("barrier");
+      expect(barrierRow?.direction).toBe("touch_up");
+      expect(Number(barrierRow?.strike)).toBe(102_000);
+
+      // The consumer keeps reading the baseline: nothing serves from shadow.
+      const consumerRows = await pool.query<Record<string, unknown>>(
+        `SELECT source, fallback_reason FROM fundamental_estimates
+          WHERE status = 'active' AND decision_ts = $1
+            AND token_id = ANY($2::text[])`,
+        [t2, [UPDOWN_UP, UPDOWN_DOWN, BARRIER_YES, BARRIER_NO]],
+      );
+      expect(consumerRows.rowCount).toBe(4);
+      for (const row of consumerRows.rows) {
+        expect(row.source).toBe("MARKET_BASELINE");
+        expect(row.fallback_reason).toBe("MODEL_IN_SHADOW");
+      }
+    });
+
     it("keeps the database constraints as the last line of defence", async () => {
       // A MODEL row without provenance must be impossible even by direct SQL.
       await expect(

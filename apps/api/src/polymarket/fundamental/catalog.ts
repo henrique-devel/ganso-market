@@ -16,15 +16,20 @@ import type {
   MarketContext,
 } from "./features.js";
 import {
+  CRYPTO_EXTENDED_FEATURE_SET_VERSION,
+  CRYPTO_EXTENDED_MODEL_VERSION,
   CRYPTO_FEATURE_SET_VERSION,
   CRYPTO_MODEL_FAMILY,
   CRYPTO_MODEL_VERSION,
+  DEFAULT_CRYPTO_HYPERPARAMS,
+  EXTENDED_CRYPTO_HYPERPARAMS,
   estimateCryptoUpdown,
   parseCryptoHyperparams,
   parseCryptoMarket,
   type CryptoMarketSpec,
 } from "./models/crypto-updown.js";
 import {
+  DEFAULT_MACRO_HYPERPARAMS,
   estimateMacroScheduled,
   MACRO_FEATURE_SET_VERSION,
   MACRO_MODEL_FAMILY,
@@ -44,21 +49,46 @@ export interface CategoryModelDescriptor {
   readonly family: string;
   readonly version: string;
   readonly featureSetVersion: string;
+  /** Hyperparameters the boot registers for this version (immutable after). */
+  readonly defaultHyperparams: Record<string, unknown>;
 }
 
-/** The catalog is closed: exactly one model family per category. */
+/**
+ * The catalog is closed: exactly one model FAMILY per category. A family may
+ * carry more than one version proving itself in shadow at the same time
+ * (RFC-014/RFC-019: 1.0.0 terminal-only and 1.1.0 with every form coexist,
+ * so the incumbent's evidence stream is never disturbed by the candidate's).
+ */
 export const CATEGORY_MODELS: readonly CategoryModelDescriptor[] = [
   {
     category: "crypto_updown",
     family: CRYPTO_MODEL_FAMILY,
     version: CRYPTO_MODEL_VERSION,
     featureSetVersion: CRYPTO_FEATURE_SET_VERSION,
+    defaultHyperparams: DEFAULT_CRYPTO_HYPERPARAMS as unknown as Record<
+      string,
+      unknown
+    >,
+  },
+  {
+    category: "crypto_updown",
+    family: CRYPTO_MODEL_FAMILY,
+    version: CRYPTO_EXTENDED_MODEL_VERSION,
+    featureSetVersion: CRYPTO_EXTENDED_FEATURE_SET_VERSION,
+    defaultHyperparams: EXTENDED_CRYPTO_HYPERPARAMS as unknown as Record<
+      string,
+      unknown
+    >,
   },
   {
     category: "macro_scheduled",
     family: MACRO_MODEL_FAMILY,
     version: MACRO_MODEL_VERSION,
     featureSetVersion: MACRO_FEATURE_SET_VERSION,
+    defaultHyperparams: DEFAULT_MACRO_HYPERPARAMS as unknown as Record<
+      string,
+      unknown
+    >,
   },
 ];
 
@@ -74,6 +104,17 @@ export interface CycleData {
   readonly series: ReadonlyMap<string, FeedSeries>;
   readonly calendar: readonly MacroCalendarContext[];
   readonly releases: ReadonlyMap<string, MacroReleaseContext>;
+  /**
+   * RFC-019: feed samples as-of each updown window open, keyed by
+   * `openPriceKey`. Loaded once per distinct (symbol, open instant) per
+   * cycle; a missing entry is an abstention downstream, never a default.
+   */
+  readonly openPrices: ReadonlyMap<string, FeedSample>;
+}
+
+/** Key of one updown strike request inside `CycleData.openPrices`. */
+export function openPriceKey(symbol: string, at: Date): string {
+  return `${symbol}|${at.toISOString()}`;
 }
 
 export type MarketPlan =
@@ -142,6 +183,8 @@ export interface RunModelInput {
   readonly cycle: CycleData;
   readonly config: FundamentalConfig;
   readonly hyperparams: Record<string, unknown>;
+  /** Registered feature-set of the invoking version (RFC-014/RFC-019). */
+  readonly featureSetVersion?: string;
   readonly thinBook: boolean;
   readonly guard: AsOfGuard;
 }
@@ -163,14 +206,24 @@ export function runCategoryModel(input: RunModelInput): ModelResult {
       if (series === undefined) {
         return { ok: false, reason: "MODEL_ABSTAINED" };
       }
+      const openFeed =
+        plan.spec.form === "updown" && plan.spec.windowStartTs !== null
+          ? (input.cycle.openPrices.get(
+              openPriceKey(plan.spec.symbol, plan.spec.windowStartTs),
+            ) ?? null)
+          : null;
       return estimateCryptoUpdown({
         spec: plan.spec,
         decisionTs: input.decisionTs,
         feed,
         series,
+        openFeed,
         config: input.config,
         hyperparams: parseCryptoHyperparams(input.hyperparams, input.config),
         guard: input.guard,
+        ...(input.featureSetVersion === undefined
+          ? {}
+          : { featureSetVersion: input.featureSetVersion }),
       });
     }
     const eventKey = plan.spec.eventKey;

@@ -51,6 +51,8 @@ function context(
     tickSize: "0.01",
     umaDisputeActive: false,
     ruleChangedRecently: false,
+    firstSeenAt: new Date("2026-08-10T00:00:00.000Z"),
+    affirmativeTokenId: "1",
   };
 }
 
@@ -101,6 +103,8 @@ function series(
     points: values.map((close, index) => ({
       bucketStart: new Date(firstBucket.getTime() + index * MINUTE_MS),
       close,
+      high: close,
+      low: close,
     })),
     firstBucket,
     lastBucket,
@@ -142,9 +146,13 @@ function sample(price: number, ageMs = 15_000, stale = false): FeedSample {
 function spec(overrides: Partial<CryptoMarketSpec> = {}): CryptoMarketSpec {
   return {
     symbol: SYMBOL,
+    form: "terminal",
     strike: 110_000,
     direction: "above",
     deadline: new Date(DECISION_TS.getTime() + 24 * 3_600_000),
+    windowStartTs: null,
+    windowOpensTs: null,
+    touchScanFrom: null,
     ...overrides,
   };
 }
@@ -176,9 +184,13 @@ describe("parseCryptoMarket", () => {
       parseCryptoMarket(context("Will BTC be above $110,000 on August 30?")),
     ).toEqual({
       symbol: "btc/usd",
+      form: "terminal",
       strike: 110_000,
       direction: "above",
       deadline: new Date("2026-08-30T20:00:00.000Z"),
+      windowStartTs: null,
+      windowOpensTs: null,
+      touchScanFrom: null,
     });
 
     expect(
@@ -188,10 +200,6 @@ describe("parseCryptoMarket", () => {
       strike: 4_500,
       direction: "above",
     });
-
-    expect(
-      parseCryptoMarket(context("Will Bitcoin dip below $95k in August?")),
-    ).toMatchObject({ symbol: "btc/usd", strike: 95_000, direction: "below" });
 
     expect(
       parseCryptoMarket(context("Will Solana close above $180 on Friday?")),
@@ -235,16 +243,31 @@ describe("parseCryptoMarket", () => {
     expect(
       parseCryptoMarket(context("Will BTC be above or below $110,000?")),
     ).toBeNull();
-    // Barrier payoff: pays on the path, not on the level at T.
+    // A path marker WITHOUT a barrier verb: still a path payoff, but not a
+    // family whose window this parser can bound.
+    expect(
+      parseCryptoMarket(context("Will BTC ever be above $150,000?")),
+    ).toBeNull();
+    // An all-time high has no numeric barrier in the question.
+    expect(
+      parseCryptoMarket(
+        context("Will Bitcoin hit a new all-time high in August?"),
+      ),
+    ).toBeNull();
+    // A barrier verb whose window family is unrecognizable ("in 2026" is not
+    // a month, a date or a range).
     expect(
       parseCryptoMarket(context("Will Bitcoin hit $150k in 2026?")),
-    ).toBeNull();
-    expect(
-      parseCryptoMarket(context("Will BTC reach $150,000 anytime in August?")),
     ).toBeNull();
     // Range payoff.
     expect(
       parseCryptoMarket(context("Will BTC be between $100k and $120k?")),
+    ).toBeNull();
+    // RFC-014: "dip BELOW" is a path verb with a terminal preposition, and no
+    // market in the measured population uses it, so no rule text settles the
+    // family. Ambiguous family => baseline, never a guessed map.
+    expect(
+      parseCryptoMarket(context("Will Bitcoin dip below $95k in August?")),
     ).toBeNull();
     // No endDate.
     expect(
@@ -658,6 +681,9 @@ describe("parseCryptoHyperparams", () => {
       ewmaLambdas: DEFAULT_FUNDAMENTAL_CONFIG.crypto.ewmaLambdas,
       studentDf: DEFAULT_FUNDAMENTAL_CONFIG.crypto.studentDf,
       calibration: null,
+      // A stored row without `forms` is the 1.0.0 generation: terminal-only,
+      // exactly what it was before RFC-014.
+      forms: ["terminal"],
     });
   });
 
@@ -677,6 +703,7 @@ describe("parseCryptoHyperparams", () => {
       ewmaLambdas: [0.9],
       studentDf: 6,
       calibration: { intercept: 0.1, coefficients: [1, 0, 0, 0] },
+      forms: ["terminal"],
     });
     expect(
       parseCryptoHyperparams(
@@ -762,12 +789,10 @@ describe("feed gaps", () => {
     const withGap = seriesWithGap(path, 30);
 
     const base = {
-      spec: {
-        symbol: SYMBOL,
+      spec: spec({
         strike: 101_500,
-        direction: "above" as const,
         deadline: new Date(DECISION_TS.getTime() + 6 * 3_600_000),
-      },
+      }),
       decisionTs: DECISION_TS,
       feed: sample(101_000),
       config: DEFAULT_FUNDAMENTAL_CONFIG,
@@ -801,12 +826,10 @@ describe("feed gaps", () => {
     );
     const shredded = seriesWithGap(path, 60);
     const result = estimateCryptoUpdown({
-      spec: {
-        symbol: SYMBOL,
+      spec: spec({
         strike: 101_000,
-        direction: "above",
         deadline: new Date(DECISION_TS.getTime() + 3_600_000),
-      },
+      }),
       decisionTs: DECISION_TS,
       feed: sample(100_500),
       series: shredded,
