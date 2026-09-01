@@ -37,10 +37,40 @@ function fakePool(responder: Responder): {
       const canned = responder(text, params ?? [], captured);
       captured.push({ text, params: [...(params ?? [])] });
       return Promise.resolve(
-        (canned as QueryResult<R> | null) ?? { rows: [], rowCount: 0 },
+        (stampTableName(text, params, canned) as QueryResult<R> | null) ?? {
+          rows: [],
+          rowCount: 0,
+        },
       );
     },
   };
+}
+
+/**
+ * The catalog read asks for a LIST of tables and returns one row per table,
+ * keyed by `table_name` — `measureTableSizes` builds its map from that column,
+ * so a fixture row without one would be silently dropped.
+ *
+ * Each test below says what a size row LOOKS like; this says which table it is
+ * FOR, taken from the parameter the query was actually called with. A fixture
+ * that returns no rows still returns none: "this table is not in the catalog"
+ * is a case the runner has to handle.
+ */
+function stampTableName(
+  text: string,
+  params: readonly unknown[] | undefined,
+  canned: { rows: Record<string, unknown>[]; rowCount: number } | null,
+): { rows: Record<string, unknown>[]; rowCount: number } | null {
+  if (canned === null || !text.includes("pg_total_relation_size")) {
+    return canned;
+  }
+  const requested = (params?.[0] as string[] | undefined) ?? [];
+  const template = canned.rows[0];
+  if (template === undefined || requested.length === 0) {
+    return canned;
+  }
+  const rows = requested.map((table) => ({ table_name: table, ...template }));
+  return { rows, rowCount: rows.length };
 }
 
 const NOW = new Date("2026-08-19T12:00:00Z");

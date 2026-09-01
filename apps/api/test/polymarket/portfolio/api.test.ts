@@ -170,6 +170,7 @@ function worldPool(
         );
       }
       if (text.includes("FROM portfolio_decisions")) {
+        record.reads.push({ text, params });
         return respond([
           {
             decision_id: 7,
@@ -224,6 +225,33 @@ const READ_ROUTES = [
   "/polymarket/gates/measurements",
   "/polymarket/decisions",
 ];
+
+describe("GET /polymarket/decisions", () => {
+  // RFC-015 §3: the 500 of 2026-08-31 18:21Z. There is no index on
+  // decision_ts alone, so `ORDER BY decision_ts DESC LIMIT 500` was a parallel
+  // seq scan plus a top-N sort over the whole table — 715 ms measured in
+  // production against the API pool's 1000 ms statement_timeout, on a table
+  // that grows ~545 MB/day. decision_id is the primary key: index-only scan
+  // backward, 0.17 ms measured, and a TOTAL order where decision_ts ties.
+  it("pages the decision log on the primary key, never on decision_ts", async () => {
+    const record = { writes: [] as Recorded[], reads: [] as Recorded[] };
+    const instance = await buildApp(worldPool(record));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/decisions",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const read = record.reads.find(
+      (query) =>
+        query.text.includes("FROM portfolio_decisions") &&
+        query.text.includes("LIMIT"),
+    );
+    expect(read).toBeDefined();
+    expect(read?.text).toContain("ORDER BY decision_id DESC");
+    expect(read?.text).not.toContain("ORDER BY decision_ts DESC");
+  });
+});
 
 describe("session guard", () => {
   it("refuses every route without a token", async () => {

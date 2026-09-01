@@ -10,6 +10,13 @@ it is the hole widening by accident. ``location ^~ /api/polymarket/paper`` would
 publish ``POST /api/polymarket/paper/intents``, which CREATES simulated orders,
 and the diff that did it would look like a one-character change. These tests fail
 if that happens.
+
+RFC-015 (2026-09-01) published a second path under ``/paper`` — the read-only
+performance report, which is where the panel's unrealised PnL and fees come
+from. So "only the rearm may be named" became an allowlist of two. The
+allowlist is the point: adding a third requires editing this file, which is a
+diff a reviewer reads as "the perimeter changed" rather than as "one more
+location".
 """
 
 from __future__ import annotations
@@ -21,6 +28,12 @@ from pathlib import Path
 CONF = Path(__file__).resolve().parents[2] / "infra" / "nginx" / "nginx.conf"
 
 REARM = "/api/polymarket/paper/kill-switch/rearm"
+PERFORMANCE = "/api/polymarket/paper/performance"
+
+# Every path under /api/polymarket/paper the perimeter is allowed to name, and
+# the ONE method each may carry. Anything else under that prefix — intents,
+# orders, the kill-switch engage — stays unreachable from outside.
+PAPER_ALLOWLIST = {REARM: "POST", PERFORMANCE: "GET"}
 
 
 def conf_text() -> str:
@@ -58,8 +71,9 @@ class NginxPerimeterTests(unittest.TestCase):
 
     def test_no_prefix_location_can_reach_the_paper_module(self) -> None:
         # `^~ /api/polymarket/paper` would also publish POST .../intents, the
-        # surface that creates orders. Only an exact match may name this module.
-        for spec, _ in locations():
+        # surface that creates orders. Only an exact match may name this module,
+        # and only for a path on the allowlist.
+        for spec, body in locations():
             path = spec.split()[-1]
             if not path.startswith("/api/polymarket/paper"):
                 continue
@@ -67,13 +81,41 @@ class NginxPerimeterTests(unittest.TestCase):
                 spec.startswith("= "),
                 f"{spec!r} publishes the paper module by prefix; use `location =`",
             )
-            self.assertEqual(path, REARM, f"{spec!r} publishes more than the rearm")
+            self.assertIn(
+                path,
+                PAPER_ALLOWLIST,
+                f"{spec!r} publishes a paper path that is not on the allowlist",
+            )
+            allowed = PAPER_ALLOWLIST[path]
+            self.assertIn(
+                f"$request_method != {allowed}",
+                body,
+                f"{spec!r} must be pinned to {allowed} and nothing else",
+            )
+
+    def test_the_rfc_015_read_surfaces_are_exact_and_get_only(self) -> None:
+        specs = {spec.split()[-1]: spec for spec, _ in locations()}
+        for path in (
+            "/api/polymarket/overview",
+            "/api/polymarket/events",
+            "/api/polymarket/data-quality",
+            PERFORMANCE,
+        ):
+            self.assertIn(path, specs, f"{path} is not published")
+            self.assertTrue(
+                specs[path].startswith("= "),
+                f"{path} must be an exact location, not a prefix",
+            )
+            body = next(b for s, b in locations() if s == specs[path])
+            self.assertIn("$request_method != GET", body)
+            self.assertIn("return 404", body)
 
     def test_the_order_creating_surfaces_stay_closed(self) -> None:
         published = {spec.split()[-1] for spec, _ in locations()}
         for closed in (
             "/api/polymarket/paper/intents",
             "/api/polymarket/paper/orders",
+            "/api/polymarket/paper/positions",
             "/api/polymarket/paper/kill-switch",
             "/api/polymarket/portfolio/halt",
             "/api/polymarket/portfolio/resume",

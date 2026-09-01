@@ -9,6 +9,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { fetchGateMeasurements } from "../src/portfolio.js";
+// Explicit .tsx: "../src/Portfolio.js" would resolve to src/portfolio.ts on a
+// case-insensitive filesystem.
+import { roundTripCost } from "../src/Portfolio.tsx";
 import type { ResolutionFetcher } from "../src/resolution.js";
 
 function jsonResponse(
@@ -151,5 +154,50 @@ describe("fetchGateMeasurements", () => {
       fetcher as ResolutionFetcher,
     );
     expect(outcome.kind).toBe("unauthorized");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RFC-015 §8: the "Rápidos" tab's arithmetic.
+
+describe("roundTripCost", () => {
+  it("charges the spread once and fees and slippage on both legs", () => {
+    // Buying at the ask and selling at the bid loses the spread once; fees and
+    // slippage are charged entering AND leaving.
+    expect(
+      roundTripCost({
+        spread: "0.010000",
+        fee: "0.001000",
+        slippage: "0.002000",
+      }),
+    ).toBeCloseTo(0.016, 9);
+  });
+
+  it("reduces to the spread when there are no fees, which is production today", () => {
+    // Measured 2026-09-01: every panel row carries fee 0.000000 and slippage
+    // 0.000000, so the round trip IS the spread. The components stay on screen
+    // so that stops being an invisible assumption.
+    expect(
+      roundTripCost({
+        spread: "0.014000",
+        fee: "0.000000",
+        slippage: "0.000000",
+      }),
+    ).toBeCloseTo(0.014, 9);
+  });
+
+  it("treats a missing fee as zero but a missing spread as unknown", () => {
+    // No spread means no book to cross: there is no honest number to print,
+    // and 0 would read as "free".
+    expect(
+      roundTripCost({ spread: "0.020000", fee: null, slippage: null }),
+    ).toBe(0.02);
+    expect(
+      roundTripCost({ spread: null, fee: "0.001", slippage: "0" }),
+    ).toBeNull();
+    expect(roundTripCost({ spread: "", fee: null, slippage: null })).toBeNull();
+    expect(
+      roundTripCost({ spread: "abc", fee: null, slippage: null }),
+    ).toBeNull();
   });
 });

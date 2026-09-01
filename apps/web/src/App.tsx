@@ -14,6 +14,12 @@ import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
 // extension substitution) would match src/resolution.ts instead.
 import { PortfolioPanel } from "./Portfolio.tsx";
 import { ResolutionPanel } from "./Resolution.tsx";
+import {
+  BuildFooter,
+  OverviewPanel,
+  PnlBand,
+  useOverview,
+} from "./Overview.tsx";
 
 const REFRESH_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -194,6 +200,15 @@ export function LoginPanel({
   );
 }
 
+type Tab = "visao" | "status" | "resolucao" | "portfolio";
+
+const TABS: readonly (readonly [Tab, string])[] = [
+  ["visao", "Visão geral"],
+  ["status", "Status"],
+  ["resolucao", "Resolução"],
+  ["portfolio", "Portfólio"],
+];
+
 function Dashboard({
   session,
   onLogout,
@@ -204,10 +219,18 @@ function Dashboard({
   onUnauthorized: () => void;
 }>) {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
-  const [tab, setTab] = useState<"status" | "resolucao" | "portfolio">(
-    "status",
-  );
+  // "Visão geral" is the default (RFC-015): the first thing on screen is the
+  // state of the operation, not a list of rows to scroll.
+  const [tab, setTab] = useState<Tab>("visao");
   const mounted = useRef(true);
+
+  // Mounted here, not inside the tab, so the band and the footer keep their
+  // data when the operator switches tabs — and so the band is on screen on
+  // every one of them.
+  const { overview, performance, events, degraded, feedDegraded } = useOverview(
+    session.accessToken,
+    onUnauthorized,
+  );
 
   const refresh = useCallback(async (): Promise<void> => {
     const controller = new AbortController();
@@ -237,11 +260,11 @@ function Dashboard({
   return (
     <main className="shell shell--wide">
       <header className="header">
-        <p className="eyebrow">Fundação RFC-001</p>
+        <p className="eyebrow">Painel do operador</p>
         <h1>Ganso Market</h1>
         <p className="scope">
-          Estado operacional real. Nesta fundação não existe execução de ordens;
-          o único modo configurável é paper.
+          Estado operacional real. Não existe execução de ordens: o único modo
+          configurável é paper.
         </p>
         <p className="session">
           Sessão de <strong>{session.username}</strong>.{" "}
@@ -250,36 +273,32 @@ function Dashboard({
           </button>
         </p>
       </header>
+      <PnlBand
+        overview={overview}
+        performance={performance}
+        degraded={degraded}
+      />
       <nav className="tabs" aria-label="Seções do painel">
-        <button
-          type="button"
-          className={tab === "status" ? "tab tab--active" : "tab"}
-          onClick={() => {
-            setTab("status");
-          }}
-        >
-          Status
-        </button>
-        <button
-          type="button"
-          className={tab === "resolucao" ? "tab tab--active" : "tab"}
-          onClick={() => {
-            setTab("resolucao");
-          }}
-        >
-          Resolução
-        </button>
-        <button
-          type="button"
-          className={tab === "portfolio" ? "tab tab--active" : "tab"}
-          onClick={() => {
-            setTab("portfolio");
-          }}
-        >
-          Portfólio
-        </button>
+        {TABS.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className={tab === key ? "tab tab--active" : "tab"}
+            onClick={() => {
+              setTab(key);
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
-      {tab === "status" ? (
+      {tab === "visao" ? (
+        <OverviewPanel
+          overview={overview}
+          events={events}
+          feedDegraded={feedDegraded}
+        />
+      ) : tab === "status" ? (
         <>
           <StatusPanel status={status} />
           <button
@@ -301,6 +320,7 @@ function Dashboard({
           onUnauthorized={onUnauthorized}
         />
       )}
+      <BuildFooter releaseSha={overview?.release_sha ?? null} />
     </main>
   );
 }

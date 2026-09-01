@@ -615,82 +615,26 @@ function log(
   );
 }
 
-interface TableSize {
+export interface TableSize {
   /** Physical bytes on disk (pg_total_relation_size): never shrinks on DELETE. */
   readonly bytes: number;
-  /** Live bytes: live rows times the measured row width (see tableSize). */
+  /** Live bytes: live rows times the measured row width (see measureTableSizes). */
   readonly liveBytes: number;
   readonly reltuples: number;
   /** Best available live row count (pg_stat, falling back to reltuples). */
   readonly liveRows: number;
 }
 
-function toDate(value: unknown): Date | null {
-  if (value instanceof Date) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  return null;
-}
-
-export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
-  const pool = deps.pool;
-  const budgetBytes = deps.budgetBytes ?? DEFAULT_BUDGET_BYTES;
-  const tables = deps.tables ?? RETENTION_TABLES;
-  const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
-  const maxQuotaIterations = deps.maxQuotaIterations ?? MAX_QUOTA_ITERATIONS;
-
-  // Two different sizes, because they answer two different questions.
-  //
-  // `bytes` is physical (pg_total_relation_size) and answers "how much disk is
-  // this costing right now" — the global budget alarm's bloat signal. It does
-  // NOT shrink on DELETE: dead tuples keep their pages until VACUUM returns
-  // them to the free space map, and even then the file does not give space
-  // back to the OS.
-  //
-  // `liveBytes` answers "how much data is actually retained" — the per-table
-  // quota — and must not depend on the physical file AT ALL. The first fix
-  // discounted the physical size by the dead-tuple fraction, and that
-  // degenerates the moment autovacuum finishes: n_dead_tup drops to zero, the
-  // file keeps every empty page, and live_bytes == physical again. Measured in
-  // production 2026-08-28: polymarket_book_deltas at 104.5 GB physical with
-  // n_dead_tup = 0 read as 104.5 GB "live" against a 52 GB quota, so the run
-  // asked to delete 33.9 M LIVE rows — 53% of the table — with the retained
-  // data actually around 20 GB. The same degeneration had already deleted
-  // 1.39 M live rows (down to data 3 hours old) earlier that day.
-  //
-  // So live bytes are now built from per-row measurements only:
-  //
-  //   liveRows x (heap width + tuple overhead)        -- pg_stats.avg_width
-  // + liveRows x (index keys + entry overhead) / fill -- per live index entry
-  // + live TOAST chunks x chunk size                  -- toast pg_stat counts
-  //
-  // Every term scales with live rows (TOAST chunk counts move with vacuum,
-  // slightly behind deletes), so a prune moves the measure immediately and the
-  // estimate can never inherit empty pages or index bloat. The physical-live
-  // discrepancy is reported as RETENTION_BLOAT / RETENTION_GLOBAL_BLOAT and is
-  // never a reason to delete rows. Priced as freshly rebuilt (compact), which
-  // is exactly what a VACUUM FULL would leave.
-  //
-  // Fallbacks, in order, when the catalog has less to offer: no pg_stats row
-  // yet (never analyzed) -> the dead-fraction discount; no stats-collector row
-  // at all -> the physical size (the original behaviour, for freshly created
-  // tables the collector has not seen).
-  async function tableSize(table: string): Promise<TableSize | null> {
-    const result = await pool.query<{
-      bytes: string | number | null;
-      reltuples: string | number | null;
-      live_tup: string | number | null;
-      dead_tup: string | number | null;
-      toast_live_tup: string | number | null;
-      heap_width: string | number | null;
-      index_count: string | number | null;
-      index_key_width: string | number | null;
-    }>(
-      `SELECT pg_total_relation_size(c.oid)::bigint AS bytes,
+/**
+ * Catalog read behind every size measurement in this module.
+ *
+ * One statement for the whole list, not one per table: the read API renders
+ * the same numbers on every dashboard poll, and 37 round trips would not fit
+ * the API pool's 1s statement_timeout. Measured in production 2026-09-01:
+ * all 74 tables in 16 ms.
+ */
+const TABLE_SIZE_SQL = `SELECT c.relname AS table_name,
+              pg_total_relation_size(c.oid)::bigint AS bytes,
               c.reltuples::float8 AS reltuples,
               s.n_live_tup::bigint AS live_tup,
               s.n_dead_tup::bigint AS dead_tup,
@@ -720,13 +664,63 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
               AND st.attname = a.attname
             WHERE i.indrelid = c.oid AND i.indisvalid
          ) ix ON true
-        WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = $1`,
-      [table],
-    );
-    const row = result.rows[0];
-    if (row === undefined) {
-      return null;
-    }
+        WHERE n.nspname = 'public' AND c.relkind = 'r'
+          AND c.relname = ANY($1::text[])`;
+
+/**
+ * Live and physical bytes for each named table, in one catalog read.
+ *
+ * THE definition of "live bytes" for this codebase — the quota alarm and the
+ * read API's `budget_used_pct` both call this. A second estimator elsewhere is
+ * how the panel and the alarm came to disagree in the first place (RFC-015 §9).
+ *
+ * `liveBytes` must not depend on the physical file AT ALL. The first fix
+ * discounted the physical size by the dead-tuple fraction, and that degenerates
+ * the moment autovacuum finishes: n_dead_tup drops to zero, the file keeps every
+ * empty page, and live_bytes == physical again. Measured in production
+ * 2026-08-28: polymarket_book_deltas at 104.5 GB physical with n_dead_tup = 0
+ * read as 104.5 GB "live" against a 52 GB quota, so the run asked to delete
+ * 33.9 M LIVE rows — 53% of the table — with the retained data actually around
+ * 20 GB. The same degeneration had already deleted 1.39 M live rows earlier
+ * that day.
+ *
+ * So live bytes are built from per-row measurements only:
+ *
+ *   liveRows x (heap width + tuple overhead)        -- pg_stats.avg_width
+ * + liveRows x (index keys + entry overhead) / fill -- per live index entry
+ * + live TOAST chunks x chunk size                  -- toast pg_stat counts
+ *
+ * Every term scales with live rows (TOAST chunk counts move with vacuum,
+ * slightly behind deletes), so a prune moves the measure immediately and the
+ * estimate can never inherit empty pages or index bloat. Priced as freshly
+ * rebuilt (compact), which is exactly what a VACUUM FULL would leave.
+ *
+ * Fallbacks, in order, when the catalog has less to offer: no pg_stats row yet
+ * (never analyzed) -> the dead-fraction discount; no stats-collector row at all
+ * -> the physical size (the original behaviour, for freshly created tables the
+ * collector has not seen). Tables absent from the catalog are absent from the
+ * map — callers decide whether that is zero or an error.
+ */
+export async function measureTableSizes(
+  pool: { query: SqlExecutor["query"] },
+  tables: readonly string[],
+): Promise<Map<string, TableSize>> {
+  const sizes = new Map<string, TableSize>();
+  if (tables.length === 0) {
+    return sizes;
+  }
+  const result = await pool.query<{
+    table_name: string;
+    bytes: string | number | null;
+    reltuples: string | number | null;
+    live_tup: string | number | null;
+    dead_tup: string | number | null;
+    toast_live_tup: string | number | null;
+    heap_width: string | number | null;
+    index_count: string | number | null;
+    index_key_width: string | number | null;
+  }>(TABLE_SIZE_SQL, [[...tables]]);
+  for (const row of result.rows) {
     const bytes = Number(row.bytes ?? 0);
     const reltuples = Math.max(Number(row.reltuples ?? 0), 0);
     const liveTup = Math.max(Number(row.live_tup ?? 0), 0);
@@ -749,7 +743,39 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     } else {
       liveBytes = bytes;
     }
-    return { bytes, liveBytes, reltuples, liveRows };
+    sizes.set(row.table_name, { bytes, liveBytes, reltuples, liveRows });
+  }
+  return sizes;
+}
+
+function toDate(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
+  const pool = deps.pool;
+  const budgetBytes = deps.budgetBytes ?? DEFAULT_BUDGET_BYTES;
+  const tables = deps.tables ?? RETENTION_TABLES;
+  const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
+  const maxQuotaIterations = deps.maxQuotaIterations ?? MAX_QUOTA_ITERATIONS;
+
+  // Physical and live bytes, both from `measureTableSizes` — the single
+  // definition this codebase has (see there for why live bytes never touch the
+  // physical file). `bytes` answers "how much disk is this costing right now"
+  // and is only ever a bloat signal; `liveBytes` answers "how much data is
+  // actually retained" and is what every quota decision below is made on. The
+  // physical-live discrepancy is reported as RETENTION_BLOAT /
+  // RETENTION_GLOBAL_BLOAT and is never a reason to delete rows.
+  async function tableSize(table: string): Promise<TableSize | null> {
+    const sizes = await measureTableSizes(pool, [table]);
+    return sizes.get(table) ?? null;
   }
 
   // Batched delete (50k per statement via ctid) so a prune never holds a

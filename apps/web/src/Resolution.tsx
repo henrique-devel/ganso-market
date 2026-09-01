@@ -23,6 +23,7 @@ import {
   type ViolationSets,
 } from "./resolution.js";
 import { rearmKillSwitch } from "./paper.js";
+import { CATEGORIA, consequencia, rotulo } from "./dicionario";
 
 const REFRESH_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -585,7 +586,9 @@ function ScoreTable({
                       </span>
                     ) : null}
                   </td>
-                  <td>{market.category ?? "—"}</td>
+                  <td title={consequencia(market.category, CATEGORIA)}>
+                    {rotulo(market.category, CATEGORIA)}
+                  </td>
                   <td>
                     <ScoreBar score={market.score} />
                   </td>
@@ -923,7 +926,9 @@ function DisputesSection({
                   <td title={market.question}>
                     {truncate(market.question, 70)}
                   </td>
-                  <td>{market.category ?? "—"}</td>
+                  <td title={consequencia(market.category, CATEGORIA)}>
+                    {rotulo(market.category, CATEGORIA)}
+                  </td>
                   <td>
                     <EffectiveActionBadge market={market} />
                   </td>
@@ -1352,7 +1357,10 @@ function ReportSection({
                 <tbody>
                   {report.categories.map((category) => (
                     <tr key={category.category}>
-                      <td>{category.category}</td>
+                      <td title={consequencia(category.category, CATEGORIA)}>
+                        {rotulo(category.category, CATEGORIA)}{" "}
+                        <code>{category.category}</code>
+                      </td>
                       <td>{category.resolved ?? "—"}</td>
                       <td>{category.disputed ?? "—"}</td>
                       <td>
