@@ -337,6 +337,13 @@ function renderSweepTable(
     );
   }
   lines.push("");
+  lines.push(
+    `  Counts are absolute. The denominator for ACTION and REASON is the ` +
+      `${String(t.decisionsReachingArithmetic)} rows / ` +
+      `${String(t.marketsReachingArithmetic)} markets that reached the ` +
+      `arithmetic, NOT the ${String(t.decisionsSeen)} rows in the window.`,
+  );
+  lines.push("");
   for (const c of t.candidates) {
     const transitions = Object.entries(c.verdictTransitions).sort(
       (a, b) => b[1] - a[1],
