@@ -2227,7 +2227,8 @@ tocado** — quota 2 GB, TTL 90 dias.
 | Estimativas da última hora de vida, pontuáveis         | **0 → 8.063** (100%)                                                  |
 | Gap de estimativa na última hora de vida               | **10,0 s** (o mercado das 00:00Z)                                     |
 | Janelas `1s`/`10s` em mercado de horizonte real > 6 h  | **75% / 38% → 0 de 14 / 0 de 2**                                      |
-| Erros novos (recorder, estimator, paper, portfolio, resolution, api) | **0 em todos os seis**                                  |
+| Erros novos (recorder, estimator, paper, portfolio, resolution, api) | **0 em todos os seis**, acumulado em 37 min             |
+| Bucket de horizonte no motivo do `enter`               | **`priority_2_crypto_1d_7d`** às 00:27:46Z                            |
 | RAM                                                    | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
 
 **Taxa de volume — medida curta, a re-medir.** Nos primeiros 21,6 min pós-deploy
@@ -2238,13 +2239,10 @@ tomando a projeção pelo valor de face, a quota de 2 GB compraria ~71 dias, 63�
 o piso de 27 h; `fundamental_estimates` está em 911 MB (44,5% da quota).
 **Re-medir a taxa em 48 h** e comparar com o modelo do `budget.test.ts`.
 
-**Pendência aberta desta sessão:** o carimbo do bucket de horizonte no motivo do
-`enter` **ainda não foi observado em produção** — desde o rebuild só houve
-`exit` e `rejected_filter`, porque a Gamma não publicou mercado novo na janela
-observada (~25 min). O caminho tem teste unitário (`labels the horizon bucket on
-the membership log`), mas a confirmação em produção fica para a próxima sessão:
-`SELECT reason FROM polymarket_universe_log WHERE action='enter' ORDER BY at
-DESC LIMIT 5` deve trazer algo como `priority_2_crypto_lt_1h`.
+**Carimbo do bucket confirmado às 00:27:46Z**, no primeiro `enter` posterior ao
+rebuild (a Gamma levou meia hora para publicar mercado novo):
+`priority_2_crypto_1d_7d`, em dois mercados. O giro por bucket passa a ser
+legível direto do log de membresia.
 
 **Observação de retenção, não regressão:** `paper_feature_windows` continua em
 1095 MB contra uma quota de 0,6 GB (178%), e a poda por quota bate no piso

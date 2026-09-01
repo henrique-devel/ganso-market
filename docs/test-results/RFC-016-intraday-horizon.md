@@ -285,13 +285,14 @@ E o schema no banco de produção:
 | Linhas obsoletas (fora do universo) com `end_ts`        | —                           | **973 seguem NULL** — o desenho prospectivo, sem backfill inventado |
 | Membros com fim real no passado                         | 1 de 83                     | **2 de 87** (os que acabaram de vencer, antes do ciclo de saída) |
 | Distribuição de horizonte por `end_ts`                  | ilegível na tabela plana    | 3 em `<1 h`, 29 em `1h–6h`, 17 em `6h–24h`, 27 em `1d–7d`, 16 em `>7d` |
+| Bucket de horizonte carimbado no `enter`                | não existia                 | **`priority_2_crypto_1d_7d`** às 00:27:46Z |
 | Labels com `publicly_knowable_ts` à meia-noite          | **1.572 de 1.670 (94%)**    | **48 de 1.672 (2,9%)**           |
 | Estimativas `MODEL` pontuáveis                          | **36.212 de 74.412**        | **74.412 de 74.412 (100%)**      |
 | Estimativas da última hora de vida, pontuáveis          | **0 de 8.063**              | **8.063 de 8.063 (100%)**        |
 | Gap de estimativa na última hora de vida                | 10 s (já funcionava)        | **10,0 s** (mercado das 00:00Z)  |
 | Janelas `10s` em mercado com horizonte real > 6 h       | **63.951 de 84.772 (75%)**  | **0 de 14**                      |
 | Janelas `1s` idem                                       | **3.936 de 10.481 (38%)**   | **0 de 2**                       |
-| Erros novos (6 serviços)                                | —                           | **0 em todos**                   |
+| Erros novos (6 serviços)                                | —                           | **0 em todos**, acumulado em 37 min |
 | RAM                                                     | —                           | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
 
 Os 48 labels que sobraram à meia-noite foram conferidos um a um por amostragem
@@ -329,12 +330,20 @@ do `budget.test.ts`.
 
 ### Pendências abertas desta sessão
 
-- **O carimbo do bucket no `enter` não foi observado em produção.** Desde o
-  rebuild houve apenas `exit` e `rejected_filter` — a Gamma não publicou mercado
-  novo na janela observada (~25 min). O caminho tem teste unitário; a
-  confirmação é `SELECT reason FROM polymarket_universe_log WHERE
-  action='enter' ORDER BY at DESC LIMIT 5`, que deve trazer algo como
-  `priority_2_crypto_lt_1h`.
+- ~~O carimbo do bucket no `enter` não foi observado em produção.~~
+  **CONFIRMADO às 00:27:46Z**, no primeiro `enter` posterior ao rebuild (a
+  Gamma levou meia hora para publicar mercado novo):
+
+  ```text
+      at     |         reason
+  -----------+-------------------------
+   00:27:46Z | enter  | priority_2_crypto_1d_7d
+   00:27:46Z | enter  | priority_2_crypto_1d_7d
+  ```
+
+  O motivo passou a carregar o bucket de horizonte, então o giro por bucket é
+  legível direto do log de membresia, sem join com uma cadeia de regras que já
+  andou quando alguém for perguntar.
 - **`paper_feature_windows` continua em 1095 MB contra 0,6 GB de quota (178%)**,
   e a poda por quota bate no piso (`RETENTION_QUOTA_NO_PROGRESS`, cutoff =
   floor). É **anterior** a esta RFC; o que ela fez foi fechar a torneira. A
