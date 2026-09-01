@@ -2226,7 +2226,7 @@ tocado** — quota 2 GB, TTL 90 dias.
 | Estimativas MODEL pontuáveis                           | **36.212 → 74.412** (100%)                                            |
 | Estimativas da última hora de vida, pontuáveis         | **0 → 8.063** (100%)                                                  |
 | Gap de estimativa na última hora de vida               | **10,0 s** (o mercado das 00:00Z)                                     |
-| Janelas `1s`/`10s` em mercado de horizonte real > 6 h  | **75% / 38% → 0 de 14 / 0 de 2**                                      |
+| Janelas `1s`/`10s` em mercado de horizonte real > 6 h  | **75% / 38% → 0 de 3.868 / 0 de 2** (amostra de 1 h 40)                |
 | Erros novos (recorder, estimator, paper, portfolio, resolution, api) | **0 em todos os seis**, acumulado em 37 min             |
 | Bucket de horizonte no motivo do `enter`               | **`priority_2_crypto_1d_7d`** às 00:27:46Z                            |
 | RAM                                                    | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
@@ -2244,13 +2244,6 @@ comparar com o modelo do `budget.test.ts`.
 **3.868** janelas `10s` e 2 janelas `1s` computadas em 1 h 40, **zero** são de
 mercado com horizonte real acima de 6 h. Antes eram 75% e 38%. O conserto não
 matou a cadência fina — ele a apontou.
-**Taxa de volume — medida curta, a re-medir.** Nos primeiros 21,6 min pós-deploy
-foram 443 linhas, o que projeta **~29,5 k/dia** contra as 20.818 das 24 h
-anteriores. **A janela é curta e enviesada**: ela contém o vencimento das 00:00Z
-de vários updown horários, que é justamente o pico do bucket de 10 s. Mesmo
-tomando a projeção pelo valor de face, a quota de 2 GB compraria ~71 dias, 63×
-o piso de 27 h; `fundamental_estimates` está em 911 MB (44,5% da quota).
-**Re-medir a taxa em 48 h** e comparar com o modelo do `budget.test.ts`.
 
 **Carimbo do bucket confirmado às 00:27:46Z**, no primeiro `enter` posterior ao
 rebuild (a Gamma levou meia hora para publicar mercado novo):
@@ -2270,13 +2263,6 @@ PR #67 (docs) reiniciou os containers — a fragilidade conhecida que o PR #63
 endereçou. O job de 10 min recuperou sozinho às **01:47:52Z** com
 `MACRO_CALENDAR_SYNCED {"recovered": true}`, o mesmo padrão do PR #65. Os outros
 cinco serviços seguem em zero erros.
-**Observação de retenção, não regressão:** `paper_feature_windows` continua em
-1095 MB contra uma quota de 0,6 GB (178%), e a poda por quota bate no piso
-(`RETENTION_QUOTA_NO_PROGRESS`, cutoff = floor). Isso é **anterior** a esta RFC;
-o que ela fez foi fechar a torneira — a taxa de janelas finas caiu ~380× —,
-então a expectativa é que a tabela desça abaixo da quota conforme o acervo
-envelhece. **Verificar em 48 h**; se não descer, é decisão de quota do
-proprietário.
 
 Evidência completa em
 [`docs/test-results/RFC-016-intraday-horizon.md`](test-results/RFC-016-intraday-horizon.md);
