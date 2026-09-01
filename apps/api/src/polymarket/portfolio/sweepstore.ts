@@ -80,6 +80,17 @@ export interface DecisionWindow {
   readonly to: Date | null;
   readonly kinds: readonly string[] | null;
   readonly batchSize: number;
+  /**
+   * Highest `decision_id` the scan may read, inclusive.
+   *
+   * The log grows at ~55 rows per market per hour, and a full pass takes
+   * minutes, so an unbounded keyset walk would sweep rows written AFTER the
+   * provenance block was taken — the report would name one window and have
+   * measured a larger one, and two runs would never agree. The caller pins this
+   * to the `maxDecisionId` that `summarizeWindow` returned, which makes the
+   * window a closed set and the run repeatable.
+   */
+  readonly maxDecisionId: number | null;
 }
 
 /** What the log actually holds, printed as provenance before anything runs. */
@@ -110,6 +121,10 @@ function windowClause(
   if (window.kinds !== null && window.kinds.length > 0) {
     params.push([...window.kinds]);
     clauses.push(`decision_kind = ANY($${String(params.length)}::text[])`);
+  }
+  if (window.maxDecisionId !== null) {
+    params.push(window.maxDecisionId);
+    clauses.push(`decision_id <= $${String(params.length)}`);
   }
   return clauses.join(" AND ");
 }

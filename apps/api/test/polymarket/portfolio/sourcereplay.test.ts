@@ -20,7 +20,10 @@ import {
   type ShadowEstimate,
 } from "../../../src/polymarket/portfolio/sourcereplay.js";
 import { rederive } from "../../../src/polymarket/portfolio/sweep.js";
-import { shadowEstimatesAsOf } from "../../../src/polymarket/portfolio/sweepstore.js";
+import {
+  shadowEstimatesAsOf,
+  streamDecisions,
+} from "../../../src/polymarket/portfolio/sweepstore.js";
 import { CONFIG, entryDecision } from "../fixtures/portfolio-decision.js";
 
 const DECISION_TS = new Date("2026-08-30T12:00:00Z");
@@ -418,5 +421,88 @@ describe("shadowEstimatesAsOf", () => {
     const result = await shadowEstimatesAsOf(pool, [], 300_000);
     expect(result.size).toBe(0);
     expect(captured).toEqual([]);
+  });
+});
+
+describe("streamDecisions", () => {
+  function capturing(): {
+    captured: { text: string; params: unknown[] }[];
+    pool: {
+      query: <R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ) => Promise<QueryResult<R>>;
+    };
+  } {
+    const captured: { text: string; params: unknown[] }[] = [];
+    return {
+      captured,
+      pool: {
+        query<R extends Record<string, unknown>>(
+          text: string,
+          params?: readonly unknown[],
+        ): Promise<QueryResult<R>> {
+          captured.push({ text, params: [...(params ?? [])] });
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        },
+      },
+    };
+  }
+
+  it("walks by keyset, never by offset", async () => {
+    const { captured, pool } = capturing();
+    await streamDecisions(
+      pool,
+      { from: null, to: null, kinds: null, batchSize: 500, maxDecisionId: 900 },
+      () => undefined,
+    );
+    const sql = captured[0]?.text ?? "";
+    expect(sql).toContain("decision_id > $1");
+    expect(sql).toContain("ORDER BY decision_id ASC");
+    expect(sql).not.toContain("OFFSET");
+  });
+
+  it("closes the window at the high-water mark, so a growing log cannot leak in", async () => {
+    const { captured, pool } = capturing();
+    await streamDecisions(
+      pool,
+      { from: null, to: null, kinds: null, batchSize: 500, maxDecisionId: 900 },
+      () => undefined,
+    );
+    // Without this bound a full pass — minutes long, against a log that gains
+    // ~55 rows per market per hour — would sweep rows written after the
+    // provenance block was taken, and two runs would never agree.
+    expect(captured[0]?.text).toContain("decision_id <= $2");
+    expect(captured[0]?.params).toEqual([0, 900, 500]);
+  });
+
+  it("stops when a page comes back short", async () => {
+    let calls = 0;
+    const pool = {
+      query<R extends Record<string, unknown>>(): Promise<QueryResult<R>> {
+        calls += 1;
+        return Promise.resolve({
+          rows: [{ decision_id: 1 }] as unknown as R[],
+          rowCount: 1,
+        });
+      },
+    };
+    const batches: number[] = [];
+    const total = await streamDecisions(
+      pool,
+      {
+        from: null,
+        to: null,
+        kinds: null,
+        batchSize: 500,
+        maxDecisionId: null,
+      },
+      (batch) => {
+        batches.push(batch.length);
+      },
+    );
+    expect(calls).toBe(1);
+    expect(total).toBe(1);
+    expect(batches).toEqual([1]);
   });
 });

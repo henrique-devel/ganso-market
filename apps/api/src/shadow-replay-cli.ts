@@ -129,13 +129,19 @@ async function runSweep(input: {
   readonly window: DecisionWindow;
   readonly bracketHigh: number;
 }): Promise<{ report: SweepReport; provenance: Record<string, unknown> }> {
-  const { pool, path, values, window } = input;
+  const { pool, path, values } = input;
   assertSweepable(path);
 
-  const summary = await summarizeWindow(pool, window);
+  const summary = await summarizeWindow(pool, input.window);
   if (summary.rows === 0) {
     throw new CliError("EMPTY_WINDOW", "the window holds no decisions");
   }
+  // Close the window at the high-water mark the summary just reported, so the
+  // rows swept are exactly the rows the provenance block names.
+  const window: DecisionWindow = {
+    ...input.window,
+    maxDecisionId: summary.maxDecisionId,
+  };
   const configs = await loadConfigsForWindow(
     pool,
     summary.configVersions,
@@ -245,6 +251,10 @@ async function runSweep(input: {
         rows: summary.rows,
         markets: summary.markets,
         decision_id_range: [summary.minDecisionId, summary.maxDecisionId],
+        closed_at_decision_id: summary.maxDecisionId,
+        note:
+          "the scan is pinned to this decision_id, so rows written during the " +
+          "run are outside it and two runs over the same range agree",
       },
       config_versions: summary.configVersions,
       config_hashes: Object.fromEntries(
@@ -385,11 +395,15 @@ async function runSourceReplay(input: {
   readonly pool: ReturnType<typeof readOnlyPool>;
   readonly window: DecisionWindow;
 }): Promise<{ report: unknown; provenance: Record<string, unknown> }> {
-  const { pool, window } = input;
-  const summary = await summarizeWindow(pool, window);
+  const { pool } = input;
+  const summary = await summarizeWindow(pool, input.window);
   if (summary.rows === 0) {
     throw new CliError("EMPTY_WINDOW", "the window holds no decisions");
   }
+  const window: DecisionWindow = {
+    ...input.window,
+    maxDecisionId: summary.maxDecisionId,
+  };
   const configs = await loadConfigsForWindow(
     pool,
     summary.configVersions,
@@ -527,6 +541,7 @@ async function runSourceReplay(input: {
         oldest: summary.oldest?.toISOString() ?? null,
         newest: summary.newest?.toISOString() ?? null,
         rows: summary.rows,
+        closed_at_decision_id: summary.maxDecisionId,
       },
       shadow_estimates_in_window: {
         rows: coverage.rows,
@@ -687,11 +702,13 @@ async function run(): Promise<void> {
   if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 5000) {
     throw new CliError("USAGE", "--batch must be an integer in [1, 5000]");
   }
-  const window: DecisionWindow = {
+  const requested: DecisionWindow = {
     from: parseInstant(flagValue(argv, "--from"), "--from"),
     to: parseInstant(flagValue(argv, "--to"), "--to"),
     kinds: null,
     batchSize,
+    // Pinned below, once the summary has named the log's high-water mark.
+    maxDecisionId: null,
   };
 
   const config = await loadConfig();
@@ -725,7 +742,7 @@ async function run(): Promise<void> {
         pool,
         path,
         values,
-        window,
+        window: requested,
         bracketHigh,
       });
       process.stdout.write(
@@ -736,7 +753,10 @@ async function run(): Promise<void> {
       return;
     }
 
-    const { report, provenance } = await runSourceReplay({ pool, window });
+    const { report, provenance } = await runSourceReplay({
+      pool,
+      window: requested,
+    });
     process.stdout.write(
       format === "json"
         ? `${JSON.stringify({ status: "ok", command, report, provenance }, null, 2)}\n`
