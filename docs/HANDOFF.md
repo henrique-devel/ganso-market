@@ -1,6 +1,33 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-01 — **RFC-016: o instante real de fim de mercado
+- Última atualização: 2026-09-01 — **RFC-014 + RFC-019: o modelo deixa de calar
+  em barreira e updown (PR #70)**. A categoria crypto estava em **31,9%** de
+  cobertura (36 de 113 mercados com linha MODEL em 24 h) porque o modelo recusa,
+  corretamente, tudo que não é terminal: **barreira 0 de 51, updown 0 de 13**.
+  As duas formas entram como **uma** versão nova da mesma família —
+  `crypto_updown_gbm@1.1.0`, formas no hyperparam imutável `forms` — coexistindo
+  em `shadow` com a 1.0.0 **intocada** (golden pinado bit a bit); a promoção
+  segue exigindo gate PASS + ação manual, e o gate não mudou.
+  **A re-medição desmentiu três premissas do escopo**: `event_start_ts` **não
+  existe** (a D2 da RFC-016 mediu `eventStartTime: null` em 100/100 — a abertura
+  passa a ser derivada do fim real menos a duração do título); a resolução real é
+  **candle Binance**, não Chainlink, então "zero basis risk" caiu e o viés ficou
+  registrado (no updown o offset cancela em K/S; na barreira o TWAP alisa os
+  pavios enquanto a 2·Φ contínua superestima); e o **RTDS de produção só entrega
+  BTC** (eth/sol/xrp e o feed spot nunca gravaram uma linha — investigação do
+  recorder aberta, fora deste escopo). Revisão adversarial de seis lentes fechou
+  **sete defeitos**, dois deles introduzidos nesta sessão: `$1 million` virava
+  strike de **$1** (numa barreira, toque instantâneo com q≈1), o range contava
+  dias no ano do deadline e abria a janela ~23 h cedo num ano bissexto, e a
+  direção neutra ("hit") **invertia após um cruzamento**. `dip below` não virou
+  nem barreira nem terminal: zero ocorrências em produção e nenhuma regra decide
+  a família — fica no baseline, como manda a condição de parada. Cobertura do
+  parser no universo vivo (54 membros): **26 → 51**; servível com o feed que
+  existe: **20 → 41 (2,05×)**. `make verify` verde (1467 testes na API),
+  PostgreSQL 18.4 real 8/8 com as 17 migrations pelo protocolo. Sem migration
+  nova. Evidência:
+  [`docs/test-results/RFC-014-019-barrier-updown.md`](test-results/RFC-014-019-barrier-updown.md).
+  Registro anterior do dia: **RFC-016: o instante real de fim de mercado
   (PR #66)**. A re-medição **desmentiu cinco das sete premissas** do escopo de
   28/08 — a cadência de 10 s já estava ativa desde 23/08, o horizonte já era
   intradia via `polymarket_rule_versions.end_date`, os "558 crypto vencidos" são
@@ -67,6 +94,8 @@
   autorização)
 - Branch principal: `main`
 - RFC-016: **implementada e ativa em produção** desde 2026-08-31 23:57:35Z (migration 0017)
+- RFC-014 + RFC-019: **código completo (2026-09-01, PR #70)**, `crypto_updown_gbm@1.1.0`
+  em `shadow` ao lado da 1.0.0; deploy e verificação em produção na mesma sessão
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
   migration 0014 aplicada em produção e **nunca alterada** desde então
