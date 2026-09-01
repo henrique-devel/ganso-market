@@ -70,9 +70,14 @@ inteiro (RFC-014 E5). Detalhe completo nas RFCs:
 **Defeitos encontrados durante a implementação (todos com teste):**
 
 1. `STRIKE_PATTERN` lia o "b" de "**b**y" como sufixo de bilhões — "dip to
-   $45,000 **by** December 31" virava strike de 45 trilhões. Latente desde a
-   1.0.0 (a família "by" era recusada antes do parse do strike), alcançável
-   na 1.1.0. Corrigido com fronteira de palavra após o sufixo.
+   $45,000 **by** December 31" virava strike de 45 trilhões. Corrigido com
+   fronteira de palavra após o sufixo. A revisão apontou que o fix também
+   mudaria o parse de perguntas **terminais** do tipo "$X **by** <data>", que
+   a 1.0.0 serve — o que seria regressão na versão pinada. **Medido, não
+   suposto:** essa população é de **0 mercados** no histórico crypto inteiro e
+   **0 linhas MODEL** gravadas, então nenhuma evidência da 1.0.0 muda. Na
+   1.1.0 o caminho é alcançável (a família "by" passou a ser aceita), que é
+   por onde o defeito apareceu.
 2. A derivação `deadline − N·24h` da abertura de janela de barreira fica 1 h
    **adiantada** no spring-forward de março (a janela ET é 1 h mais curta) —
    anticonservador: a varredura contaria toque fora da janela. Corrigido com
