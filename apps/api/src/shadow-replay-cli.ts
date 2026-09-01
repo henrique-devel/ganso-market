@@ -117,9 +117,11 @@ function pct(part: number, whole: number): string {
 
 interface SweepReport {
   readonly totals: SweepTotals;
-  readonly breakevens: readonly Breakeven[];
+  /** ACCEPTED <-> REJECTED: the number the config decision actually needs. */
+  readonly actionBreakevens: readonly Breakeven[];
+  /** Side/reason only. Diagnostic, and never the headline. */
+  readonly labelBreakevens: readonly Breakeven[];
   readonly breakevenSearched: number;
-  readonly breakevenFound: number;
 }
 
 async function runSweep(input: {
@@ -208,7 +210,8 @@ async function runSweep(input: {
 
   // What turns "zero changed at every candidate" into a number: how far the key
   // would have to move before the nearest decision changes at all.
-  const breakevens: Breakeven[] = [];
+  const actionBreakevens: Breakeven[] = [];
+  const labelBreakevens: Breakeven[] = [];
   let searched = 0;
   for (const near of nearMisses) {
     const config = configs.get(near.decision.configVersion);
@@ -216,26 +219,33 @@ async function runSweep(input: {
       continue;
     }
     searched += 1;
-    const found = breakevenValue({
-      decision: near.decision,
-      config,
-      path,
-      bracketLow: configValueAt(config, path),
-      bracketHigh: input.bracketHigh,
-    });
-    if (found !== null) {
-      breakevens.push(found);
+    const low = configValueAt(config, path);
+    for (const watching of ["action", "label"] as const) {
+      const found = breakevenValue({
+        decision: near.decision,
+        config,
+        path,
+        bracketLow: low,
+        bracketHigh: input.bracketHigh,
+        watching,
+      });
+      if (found !== null) {
+        (watching === "action" ? actionBreakevens : labelBreakevens).push(
+          found,
+        );
+      }
     }
   }
-  breakevens.sort((a, b) => a.value - b.value);
+  actionBreakevens.sort((a, b) => a.value - b.value);
+  labelBreakevens.sort((a, b) => a.value - b.value);
 
   const shadow = await shadowCoverage(pool, window.from, window.to);
   return {
     report: {
       totals: accumulator.totals(),
-      breakevens,
+      actionBreakevens,
+      labelBreakevens,
       breakevenSearched: searched,
-      breakevenFound: breakevens.length,
     },
     provenance: {
       mode: "A",
@@ -366,22 +376,37 @@ function renderSweepTable(
   lines.push("## Margin — what a row of zeros actually means");
   lines.push("");
   lines.push(
-    `  breakeven searched on the ${String(report.breakevenSearched)} decisions whose slack the candidates consumed most; found ${String(report.breakevenFound)}.`,
+    `  searched on the ${String(report.breakevenSearched)} decisions whose slack the candidates consumed most,` +
+      ` inside the bracket ${JSON.stringify(provenance.breakeven_bracket)}.`,
   );
-  if (report.breakevens.length === 0) {
+  lines.push("");
+  lines.push("  ACTION (ACCEPTED <-> REJECTED) — the number the config needs:");
+  if (report.actionBreakevens.length === 0) {
     lines.push(
-      `  No verdict changes anywhere in the bracket ${JSON.stringify(provenance.breakeven_bracket)}.`,
+      "    NONE. No value in the bracket changes what the engine would DO.",
     );
     lines.push(
-      "  Read with the 'max slack used' column: a max near zero means the key is",
+      "    Read with 'max slack used': a max near zero means the key is",
     );
     lines.push(
-      "  arithmetically incapable in this population, NOT that the candidates are safe.",
+      "    arithmetically incapable in this population, NOT that the candidates",
     );
+    lines.push("    are safe to adopt on the evidence of this sweep.");
   } else {
-    for (const b of report.breakevens.slice(0, 5)) {
+    for (const b of report.actionBreakevens.slice(0, 5)) {
       lines.push(
-        `  decision ${String(b.decisionId)}: ${b.fromOutcome} -> ${b.toOutcome} at ${t.path} = ${b.value.toPrecision(6)}`,
+        `    decision ${String(b.decisionId)}: ${b.fromOutcome} -> ${b.toOutcome} at ${t.path} = ${b.value.toPrecision(6)}`,
+      );
+    }
+  }
+  lines.push("");
+  lines.push("  LABEL (side and reason only) — diagnostic, not the headline:");
+  if (report.labelBreakevens.length === 0) {
+    lines.push("    NONE in the bracket.");
+  } else {
+    for (const b of report.labelBreakevens.slice(0, 3)) {
+      lines.push(
+        `    decision ${String(b.decisionId)}: ${b.fromOutcome} -> ${b.toOutcome} at ${t.path} = ${b.value.toPrecision(6)}`,
       );
     }
   }

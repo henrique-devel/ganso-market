@@ -227,24 +227,63 @@ describe("acceptSlack — the margin metric", () => {
 });
 
 describe("breakevenValue", () => {
-  it("finds the rate at which the verdict changes, and confirms it there", () => {
+  it("finds the rate at which the ACTION changes, and confirms it there", () => {
     const found = breakevenValue({
       decision: entryDecision(),
       config: CONFIG,
       path: "costs.capitalCostAnnual",
       bracketLow: 0.12,
       bracketHigh: 10,
+      watching: "action",
     });
     expect(found).not.toBeNull();
     // Solved by hand: excess = r x (180/365) x 0.5 - 0.0005 x 180 > 0.01
     // gives r > 0.4056.
     expect(found?.value).toBeGreaterThan(0.4);
     expect(found?.value).toBeLessThan(0.42);
-    expect(found?.fromOutcome).toBe("YES/ACCEPTED:-");
-    expect(found?.toOutcome).toBe("YES/REJECTED:EDGE_BELOW_MIN");
+    expect(found?.fromOutcome).toBe("ACCEPTED");
+    expect(found?.toOutcome).toBe("REJECTED");
+    expect(found?.watching).toBe("action");
   });
 
-  it("returns null when nothing in the bracket changes the verdict", () => {
+  it("searches the label separately, because the two answer different questions", () => {
+    // Measured on the full window: the nearest change of ANY kind is a leg flip
+    // at r = 0.419 that rewrites PRICE_OUT_OF_BAND on one side into
+    // PRICE_OUT_OF_BAND on the other. Reported as "the breakeven" it would tell
+    // the owner something changes at 42% a year when nothing the engine DOES
+    // changes there.
+    const tied = entryDecision({
+      q: "0.925000",
+      qLo: "0.925000",
+      qHi: "0.925000",
+      asks: [{ price: "0.93", size: "500" }],
+      bids: [{ price: "0.92", size: "500" }],
+      expectedLockupS: 2_280,
+    });
+    const action = breakevenValue({
+      decision: tied,
+      config: CONFIG,
+      path: "costs.capitalCostAnnual",
+      bracketLow: 0.12,
+      bracketHigh: 1000,
+      watching: "action",
+    });
+    const label = breakevenValue({
+      decision: tied,
+      config: CONFIG,
+      path: "costs.capitalCostAnnual",
+      bracketLow: 0.12,
+      bracketHigh: 1000,
+      watching: "label",
+    });
+    // The action never moves; only the recorded label does.
+    expect(action).toBeNull();
+    expect(label).not.toBeNull();
+    expect(label?.watching).toBe("label");
+    expect(label?.toOutcome).toBe("NO/REJECTED:PRICE_OUT_OF_BAND");
+  });
+
+  it("returns null when nothing in the bracket changes the action", () => {
     // The production lockup. No rate up to 1000%/yr moves this decision, which
     // is the finding, not a failure of the search.
     const short = entryDecision({ expectedLockupS: 13_198 });
@@ -254,6 +293,7 @@ describe("breakevenValue", () => {
       path: "costs.capitalCostAnnual",
       bracketLow: 0.12,
       bracketHigh: 10,
+      watching: "action",
     });
     expect(found).toBeNull();
   });
