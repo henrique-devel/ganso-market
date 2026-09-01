@@ -48,6 +48,13 @@ export interface CryptoModelConfig {
   readonly minHistoryMinutes: number;
   /** Maximum age of the resolving feed sample, in milliseconds. */
   readonly maxFeedAgeMs: number;
+  /**
+   * RFC-019: maximum age of the window-open sample that becomes the updown
+   * strike, measured against the WINDOW OPEN instant (not the decision). An
+   * RTDS gap at the open produces abstention, never a strike from another
+   * instant.
+   */
+  readonly maxStrikeAgeMs: number;
 }
 
 export interface MacroModelConfig {
@@ -123,6 +130,7 @@ export const DEFAULT_FUNDAMENTAL_CONFIG: FundamentalConfig = Object.freeze({
     studentDf: 4,
     minHistoryMinutes: 120,
     maxFeedAgeMs: 120_000,
+    maxStrikeAgeMs: 300_000,
   }),
   macro: Object.freeze({
     defaultSigma: Object.freeze({
@@ -335,7 +343,13 @@ export function parseFundamentalConfig(raw: unknown): FundamentalConfig {
       : requireObject(root.crypto, "fundamental.crypto");
   rejectUnknownKeys(
     cryptoRaw,
-    ["ewma_lambdas", "student_df", "min_history_minutes", "max_feed_age_ms"],
+    [
+      "ewma_lambdas",
+      "student_df",
+      "min_history_minutes",
+      "max_feed_age_ms",
+      "max_strike_age_ms",
+    ],
     "fundamental.crypto",
   );
   const macroRaw =
@@ -546,6 +560,15 @@ export function parseFundamentalConfig(raw: unknown): FundamentalConfig {
           : parseInteger(
               cryptoRaw.max_feed_age_ms,
               "fundamental.crypto.max_feed_age_ms",
+              1_000,
+              3_600_000,
+            ),
+      maxStrikeAgeMs:
+        cryptoRaw.max_strike_age_ms === undefined
+          ? defaults.crypto.maxStrikeAgeMs
+          : parseInteger(
+              cryptoRaw.max_strike_age_ms,
+              "fundamental.crypto.max_strike_age_ms",
               1_000,
               3_600_000,
             ),

@@ -21,8 +21,6 @@ import {
   listModels,
   registerModel,
 } from "./registry.js";
-import { DEFAULT_CRYPTO_HYPERPARAMS } from "./models/crypto-updown.js";
-import { DEFAULT_MACRO_HYPERPARAMS } from "./models/macro-scheduled.js";
 
 const SERVICE = "polymarket-fundamental";
 
@@ -127,16 +125,7 @@ export async function ensureCatalogModels(
           version: descriptor.version,
           gitSha,
           featureSetVersion: descriptor.featureSetVersion,
-          hyperparams:
-            descriptor.category === "crypto_updown"
-              ? (DEFAULT_CRYPTO_HYPERPARAMS as unknown as Record<
-                  string,
-                  unknown
-                >)
-              : (DEFAULT_MACRO_HYPERPARAMS as unknown as Record<
-                  string,
-                  unknown
-                >),
+          hyperparams: descriptor.defaultHyperparams,
           seed: 0,
           trainWindowStart: null,
           trainWindowEnd: null,

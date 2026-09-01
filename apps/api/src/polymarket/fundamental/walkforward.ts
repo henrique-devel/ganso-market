@@ -695,6 +695,58 @@ function horizonSlices(
   return slices;
 }
 
+/** Canonical order of the question-form slices; extras sort after. */
+const FORM_BUCKETS = ["terminal", "barrier", "updown"] as const;
+
+/**
+ * RFC-019: per-question-form slices, the exact mechanics of `horizonSlices`.
+ * Rows older than the form stamp are terminal by construction (the crypto
+ * 1.0.0 and macro maps only ever priced terminal payoffs), so null reads as
+ * "terminal" rather than inventing an "unknown" bucket that would split the
+ * same population in two.
+ */
+function formSlices(
+  observations: readonly ScoredObservation[],
+): HorizonSlice[] {
+  const grouped = new Map<string, ScoredObservation[]>();
+  for (const observation of observations) {
+    const bucket = observation.form ?? "terminal";
+    const existing = grouped.get(bucket);
+    if (existing === undefined) {
+      grouped.set(bucket, [observation]);
+    } else {
+      existing.push(observation);
+    }
+  }
+
+  const order: string[] = [...FORM_BUCKETS];
+  for (const key of [...grouped.keys()].sort()) {
+    if (!order.includes(key)) {
+      order.push(key);
+    }
+  }
+
+  const slices: HorizonSlice[] = [];
+  for (const bucket of order) {
+    const sliceObservations = grouped.get(bucket);
+    if (sliceObservations === undefined || sliceObservations.length === 0) {
+      continue;
+    }
+    const model = scoreSummary(toPairs(sliceObservations, modelPrediction));
+    const baseline = scoreSummary(
+      toPairs(sliceObservations, baselinePrediction),
+    );
+    slices.push({
+      bucket,
+      count: sliceObservations.length,
+      model,
+      baseline,
+      relativeBrierDegradation: relativeBrierDegradation(model, baseline),
+    });
+  }
+  return slices;
+}
+
 /**
  * Full calibration report for one model over one validation window.
  *
@@ -736,6 +788,7 @@ export function computeCalibrationMetrics(
     deltaBrier: blockBootstrapDelta(headline, brierTerm, options),
     deltaLogLoss: blockBootstrapDelta(headline, logLossTerm, options),
     horizonSlices: horizonSlices(headline),
+    formSlices: formSlices(headline),
     reliabilityModel: reliabilityBins(toPairs(headline, modelPrediction)),
     reliabilityBaseline: reliabilityBins(toPairs(headline, baselinePrediction)),
     intervalCoverage: intervalCoverage(headline),

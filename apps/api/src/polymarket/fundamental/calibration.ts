@@ -10,6 +10,7 @@
 import type { FundamentalConfig } from "./config.js";
 import type { QueryPool } from "./features.js";
 import { runGate, type GateThresholds } from "./gate.js";
+import { classifyCryptoQuestionForm } from "./models/crypto-updown.js";
 import { listModels } from "./registry.js";
 import type {
   CalibrationMetrics,
@@ -76,7 +77,8 @@ export async function loadScoredObservations(
 ): Promise<ScoredObservation[]> {
   const result = await pool.query<Record<string, unknown>>(
     `SELECT e.token_id, e.market_id, e.decision_ts, e.q, e.q_lo, e.q_hi,
-            e.market_prob, l.label, l.publicly_knowable_ts, l.disputed
+            e.market_prob, e.data_refs->>'form' AS form,
+            l.label, l.publicly_knowable_ts, l.disputed
        FROM fundamental_estimates e
        JOIN fundamental_labels l ON l.token_id = e.token_id
       WHERE e.model_id = $1
@@ -131,6 +133,7 @@ export async function loadScoredObservations(
       horizonMs: knowableTs.getTime() - decisionTs.getTime(),
       disputed: row.disputed === true,
       degenerate: baselineQ > DEGENERATE_HIGH || baselineQ < DEGENERATE_LOW,
+      form: typeof row.form === "string" ? row.form : null,
     });
   }
   return observations;
@@ -182,6 +185,69 @@ export async function loadFallbackRates(
     rate: total === 0 ? null : fallbacks / total,
     byReason,
   };
+}
+
+export interface FormCoverage {
+  readonly markets: number;
+  readonly covered: number;
+}
+
+/**
+ * RFC-019: operational coverage of the last day, split by question form. Of
+ * the category's markets with ANY estimate in the window, how many of each
+ * form did THIS model produce a MODEL row for? The classifier is the same
+ * pure function the parser uses, so the report cannot disagree with the
+ * estimator about what a question is.
+ */
+export async function loadFormCoverage(
+  pool: QueryPool,
+  category: string,
+  modelId: string,
+  from: Date,
+  to: Date,
+): Promise<Record<string, FormCoverage>> {
+  const markets = await pool.query<Record<string, unknown>>(
+    `SELECT e.market_id,
+            bool_or(e.model_id = $2 AND e.source = 'MODEL') AS covered
+       FROM fundamental_estimates e
+      WHERE e.category = $1
+        AND e.decision_ts >= $3
+        AND e.decision_ts < $4
+      GROUP BY e.market_id`,
+    [category, modelId, from, to],
+  );
+  const coveredById = new Map<string, boolean>();
+  for (const row of markets.rows) {
+    coveredById.set(String(row.market_id), row.covered === true);
+  }
+  if (coveredById.size === 0) {
+    return {};
+  }
+  const questions = await pool.query<Record<string, unknown>>(
+    `SELECT condition_id, question FROM polymarket_markets
+      WHERE condition_id = ANY($1::text[])`,
+    [[...coveredById.keys()]],
+  );
+
+  const totals = new Map<string, { markets: number; covered: number }>();
+  for (const row of questions.rows) {
+    const question = typeof row.question === "string" ? row.question : "";
+    const form = classifyCryptoQuestionForm(question);
+    const entry = totals.get(form) ?? { markets: 0, covered: 0 };
+    entry.markets += 1;
+    if (coveredById.get(String(row.condition_id)) === true) {
+      entry.covered += 1;
+    }
+    totals.set(form, entry);
+  }
+  const result: Record<string, FormCoverage> = {};
+  for (const key of [...totals.keys()].sort()) {
+    const entry = totals.get(key);
+    if (entry !== undefined) {
+      result[key] = entry;
+    }
+  }
+  return result;
 }
 
 /** Distinct resolved markets covered by a set of observations. */
@@ -373,6 +439,19 @@ export async function runCalibrationJob(
         windowFrom,
         generatedAt,
       );
+      // RFC-019: the operational coverage of the last day, split by question
+      // form. Only the crypto category has forms; the macro report carries no
+      // such section rather than a fabricated one.
+      const coverageByForm =
+        model.category === "crypto_updown"
+          ? await loadFormCoverage(
+              deps.pool,
+              model.category,
+              model.modelId,
+              new Date(generatedAt.getTime() - 24 * 3_600_000),
+              generatedAt,
+            )
+          : null;
 
       const gate = await runGate({
         pool: deps.pool,
@@ -397,6 +476,14 @@ export async function runCalibrationJob(
         payload: {
           metrics: metrics as unknown as Record<string, unknown>,
           fallbacks,
+          ...(coverageByForm === null
+            ? {}
+            : {
+                coverage_by_form: {
+                  window_hours: 24,
+                  forms: coverageByForm,
+                },
+              }),
           data_window: {
             requested_from: windowFrom.toISOString(),
             requested_to: generatedAt.toISOString(),

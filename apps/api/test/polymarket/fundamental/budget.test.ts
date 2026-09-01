@@ -137,8 +137,12 @@ describe("estimate volumetry", () => {
       (table) => table.table === "fundamental_estimates",
     );
     const quotaBytes = estimates?.quotaBytes ?? 0;
-    // Consumer rows plus one shadow row per token per cycle.
-    const rows = rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs) * 2;
+    // Consumer rows plus one shadow row PER SHADOW VERSION per token per
+    // cycle. RFC-014/RFC-019 put a second crypto version in shadow
+    // (crypto_updown_gbm 1.0.0 and 1.1.0 coexist while the candidate proves
+    // itself), so the most pessimistic ceiling is three rows per token: the
+    // consumer row and both shadows, for a universe made entirely of crypto.
+    const rows = rowsPerDay(DEFAULT_FUNDAMENTAL_CONFIG.estimateCadenceMs) * 3;
     const ceilingDays = quotaBytes / (rows * MEASURED_BYTES_PER_ROW);
     // NOT doubled for shadow: unlike the modelled ceiling, the measured count
     // is what the table actually received, shadow rows included (2 900 of the
@@ -151,11 +155,14 @@ describe("estimate volumetry", () => {
     // then UMA liveness (~2 h), the hourly label sync, and up to a full day
     // until the daily calibration runs. Anything under that prunes the row
     // before it can ever become evidence. Asserted on the MODELLED CEILING
-    // (200 tokens, every bucket writing at full rate), the most pessimistic
-    // number available, which clears it by more than five times.
+    // (200 tokens, every bucket writing at full rate, both crypto shadows),
+    // the most pessimistic number available. The RFC-016 ceiling cleared the
+    // chain by 5.5x with one shadow row; adding the RFC-014/019 second shadow
+    // makes the ceiling honestly heavier and the clearance is now 3x-plus —
+    // the FLOOR itself has not moved a millimetre.
     const EVIDENCE_CHAIN_DAYS = 27 / 24;
     expect(ceilingDays).toBeGreaterThan(EVIDENCE_CHAIN_DAYS);
-    expect(ceilingDays).toBeGreaterThan(5);
+    expect(ceilingDays).toBeGreaterThan(EVIDENCE_CHAIN_DAYS * 3);
 
     // The 7x safety margin the owner's quota decision was taken with, measured
     // where that decision measured it: the rate production actually writes.

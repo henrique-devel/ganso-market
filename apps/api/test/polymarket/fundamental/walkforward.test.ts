@@ -48,6 +48,7 @@ function observation(
     horizonMs: overrides.horizonMs ?? 30 * 60_000,
     disputed: overrides.disputed ?? false,
     degenerate: overrides.degenerate ?? false,
+    form: overrides.form ?? null,
   };
 }
 
@@ -587,6 +588,31 @@ describe("computeCalibrationMetrics", () => {
       expect(slice.relativeBrierDegradation).toBeLessThan(0);
     }
     expect(counted).toBe(clean.length);
+  });
+
+  it("stratifies by question form, reading unstamped rows as terminal (RFC-019)", () => {
+    const stamped = clean.map((observation, index) => ({
+      ...observation,
+      form: index % 3 === 0 ? "barrier" : index % 3 === 1 ? "updown" : null,
+    }));
+    const metrics = computeCalibrationMetrics(stamped, BOOTSTRAP);
+
+    // Canonical order, null counted as terminal (every pre-stamp row came
+    // from a terminal-payoff map), counts covering the whole headline.
+    expect(metrics.formSlices.map((slice) => slice.bucket)).toEqual([
+      "terminal",
+      "barrier",
+      "updown",
+    ]);
+    expect(
+      metrics.formSlices.reduce((total, slice) => total + slice.count, 0),
+    ).toBe(stamped.length);
+    const terminal = metrics.formSlices.find(
+      (slice) => slice.bucket === "terminal",
+    );
+    expect(terminal?.count).toBe(
+      stamped.filter((observation) => observation.form === null).length,
+    );
   });
 
   it("reports reliability curves, interval coverage and the bootstrap settings", () => {
