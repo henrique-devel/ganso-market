@@ -252,7 +252,95 @@ a quota em 2 GB** e tornar o teste honesto. O `budget.test.ts` passou a:
 
 ## 7. Verificação em produção
 
-_(preenchido após o deploy — ver seção 8)_
+Deploy em três passos: merge do PR #66 → CD verde (que aplicou a migration
+sozinho: `schema_versions` foi a **17** sem ninguém rodar nada à mão) → rebuild
+de profile em `polymarket-recorder`, `-estimator`, `-paper`, `-portfolio` e
+`-resolution` às **2026-08-31 23:57:35Z**.
+
+Revisão confirmada em `/etc/ganso/release-sha` dentro de cada container (não no
+`docker compose ps`, que mostra uptime e não idade de imagem):
+
+```text
+api                        4bae1b92a1ffb8d9a2910470ccee3a8e1881161d
+polymarket-recorder        4bae1b92a1ffb8d9a2910470ccee3a8e1881161d
+polymarket-estimator       4bae1b92a1ffb8d9a2910470ccee3a8e1881161d
+polymarket-paper           4bae1b92a1ffb8d9a2910470ccee3a8e1881161d
+polymarket-portfolio       4bae1b92a1ffb8d9a2910470ccee3a8e1881161d
+polymarket-resolution      4bae1b92a1ffb8d9a2910470ccee3a8e1881161d
+```
+
+E o schema no banco de produção:
+
+```text
+ end_date_iso         | text                     |  (permanece — é o que a Gamma devolveu)
+ end_ts               | timestamp with time zone |
+    "polymarket_markets_end_ts_idx" btree (end_ts) WHERE end_ts IS NOT NULL
+```
+
+### Critérios de aceite
+
+| Critério                                                | Antes                       | Medido em produção após o deploy |
+| --------------------------------------------------------- | --------------------------- | -------------------------------- |
+| `end_ts` nos membros do universo                        | —                           | **87 de 87 (100%)**, 81 com hora intradia |
+| Linhas obsoletas (fora do universo) com `end_ts`        | —                           | **973 seguem NULL** — o desenho prospectivo, sem backfill inventado |
+| Membros com fim real no passado                         | 1 de 83                     | **2 de 87** (os que acabaram de vencer, antes do ciclo de saída) |
+| Distribuição de horizonte por `end_ts`                  | ilegível na tabela plana    | 3 em `<1 h`, 29 em `1h–6h`, 17 em `6h–24h`, 27 em `1d–7d`, 16 em `>7d` |
+| Labels com `publicly_knowable_ts` à meia-noite          | **1.572 de 1.670 (94%)**    | **48 de 1.672 (2,9%)**           |
+| Estimativas `MODEL` pontuáveis                          | **36.212 de 74.412**        | **74.412 de 74.412 (100%)**      |
+| Estimativas da última hora de vida, pontuáveis          | **0 de 8.063**              | **8.063 de 8.063 (100%)**        |
+| Gap de estimativa na última hora de vida                | 10 s (já funcionava)        | **10,0 s** (mercado das 00:00Z)  |
+| Janelas `10s` em mercado com horizonte real > 6 h       | **63.951 de 84.772 (75%)**  | **0 de 14**                      |
+| Janelas `1s` idem                                       | **3.936 de 10.481 (38%)**   | **0 de 2**                       |
+| Erros novos (6 serviços)                                | —                           | **0 em todos**                   |
+| RAM                                                     | —                           | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
+
+Os 48 labels que sobraram à meia-noite foram conferidos um a um por amostragem
+e são **meia-noite de verdade**: "Bitcoin Up or Down - August 21,
+4:00PM-8:00PM ET" termina às `2026-08-22T00:00:00Z`. O número bate com as 41
+versões de regra genuinamente à meia-noite medidas na seção 1.
+
+Mudança da mistura de janelas do paper, 6 h antes do deploy contra o período
+depois dele:
+
+```text
+    periodo    | window_kind | count
+---------------+-------------+-------
+ pre-deploy 6h | 10s         | 86509
+ pre-deploy 6h | 1m          | 44170
+ pre-deploy 6h | 1s          | 12980
+ pos-deploy    | 1m          |  1710
+ pos-deploy    | 10s         |    14
+ pos-deploy    | 1s          |     2
+```
+
+Normalizado por hora, a taxa de janelas `10s` cai de ~14.400/h para ~38/h.
+
+### Taxa de volume — medida curta, a re-medir em 48 h
+
+Nos primeiros **21,6 min** pós-deploy: **443 linhas**, que projetam
+~**29,5 k/dia**, contra **20.818** nas 24 h anteriores ao deploy. **A janela é
+curta e enviesada**: contém o vencimento das 00:00Z de vários updown horários,
+que é exatamente o pico do bucket de 10 s. Mesmo tomando a projeção pelo valor
+de face, a quota de 2 GB compraria ~71 dias — 63× o piso de 27 h — e
+`fundamental_estimates` está em **911 MB (44,5% da quota)**.
+
+**Ação para a próxima sessão:** re-medir a taxa em 48 h e comparar com o modelo
+do `budget.test.ts`.
+
+### Pendências abertas desta sessão
+
+- **O carimbo do bucket no `enter` não foi observado em produção.** Desde o
+  rebuild houve apenas `exit` e `rejected_filter` — a Gamma não publicou mercado
+  novo na janela observada (~25 min). O caminho tem teste unitário; a
+  confirmação é `SELECT reason FROM polymarket_universe_log WHERE
+  action='enter' ORDER BY at DESC LIMIT 5`, que deve trazer algo como
+  `priority_2_crypto_lt_1h`.
+- **`paper_feature_windows` continua em 1095 MB contra 0,6 GB de quota (178%)**,
+  e a poda por quota bate no piso (`RETENTION_QUOTA_NO_PROGRESS`, cutoff =
+  floor). É **anterior** a esta RFC; o que ela fez foi fechar a torneira. A
+  expectativa é que a tabela desça abaixo da quota conforme o acervo envelhece —
+  **verificar em 48 h**; se não descer, é decisão de quota do proprietário.
+
 
 ## 8. Não verificado
 
