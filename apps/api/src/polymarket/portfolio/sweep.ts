@@ -801,13 +801,29 @@ export class SweepAccumulator {
 
 export interface Breakeven {
   readonly decisionId: number;
-  /** The value at which the verdict changes, confirmed by re-derivation. */
+  /** The value at which the watched quantity changes, confirmed by re-derivation. */
   readonly value: number;
   readonly fromOutcome: string;
   readonly toOutcome: string;
   readonly bracketLow: number;
   readonly bracketHigh: number;
+  readonly watching: BreakevenWatch;
 }
+
+/**
+ * What the search is allowed to call a change.
+ *
+ * The distinction is not cosmetic, and the first production run proved it: on
+ * the full window the nearest change of any kind sits at r = 0.419, and it is a
+ * leg flip that rewrites `PRICE_OUT_OF_BAND` on one side into
+ * `PRICE_OUT_OF_BAND` on the other. Reported as "the breakeven", that number
+ * would tell the owner something changes at 42% a year when nothing the engine
+ * DOES changes there. So the two are searched and reported apart:
+ *
+ *   "action" — ACCEPTED <-> REJECTED. The number the config decision needs.
+ *   "label"  — the recorded side and reason. Diagnostic.
+ */
+export type BreakevenWatch = "action" | "label";
 
 /**
  * The value of `path` at which this decision's verdict changes.
@@ -828,10 +844,11 @@ export function breakevenValue(input: {
   readonly path: string;
   readonly bracketLow: number;
   readonly bracketHigh: number;
+  readonly watching: BreakevenWatch;
   readonly steps?: number;
   readonly tolerance?: number;
 }): Breakeven | null {
-  const { decision, config, path, bracketLow, bracketHigh } = input;
+  const { decision, config, path, bracketLow, bracketHigh, watching } = input;
   const steps = input.steps ?? 64;
   const tolerance = input.tolerance ?? 1e-6;
 
@@ -844,9 +861,13 @@ export function breakevenValue(input: {
       return null;
     }
     const rederived = rederive({ decision, config: candidateConfig });
-    return rederived === null
-      ? null
-      : `${rederived.row.marketSide}/${rederived.row.outcome}:${rederived.row.reasonCode ?? "-"}`;
+    if (rederived === null) {
+      return null;
+    }
+    const row = rederived.row;
+    return watching === "action"
+      ? row.outcome
+      : `${row.marketSide}/${row.outcome}:${row.reasonCode ?? "-"}`;
   };
 
   if (!(bracketHigh > bracketLow)) {
@@ -896,6 +917,7 @@ export function breakevenValue(input: {
         toOutcome: confirmed,
         bracketLow,
         bracketHigh,
+        watching,
       };
     }
     previousValue = value;
