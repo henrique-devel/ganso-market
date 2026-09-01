@@ -2106,6 +2106,133 @@ CD normal do projeto produzindo a corrida que produz há semanas.
   `macro_scheduled` (ou aceitar que a categoria macro não produz evidência).
 
 
+## SESSÃO 2026-09-01 — RFC-017: SHADOW REPLAY NOS DOIS MODOS (PRs #72 e #73)
+
+**FATO INFORMADO:** o proprietário aprovou em 2026-08-28 os dois modos do shadow
+replay — varredura de config (decisão 2 de 27/08) e replay contrafactual de
+fonte. Escopo: ferramenta de leitura, sem tabela nova, sem painel, sem cunhar
+versão de config.
+
+**FATO VERIFICADO (produção, 2026-09-01, `release-sha`
+`78333343b04b885872505d74c654d265b1aea05e`):** a ferramenta existe, roda os dois
+modos sobre a janela inteira e **não escreve em lugar nenhum, por construção**.
+A saída verbatim das duas rodadas está em
+[`docs/test-results/RFC-017-shadow-replay.md`](test-results/RFC-017-shadow-replay.md).
+
+### O que a medição desmente
+
+**(1) O denominador honesto não é o log, são 9,05% dele.** `evaluateMarket`
+recusa em escada, e todas as recusas acima da conta são decididas por escalares
+já persistidos que nenhuma troca de config recomputa — `portfolio_state`,
+`breaker_open`, `resolution_action`. Medido: **20.340 de 224.647** linhas
+chegaram à conta, em **65 dos 322** mercados; metade do log (49,1%) é
+`PORTFOLIO_CIRCUIT_BREAKER`. Uma varredura que dividisse flips por 224 mil
+reportaria um número 11× menor que o real. A ferramenta publica o denominador
+alcançável ao lado do total, nos dois modos.
+
+**(2) `capitalCostAnnual` não é "quase inerte" — não muda nenhuma decisão.**
+
+| valor | AÇÃO (linhas/mercados) | MOTIVO (linhas/mercados) | folga consumida |
+| ----- | ---------------------- | ------------------------ | --------------- |
+| 0,120 | 0 / 0                  | 0 / 0                    | 0,0000%         |
+| 0,150 | 0 / 0                  | 0 / 0                    | 0,0000%         |
+| 0,183 | 0 / 0                  | 0 / 0                    | 0,0001%         |
+| 0,200 | **0 / 0**              | 269 / 1                  | 0,0318%         |
+| 0,250 | **0 / 0**              | 282 / 1                  | 0,1310%         |
+| 0,300 | **0 / 0**              | 282 / 1                  | 0,2301%         |
+| 0,365 | **0 / 0**              | 284 / 2                  | 0,3590%         |
+| 0,400 | **0 / 0**              | 284 / 2                  | 0,4284%         |
+
+A busca de valor de virada, sobre as 20 decisões que os candidatos chegaram mais
+perto de virar, **não acha mudança de AÇÃO em todo o bracket [0,12; 1000]** — nem
+a 100.000% a.a. A causa é o lockup: o log tem **dois** (38 min e 3,67 h), e com
+o hurdle do buffer em 0,0005/dia a carga máxima a r=0,40 é **0,0000827/ação**,
+0,41% do `edgeLiqMin`. O parâmetro só voltaria a pesar com lockup de ~30 dias.
+
+Corrige também o registro de 27/08 de que na **saída** os 12% "já são
+vinculantes": o critério 6 (`edgeAtBid < remainingCapitalCost`) compara contra
+0,000159/ação no pior caso a r=0,40 enquanto o critério 1 dispara em
+`edgeResidualMin = 0,01`. Está **63× dentro** do critério 1 — só pode disparar em
+posição que o critério 1 já tirou. Positivo não é vinculante.
+
+**(3) Parte das decisões já usa o shadow (defeito ativo, da RFC-010).**
+`estimateAsOf` (`store.ts:178`) não filtra `status` nem desempata, e cada
+instante tem uma linha de consumidor (`active`) mais uma por modelo shadow, todas
+com o **mesmo `decision_ts`**. Com **zero modelos promovidos**, **5 decisões** de
+01/09 (13:03:43Z–13:50:44Z, 2 mercados) gravaram `estimate_source='MODEL'`: a
+`decision_id` 698296 tem `q_lo=0,990385`, que é o `estimate_id` 837093
+(`crypto_updown_gbm@1.0.0`, `shadow`), e não `0,997632` da linha ativa 837092 do
+mesmo instante. Há **80.397 instantes** com mais de uma linha; passou a disparar
+depois que o PR #70 acrescentou o segundo modelo shadow às 12:14Z. **Nenhuma das
+5 foi aceita**, mas a invariante da RFC-010 ("shadow estimates … are invisible to
+consumers", migration 0006) está quebrada. O conserto é um predicado
+(`AND status = 'active'`) mais desempate determinístico, **é área da RFC-010 e
+fica como decisão do proprietário**. O modo B detecta, exclui e conta esses casos
+(`BASELINE_ALREADY_SHADOW = 5`) — comparar shadow contra shadow seria inventar o
+resultado.
+
+### Modo B — o que o shadow teria feito
+
+Das **2.576** decisões que chegaram à estimativa e tinham linha shadow as-of
+(dentro do TTL de 300 s), **519 (20,1%)** em **9 de 22 mercados (40,9%)** teriam
+agido diferente. A assimetria é o número: **511 entradas só do shadow** contra
+**8 só do baseline**; a transição dominante é
+`LOWER_BOUND_BELOW_COSTS → ACCEPTED` (415 linhas). Exclusão dominante e honesta:
+`SHADOW_MISSING` em 210.601 de 224.481 linhas — o shadow cobre `crypto_updown` e
+o log tem 322 mercados.
+
+**Mais entradas não é mais alpha, e o PnL que diria qual das duas coisas é ainda
+não existe:** das 515 entradas contrafactuais, **0** está num token com label
+final. A ferramenta reporta `515 considered / 0 settled` em vez de inventar um
+número. **Re-rodar quando os labels chegarem.** O gate da RFC-010 segue soberano;
+isto alimenta a decisão de promoção, não a substitui.
+
+### Dois defeitos de medição pegos pela própria rodada, antes do número sair
+
+- **AÇÃO estava somada a MOTIVO.** A estimativa `MARKET_BASELINE` sai do mesmo
+  livro que o motor caminha, então `q` fica no microprice e as duas pernas
+  **empatam exatamente**; `evaluateMarket` desempata com `>` estrito e a carga de
+  capital, proporcional ao preço, desempata a favor da perna barata. 284
+  rejeições trocavam de rótulo e continuavam rejeições. Contar isso como
+  "veredito mudou" inflaria a mordida numa ordem de grandeza.
+- **Os deltas vinham da coluna de 6 casas; o motor decide em 9.** A r=0,183 a
+  carga que vira a perna é 2,5e-7/ação — 319 linhas trocam de perna enquanto
+  `capital_cost` ainda imprime `0.000000`.
+- E o **valor de virada** procurava qualquer mudança: na janela inteira ele achou
+  0,419, que é uma troca de perna, e teria ido ao proprietário como "o número da
+  1.3.0" (PR #73 separou AÇÃO de RÓTULO).
+
+### Controle — a lente de degeneração, fechada com dado
+
+O zero do `capitalCostAnnual` só vale se a ferramenta souber achar um flip quando
+existe um. Rodando **a mesma janela, a mesma população, o mesmo binário** contra
+`costs.edgeLiqMin` (0,02 → 0,03): **7 linhas em 2 mercados mudam de AÇÃO** e a
+busca de virada devolve os valores um a um — 0,0204929, 0,0214201, 0,0223213,
+0,0234751, 0,0251381 — em vez de `NONE`. A varredura não "passou porque não havia
+contra o que comparar": o zero do `capitalCostAnnual` é um fato sobre o
+parâmetro, não sobre a ferramenta nem sobre o tamanho da amostra.
+
+### Invariantes e verificações
+
+`replayDecision` e o `CONFIG_HASH_MISMATCH` **intocados** — a varredura os usa
+como **teste de admissão**, e 224.647 de 224.647 decisões passaram (zero
+mismatch, sobre a janela inteira e não só a amostra horária de 50). Nenhum
+terceiro construtor de linha: só `decisionrow.ts` devolve `DecisionRow`, e o
+mapeador de linha do `gatestore` foi **extraído** para o loader novo não virar um
+segundo. Loader keyset com streaming (páginas de 500) — a janela cheia são
+~620 MB de JSON contra o `mem_limit` de 384 MiB da `api`. Janela fechada no
+`decision_id` do sumário, sem o que duas rodadas nunca bateriam: duas rodadas
+sobre `decision_id <= 703817` deram agregados idênticos. `make verify` verde,
+**1518 testes na API**. Sem migration. Modo A levou 1 min 27 s; modo B, 7 min 11 s.
+
+### Próximo passo mínimo
+
+Apresentar ao proprietário: (a) que a 1.3.0 não tem número a cunhar — subir a
+taxa não muda nada enquanto o livro for intradia, e a decisão real é sobre o
+universo; (b) o vazamento do shadow, que é um predicado de conserto na RFC-010;
+(c) re-rodar o modo B quando os labels dos mercados que o shadow teria entrado
+chegarem.
+
 ## SESSÃO 2026-09-01 — RFC-016: O INSTANTE REAL DE FIM, E A EVIDÊNCIA DA ÚLTIMA HORA QUE ERA DESCARTADA (PR #66)
 
 **A re-medição desmentiu cinco das sete premissas do escopo aprovado em
@@ -2419,12 +2546,24 @@ mercado por dia); registrar a interpretação de "toda intenção persiste"; e s
 então TTL 180 → 90 em `retention.ts`. Fora do PR da ponte — são áreas
 diferentes, e o carimbo de provenance é o que urge.
 
-### 3c. Shadow replay de `custo_capital_anual` (decisão 2)
+### 3c. Shadow replay de `custo_capital_anual` (decisão 2) — **FEITO, e a resposta não é um número**
 
-Varredura de taxas candidatas sobre o decision log gravado, usando
-`inputs_json.replay`, medindo quantas decisões mudam de veredito, de tamanho e
-de binding constraint. Roda contra a janela de ~3 dias que existe hoje (ou
-depois de 3b). O número da varredura é o que cunha a config 1.3.0 — não antes.
+**Entregue e rodado em produção em 2026-09-01** (RFC-017, PRs #72 e #73). A
+varredura existe, roda sobre a janela inteira e é read-only por construção.
+
+O que ela mede não é "qual taxa escolher", porque **nenhuma taxa da lista muda
+decisão nenhuma**: com 0,15, 0,183, 0,20, 0,25, 0,30, 0,365 ou 0,40, a coluna
+AÇÃO é 0 linhas / 0 mercados sobre as 20.340 decisões que chegam à conta, e a
+busca de valor de virada não acha mudança de ação em todo o bracket
+[0,12; 1000]. O lockup do livro é de horas; a carga máxima a r=0,40 é
+0,0000827/ação contra um `edgeLiqMin` de 0,02.
+
+**A decisão do proprietário muda de forma:** não é escolher entre 20% e 40%, é
+decidir se o universo negociado deve passar a incluir horizontes de semanas — que
+é onde o parâmetro volta a morder. Enquanto o livro for intradia, `1.2.0` e uma
+hipotética `1.3.0` com 0,40 produzem **exatamente as mesmas decisões**.
+Detalhe e tabela verbatim em
+[`docs/test-results/RFC-017-shadow-replay.md`](test-results/RFC-017-shadow-replay.md).
 
 ### 3d. Chave do cap de fonte de resolução (decisão 3)
 
@@ -2645,14 +2784,19 @@ do merge.
   ver com o alarme global), retém a ordem de 3. Sem consumidor profundo (a API só lê a linha
   mais nova por token), então é etiqueta errada e não perigo. Medir
   `pg_column_size` em produção e redeclarar.
-- **`custo_capital_anual`** — **decidido** em 2026-08-27: subir para tornar
-  vinculante, com o número saindo de um shadow replay sobre o decision log
-  gravado. Correção do achado original: o cruzamento é `r > 0,1825 / preço`, não
-  um único "18,3% a.a." — 19,2% só morde no topo da banda de compra e 36,5% é o
-  necessário a meio preço. Na **saída** o parâmetro já é vinculante hoje (o
-  critério 6 cobra o lockup integral), então subir também deixa a saída mais
-  impaciente. `config/portfolio.json` fica em **1.2.0** até a varredura dar o
-  número.
+- **`custo_capital_anual`** — **a varredura rodou em 2026-09-01 (RFC-017) e não
+  deu um número, deu uma resposta diferente**: na população que existe hoje
+  **nenhuma taxa entre 0,12 e 0,40 muda uma única decisão** (AÇÃO = 0 linhas / 0
+  mercados sobre 20.340 decisões alcançáveis), e a busca de virada não acha
+  mudança de ação nem a 100.000% a.a. A álgebra de 27/08 (`r > 0,1825/preço`)
+  está certa e é o **sinal**; faltava a **magnitude**, que vem do lockup — o log
+  tem 38 min e 3,67 h, e a carga máxima a r=0,40 é 0,0000827/ação contra
+  `edgeLiqMin` de 0,02. Isso também corrige o registro de que na saída o
+  parâmetro "já é vinculante": o critério 6 dispara 63× dentro do critério 1, ou
+  seja, só em posição que o critério 1 já tirou. `config/portfolio.json`
+  **continua em 1.2.0**, agora por um motivo medido: subir não faria nada. A
+  decisão que sobra para o proprietário é sobre o **universo** (horizontes de
+  semanas fariam o parâmetro voltar a morder), não sobre a taxa.
 - **`g2MaxSinglePositionPnlShare = 0,25`** — **aprovado** pelo proprietário em
   2026-08-27; deixa de ser número do implementador. Revisão contra dado real
   quando o G2 tiver ≥ 100 posições fechadas, o que depende da ponte de paper.
