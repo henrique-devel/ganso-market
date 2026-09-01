@@ -1,6 +1,6 @@
 # RFC-017 — Polymarket: shadow replay (varredura de config e replay de fonte)
 
-**Status:** in-progress (2026-09-01)
+**Status:** implemented (2026-09-01, PRs #72 e #73 — primeira rodada real em produção, evidência em [`docs/test-results/RFC-017-shadow-replay.md`](../test-results/RFC-017-shadow-replay.md))
 **Dependências:** RFC-013 tarefa 7 (replay determinístico do decision log, ativo em produção), RFC-010 (estimativas e labels, ativos), RFC-012 (buffer de resolução, ativa)
 **Habilita:** o número de `capitalCostAnnual` que cunharia a config 1.3.0; a leitura contrafactual "e se a fonte fosse o shadow?" que alimenta — sem substituir — a decisão de promoção da RFC-010
 
