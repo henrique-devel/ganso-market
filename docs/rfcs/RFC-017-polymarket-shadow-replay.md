@@ -244,6 +244,36 @@ Complemento explícito: o **valor de virada** por chave, achado por bisseção s
 para confirmar que o veredito de fato mudou ali. A limitação vai impressa: a
 bisseção acha *uma* travessia no bracket, não prova que é a única.
 
+### D3b — AÇÃO e MOTIVO contam separado (a rodada seca obrigou)
+
+Rodando a ferramenta contra **300 decisões reais** antes do deploy, ela reportou
+7 linhas "mudadas" a partir de r=0,20. Investigado, o mecanismo é este:
+
+a estimativa `MARKET_BASELINE` sai do **mesmo livro** que o motor caminha, então
+`q` fica no microprice e as duas pernas **empatam exatamente** — `q_lo − ask_yes`
+e `(1 − q_hi) − ask_no` são iguais quando `q` é o meio. `evaluateMarket`
+desempata com `>` estrito, e YES, avaliado primeiro, ganha. A carga de capital é
+proporcional ao **preço**, logo não é neutra no empate: morde a perna de 0,93 e
+não a de 0,08, o vencedor vira NO, e a rejeição sai de
+`LOWER_BOUND_BELOW_COSTS`/YES para `PRICE_OUT_OF_BAND`/NO.
+
+**Nada virou entrável.** Chamar isso de "o veredito mudou" inflaria a mordida do
+parâmetro numa ordem de grandeza. A ferramenta conta as duas coisas separadas:
+
+- **AÇÃO** (`ACCEPTED ↔ REJECTED`) — o motor teria AGIDO diferente;
+- **MOTIVO** — o rótulo gravado mudou e a ação não;
+- **PERNA** — a perna escolhida trocou, que é o mecanismo por trás do MOTIVO.
+
+### D3c — medir na escala do motor, não na da coluna
+
+Os deltas saíam das colunas de 6 casas; o motor decide em 9. A r=0,183 a carga
+que vira a perna é **~2,5e-7 por ação**: 12 das 300 decisões trocam de perna
+enquanto `capital_cost` ainda imprime `0.000000`. Medir na escala da coluna
+reportaria **zero exatamente onde o efeito começa** — a mesma falsa ausência que
+esta RFC existe para não produzir. `rederive` devolve os escalares da avaliação
+em escala de trabalho, e é deles que saem `accept_slack`, os deltas e o
+"custo passou a ser positivo".
+
 ### D4 — dupla ponderação, porque a concentração é real
 
 Medido na população alcançável: 65 mercados, mediana ~304 linhas, o maior com
@@ -331,6 +361,8 @@ Modo A:
 1. taxa acima do cruzamento **flipa** uma linha sintética ACCEPTED→REJECTED e
    muda o binding constraint (fixture com lockup longo, porque a produção não
    tem um);
+1b. o **empate de perna** da D3b: a taxa troca MOTIVO e PERNA sem tocar a AÇÃO,
+   reproduzido da fixture que copia as linhas 701807–702562 de produção;
 2. a taxa gravada (0,12) dá **zero** mudanças — linha de controle;
 3. `baseline_mismatch` exclui e conta (config hash divergente);
 4. **determinismo byte a byte** entre duas rodadas sobre a mesma entrada;
