@@ -262,8 +262,18 @@ export interface SourceReplayTotals {
   readonly marketsAdmitted: number;
   readonly marketsReachingEstimate: number;
   readonly exclusions: Readonly<Record<SourceExclusion, number>>;
-  readonly linesChanged: number;
-  readonly marketsChanged: number;
+  /** ACCEPTED <-> REJECTED: would the engine have ACTED differently. */
+  readonly linesOutcomeChanged: number;
+  readonly marketsOutcomeChanged: number;
+  /**
+   * The recorded reason moved while the action did not.
+   *
+   * Kept apart from the outcome for the reason mode A's sweep made concrete: a
+   * change of chosen leg rewrites the reason and the side of a rejection that
+   * stays a rejection, and folding the two together inflates the apparent bite.
+   */
+  readonly linesReasonChanged: number;
+  readonly marketsReasonChanged: number;
   readonly verdictTransitions: Readonly<Record<string, number>>;
   readonly baselineAccepted: number;
   readonly shadowAccepted: number;
@@ -280,7 +290,8 @@ export class SourceReplayAccumulator {
   private seen = 0;
   private admitted = 0;
   private reaching = 0;
-  private linesChanged = 0;
+  private linesOutcomeChanged = 0;
+  private linesReasonChanged = 0;
   private baselineAccepted = 0;
   private shadowAccepted = 0;
   private shadowOnly = 0;
@@ -290,7 +301,8 @@ export class SourceReplayAccumulator {
   private readonly marketsSeen = new Set<string>();
   private readonly marketsAdmitted = new Set<string>();
   private readonly marketsReaching = new Set<string>();
-  private readonly marketsChanged = new Set<string>();
+  private readonly marketsOutcomeChanged = new Set<string>();
+  private readonly marketsReasonChanged = new Set<string>();
   private readonly modelIds = new Set<string>();
   private readonly transitions: Record<string, number> = {};
   private readonly exclusions: Record<SourceExclusion, number> = {
@@ -350,9 +362,13 @@ export class SourceReplayAccumulator {
     if (baseAccepted && !shadowAccepted) {
       this.baselineOnly += 1;
     }
+    if (baseAccepted !== shadowAccepted) {
+      this.linesOutcomeChanged += 1;
+      this.marketsOutcomeChanged.add(input.conditionId);
+    }
     if (baseKey !== shadowKey) {
-      this.linesChanged += 1;
-      this.marketsChanged.add(input.conditionId);
+      this.linesReasonChanged += 1;
+      this.marketsReasonChanged.add(input.conditionId);
       const key = `${baseKey} -> ${shadowKey}`;
       this.transitions[key] = (this.transitions[key] ?? 0) + 1;
     }
@@ -367,8 +383,10 @@ export class SourceReplayAccumulator {
       marketsAdmitted: this.marketsAdmitted.size,
       marketsReachingEstimate: this.marketsReaching.size,
       exclusions: { ...this.exclusions },
-      linesChanged: this.linesChanged,
-      marketsChanged: this.marketsChanged.size,
+      linesOutcomeChanged: this.linesOutcomeChanged,
+      marketsOutcomeChanged: this.marketsOutcomeChanged.size,
+      linesReasonChanged: this.linesReasonChanged,
+      marketsReasonChanged: this.marketsReasonChanged.size,
       verdictTransitions: { ...this.transitions },
       baselineAccepted: this.baselineAccepted,
       shadowAccepted: this.shadowAccepted,

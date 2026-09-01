@@ -115,7 +115,7 @@ describe("sweepDecision", () => {
   it("changes nothing at the recorded value — the control line", () => {
     const result = sweep(entryDecision(), "costs.capitalCostAnnual", [0.12]);
     const control = result.candidates[0];
-    expect(control?.verdictChanged).toBe(false);
+    expect(control?.outcomeChanged).toBe(false);
     expect(control?.bindingChanged).toBe(false);
     expect(control?.deltaEdgeNet).toBe(0);
     expect(control?.deltaCapitalCost).toBe(0);
@@ -131,17 +131,17 @@ describe("sweepDecision", () => {
     expect(result.baselineOutcome).toBe("ACCEPTED");
 
     const [control, near, over, far] = result.candidates;
-    expect(control?.verdictChanged).toBe(false);
+    expect(control?.outcomeChanged).toBe(false);
     // 0.40 is above the sign crossing (r > 0.1825/p) but still under the
     // magnitude that matters: positive is not binding.
-    expect(near?.verdictChanged).toBe(false);
+    expect(near?.outcomeChanged).toBe(false);
     expect(near?.deltaCapitalCost).toBeGreaterThan(0);
     expect(near?.capitalCostBecamePositive).toBe(true);
 
     // The two rejections arrive in order as the charge grows: first the net
     // edge falls under `edgeLiqMin` (0.01 < edge_net < 0.02), then under the
     // safety margin itself.
-    expect(over?.verdictChanged).toBe(true);
+    expect(over?.outcomeChanged).toBe(true);
     expect(over?.outcome).toBe("REJECTED");
     expect(over?.reasonCode).toBe("EDGE_BELOW_MIN");
     expect(over?.bindingChanged).toBe(true);
@@ -156,7 +156,7 @@ describe("sweepDecision", () => {
     const result = sweep(entryDecision(), "kelly.lambda", [0.25, 0.5]);
     expect(result.baselineBinding).toBe("KELLY_CAP");
     const raised = result.candidates[1];
-    expect(raised?.verdictChanged).toBe(false);
+    expect(raised?.outcomeChanged).toBe(false);
     expect(raised?.outcome).toBe("ACCEPTED");
     expect(raised?.bindingChanged).toBe(true);
     expect(raised?.bindingConstraint).toBe("CAP_ENTRADA");
@@ -203,16 +203,16 @@ describe("sweepDecision", () => {
 
 describe("acceptSlack — the margin metric", () => {
   it("is the signed distance to the boundary that actually decides", () => {
-    const row = rederive({ decision: entryDecision(), config: CONFIG });
+    const rebuilt = rederive({ decision: entryDecision(), config: CONFIG });
     // edge_net 0.03 against max(safety_margin 0.01, edgeLiqMin 0.02).
-    expect(acceptSlack(row!, CONFIG)).toBeCloseTo(0.01, 9);
+    expect(acceptSlack(rebuilt!.exact, CONFIG)).toBeCloseTo(0.01, 9);
   });
 
   it("is null for a row that never reached the arithmetic", () => {
     const vetoed = entryDecision({ breakerOpen: true });
     expect(vetoed.reasonCode).toBe("PORTFOLIO_CIRCUIT_BREAKER");
-    const row = rederive({ decision: vetoed, config: CONFIG });
-    expect(acceptSlack(row!, CONFIG)).toBeNull();
+    const rebuilt = rederive({ decision: vetoed, config: CONFIG });
+    expect(acceptSlack(rebuilt!.exact, CONFIG)).toBeNull();
   });
 
   it("reports how much of the slack a candidate consumed", () => {
@@ -222,7 +222,7 @@ describe("acceptSlack — the margin metric", () => {
     // This is the number that separates "cannot bite" from "did not bite".
     expect(candidate?.slackConsumed).toBeGreaterThan(0.8);
     expect(candidate?.slackConsumed).toBeLessThan(0.9);
-    expect(candidate?.verdictChanged).toBe(false);
+    expect(candidate?.outcomeChanged).toBe(false);
   });
 });
 
@@ -240,8 +240,8 @@ describe("breakevenValue", () => {
     // gives r > 0.4056.
     expect(found?.value).toBeGreaterThan(0.4);
     expect(found?.value).toBeLessThan(0.42);
-    expect(found?.fromOutcome).toBe("ACCEPTED:-");
-    expect(found?.toOutcome).toBe("REJECTED:EDGE_BELOW_MIN");
+    expect(found?.fromOutcome).toBe("YES/ACCEPTED:-");
+    expect(found?.toOutcome).toBe("YES/REJECTED:EDGE_BELOW_MIN");
   });
 
   it("returns null when nothing in the bracket changes the verdict", () => {
@@ -288,10 +288,10 @@ describe("SweepAccumulator", () => {
     expect(totals.decisionsAdmitted).toBe(4);
     expect(totals.marketsAdmitted).toBe(2);
     const flipped = totals.candidates[1];
-    expect(flipped?.linesChanged).toBe(4);
-    expect(flipped?.marketsChanged).toBe(2);
+    expect(flipped?.linesOutcomeChanged).toBe(4);
+    expect(flipped?.marketsOutcomeChanged).toBe(2);
     expect(flipped?.verdictTransitions).toEqual({
-      "ACCEPTED:- -> REJECTED:EDGE_BELOW_MIN": 4,
+      "YES/ACCEPTED:- -> YES/REJECTED:EDGE_BELOW_MIN": 4,
     });
   });
 
@@ -320,11 +320,13 @@ describe("SweepAccumulator", () => {
     );
 
     const flipped = accumulator.totals().candidates[1];
-    expect(flipped?.linesChanged).toBe(3);
-    expect(flipped?.marketsChanged).toBe(1);
+    expect(flipped?.linesOutcomeChanged).toBe(3);
+    expect(flipped?.marketsOutcomeChanged).toBe(1);
     // 3/4 of the lines but 1/2 of the markets: the two readings disagree, which
     // is the whole reason both are printed.
-    expect(flipped?.linesChanged).not.toBe(flipped?.marketsChanged);
+    expect(flipped?.linesOutcomeChanged).not.toBe(
+      flipped?.marketsOutcomeChanged,
+    );
   });
 
   it("counts every exclusion, so the denominator can be audited", () => {
@@ -436,5 +438,79 @@ describe("readOnlyPool", () => {
     }
     // Nothing reached the executor at all.
     expect(statements).toEqual([]);
+  });
+});
+
+describe("the leg tie, and why ACTION and REASON are counted apart", () => {
+  /**
+   * The market-baseline estimate is derived from the same book the engine walks,
+   * so `q` sits at the microprice and the two legs tie almost exactly:
+   * `q_lo - ask_yes` and `(1 - q_hi) - ask_no` are equal when `q` is the mid.
+   * `evaluateMarket` breaks that tie with a strict `>`, so YES — evaluated first
+   * — wins it.
+   *
+   * The capital charge is proportional to PRICE, so it is not neutral across the
+   * tie: at r = 0.20 it bites the 0.93 leg and not the 0.08 one, and the winner
+   * becomes NO, whose price is outside the band. The rejection stays a
+   * rejection and its recorded reason and side both change.
+   *
+   * Reproduced from production rows 701807-702562 on 2026-09-01.
+   */
+  const TIED = {
+    q: "0.925000",
+    qLo: "0.925000",
+    qHi: "0.925000",
+    asks: [{ price: "0.93", size: "500" }],
+    bids: [{ price: "0.92", size: "500" }],
+    expectedLockupS: 2_280,
+  } as const;
+
+  it("changes the reason and the side without changing the action", () => {
+    const decision = entryDecision(TIED);
+    expect(decision.outcome).toBe("REJECTED");
+    expect(decision.reasonCode).toBe("LOWER_BOUND_BELOW_COSTS");
+    expect(decision.marketSide).toBe("YES");
+    expect(decision.execPrice).toBe("0.930000");
+
+    const result = sweep(decision, "costs.capitalCostAnnual", [0.12, 0.2, 0.4]);
+    const control = result.candidates[0];
+    expect(control?.outcomeChanged).toBe(false);
+    expect(control?.reasonChanged).toBe(false);
+
+    for (const candidate of [result.candidates[1], result.candidates[2]]) {
+      // Nothing became entrable. Counting this as "the verdict changed" would
+      // report a bite the parameter does not have.
+      expect(candidate?.outcomeChanged).toBe(false);
+      expect(candidate?.outcome).toBe("REJECTED");
+      // But the recorded explanation and the chosen leg both moved.
+      expect(candidate?.reasonChanged).toBe(true);
+      expect(candidate?.reasonCode).toBe("PRICE_OUT_OF_BAND");
+      expect(candidate?.sideChanged).toBe(true);
+      expect(candidate?.marketSide).toBe("NO");
+    }
+  });
+
+  it("keeps the two counts separate in the totals", () => {
+    const accumulator = new SweepAccumulator({
+      path: "costs.capitalCostAnnual",
+      recordedValue: 0.12,
+      values: [0.12, 0.4],
+    });
+    accumulator.add(
+      sweep(
+        entryDecision(TIED, 1, "0xtied"),
+        "costs.capitalCostAnnual",
+        [0.12, 0.4],
+      ),
+    );
+    const raised = accumulator.totals().candidates[1];
+    expect(raised?.linesOutcomeChanged).toBe(0);
+    expect(raised?.marketsOutcomeChanged).toBe(0);
+    expect(raised?.linesReasonChanged).toBe(1);
+    expect(raised?.linesSideChanged).toBe(1);
+    // The transition string names the leg, because the leg is the mechanism.
+    expect(Object.keys(raised?.verdictTransitions ?? {})).toEqual([
+      "YES/REJECTED:LOWER_BOUND_BELOW_COSTS -> NO/REJECTED:PRICE_OUT_OF_BAND",
+    ]);
   });
 });

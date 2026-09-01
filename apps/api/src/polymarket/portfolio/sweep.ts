@@ -34,6 +34,7 @@ import { planExit } from "./exitcycle.js";
 import {
   deserializeEntryReplay,
   deserializeExitReplay,
+  exact,
   replayDecision,
   type PersistedDecision,
 } from "./replay.js";
@@ -206,14 +207,6 @@ export type SweepExclusion =
   | "UNSUPPORTED_KIND"
   | "CONFIG_UNAVAILABLE";
 
-function num(value: string | null): number | null {
-  if (value === null) {
-    return null;
-  }
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 /**
  * Signed distance from the entry decision boundary, in price units per share.
  *
@@ -228,11 +221,10 @@ function num(value: string | null): number | null {
  * a denominator.
  */
 export function acceptSlack(
-  row: Pick<DecisionRow, "edgeNet" | "safetyMargin">,
+  exact: Pick<ExactValues, "edgeNet" | "safetyMargin">,
   config: PortfolioConfig,
 ): number | null {
-  const edgeNet = num(row.edgeNet);
-  const safetyMargin = num(row.safetyMargin);
+  const { edgeNet, safetyMargin } = exact;
   if (edgeNet === null || safetyMargin === null) {
     return null;
   }
@@ -246,11 +238,48 @@ export function reachedArithmetic(row: {
   return row.edgeNet !== null;
 }
 
+/**
+ * The engine's own numbers, at WORKING scale.
+ *
+ * The row carries six decimals, because that is what the columns store. The
+ * engine decides at nine. The difference is not academic here: measured on
+ * production rows on 2026-09-01, `capitalCostAnnual = 0.183` already flips the
+ * chosen leg on 12 of 300 decisions while the recorded `capital_cost` column
+ * still reads `0.000000` — the charge that moved them is ~2.5e-7 per share.
+ * Deltas computed from the six-decimal strings would report that as no change at
+ * all, which is exactly the false zero this tool exists not to produce.
+ */
+export interface ExactValues {
+  readonly edgeNet: number | null;
+  readonly costsTotal: number | null;
+  readonly capitalCost: number | null;
+  readonly safetyMargin: number | null;
+  readonly sizeShares: number | null;
+}
+
+export interface Rederived {
+  readonly row: DecisionRow;
+  readonly exact: ExactValues;
+}
+
+const NO_EXACT: ExactValues = {
+  edgeNet: null,
+  costsTotal: null,
+  capitalCost: null,
+  safetyMargin: null,
+  sizeShares: null,
+};
+
+/** Nine-digit value of a scaled bigint, as a number. */
+function exactNumber(scaled: bigint): number {
+  return Number(exact(scaled));
+}
+
 /** Re-derive one decision under one config. Returns the row, never persisted. */
 export function rederive(input: {
   readonly decision: PersistedDecision;
   readonly config: PortfolioConfig;
-}): DecisionRow | null {
+}): Rederived | null {
   const { decision, config } = input;
   const inputs = decision.inputs;
   const raw =
@@ -310,11 +339,22 @@ export function rederive(input: {
       qHi: decision.qHi,
       estimateSource: decision.estimateSource,
     };
-    return entryDecisionRow({
-      evaluation: evaluateMarket(engineInput),
-      context,
-      replay: replayBlock,
-    });
+    const evaluation = evaluateMarket(engineInput);
+    const best = evaluation.best;
+    const sizing = evaluation.sizing;
+    return {
+      row: entryDecisionRow({ evaluation, context, replay: replayBlock }),
+      exact: {
+        edgeNet: best === null ? null : exactNumber(best.ev.edgeNetScaled),
+        costsTotal:
+          best === null ? null : exactNumber(best.ev.costsTotalScaled),
+        capitalCost:
+          best === null ? null : exactNumber(best.ev.capitalCostScaled),
+        safetyMargin:
+          best === null ? null : exactNumber(best.ev.safetyMarginScaled),
+        sizeShares: sizing === null ? null : exactNumber(sizing.sizeScaled),
+      },
+    };
   }
 
   if (decision.decisionKind === "EXIT") {
@@ -335,15 +375,21 @@ export function rederive(input: {
       qHi: decision.qHi,
       estimateSource: decision.estimateSource,
     };
-    return exitDecisionRow({
-      plan: planExit({
-        context: restored.context,
-        config,
-        portfolioState: restored.portfolioState,
-      }),
-      context,
-      replay: replayBlock,
+    const plan = planExit({
+      context: restored.context,
+      config,
+      portfolioState: restored.portfolioState,
     });
+    return {
+      row: exitDecisionRow({ plan, context, replay: replayBlock }),
+      exact: {
+        ...NO_EXACT,
+        edgeNet:
+          plan.edgeAtBidScaled === null
+            ? null
+            : exactNumber(plan.edgeAtBidScaled),
+      },
+    };
   }
 
   return null;
@@ -355,7 +401,25 @@ export interface CandidateOutcome {
   readonly outcome: string;
   readonly reasonCode: string | null;
   readonly bindingConstraint: string;
-  readonly verdictChanged: boolean;
+  readonly marketSide: string;
+  /**
+   * ACCEPTED <-> REJECTED. The headline: would the engine have ACTED differently.
+   */
+  readonly outcomeChanged: boolean;
+  /**
+   * The recorded reason moved while the action did not.
+   *
+   * Measured on production rows, this is not a hypothetical: at r >= 0.20 the
+   * capital charge, being proportional to price, breaks the exact tie between
+   * the two legs (`q_lo - ask_yes` and `(1 - q_hi) - ask_no` coincide on a
+   * complementary book) in favour of the cheap one, and a rejection recorded as
+   * LOWER_BOUND_BELOW_COSTS on YES at 0.93 becomes PRICE_OUT_OF_BAND on NO at
+   * 0.08. Nothing became entrable. Reporting that as "the verdict changed" would
+   * inflate the parameter's apparent bite by an order of magnitude.
+   */
+  readonly reasonChanged: boolean;
+  /** The chosen leg flipped — the mechanism behind most `reasonChanged`. */
+  readonly sideChanged: boolean;
   readonly bindingChanged: boolean;
   /** Deltas against the baseline re-derivation, in price units per share. */
   readonly deltaEdgeNet: number | null;
@@ -367,7 +431,13 @@ export interface CandidateOutcome {
   readonly deltaAcceptSlack: number | null;
   /** |delta slack| / |baseline slack|; null when the baseline slack is zero. */
   readonly slackConsumed: number | null;
-  /** True when the capital charge went from zero to positive. */
+  /**
+   * True when the capital charge went from zero to positive at WORKING scale.
+   *
+   * Working scale, not the six-decimal column: at r = 0.183 the charge that
+   * flips a leg is ~2.5e-7 per share, which the recorded `capital_cost` column
+   * still prints as `0.000000`.
+   */
   readonly capitalCostBecamePositive: boolean;
 }
 
@@ -379,6 +449,7 @@ export interface DecisionSweep {
   readonly baselineOutcome: string;
   readonly baselineReason: string | null;
   readonly baselineBinding: string;
+  readonly baselineSide: string;
   readonly baselineAcceptSlack: number | null;
   readonly candidates: readonly CandidateOutcome[];
 }
@@ -409,28 +480,30 @@ export function sweepDecision(input: {
         : "BASELINE_MISMATCH";
   }
 
-  const baseline = rederive({ decision, config });
-  if (baseline === null) {
+  const rebuilt = rederive({ decision, config });
+  if (rebuilt === null) {
     return "NO_REPLAY_BLOCK";
   }
-  const baselineSlack = acceptSlack(baseline, config);
-  const baselineEdge = num(baseline.edgeNet);
-  const baselineCosts = num(baseline.costsTotal);
-  const baselineCapital = num(baseline.capitalCost);
-  const baselineSize = num(baseline.sizeShares);
+  const baseline = rebuilt.row;
+  const baselineSlack = acceptSlack(rebuilt.exact, config);
+  const baselineEdge = rebuilt.exact.edgeNet;
+  const baselineCosts = rebuilt.exact.costsTotal;
+  const baselineCapital = rebuilt.exact.capitalCost;
+  const baselineSize = rebuilt.exact.sizeShares;
 
   const candidates: CandidateOutcome[] = [];
   for (const value of values) {
     const candidateConfig = configWithKey(config, path, value);
-    const row = rederive({ decision, config: candidateConfig });
-    if (row === null) {
+    const rederived = rederive({ decision, config: candidateConfig });
+    if (rederived === null) {
       return "NO_REPLAY_BLOCK";
     }
-    const slack = acceptSlack(row, candidateConfig);
-    const edge = num(row.edgeNet);
-    const costs = num(row.costsTotal);
-    const capital = num(row.capitalCost);
-    const size = num(row.sizeShares);
+    const row = rederived.row;
+    const slack = acceptSlack(rederived.exact, candidateConfig);
+    const edge = rederived.exact.edgeNet;
+    const costs = rederived.exact.costsTotal;
+    const capital = rederived.exact.capitalCost;
+    const size = rederived.exact.sizeShares;
     const deltaSlack =
       slack === null || baselineSlack === null ? null : slack - baselineSlack;
     candidates.push({
@@ -438,9 +511,10 @@ export function sweepDecision(input: {
       outcome: row.outcome,
       reasonCode: row.reasonCode,
       bindingConstraint: row.bindingConstraint,
-      verdictChanged:
-        row.outcome !== baseline.outcome ||
-        row.reasonCode !== baseline.reasonCode,
+      marketSide: row.marketSide,
+      outcomeChanged: row.outcome !== baseline.outcome,
+      reasonChanged: row.reasonCode !== baseline.reasonCode,
+      sideChanged: row.marketSide !== baseline.marketSide,
       bindingChanged: row.bindingConstraint !== baseline.bindingConstraint,
       deltaEdgeNet:
         edge === null || baselineEdge === null ? null : edge - baselineEdge,
@@ -471,6 +545,7 @@ export function sweepDecision(input: {
     baselineOutcome: baseline.outcome,
     baselineReason: baseline.reasonCode,
     baselineBinding: baseline.bindingConstraint,
+    baselineSide: baseline.marketSide,
     baselineAcceptSlack: baselineSlack,
     candidates,
   };
@@ -492,12 +567,17 @@ export function sweepDecision(input: {
  */
 export interface CandidateTotals {
   readonly value: number;
-  readonly linesChanged: number;
-  readonly marketsChanged: number;
+  /** ACCEPTED <-> REJECTED: the number that answers "would it have acted". */
+  readonly linesOutcomeChanged: number;
+  readonly marketsOutcomeChanged: number;
+  /** The recorded reason moved while the action did not. */
+  readonly linesReasonChanged: number;
+  readonly marketsReasonChanged: number;
+  readonly linesSideChanged: number;
   readonly linesBindingChanged: number;
   readonly marketsBindingChanged: number;
   readonly capitalCostBecamePositive: number;
-  /** Transitions `from -> to`, by count, for the verdicts that moved. */
+  /** Transitions `from -> to`, by count, for the reasons that moved. */
   readonly verdictTransitions: Readonly<Record<string, number>>;
   readonly bindingTransitions: Readonly<Record<string, number>>;
   readonly medianDeltaEdgeNet: number | null;
@@ -555,10 +635,13 @@ export class SweepAccumulator {
   };
   private readonly baselineOutcomes: Record<string, number> = {};
 
-  private readonly linesChanged: number[];
+  private readonly linesOutcome: number[];
+  private readonly linesReason: number[];
+  private readonly linesSide: number[];
   private readonly linesBinding: number[];
   private readonly capitalPositive: number[];
-  private readonly marketsChanged: Set<string>[];
+  private readonly marketsOutcome: Set<string>[];
+  private readonly marketsReason: Set<string>[];
   private readonly marketsBinding: Set<string>[];
   private readonly verdictTransitions: Record<string, number>[];
   private readonly bindingTransitions: Record<string, number>[];
@@ -576,10 +659,13 @@ export class SweepAccumulator {
     this.recordedValue = input.recordedValue;
     this.values = input.values;
     const n = input.values.length;
-    this.linesChanged = Array.from({ length: n }, () => 0);
+    this.linesOutcome = Array.from({ length: n }, () => 0);
+    this.linesReason = Array.from({ length: n }, () => 0);
+    this.linesSide = Array.from({ length: n }, () => 0);
     this.linesBinding = Array.from({ length: n }, () => 0);
     this.capitalPositive = Array.from({ length: n }, () => 0);
-    this.marketsChanged = Array.from({ length: n }, () => new Set<string>());
+    this.marketsOutcome = Array.from({ length: n }, () => new Set<string>());
+    this.marketsReason = Array.from({ length: n }, () => new Set<string>());
     this.marketsBinding = Array.from({ length: n }, () => new Set<string>());
     this.verdictTransitions = Array.from(
       { length: n },
@@ -614,10 +700,19 @@ export class SweepAccumulator {
       this.marketsReaching.add(sweep.conditionId);
     }
     sweep.candidates.forEach((candidate, index) => {
-      if (candidate.verdictChanged) {
-        this.linesChanged[index] = (this.linesChanged[index] ?? 0) + 1;
-        this.marketsChanged[index]?.add(sweep.conditionId);
-        const key = `${baselineKey} -> ${candidate.outcome}:${candidate.reasonCode ?? "-"}`;
+      if (candidate.outcomeChanged) {
+        this.linesOutcome[index] = (this.linesOutcome[index] ?? 0) + 1;
+        this.marketsOutcome[index]?.add(sweep.conditionId);
+      }
+      if (candidate.sideChanged) {
+        this.linesSide[index] = (this.linesSide[index] ?? 0) + 1;
+      }
+      if (candidate.outcomeChanged || candidate.reasonChanged) {
+        this.linesReason[index] = (this.linesReason[index] ?? 0) + 1;
+        this.marketsReason[index]?.add(sweep.conditionId);
+        const key =
+          `${sweep.baselineSide}/${baselineKey} -> ` +
+          `${candidate.marketSide}/${candidate.outcome}:${candidate.reasonCode ?? "-"}`;
         const bucket = this.verdictTransitions[index];
         if (bucket !== undefined) {
           bucket[key] = (bucket[key] ?? 0) + 1;
@@ -662,8 +757,11 @@ export class SweepAccumulator {
       const slack = [...(this.absSlack[index] ?? [])].sort((a, b) => a - b);
       return {
         value,
-        linesChanged: this.linesChanged[index] ?? 0,
-        marketsChanged: this.marketsChanged[index]?.size ?? 0,
+        linesOutcomeChanged: this.linesOutcome[index] ?? 0,
+        marketsOutcomeChanged: this.marketsOutcome[index]?.size ?? 0,
+        linesReasonChanged: this.linesReason[index] ?? 0,
+        marketsReasonChanged: this.marketsReason[index]?.size ?? 0,
+        linesSideChanged: this.linesSide[index] ?? 0,
         linesBindingChanged: this.linesBinding[index] ?? 0,
         marketsBindingChanged: this.marketsBinding[index]?.size ?? 0,
         capitalCostBecamePositive: this.capitalPositive[index] ?? 0,
@@ -745,8 +843,10 @@ export function breakevenValue(input: {
       // Out of the parser's range: not a usable point on the ladder.
       return null;
     }
-    const row = rederive({ decision, config: candidateConfig });
-    return row === null ? null : `${row.outcome}:${row.reasonCode ?? "-"}`;
+    const rederived = rederive({ decision, config: candidateConfig });
+    return rederived === null
+      ? null
+      : `${rederived.row.marketSide}/${rederived.row.outcome}:${rederived.row.reasonCode ?? "-"}`;
   };
 
   if (!(bracketHigh > bracketLow)) {

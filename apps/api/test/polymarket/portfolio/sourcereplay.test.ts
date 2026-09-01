@@ -102,14 +102,14 @@ describe("decisionWithShadow", () => {
 
   it("re-derives to a different verdict when the shadow disagrees enough", () => {
     const decision = entryDecision();
-    const baseline = rederive({ decision, config: CONFIG });
+    const baseline = rederive({ decision, config: CONFIG })?.row;
     expect(baseline?.outcome).toBe("ACCEPTED");
 
     const pessimistic = decisionWithShadow({
       decision,
       shadow: shadow({ q: "0.470000", qLo: "0.450000", qHi: "0.490000" }),
     });
-    const rejected = rederive({ decision: pessimistic!, config: CONFIG });
+    const rejected = rederive({ decision: pessimistic!, config: CONFIG })?.row;
     expect(rejected?.outcome).toBe("REJECTED");
     expect(rejected?.reasonCode).toBe("LOWER_BOUND_BELOW_COSTS");
 
@@ -117,7 +117,7 @@ describe("decisionWithShadow", () => {
       decision,
       shadow: shadow({ q: "0.700000", qLo: "0.650000", qHi: "0.700000" }),
     });
-    const accepted = rederive({ decision: optimistic!, config: CONFIG });
+    const accepted = rederive({ decision: optimistic!, config: CONFIG })?.row;
     expect(accepted?.outcome).toBe("ACCEPTED");
     expect(Number(accepted?.sizeShares)).toBeGreaterThan(
       Number(baseline?.sizeShares),
@@ -132,7 +132,7 @@ describe("decisionWithShadow", () => {
       decision: entryDecision(),
       shadow: shadow({ decisionTs: new Date("2026-08-30T11:53:20Z") }),
     });
-    const row = rederive({ decision: stale!, config: CONFIG });
+    const row = rederive({ decision: stale!, config: CONFIG })?.row;
     expect(row?.outcome).toBe("REJECTED");
     expect(row?.reasonCode).toBe("DATA_STALE");
   });
@@ -328,8 +328,8 @@ describe("SourceReplayAccumulator", () => {
     expect(totals.decisionsReachingEstimate).toBe(2);
     expect(totals.shadowOnlyAccepted).toBe(1);
     expect(totals.baselineOnlyAccepted).toBe(1);
-    expect(totals.linesChanged).toBe(2);
-    expect(totals.marketsChanged).toBe(2);
+    expect(totals.linesOutcomeChanged).toBe(2);
+    expect(totals.marketsOutcomeChanged).toBe(2);
     expect(totals.modelIds).toEqual(["crypto_updown_gbm@1.1.0"]);
   });
 

@@ -300,19 +300,26 @@ function renderSweepTable(
   lines.push("## Per candidate");
   lines.push("");
   lines.push(
-    "  value      lines chg  mkts chg  binding chg  cap>0   med d(edge_net)  p90 |d(edge)|  med d(size)  max slack used",
+    "  ACTION = ACCEPTED<->REJECTED. REASON = the label moved, the action did not.",
+  );
+  lines.push("");
+  lines.push(
+    "  value      action(ln/mkt)  reason(ln/mkt)  side  binding  cap>0   med d(edge_net)  max slack used",
   );
   for (const c of t.candidates) {
     lines.push(
       "  " +
         c.value.toFixed(4).padEnd(11) +
-        String(c.linesChanged).padEnd(11) +
-        String(c.marketsChanged).padEnd(10) +
-        String(c.linesBindingChanged).padEnd(13) +
+        `${String(c.linesOutcomeChanged)}/${String(c.marketsOutcomeChanged)}`.padEnd(
+          16,
+        ) +
+        `${String(c.linesReasonChanged)}/${String(c.marketsReasonChanged)}`.padEnd(
+          16,
+        ) +
+        String(c.linesSideChanged).padEnd(6) +
+        String(c.linesBindingChanged).padEnd(9) +
         String(c.capitalCostBecamePositive).padEnd(8) +
         fixed(c.medianDeltaEdgeNet, 9).padStart(15) +
-        fixed(c.p90AbsDeltaEdgeNet, 9).padStart(14) +
-        fixed(c.medianDeltaSizeShares, 6).padStart(13) +
         (c.maxSlackConsumed === null
           ? "—"
           : `${(100 * c.maxSlackConsumed).toFixed(4)}%`
@@ -321,9 +328,11 @@ function renderSweepTable(
   }
   lines.push("");
   for (const c of t.candidates) {
-    const transitions = Object.entries(c.verdictTransitions);
+    const transitions = Object.entries(c.verdictTransitions).sort(
+      (a, b) => b[1] - a[1],
+    );
     if (transitions.length > 0) {
-      lines.push(`  verdict transitions at ${String(c.value)}:`);
+      lines.push(`  side/verdict transitions at ${String(c.value)}:`);
       for (const [key, count] of transitions.slice(0, 8)) {
         lines.push(`    ${String(count).padStart(8)}  ${key}`);
       }
@@ -447,12 +456,14 @@ async function runSourceReplay(input: {
         accumulator.excluded(decision.conditionId, "NO_REPLAY_BLOCK");
         continue;
       }
-      const baselineRow = rederive({ decision, config });
-      const shadowRow = rederive({ decision: swapped, config });
-      if (baselineRow === null || shadowRow === null) {
+      const baselineRederived = rederive({ decision, config });
+      const shadowRederived = rederive({ decision: swapped, config });
+      if (baselineRederived === null || shadowRederived === null) {
         accumulator.excluded(decision.conditionId, "NO_REPLAY_BLOCK");
         continue;
       }
+      const baselineRow = baselineRederived.row;
+      const shadowRow = shadowRederived.row;
       accumulator.add({
         conditionId: decision.conditionId,
         decisionTs: decision.decisionTs,
@@ -588,10 +599,13 @@ function renderSourceTable(
   lines.push("## What the shadow would have changed");
   lines.push("");
   lines.push(
-    `  lines whose verdict differs   ${String(t.linesChanged)}  ${pct(t.linesChanged, t.decisionsReachingEstimate)}`,
+    `  lines whose ACTION differs    ${String(t.linesOutcomeChanged)}  ${pct(t.linesOutcomeChanged, t.decisionsReachingEstimate)}`,
   );
   lines.push(
-    `  markets with any difference   ${String(t.marketsChanged)}  ${pct(t.marketsChanged, t.marketsReachingEstimate)}`,
+    `  markets whose ACTION differs  ${String(t.marketsOutcomeChanged)}  ${pct(t.marketsOutcomeChanged, t.marketsReachingEstimate)}`,
+  );
+  lines.push(
+    `  lines whose REASON differs    ${String(t.linesReasonChanged)}  ${pct(t.linesReasonChanged, t.decisionsReachingEstimate)}`,
   );
   lines.push(
     `  accepted by baseline only     ${String(t.baselineOnlyAccepted)}`,
