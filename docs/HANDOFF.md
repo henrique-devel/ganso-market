@@ -2238,6 +2238,16 @@ isto alimenta a decisão de promoção, não a substitui.
   0,419, que é uma troca de perna, e teria ido ao proprietário como "o número da
   1.3.0" (PR #73 separou AÇÃO de RÓTULO).
 
+### Controle — a lente de degeneração, fechada com dado
+
+O zero do `capitalCostAnnual` só vale se a ferramenta souber achar um flip quando
+existe um. Rodando **a mesma janela, a mesma população, o mesmo binário** contra
+`costs.edgeLiqMin` (0,02 → 0,03): **7 linhas em 2 mercados mudam de AÇÃO** e a
+busca de virada devolve os valores um a um — 0,0204929, 0,0214201, 0,0223213,
+0,0234751, 0,0251381 — em vez de `NONE`. A varredura não "passou porque não havia
+contra o que comparar": o zero do `capitalCostAnnual` é um fato sobre o
+parâmetro, não sobre a ferramenta nem sobre o tamanho da amostra.
+
 ### Invariantes e verificações
 
 `replayDecision` e o `CONFIG_HASH_MISMATCH` **intocados** — a varredura os usa
