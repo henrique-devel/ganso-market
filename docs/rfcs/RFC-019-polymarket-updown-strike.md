@@ -66,7 +66,13 @@ serve com gate PASS + promoção manual — nenhuma exceção.
    - amostra existente com `source_ts ≤ windowStart` e idade em relação a
      `windowStart` ≤ `crypto.max_strike_age_ms` (default 5 min) — um gap do
      RTDS na abertura da janela produz ausência, nunca um strike de outro
-     instante;
+     instante. **O botão existe no parser mas fica FORA de
+     `config/fundamental.json` no deploy inicial, de propósito**: o arquivo é
+     bind-mount (chega ao container no passo 2 do deploy, antes do rebuild do
+     passo 3) e o parser é fail-closed com chave desconhecida, então
+     publicá-lo junto do código poria a imagem ANTIGA do estimator em
+     crash-loop na janela entre os dois passos. Acrescentar a chave depois do
+     rebuild é seguro e não exige código;
    - amostra do MESMO feed (twap30/twap60) que o nível corrente e a série de
      volatilidade — nunca misturar feeds na mesma quantidade.
 2. **Mapa.** Com o strike resolvido, updown é o mapa terminal existente com
