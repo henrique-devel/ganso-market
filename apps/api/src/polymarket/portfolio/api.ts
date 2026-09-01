@@ -166,17 +166,61 @@ export function registerPortfolioRoutes(
     { preHandler: guard },
     wrap(async (_request, reply) => {
       const rows = await pool.query(
-        // RFC-016: `end_ts` rides along so the panel can be ranked by
-        // horizon — the data half of the future "Rápidos" tab (RFC-015).
-        // LEFT JOIN, because a snapshot must never disappear from the panel
-        // just because its registry row has not been re-observed yet.
-        `SELECT DISTINCT ON (p.token_id)
-                p.snapshot_id, p.condition_id, p.token_id, p.computed_at,
-                p.panel_json, p.decision_id, p.entrable, p.vetoed,
-                p.veto_reason, p.config_version, m.end_ts
-           FROM portfolio_panel_snapshots p
-           LEFT JOIN polymarket_markets m ON m.condition_id = p.condition_id
-          ORDER BY p.token_id, p.computed_at DESC
+        // Loose index scan (RFC-015 §10), not `DISTINCT ON`.
+        //
+        // `DISTINCT ON (token_id) ... ORDER BY token_id, computed_at DESC` did
+        // NOT use portfolio_panel_snapshots_latest_idx: measured in production
+        // 2026-09-01 as a parallel seq scan over 273k rows plus an external
+        // merge sort spilling ~9.5 MB per worker to disk, at 786 ms — 79% of
+        // the API pool's 1000 ms statement_timeout, on a table that grows all
+        // day, in the section the operator leaves open on a 30 s poll. It was
+        // the same latent 500 as the decision log, one step behind it.
+        //
+        // The recursive term walks the index token by token (one lookup per
+        // distinct token), and the lateral takes that token's newest row. 200
+        // index lookups instead of a 273k-row sort: 36 ms measured.
+        //
+        // RFC-016 end instant: the VERSIONED chain first, `end_ts` only as a
+        // fallback. Measured over the 372 tokens in the panel: end_ts has an
+        // instant for 219, the versioned chain for all 372, and where both
+        // exist they disagree in 0. Reading only end_ts silently dropped 41%
+        // of the universe from any horizon ranking — and dropped it as "—",
+        // which reads as "no deadline" rather than "wrong table".
+        //
+        // Both joins stay LEFT: a snapshot must never disappear from the panel
+        // because its registry row has not been re-observed yet.
+        `WITH RECURSIVE tokens AS (
+             (SELECT token_id FROM portfolio_panel_snapshots
+               ORDER BY token_id LIMIT 1)
+           UNION ALL
+             SELECT (SELECT p.token_id FROM portfolio_panel_snapshots p
+                      WHERE p.token_id > t.token_id
+                      ORDER BY p.token_id LIMIT 1)
+               FROM tokens t WHERE t.token_id IS NOT NULL
+         )
+         SELECT s.snapshot_id, s.condition_id, s.token_id, s.computed_at,
+                s.panel_json, s.decision_id, s.entrable, s.vetoed,
+                s.veto_reason, s.config_version,
+                COALESCE(f.end_date, m.end_ts) AS end_ts
+           FROM tokens t
+           CROSS JOIN LATERAL (
+             SELECT p.snapshot_id, p.condition_id, p.token_id, p.computed_at,
+                    p.panel_json, p.decision_id, p.entrable, p.vetoed,
+                    p.veto_reason, p.config_version
+               FROM portfolio_panel_snapshots p
+              WHERE p.token_id = t.token_id
+              ORDER BY p.computed_at DESC
+              LIMIT 1
+           ) s
+           LEFT JOIN polymarket_markets m ON m.condition_id = s.condition_id
+           LEFT JOIN LATERAL (
+             SELECT r.end_date FROM polymarket_rule_versions r
+              WHERE r.condition_id = s.condition_id AND r.valid_to IS NULL
+              ORDER BY r.version DESC
+              LIMIT 1
+           ) f ON TRUE
+          WHERE t.token_id IS NOT NULL
+          ORDER BY s.token_id
           LIMIT ${String(LIST_LIMIT)}`,
       );
       return reply.send({
@@ -429,6 +473,17 @@ export function registerPortfolioRoutes(
   );
 
   // GET /polymarket/decisions — the decision log.
+  //
+  // Ordered by decision_id, NOT decision_ts. This is the RFC-015 §3 fix for the
+  // 500 of 2026-08-31 18:21Z. There is no index on decision_ts alone (the three
+  // that exist are composite, led by kind / condition_id / token_id), so
+  // `ORDER BY decision_ts DESC LIMIT 500` was a parallel seq scan plus a top-N
+  // sort over the whole table — measured in production at 715 ms cold against
+  // the API pool's 1000 ms statement_timeout, on a table that grew ~545 MB/day.
+  // decision_id is the primary key, is monotonic with insertion, and gives a
+  // TOTAL order: decision_ts ties (one engine cycle stamps many rows with the
+  // same instant) made the old order ambiguous, which was its own latent bug.
+  // Measured after: index-only scan backward, 0.17 ms, 104 buffer hits.
   app.get(
     "/polymarket/decisions",
     { preHandler: guard },
@@ -439,7 +494,7 @@ export function registerPortfolioRoutes(
                 edge_net, size_shares, binding_constraint, outcome, reason_code,
                 portfolio_state, config_version, config_hash
            FROM portfolio_decisions
-          ORDER BY decision_ts DESC
+          ORDER BY decision_id DESC
           LIMIT ${String(HISTORY_LIMIT)}`,
       );
       return reply.send({

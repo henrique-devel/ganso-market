@@ -6,7 +6,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { DatabasePool } from "../database.js";
-import { DEFAULT_BUDGET_BYTES } from "./retention.js";
+import {
+  DEFAULT_BUDGET_BYTES,
+  RETENTION_TABLES,
+  measureTableSizes,
+} from "./retention.js";
 import type { PriceLevel } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -926,7 +930,16 @@ export function registerPolymarketReadRoutes(
   );
 
   // GET /polymarket/data-quality — gaps (24h), ingest lag (1h), storage vs
-  // the 40 GB module budget.
+  // the RFC-007 budget.
+  //
+  // RFC-015 §9: `storage` used to sum pg_total_relation_size (PHYSICAL) over
+  // tables matching `polymarket\_%` (a SUBSET) against the whole budget, while
+  // QUOTA_GLOBAL_ALARM sums LIVE bytes over the WHOLE retention list against
+  // the same budget. Two errors stacked — wrong basis and wrong population —
+  // so `budget_used_pct` was never the number the alarm acts on. It is now the
+  // same measurement, from the same function, over the same table list, and
+  // the response carries physical and bloat alongside it because "how much is
+  // retained" and "how much disk is this costing" are different questions.
   app.get(
     "/polymarket/data-quality",
     { preHandler: guard },
@@ -955,25 +968,33 @@ export function registerPolymarketReadRoutes(
               AND ingest_lag_ms IS NOT NULL`,
           [now],
         ),
-        pool.query<Row>(
-          `SELECT c.relname AS table_name,
-                  pg_total_relation_size(c.oid)::bigint AS bytes
-             FROM pg_class c
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = current_schema()
-              AND c.relkind = 'r'
-              AND c.relname LIKE 'polymarket\\_%'
-            ORDER BY c.relname`,
-          [],
+        measureTableSizes(
+          pool,
+          RETENTION_TABLES.map((config) => config.table),
         ),
       ]);
 
-      const tables = sizes.rows.map((row) => ({
-        table_name:
-          typeof row["table_name"] === "string" ? row["table_name"] : null,
-        bytes: toFiniteNumber(row["bytes"]) ?? 0,
-      }));
-      const totalBytes = tables.reduce((sum, table) => sum + table.bytes, 0);
+      // Absent from the catalog means the table does not exist yet, which is
+      // zero retained bytes — not a missing row the panel has to reason about.
+      const tables = RETENTION_TABLES.map((config) => {
+        const size = sizes.get(config.table);
+        return {
+          table_name: config.table,
+          live_bytes: Math.round(size?.liveBytes ?? 0),
+          physical_bytes: size?.bytes ?? 0,
+          live_rows: Math.round(size?.liveRows ?? 0),
+          quota_bytes: config.quotaBytes,
+          protected: config.protected,
+        };
+      }).sort((left, right) => right.live_bytes - left.live_bytes);
+      const totalBytes = tables.reduce(
+        (sum, table) => sum + table.live_bytes,
+        0,
+      );
+      const physicalBytes = tables.reduce(
+        (sum, table) => sum + table.physical_bytes,
+        0,
+      );
       const lagRow = lag.rows[0] ?? {};
       return reply.code(200).send({
         generated_at: now.toISOString(),
@@ -989,8 +1010,16 @@ export function registerPolymarketReadRoutes(
           p99: toFiniteNumber(lagRow["p99"]),
         },
         storage: {
+          basis:
+            "bytes vivos da lista de retenção (o mesmo do QUOTA_GLOBAL_ALARM)",
           budget_bytes: STORAGE_BUDGET_BYTES,
+          // `total_bytes` keeps its name and becomes live bytes: it is what
+          // budget_used_pct divides, and the two must never drift apart again.
           total_bytes: totalBytes,
+          physical_bytes: physicalBytes,
+          // Pages a DELETE cannot give back. Never a reason to prune; the
+          // remedy is VACUUM FULL / pg_repack and it is the owner's call.
+          bloat_bytes: Math.max(physicalBytes - totalBytes, 0),
           budget_used_pct:
             Math.round((totalBytes / STORAGE_BUDGET_BYTES) * 100 * 100) / 100,
           tables,

@@ -335,9 +335,29 @@ describe("metrics snapshot", () => {
           rows: [
             {
               table_name: "polymarket_book_deltas",
-              bytes: String(2 * 1024 ** 3),
+              // 4 GiB of file, half of it dead tuples: 2 GiB retained.
+              bytes: String(4 * 1024 ** 3),
+              reltuples: "50",
+              live_tup: "50",
+              dead_tup: "50",
+              toast_live_tup: "0",
+              heap_width: null,
+              index_count: null,
+              index_key_width: null,
             },
-            { table_name: "polymarket_trades", bytes: String(1024 ** 3) },
+            {
+              // Not a `polymarket_%` table: under the old definition this
+              // contributed nothing (RFC-015 §9).
+              table_name: "portfolio_decisions",
+              bytes: String(1024 ** 3),
+              reltuples: "10",
+              live_tup: "10",
+              dead_tup: "0",
+              toast_live_tup: "0",
+              heap_width: null,
+              index_count: null,
+              index_key_width: null,
+            },
           ],
           rowCount: 2,
         } as unknown as QueryResult<never>;
@@ -354,11 +374,24 @@ describe("metrics snapshot", () => {
     expect(metrics.gapsLast24h.rtds).toEqual({ count: 1, totalSeconds: 10 });
     expect(metrics.ingestLagLastHour).toEqual({ p50Ms: 12, p99Ms: 250 });
     expect(metrics.updatesLastHour).toBe(4200);
+    // LIVE bytes over the retention list — the same measurement
+    // QUOTA_GLOBAL_ALARM makes (RFC-015 §9). 2 GiB retained of 4 GiB of file,
+    // plus 1 GiB from a table the old `polymarket_%` predicate never saw.
     expect(metrics.totalBytes).toBe(3 * 1024 ** 3);
+    expect(metrics.physicalBytes).toBe(5 * 1024 ** 3);
+    expect(metrics.bytesByTable["portfolio_decisions"]).toBe(1024 ** 3);
+    expect(metrics.bytesByTable["polymarket_book_deltas"]).toBe(2 * 1024 ** 3);
     expect(metrics.budgetBytes).toBe(BUDGET_BYTES);
     // Budget raised from 40 to 110 GB by the owner on 2026-08-25 (RFC-007
     // amendment); derived from the constant so the two cannot drift.
     expect(metrics.budgetUsedPct).toBeCloseTo((3 / 110) * 100, 6);
+
+    // Every retention table is asked for by name; nothing matches by pattern.
+    const sizeQuery = pool.captured.find((q) =>
+      q.text.includes("pg_total_relation_size"),
+    );
+    expect(sizeQuery?.text).not.toContain("LIKE");
+    expect(sizeQuery?.params?.[0]).toContain("resolution_scores");
 
     // The lag query covers both raw feeds with percentile_cont.
     const lagQuery = pool.captured.find((q) =>
