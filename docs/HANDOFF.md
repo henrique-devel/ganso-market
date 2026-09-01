@@ -1,6 +1,24 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-08-31 (noite, 2) — **nowcast oficial no calendário
+- Última atualização: 2026-09-01 — **RFC-016: o instante real de fim de mercado
+  (PR #66)**. A re-medição **desmentiu cinco das sete premissas** do escopo de
+  28/08 — a cadência de 10 s já estava ativa desde 23/08, o horizonte já era
+  intradia via `polymarket_rule_versions.end_date`, os "558 crypto vencidos" são
+  linhas obsoletas de mercados fora do universo e o cap não morde desde 29/08 —
+  e encontrou no lugar um defeito muito maior: **o label store lia a coluna
+  date-only**, punha 94% dos `publicly_knowable_ts` à meia-noite (mediana 16 h
+  adiantados) e, como a calibração filtra por `decision_ts <
+  publicly_knowable_ts`, descartava **38.200 de 74.412** estimativas MODEL — e
+  **8.063 de 8.063** das feitas na última hora de vida do mercado, que é
+  exatamente o que a cadência de 10 s existe para produzir. É o mecanismo por
+  trás do bloqueio "o gate da RFC-010 não tem como acumular evidência".
+  Migration 0017 (`end_ts`, aditiva, prospectiva), captura nos dois call sites,
+  onze consumidores auditados um a um, reserva de 25 slots do cap para
+  horizontes curtos e `budget.test.ts` recalibrado sem afrouxar o piso.
+  **Deployado às 23:57:35Z e verificado**: `end_ts` em 87/87 membros, labels à
+  meia-noite 94% → 2,9%, estimativas pontuáveis **36.212 → 74.412**, última hora
+  **0 → 8.063**, janelas finas em mercado longo **75% → 0**, zero erros nos seis
+  serviços. Ver "SESSÃO 2026-09-01". Registro anterior do dia: **nowcast oficial no calendário
   macro + sync com retry (PR #63)**. A entrega veio junto de uma **medição que
   desmente a premissa do trabalho**: rodando o parser real contra os 22 mercados
   macro de produção, os 22 falham em `UNRECOGNIZED_VARIABLE` **antes** de o
@@ -48,6 +66,7 @@
   `portfolio_panel_snapshots(decision_id)` = migration 0016, pendente de
   autorização)
 - Branch principal: `main`
+- RFC-016: **implementada e ativa em produção** desde 2026-08-31 23:57:35Z (migration 0017)
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
   migration 0014 aplicada em produção e **nunca alterada** desde então
@@ -2044,6 +2063,198 @@ CD normal do projeto produzindo a corrida que produz há semanas.
   passar com o universo atual, pela medição acima. Não foi forçada.
 - **Decisão do proprietário**: variável de mudança de juros para o
   `macro_scheduled` (ou aceitar que a categoria macro não produz evidência).
+
+
+## SESSÃO 2026-09-01 — RFC-016: O INSTANTE REAL DE FIM, E A EVIDÊNCIA DA ÚLTIMA HORA QUE ERA DESCARTADA (PR #66)
+
+**A re-medição desmentiu cinco das sete premissas do escopo aprovado em
+2026-08-28**, e encontrou no lugar delas um defeito bem maior. A medição vem
+primeiro porque foi ela que decidiu o desenho.
+
+### O que o diagnóstico de 28/08 dizia, e o que a produção diz
+
+Medido em 2026-08-31 entre 23:00Z e 23:20Z, contra o banco de produção e contra
+a API pública da Gamma:
+
+| Premissa de 28/08                        | Medido em 31/08                                                                                          |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| "gravamos só `end_date_iso` (date-only)"  | **falso onde importa**: `polymarket_rule_versions.end_date` é TIMESTAMPTZ e já tem o instante cheio em **1005/1046** versões abertas (as 41 restantes são meia-noite de verdade — Fed, fim de ano) |
+| "558 crypto ativos vencidos"              | reproduz como **703**, e **todas** são linhas de registro obsoletas de mercados que já saíram do universo. Membros com `end_date_iso` vencido: **0** |
+| "nenhum mercado com horizonte < 6 h"      | **2** membros < 1 h e **29** < 6 h no instante da medição                                                  |
+| "a cadência de 10 s nunca ativa"          | **ativa desde 23/08**: 3 tokens com gap mediano de **10,0 s** nos últimos 20 min, e **6.164 das 20.471** estimativas de 24 h no bucket `lt_1h` — o maior bucket do dia |
+| "gap nos updown vivos = 60 s"             | o número está certo, a leitura não: 60 s é a mediana da **mistura**; na última hora de vida é 10 s          |
+| "o cap rejeitou ~46 mercados/dia"         | última rejeição por cap em **2026-08-29 09:59Z**; **zero** nas últimas 24 h; universo em 83/100 mercados     |
+| "~1.586 enter/exit por semana"            | **confirmado**: 1.492 enter / 1.502 exit em 7 dias                                                          |
+| Gamma devolve `eventStartTime`            | **`null` em 100 de 100** mercados crypto; `gameStartTime` também                                            |
+
+O `end_date_iso` **é** date-only (1056/1056) e a Gamma **devolve** o instante
+cheio. As duas coisas são verdade. O que não era verdade é que ninguém gravasse
+o instante — `registry.ts` já o passa para `applyRuleObservation` desde a
+RFC-007, e o horizonte das features lê essa coluna primeiro. Por isso a cadência
+funciona.
+
+### O DEFEITO REAL: a cadência de 10 s funciona e tudo que ela produz é jogado fora
+
+Dos **onze** leitores de horizonte no código, nove leem a cadeia versionada e
+acertam. Dois liam a coluna plana. Um deles é o label store:
+
+`labels.ts` alimentava `publiclyKnowableInstant` com o date-only, e como esse
+instante é o **mínimo** dos candidatos, o resultado era a meia-noite do dia do
+vencimento — **1.572 de 1.670 labels (94%)** às 00:00:00 exatas, mediana **16 h**
+adiantados (p90 20 h). E `calibration.ts` filtra a evidência com
+`AND e.decision_ts < l.publicly_knowable_ts`:
+
+| Conjunto                                        | Antes            | Depois (medido em produção) |
+| ------------------------------------------------- | ---------------- | --------------------------- |
+| Estimativas `MODEL` com label final, pontuáveis  | 36.212 de 74.412 | **74.412 de 74.412**        |
+| Estimativas na **última hora de vida** do mercado | **0 de 8.063**   | **8.063 de 8.063**          |
+| Labels com `publicly_knowable_ts` à meia-noite    | 1.572 de 1.670   | **48 de 1.672** (2,9%)      |
+
+**Zero de 8.063.** A cadência de 10 s decidida pelo proprietário em 22/08 existe
+para produzir exatamente essas estimativas, e cem por cento delas eram
+descartadas antes de virar evidência. **É o mecanismo por trás do bloqueio "o
+gate da RFC-010 não tem como acumular evidência" que este handoff carregava
+desde 20/08.** Os 48 que restaram à meia-noite são meia-noite de verdade
+(conferido: "Bitcoin Up or Down - August 21, 4:00PM-8:00PM ET" termina às
+2026-08-22T00:00:00Z).
+
+Defeito secundário, no paper: `paper/runner.ts` calculava `endDate - now` do
+date-only, o que dá **negativo** quase o dia todo, e negativo satisfazia o teste
+`<= 1 h` de `windowKindsForHorizon` — o token recebia o conjunto de janelas mais
+**caro**, não o mais barato.
+
+| Janelas de feature                                    | 6 h antes do deploy       | Depois do deploy |
+| ------------------------------------------------------ | ------------------------- | ---------------- |
+| `10s`                                                 | 86.509                    | 14               |
+| `1s`                                                  | 12.980                    | 2                |
+| `1m`                                                  | 44.170                    | 1.710            |
+| Fração das `10s` em mercado com horizonte real > 6 h  | **75%** (63.951 de 84.772) | **0 de 14**      |
+| Fração das `1s` idem                                  | **38%** (3.936 de 10.481)  | **0 de 2**       |
+
+### O que foi entregue (PR #66, merge 2026-08-31 23:4xZ)
+
+- **Migration 0017 (aditiva, aplicada pelo CD):** `polymarket_markets.end_ts
+  TIMESTAMPTZ` nullable, **sem backfill** — preenchida conforme a Gamma
+  re-observa, o padrão do `questionID` da RFC-012 — mais um índice parcial
+  `WHERE end_ts IS NOT NULL`.
+- **Captura nos DOIS call sites** (lição do PR #49): o ciclo do registro e a
+  varredura de pendentes, do mesmo payload. A varredura usa
+  `applyMarketEndTsObservation`, uma escrita estreita que **nunca apaga** um
+  instante conhecido, **nunca cria** linha, e **não dispara** o gatilho de
+  captura de metadata da 0012 — verificado contra PostgreSQL real (1 versão
+  antes, 1 depois de dois UPDATEs; e 1→2 ao mudar `question`, provando que o
+  gatilho continua vigiando o que deve).
+- **Duas ordens explícitas de resolução do horizonte.** As-of
+  (`rule.end_date → end_ts → end_date_iso`): a regra versionada sempre ganha,
+  porque `end_ts` é mutável in place e não sabe dizer o que valia no instante da
+  decisão. Corrente (`end_ts → rule.end_date → end_date_iso`): para o label
+  store, o paper e os payloads de leitura. **O fallback para a regra versionada
+  é o que consertou o acervo histórico sem nenhum UPDATE retroativo** — os
+  74.412 viraram evidência no dia do deploy porque todo mercado resolvido tem
+  versão de regra, mesmo sem `end_ts`.
+- **Cap do universo:** a série curta estava em prioridade **3 de 4** — o
+  universo rápido era a primeira coisa a ser cortada quando o cap mordesse. Um
+  updown dentro de 6 h sobe para 2, e **25 dos 100 slots** ficam reservados a
+  mercados curtos, ordenados por quem vence antes; a reserva é oportunista e
+  devolve à fila geral o que não usa. O motivo do `enter` passou a carregar o
+  bucket de horizonte.
+- **`end_ts` exposto** em `/polymarket/opportunities`,
+  `/polymarket/resolution-risk` e no payload de mercado do read API, para a
+  futura aba "Rápidos" da RFC-015. Sem location novo no Nginx.
+
+### Fora do escopo original, com o motivo medido (aprovado pelo proprietário em 31/08)
+
+- **`end_ts` NÃO entra em `polymarket_market_metadata_versions`.** O histórico
+  as-of desse fato **já existe e está correto** em
+  `polymarket_rule_versions.end_date`: versionada, com hash de conteúdo
+  normativo (uma mudança de `endDate` abre versão nova por construção) e trigger
+  append-only. É onde o `endDate` semanticamente mora — faz parte das regras de
+  resolução, junto de `uma_end_date` e `custom_liveness`. Duplicar criaria
+  **duas cadeias as-of para o mesmo fato**, e um backtest que lesse a errada
+  produziria um horizonte divergente do que o estimador usou, sem como saber
+  qual estava certo.
+- **`event_start_ts` não foi criado.** `eventStartTime` vem `null` em 100/100
+  mercados crypto medidos, e `gameStartTime` também. Coluna que a fonte nunca
+  preenche é peso morto.
+
+### VOLUMETRIA: o teto apertou, o piso não se moveu
+
+O `MEASURED_ROW_SHARE` do `budget.test.ts` era de 22/08 e descrevia um universo
+que não existe mais. Re-medido em 31/08 (48 h, amostra horária, horizonte as-of
+pela versão de regra em vigor naquela hora, ponderado por tokens):
+
+| Bucket   | Modelo de 22/08 | Medido em 31/08 |
+| -------- | --------------- | --------------- |
+| `lt_1h`  | 0,3%            | **6,32%**       |
+| `1h_6h`  | 2,8%            | **9,55%**       |
+| `6h_24h` | 7,4%            | **31,95%**      |
+| `1d_7d`  | 14,5%           | **31,10%**      |
+| `gt_7d`  | **75,0%**       | **21,08%**      |
+
+Consequência: o **teto modelado** (200 tokens, todo token rendendo linha a cada
+período de cadência, mais shadow) sobe de ~47 k para **~170 k linhas/dia**, e a
+quota de 2 GB compra **6,2 dias** nele em vez dos ~24 que o modelo antigo
+prometia. A **taxa realmente escrita** era de 20.818 linhas nas 24 h anteriores
+ao deploy, e nessa taxa a mesma quota compra **~100 dias**.
+
+**DECISÃO DO PROPRIETÁRIO (2026-08-31), consultado com os dois números:** manter
+a quota em **2 GB** e tornar o teste honesto. O `budget.test.ts` passou a
+assertar a **INVARIANTE** (`horizonte + 27 h` = 1,125 dia) sobre o **teto** — o
+número mais pessimista disponível, que a clareia por **5,5×** — e a margem de
+**7×** sobre a **taxa medida em produção**, que é onde a decisão de quota de
+24/08 sempre a mediu. Também caiu a asserção "corta 4× versus a cadência plana",
+que não vale mais (o corte real é ~1,7×, porque o universo migrou para
+horizontes curtos), substituída pela que de fato importa: **mais de 75% das
+linhas caem em `lt_1h`/`1h_6h`**, onde uma estimativa ainda pode virar
+evidência, e menos de 5% na cauda `gt_7d`. **Nada em `RETENTION_TABLES` foi
+tocado** — quota 2 GB, TTL 90 dias.
+
+### Deploy e verificação em produção
+
+**Os três passos, completos.** Merge do #66 → CD verde (que aplicou a migration:
+`schema_versions` foi a **17** sozinha) → rebuild de profile em
+`polymarket-recorder`, `-estimator`, `-paper`, `-portfolio` e `-resolution` às
+**2026-08-31 23:57:35Z**. Todos os **seis** containers em
+`/etc/ganso/release-sha` = `4bae1b92a1ffb8d9a2910470ccee3a8e1881161d`.
+
+| Critério de aceite                                     | Medido em produção                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------------------- |
+| `end_ts` preenchida nos membros do universo            | **87 de 87 (100%)**, 81 com hora intradia; as 973 linhas obsoletas de mercados fora do universo seguem NULL, como o desenho prospectivo manda |
+| Membros com fim real no passado                        | **2 de 87** — os que acabaram de vencer e ainda não passaram pelo ciclo de saída (era 1 de 83 antes) |
+| Distribuição de horizonte pelo `end_ts`                | 3 em `< 1 h`, 29 em `1h–6h`, 17 em `6h–24h`, 27 em `1d–7d`, 16 em `> 7d` |
+| Labels com knowable_ts à meia-noite                    | **94% → 2,9%** (1.572/1.670 → 48/1.672), e os 48 são meia-noite real  |
+| Estimativas MODEL pontuáveis                           | **36.212 → 74.412** (100%)                                            |
+| Estimativas da última hora de vida, pontuáveis         | **0 → 8.063** (100%)                                                  |
+| Gap de estimativa na última hora de vida               | **10,0 s** (o mercado das 00:00Z)                                     |
+| Janelas `1s`/`10s` em mercado de horizonte real > 6 h  | **75% / 38% → 0 de 14 / 0 de 2**                                      |
+| Erros novos (recorder, estimator, paper, portfolio, resolution, api) | **0 em todos os seis**, acumulado em 37 min             |
+| Bucket de horizonte no motivo do `enter`               | **`priority_2_crypto_1d_7d`** às 00:27:46Z                            |
+| RAM                                                    | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
+
+**Taxa de volume — medida curta, a re-medir.** Nos primeiros 21,6 min pós-deploy
+foram 443 linhas, o que projeta **~29,5 k/dia** contra as 20.818 das 24 h
+anteriores. **A janela é curta e enviesada**: ela contém o vencimento das 00:00Z
+de vários updown horários, que é justamente o pico do bucket de 10 s. Mesmo
+tomando a projeção pelo valor de face, a quota de 2 GB compraria ~71 dias, 63×
+o piso de 27 h; `fundamental_estimates` está em 911 MB (44,5% da quota).
+**Re-medir a taxa em 48 h** e comparar com o modelo do `budget.test.ts`.
+
+**Carimbo do bucket confirmado às 00:27:46Z**, no primeiro `enter` posterior ao
+rebuild (a Gamma levou meia hora para publicar mercado novo):
+`priority_2_crypto_1d_7d`, em dois mercados. O giro por bucket passa a ser
+legível direto do log de membresia.
+
+**Observação de retenção, não regressão:** `paper_feature_windows` continua em
+1095 MB contra uma quota de 0,6 GB (178%), e a poda por quota bate no piso
+(`RETENTION_QUOTA_NO_PROGRESS`, cutoff = floor). Isso é **anterior** a esta RFC;
+o que ela fez foi fechar a torneira — a taxa de janelas finas caiu ~380× —,
+então a expectativa é que a tabela desça abaixo da quota conforme o acervo
+envelhece. **Verificar em 48 h**; se não descer, é decisão de quota do
+proprietário.
+
+Evidência completa em
+[`docs/test-results/RFC-016-intraday-horizon.md`](test-results/RFC-016-intraday-horizon.md);
+o documento em [`docs/rfcs/RFC-016-polymarket-intraday-horizon.md`](rfcs/RFC-016-polymarket-intraday-horizon.md).
 
 
 ## Próximo passo mínimo

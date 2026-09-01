@@ -1,6 +1,6 @@
 # RFC-016 — Polymarket: horizonte intradia e universo rápido
 
-**Status:** accepted
+**Status:** implemented (2026-08-31 23:57:35Z, PR #66 — evidência em [`docs/test-results/RFC-016-intraday-horizon.md`](../test-results/RFC-016-intraday-horizon.md))
 **Dependências:** RFC-007 (registro de universo e versionamento de regras, ativos), RFC-010 (modelo fundamental, label store e gate, ativos), RFC-011 (paper features, código completo), RFC-012 (risco de resolução, ativa)
 **Habilita:** a evidência que o gate da RFC-010 nunca conseguiu acumular; a aba "Rápidos" da RFC-015 (só o dado, sem UI)
 
