@@ -868,13 +868,14 @@ function json(value: unknown): unknown {
   return typeof value === "string" ? (JSON.parse(value) as unknown) : value;
 }
 
-/** The newest decisions, in the shape the replay reads. */
-export async function loadRecentDecisions(
-  pool: PortfolioPool,
-  limit: number,
-): Promise<PersistedDecision[]> {
-  const result = await pool.query<Record<string, unknown>>(
-    `SELECT decision_id, decision_kind, condition_id, token_id, market_side,
+/**
+ * Every column the replay needs, named once.
+ *
+ * The RFC-017 sweep reads the same rows through a keyset cursor rather than a
+ * `LIMIT`, and a second column list would be a second place for the two to drift
+ * apart — the same reason `decisionrow.ts` has exactly one row builder.
+ */
+export const DECISION_COLUMNS = `decision_id, decision_kind, condition_id, token_id, market_side,
             order_side, decision_ts, q, q_lo, q_hi, estimate_source,
             exec_price, worst_price, best_price, fee_expected, slippage,
             capital_cost, resolution_buffer, costs_total, safety_margin,
@@ -883,13 +884,13 @@ export async function loadRecentDecisions(
             factor_map_version, rule_version, param_version,
             resolution_score_version, resolution_action, oldest_input_ts,
             newest_input_ts, book_json, inputs_json, outcome, reason_code,
-            portfolio_state
-       FROM portfolio_decisions
-      ORDER BY decision_id DESC
-      LIMIT $1`,
-    [limit],
-  );
-  return result.rows.map((row) => ({
+            portfolio_state`;
+
+/** One `portfolio_decisions` row, in the shape the replay reads. */
+export function decisionFromRow(
+  row: Record<string, unknown>,
+): PersistedDecision {
+  return {
     decisionId: Number(row.decision_id ?? 0),
     decisionKind: decisionKind(row.decision_kind),
     conditionId: String(row.condition_id ?? ""),
@@ -942,7 +943,22 @@ export async function loadRecentDecisions(
     outcome: String(row.outcome ?? ""),
     reasonCode: text(row.reason_code),
     portfolioState: stateName(row.portfolio_state),
-  }));
+  };
+}
+
+/** The newest decisions, in the shape the replay reads. */
+export async function loadRecentDecisions(
+  pool: PortfolioPool,
+  limit: number,
+): Promise<PersistedDecision[]> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT ${DECISION_COLUMNS}
+       FROM portfolio_decisions
+      ORDER BY decision_id DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return result.rows.map(decisionFromRow);
 }
 
 /**
