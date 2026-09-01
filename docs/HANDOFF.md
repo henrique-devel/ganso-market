@@ -1,7 +1,17 @@
 # Handoff do projeto Ganso Market
 
 - Última atualização: 2026-09-01 — **RFC-014 + RFC-019: o modelo deixa de calar
-  em barreira e updown (PR #70)**. A categoria crypto estava em **31,9%** de
+  em barreira e updown (PR #70), DEPLOYADA E VERIFICADA EM PRODUÇÃO às
+  12:15:51Z** (`/etc/ganso/release-sha` no container do estimator =
+  `c8327a86`, era `4bae1b92`). A `crypto_updown_gbm@1.1.0` nasceu em `shadow`
+  no boot e cobre agora **todo mercado BTC com livro válido e forma
+  reconhecida**: barreira **0 → 18 de 18**, updown **0 → 1 de 1**, terminal
+  **14 = 14** (contagens idênticas às da 1.0.0 — zero regressão medida em
+  produção, não só em teste). Cobertura do universo **14 → 33 mercados
+  (2,36×)**; os descobertos são exatamente os previstos (não-BTC sem feed e as
+  recusas deliberadas). Consumidor 100% em `MARKET_BASELINE`/`MODEL_IN_SHADOW`
+  (1.603 linhas), zero erros nos seis serviços, 142 ciclos, RAM 37,45 MiB de
+  192. A categoria crypto estava em **31,9%** de
   cobertura (36 de 113 mercados com linha MODEL em 24 h) porque o modelo recusa,
   corretamente, tudo que não é terminal: **barreira 0 de 51, updown 0 de 13**.
   As duas formas entram como **uma** versão nova da mesma família —
@@ -94,8 +104,10 @@
   autorização)
 - Branch principal: `main`
 - RFC-016: **implementada e ativa em produção** desde 2026-08-31 23:57:35Z (migration 0017)
-- RFC-014 + RFC-019: **código completo (2026-09-01, PR #70)**, `crypto_updown_gbm@1.1.0`
-  em `shadow` ao lado da 1.0.0; deploy e verificação em produção na mesma sessão
+- RFC-014 + RFC-019: **ativas em produção** desde 2026-09-01 12:15:51Z (PR #70,
+  sem migration); `crypto_updown_gbm@1.1.0` em `shadow` ao lado da 1.0.0, nenhuma
+  promovida. Próximo marco: o relatório diário materializar `formSlices` e
+  `coverage_by_form`, e o N=100 da 1.1.0 acumular (~52 mercados/dia nas formas novas)
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
   migration 0014 aplicada em produção e **nunca alterada** desde então

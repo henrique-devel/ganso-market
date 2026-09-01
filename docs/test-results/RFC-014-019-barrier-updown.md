@@ -162,9 +162,82 @@ crypto, 2026-09-01, todos os endurecimentos acima aplicados):
 As três recusas restantes estão certas: `STRC` (ativo sem feed gravado), o
 updown de faixa 4–8 AM (payoff asiático) e um `between`.
 
-## 5. Verificação em produção
+## 5. Verificação em produção (2026-09-01, deploy em três passos)
 
-(preenchida após merge → CD → rebuild do `polymarket-estimator`)
+1. **Merge** do PR #70 (`c8327a86`), CI verde nos dois gates
+   (`Verify source`, `Verify Compose runtime`).
+2. **CD** verde em `c8327a86`; `deploy/release-sha` no servidor =
+   `c8327a86bb280351afaccc39938c1bb094d740a9`.
+3. **Rebuild do `polymarket-estimator`** (obrigatório — o modelo roda nele):
+   `docker compose --env-file deploy/server.env --profile polymarket up --build --detach polymarket-estimator`.
+   Evidência de revisão **dentro do container** (nunca `compose ps`):
+   `/etc/ganso/release-sha` = `c8327a86…` (era `4bae1b92…`, a imagem da
+   RFC-016).
+
+**Boot (12:15:51Z):** `MODEL_REGISTERED` de `crypto_updown_gbm@1.1.0` com
+`status: shadow` — e só ela; a 1.0.0 e a macro seguem registradas e
+inalteradas (`git_sha` `c055da33` de 2026-08-20; `promoted_at` nulo nas três).
+
+**Cobertura por forma, medida SOMENTE no período pós-restart** (membros do
+universo crypto; "com livro válido" = recebeu alguma linha, já que estimativa
+ausente não grava linha por desenho):
+
+| Forma | Ativo | Membros | Com livro válido | Cobertos pela 1.0.0 | Cobertos pela 1.1.0 |
+| ----- | ----- | ------- | ---------------- | ------------------- | ------------------- |
+| barreira | BTC | 19 | 18 | **0** | **18** |
+| barreira | não-BTC | 5 | 4 | 0 | 0 |
+| terminal | BTC | 21 | 14 | 14 | **14** |
+| terminal | não-BTC | 6 | 5 | 0 | 0 |
+| updown | BTC | 2 | 1 | **0** | **1** |
+| updown | não-BTC | 1 | 1 | 0 | 0 |
+| recusada | BTC | 1 | 1 | 0 | 0 |
+
+**Todo mercado BTC com livro válido e forma reconhecida está coberto.** Os
+descobertos são exatamente os previstos: não-BTC (o RTDS não entrega o feed) e
+as recusas deliberadas (`between`; o updown de faixa 4–8 AM é o membro sem
+livro válido da linha updown/BTC). Cobertura do universo: **14 → 33 mercados
+(2,36×)**.
+
+**Zero regressão medida em produção, não só em teste:** no mesmo período a
+1.0.0 escreveu **627 linhas em 14 mercados** e a 1.1.0 escreveu **627 linhas
+nos mesmos 14 mercados** terminais — contagens idênticas —, mais 203 linhas de
+barreira (19 mercados) e 134 de updown (1 mercado).
+
+**Amostras com a proveniência que a RFC exige** (`data_refs`):
+
+| Forma | Pergunta | Strike | Direção | Toque | Buckets varridos | Idade do strike | q | mercado |
+| ----- | -------- | ------ | ------- | ----- | ---------------- | --------------- | - | ------- |
+| updown | Bitcoin Up or Down on September 1? | **78552,4886** (feed na abertura) | up | — | — | **2000 ms** | 0,0859 | 0,1145 |
+| barreira | dip to $74,000 August 31–Sept 6 | 74000 | touch_down | false | 1187 | — | 0,6723 | 0,7750 |
+| barreira | reach $80,000 August 31–Sept 6 | 80000 | touch_up | false | 1187 | — | 0,4163 | 0,5350 |
+| barreira | dip to $75,000 on September 1 | 75000 | touch_down | false | **415** | — | 0,9705 | 0,9652 |
+| barreira | reach $85,000 in September | 85000 | touch_up | false | 415 | — | 0,4505 | 0,3798 |
+| barreira | dip to $35,000 by December 31 | 35000 | touch_down | false | 1187 | — | 0,0010 | 0,0450 |
+
+O strike do updown é o feed **2 s antes da abertura da janela** — as-of, dentro
+do teto de 5 min, e é o número que a RFC-019 exige que seja reproduzível das
+refs. As varreduras de 1187 buckets (janelas de vários dias) e 415 (famílias
+"on <data>"/"in <mês>") mostram o piso por família funcionando. Os pares
+complementares somam 1 exatamente (0,6723/0,3277; 0,4163/0,5837;
+0,0010/0,9990), confirmando o complemento do segundo token nas formas novas.
+
+**Invariantes conferidas em produção:**
+
+- Consumidor: **1.603 linhas, todas `MARKET_BASELINE` com
+  `MODEL_IN_SHADOW`** — nenhuma promoção acidental, nenhum modelo servindo.
+- **Zero erros** nos seis serviços na hora seguinte ao rebuild (estimator,
+  recorder, resolution, paper, portfolio, api).
+- **142 ciclos** do estimator, zero falha de token.
+- **RAM do estimator: 37,45 MiB de 192 MiB (19,5%)** — dentro do limite, já
+  com a segunda versão em shadow rodando a cada ciclo (eram 29,81 MiB com uma
+  só).
+
+**O que ainda não aconteceu, e por quê:** o próximo relatório de calibração
+(job diário) é que vai materializar `formSlices` e `coverage_by_form` com as
+formas novas, e o N=100 da 1.1.0 começa a contar agora que ela estima —
+labels das formas novas resolvem a ~52 mercados/dia. O primeiro veredito com
+dados dela pode perfeitamente ser `NO_EVIDENCE_OF_ALPHA`; isso é o desenho do
+projeto funcionando, não falha da entrega.
 
 ## Não verificado
 
