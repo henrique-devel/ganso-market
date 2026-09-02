@@ -3359,3 +3359,139 @@ fechou no `paper/runner.ts` no mesmo dia.
   nenhum cap pode ser o binding constraint, o de fonte de resolução inclusive.
   O que a chave nova faria com o campo só aparece quando o livro voltar a
   dimensionar entradas. Não é regressão: é a mesma população de antes.
+
+## SESSÃO 2026-09-02 — REDECLARAÇÃO CONSCIENTE DA QUOTA DE `book_deltas` (PR da decisão)
+
+A decisão de 28/08 era redeclarar a quota **com dado**, não deixar o alarme
+decidir. A série pós-repack foi completada e a decisão foi tomada. **O número
+não mudou — o que ele compra mudou por um fator de ~4.**
+
+### Medição em produção (somente leitura, 2026-09-02 02:05–02:35Z)
+
+| Grandeza | Medido |
+| --- | --- |
+| `book_deltas` vivo | **35,174 GiB** / 120.407.970 linhas |
+| `book_deltas` físico | 35,82 GiB, `n_dead_tup = 0` (sem bloat) |
+| Custo por linha | **313,67 B vivos** (heap 119 + 28 de tupla + (102 + 3×16)/0,9 de índice); o arquivo concorda em ~319 B/linha |
+| Janela retida | 2026-08-20 01:26:41Z → **12,99 dias** |
+| Última poda de `book_deltas` | **2026-08-28 10:28Z** — nenhuma desde então |
+| Global (61 tabelas de retenção) | 51,72 GiB vivos / 58,48 GiB físicos, contra gatilho de 99 GiB |
+| Disco do host | 64 G / 301 G (22%) |
+
+**Linhas/dia (UTC), a série completa:** 20/08 542.416 (parcial, borda de poda) ·
+21/08 4.308.116 · 22/08 4.695.202 · 23/08 2.008.609 · 24/08 4.871.448 ·
+25/08 7.017.169 · 26/08 13.208.278 · 27/08 12.839.312 · 28/08 24.463.878 ·
+29/08 10.523.066 · 30/08 9.782.842 · 31/08 9.433.124 · 01/09 15.588.234 ·
+02/09 1.122.716 (parcial). Médias: **11,33 M/dia** (pós-repack, 29/08–01/09),
+**13,69 M/dia** (7 dias), **15,59 M/dia** (dia mais movimentado, 01/09) —
+ou **3,31 / 4,00 / 4,55 GiB/dia vivos**. Físico: 19 GiB (28/08 21:06Z) →
+28 (31/08 13:20Z) → 35,82 (02/09 02:05Z).
+
+**A premissa de "~3,3 GB/dia" do prompt só vale para a fatia 29–31/08.** A série
+inteira é mais alta e muito variável (9,4 M a 15,6 M linhas/dia em dias normais).
+E o achado que reenquadra tudo: **os ~15,3 GB/dia que justificaram os 52 GiB em
+25/08 eram uma taxa INCHADA**. A linha custa 313,67 B; o pré-repack estava ~4×
+inflado por tuplas mortas e bloat de índice, não por dado.
+
+### Janela retida por token
+
+827 tokens têm deltas (o registro tem 2.336). Janela por token: **mín 0,00 d,
+mediana 0,59 d, máx 12,87 d**. **467 dos 827 (56,5%) não produzem delta há mais
+de 24 h e seguram 63.541.217 linhas = 18,56 GiB = 52,8% da tabela**; os 360
+ativos seguram 56.863.201 linhas (16,61 GiB). O token mais pesado sozinho tem
+8.047.625 linhas (~2,4 GiB); os três maiores somam 19,3% da tabela.
+
+### A cauda coverage-gated: a poda está TRAVADA (achado fora do escopo, PR separado)
+
+Simulando o gate (`coverageCutoffForToken`) num corte de 7 dias: **161 de 161
+tokens bloqueados, todos presos no PRÓPRIO minuto mais antigo, 0 linhas
+liberáveis**, 24.684.160 linhas (7,21 GiB) retidas pelo gate.
+
+A cobertura real é **99,917%** — só **223 minutos descobertos em 267.635**. 119
+dos 161 tokens têm exatamente UM buraco (média 1,39, máximo 4). Tolerar o minuto
+de borda de cada token avançaria a poda em **62,3 h em média** e liberaria
+**24.092.606 linhas (7,04 GiB)** — 97,6% do que está bloqueado. **0,08% de
+defeito de cobertura bloqueia 100% da poda.**
+
+**Controle positivo (o mecanismo, não a correlação):** o token mais pesado tem
+`series_1m` desde 20/08 01:13 mas deltas só desde **23/08 14:45** — e 14:45 é
+justamente um dos 3 minutos descobertos dele (11.249 de 11.252 cobertos). Isso
+prova que a poda rodou, parou EXATAMENTE num minuto descoberto, e esse minuto
+virou o mais antigo. **O gate se auto-trava**: ele para no primeiro buraco, o
+buraco vira a borda, e toda execução seguinte recalcula a mesma borda e apaga
+zero. `bucket_start` usa o mesmo relógio de ingestão que `received_at`
+(`bookpipe.ts`), então os buracos são corridas raras de borda de minuto — não um
+artefato de chaveamento.
+
+**Consequência datada:** o TTL de 14 dias começa a morder em ~2026-09-03 01:26Z
+e vai pedir exclusão e apagar **zero**. A tabela cresce sem poda até o alarme
+global (99 GiB vivos), cujo único gatilho é reduzir TTL — que também não apaga
+nada. Tratado em PR separado por decisão do proprietário.
+
+### Tabela de opções APRESENTADA ao proprietário (verbatim)
+
+| Quota | Dias retidos (11,33 / 13,69 / 15,59 M linhas/dia) | % do orçamento | Folga até o gatilho | Efeito nos consumidores | Custo/risco |
+| --- | --- | --- | --- | --- | --- |
+| 32 GiB (~7 dias) | 9,7 / 8,0 / 7,0 | 29,1% de 110 GiB | 24,0 GiB | replay cai para ~1 semana; paper, G4 e RFC-013 intactos | joga fora 20 GiB de janela num disco 78% livre e força a poda a rodar justamente enquanto ela está travada |
+| **52 GiB (manter)** | **15,7 / 13,0 / 11,4** | **47,3%** | **4,0 GiB** | replay ~13 dias; nada mais muda | nenhum; a quota passa a encostar no TTL de 14 dias |
+| 55 GiB (teto sem mexer no orçamento) | 16,6 / 13,8 / 12,1 | 50,0% | 1,0 GiB | +0,8 dia de replay | queima 3 dos 4 GiB de folga do gatilho por menos de um dia |
+| 64 GiB + orçamento 110 → 124 GiB | 19,3 / 16,0 / 14,1 | 51,6% de 124 GiB | 4,6 GiB (gatilho 111,6) | o TTL de 14 dias passa a ser o limite real | exige mover o orçamento global junto e redeclarar o alarme; ganho real de 1 a 3 dias |
+
+**Efeito nos consumidores, medido no código, não estimado:** o paper lê uma
+janela de features de **31 minutos** (`featurestore.ts`), então nenhuma opção
+afeta a operação viva. O **G4 não depende da janela**: `broker.ts` persiste o
+`consumedSlice` dentro do evento de fill exatamente para que "o replay do ledger
+sobreviva ao TTL do `book_deltas`". A RFC-013 lê o livro corrente. **O único
+consumidor que escala com a quota é o replay cru (RFC-007)** — pesquisa e
+auditoria, não operação. As âncoras (`book_snapshots_full`, 30 d) e os
+agregados de 1 min (`series_1m`, 0,86 GiB de 10 GiB) são independentes e
+sobrevivem à poda dos deltas.
+
+**Recomendação dada: manter 52 GiB** — o número foi declarado valendo 3,4 dias e
+hoje entrega ~13, a 8% do TTL de 14 dias que já estava declarado; nada
+operacional lê além de 31 minutos; e os 4 GiB de folga que sobram até o gatilho
+valem mais do que o ~1 dia que uma subida compraria.
+
+### DECISÃO DO PROPRIETÁRIO (2026-09-02 02:35Z, registrada)
+
+1. **Quota de `book_deltas`: MANTIDA em 52 GiB**, redeclarada conscientemente
+   com a série medida acima. O valor não muda; o racional que o acompanha no
+   código muda inteiro, porque o antigo ("a quota morde em ~3,4 dias") é falso.
+2. **Decidir agora, com 4,2 dos 7 dias.** A janela decidida em 28/08 fechava em
+   **2026-09-04 21:06Z** e **faltavam 2 d 19 h**; o proprietário dispensou a
+   espera com a série já na mesa. Registrado porque a decisão de 28/08 pedia a
+   semana inteira: o intervalo de dias retidos (11,4 a 15,7) é largo justamente
+   porque a variância entre dias é alta.
+3. **A trava do gate de cobertura vai em PR separado**, com re-medição e teste
+   de regressão próprios — não misturada com a redeclaração do número.
+
+### Invariante
+
+Soma declarada **95 GiB** < gatilho **99 GiB** (0,9 × 110 GiB), inalterada. O
+teste ganhou o teto medido: a soma de todas as quotas **exceto** os deltas é
+43 GiB, logo o teto dos deltas é **56 GiB exclusivo** — em 56 GiB a soma fica em
+106.300.440.576 B, exatamente igual ao gatilho, e a comparação estrita reprova
+(verificado com controle negativo). A asserção foi escrita como
+`gatilho − demais` de propósito: na forma `deltas + (gatilho − declarado)` ela
+seria algebricamente constante e nunca poderia falhar — a mesma degeneração de
+"passa porque não há com o que comparar" que este arquivo já catalogou.
+
+### Incidente ao vivo durante a medição (fora do escopo, não tocado)
+
+O feed de deltas **parou em ~01:59Z e seguia parado às 02:31Z**: 18 linhas em
+10 minutos contra ~104.000 esperadas, com `openConnections: 2`,
+`reconnects: [0,0]` e `messagesForwarded: 14` — conexões vivas, stream mudo. Os
+snapshots continuam fluindo (`fullSnapshots: 1057`). **Dois restarts não
+resolveram** (o recreate do Compose às 01:59Z e o CD do #87 às 02:08Z). O kill
+switch do paper engatou às **02:21:05Z** (`RECORDER_STALE`,
+`orders_canceled: 0`) — o gatilho automático funcionando como projetado. É a
+classe já registrada no #78 ("o defeito real é o silêncio, não a parada").
+
+**Recuperou sozinho, ~2 h depois, sem intervenção** — a mesma assinatura do #78.
+Linhas por hora, medidas depois: 01:00 **488.218** (saudável) · 02:00 **152** ·
+03:00 **58** · 04:00 **19.784** (recuperando) · 05:00 386.678 · 06:00 508.398 ·
+07:00 476.446 · 08:00 592.760 · 09:00 634.192. Parada de ~01:59Z a ~04:00Z,
+~1 M linhas perdidas. O ritmo pós-recuperação (~500–630 mil/hora ≈ 13 M/dia)
+cai **dentro** da faixa que a decisão usou, o que é a confirmação que importa:
+a escolha não dependeu do período parado. **Efeito na medição:** as taxas da
+série são um piso, não um teto — o dia 02/09 carrega duas horas de buraco.
