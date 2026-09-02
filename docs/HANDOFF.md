@@ -3135,16 +3135,22 @@ assinatura `veredito | reason_code | binding constraint` mudaria **26 256** veze
 
 **Fator VERIFICADO em produção** depois do rebuild (01:15Z):
 
-| Fase                                   | Linhas/minuto |
-| -------------------------------------- | ------------- |
-| antes (00:20–01:14Z)                   | **91,3**      |
-| depois, com os minutos de restart      | 12,4          |
-| depois, em regime (01:20Z em diante)   | **11,1**      |
-| **redução real, em regime**            | **8,2×**      |
+| Janela                                  | Decisões/min | Fator vs 91,3 |
+| --------------------------------------- | ------------ | ------------- |
+| antes (00:20–01:14Z)                    | **91,3**     | —             |
+| depois, incluindo os minutos de restart | 12,4         | 7,4×          |
+| em regime, 9 min (01:20–01:29Z)         | 11,1         | 8,2×          |
+| em regime, 19 min (01:20–01:39Z)        | 9,9          | 9,2×          |
+| em regime, 29 min (01:20–01:49Z)        | **6,9**      | **13,1×**     |
 
-O 8,2× medido em produção bate com o **8,6×** previsto do log histórico. A
-diferença são os primeiros minutos depois do restart, em que todo token cuja
-última linha não casava a assinatura conta como primeira avaliação e escreve.
+**O número ainda está assentando, e para cima.** Os primeiros minutos depois do
+restart contam como primeira avaliação todo token cuja última linha não casava a
+assinatura, e essa onda vai saindo da janela. O 8,6× previsto do log histórico é
+o piso conservador — sobre 2,17 dias inteiros, não sobre meia hora. **A medição
+que vale é a de 24 h**, e ela é item de soak (abaixo).
+
+O painel segue em **94,4 linhas/min** na mesma janela (a queda desde 100,7 é
+rotatividade do universo, não a mudança).
 
 O painel **mantém a cadência**: 100,7 linhas/minuto depois do deploy, como
 desenhado — ele é a vista viva, e quem emagreceu foi o log.
@@ -3305,6 +3311,15 @@ ciclo, nunca a tabela. **Verificado em produção às 01:26:42Z:** as 14 linhas 
 tabela têm todas o mesmo `computed_at` e `resolution_source` só tem as duas
 famílias de cláusula.
 
+### `entryProvenanceFor` continua íntegro
+
+O critério que motivou o item 1 inteiro. Verificado depois do deploy:
+`portfolio_position_entries` (tabela `protected`, imutável por trigger, nunca
+podada) tem **18 entradas carimbadas**, e as **duas** posições abertas têm
+provenance. A poda do decision log não alcança essa tabela, então os quatro
+critérios de saída que dependiam dela não voltam a ficar cegos — e agora o log
+por trás deles também dura mais.
+
 ### Zero regressão nos gates
 
 6 medições/hora mantidas (as contagens de 24 e 42 são os ciclos de boot dos
@@ -3321,5 +3336,13 @@ restarts), os seis gates com o mesmo veredito de antes
 - **Posição em mercado liquidado sem `resolved_at`:** `0x71b5721c…` settled em
   01/09 16:14Z, saiu do universo 16:26Z, e segue com 8,11 shares e `resolved_at`
   NULL em `paper_positions`. Fora do escopo desta sessão; é caminho da RFC-011.
-- **Soak do item 1:** a janela retida do decision log deve crescer na direção de
-  ~19 dias ao longo dos próximos dias. Re-medir em 48 h.
+- **Soak do item 1:** a janela retida do decision log era 2,23 dias às 01:40Z e
+  deve crescer na direção de ~19 dias conforme a poda por quota rodar sobre a
+  cadência nova. **Re-medir a taxa sobre 24 h** — meia hora não fecha o número —
+  e a janela retida em 48 h.
+- **`binding_constraint` diversificado não é verificável hoje.** O critério de
+  verificação do escopo pedia isso, e as 187 decisões da janela pós-deploy são
+  **100% `NOT_SIZED`**: com `entrable: 0` nenhuma entrada chega ao sizing, então
+  nenhum cap pode ser o binding constraint, o de fonte de resolução inclusive.
+  O que a chave nova faria com o campo só aparece quando o livro voltar a
+  dimensionar entradas. Não é regressão: é a mesma população de antes.
