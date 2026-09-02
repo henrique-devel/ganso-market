@@ -272,6 +272,20 @@ de 0,54 GB sustenta com folga no pior caso. Nenhuma quota nova é inventada; o
 consumidor único é a API, que lê `DISTINCT ON (token_id) … ORDER BY computed_at
 DESC` e o detalhe com `LIMIT 1`.
 
+Diferença que vale registrar: a cadência do painel **não** cai com o item 1. Ele
+é a vista viva, uma linha por mercado por ciclo, e continua assim de propósito —
+por isso o decision log ganha janela (~19 dias) e o painel não.
+
+**`FEATURES_WINDOW_FAILED`, re-medido:** continua sem mensagem
+(`paper/runner.ts`, só `error_name`). Zero ocorrências nas últimas 24 h de
+produção, então o defeito é latente — e é exatamente a forma que o projeto já
+pagou duas vezes: quando ele disparar, o log dirá `error_name: "Error"` e o
+diagnóstico começará do zero. O padrão do #37 (`error_message` com a mensagem
+real) é aplicado aos **quatro** sítios do mesmo arquivo que estavam nus —
+`PAPER_HEARTBEAT_FAILED`, `FEATURES_WINDOW_FAILED`, `FEATURES_TICK_FAILED` e
+`PAPER_BROKER_TICK_FAILED`: corrigir só o nomeado deixaria o mesmo ponto cego
+duas funções adiante.
+
 ---
 
 ## Escopo, em PRs

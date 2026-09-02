@@ -203,6 +203,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       // The heartbeat reports health; it never kills the process.
       logJson("error", "PAPER_HEARTBEAT_FAILED", {
         error_name: error instanceof Error ? error.name : "UnknownError",
+        error_message: error instanceof Error ? error.message : null,
       });
     } finally {
       probing = false;
@@ -345,6 +346,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
               token_id: token.tokenId,
               window_kind: kind,
               error_name: error instanceof Error ? error.name : "UnknownError",
+              error_message: error instanceof Error ? error.message : null,
             });
           }
         }
@@ -360,6 +362,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
     } catch (error: unknown) {
       logJson("error", "FEATURES_TICK_FAILED", {
         error_name: error instanceof Error ? error.name : "UnknownError",
+        error_message: error instanceof Error ? error.message : null,
       });
     } finally {
       computing = false;
@@ -405,6 +408,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
           .catch((error: unknown) => {
             logJson("error", "PAPER_BROKER_TICK_FAILED", {
               error_name: error instanceof Error ? error.name : "UnknownError",
+              error_message: error instanceof Error ? error.message : null,
             });
           })
           .finally(() => {

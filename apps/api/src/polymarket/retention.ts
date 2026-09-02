@@ -406,15 +406,26 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "received_at",
     protected: false,
   },
-  // The declared 30-day TTL is aspirational, not what happens: at the same one
-  // row per market per cycle as the decision log, and a panel_json that carries
-  // the same ten book levels per side plus the rule excerpt, this quota binds in
-  // days. Nothing reads it deep (the API takes the newest row per token), so it
-  // is a mislabel and not a hazard — measure the row in production and redeclare
-  // the TTL rather than inventing quota.
+  // TTL 30 -> 2, RFC-018 D5: the row was measured and the label was wrong.
+  //
+  // The 30 days were aspirational and never happened. Measured in production on
+  // 2026-09-02: `pg_column_size` 2 031 B per row (p50 2 000, p95 2 408, over the
+  // newest 20 000 rows) at 106 201 rows/day, against this 0.54 GB quota — a
+  // window of about 2.5 days, and the observed retained window was 2.05 days.
+  // Every recorded prune of this table in polymarket_retention_log was caused by
+  // `quota`, never by the TTL.
+  //
+  // Redeclared, not funded: nothing reads this table deep. The API takes
+  // `DISTINCT ON (token_id) ... ORDER BY computed_at DESC` and the detail view
+  // takes LIMIT 1, so the 30 days promised history nobody was reading and the
+  // quota was never going to deliver. Two days is the window this quota
+  // sustains in the worst case, so the declared number is now a promise that is
+  // kept — and, unlike the decision log next door, this table's write cadence
+  // does NOT drop: RFC-018 item 1 thinned the decision rows, and the panel
+  // deliberately keeps one row per market per cycle because it is the live view.
   {
     table: "portfolio_panel_snapshots",
-    ttlDays: 30,
+    ttlDays: 2,
     quotaBytes: 0.54 * GB,
     timeColumn: "received_at",
     protected: false,

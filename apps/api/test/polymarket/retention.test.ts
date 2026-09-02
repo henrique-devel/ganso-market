@@ -150,6 +150,34 @@ describe("retention config", () => {
     });
   });
 
+  it("declares TTLs the portfolio quotas can actually keep (RFC-018)", () => {
+    // Both of these were labels, not promises. Measured in production on
+    // 2026-09-02, both tables were pruned by `quota` in EVERY recorded run and
+    // neither ever reached its TTL:
+    //
+    //   portfolio_decisions       3 634 B/row x 106 402 rows/day vs 0.9 GB
+    //                             -> 2.17 d retained against a declared 180
+    //   portfolio_panel_snapshots 2 031 B/row x 106 201 rows/day vs 0.54 GB
+    //                             -> 2.05 d retained against a declared 30
+    //
+    // The decision log's write rate drops 8.6x with the verdict-change rule
+    // (RFC-018 item 1), which buys it ~19 days — so 90 is still above what the
+    // quota delivers, and it stays declared as the intent it is. The panel's
+    // cadence does NOT drop: it is the live view, one row per market per cycle,
+    // so its TTL is redeclared down to the window the quota really sustains.
+    const byName = new Map(RETENTION_TABLES.map((t) => [t.table, t]));
+    expect(byName.get("portfolio_decisions")).toMatchObject({
+      ttlDays: 90,
+      quotaBytes: 0.9 * 1024 ** 3,
+      protected: false,
+    });
+    expect(byName.get("portfolio_panel_snapshots")).toMatchObject({
+      ttlDays: 2,
+      quotaBytes: 0.54 * 1024 ** 3,
+      protected: false,
+    });
+  });
+
   it("keeps the declared quotas inside the global alarm trigger", () => {
     // The global alarm is a backstop, not a routine condition: a retention plan
     // whose own declared quotas already reach the trigger would alarm forever
