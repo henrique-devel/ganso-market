@@ -526,9 +526,12 @@ abaixo dele apagaria a evidência antes de ela ser pontuada.
   / `forecast`) e, opcionalmente, `consensus_std` às entradas de
   `config/macro-calendar.json` — os valores precisam vir de fonte oficial, não
   de estimativa nossa.
-- **BLOQUEIO/TODO:** não existe CLI nem endpoint que **registre** uma versão
-  nova de modelo; hoje o registro só acontece pelo catálogo no boot. Treinar
-  uma versão calibrada exigirá esse caminho (registrado no runbook).
+- ~~**BLOQUEIO/TODO:** não existe CLI nem endpoint que **registre** uma versão
+  nova de modelo~~ — **FECHADO em 2026-09-02 (RFC-018 item 4):** `models-cli`
+  (`node apps/api/dist/models-cli.js register|list|show`), fora do perímetro
+  HTTP como o `gates-cli`, reusando `registerModel` e portanto com as mesmas
+  garantias de imutabilidade por conteúdo. Documentado em
+  [`docs/runbooks/polymarket-fundamental.md`](runbooks/polymarket-fundamental.md).
 
 ## Estado atual
 
