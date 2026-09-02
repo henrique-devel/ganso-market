@@ -1,6 +1,14 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-01 — **RFC-015: o painel do operador (PR #76)**.
+- Última atualização: 2026-09-02 — **Checklist pré-live da RFC-009: NO-GO**.
+  Os seis gates estão `INSUFFICIENT_DATA` e `rfc_009_status` é `BLOCKED`; o
+  prompt 10 **não** fica liberado. O achado que reorganiza o calendário: o book
+  de paper **nunca fechou uma posição** — `closed_positions = 0` não por falta
+  de tempo, mas porque o settlement lê `payload_json.outcomePrices` enquanto o
+  coletor grava em `payload_json.raw.outcomePrices`, e o erro sai mascarado de
+  `TOKEN_NOT_IN_MARKET` 60×/h. G2 e G4 ficam em 0 para sempre até isso ser
+  corrigido. Detalhe na seção do checklist abaixo.
+- 2026-09-01 — **RFC-015: o painel do operador (PR #76)**.
   A faixa de PnL passa a existir em **todas** as abas, "Visão geral" vira a aba
   default com um agregador (`GET /polymarket/overview`) e um feed keyset
   (`GET /polymarket/events?after=`), o vocabulário de máquina ganha dicionário
@@ -203,6 +211,180 @@ publicly_knowable_ts`, descartava **38.200 de 74.412** estimativas MODEL — e
 Este documento registra o ponto de continuidade entre sessões. Ele não
 substitui a ordem de fontes de verdade: solicitação atual do proprietário,
 `docs/PRD.md`, RFC ativa e somente depois código/configuração.
+
+## CHECKLIST PRÉ-LIVE DA RFC-009 — **NO-GO** (2026-09-02)
+
+**Veredito: NO-GO. Os seis gates estão `INSUFFICIENT_DATA`.** O prompt 10
+(RFC-009, execução real) **NÃO fica liberado**. Nenhuma aprovação foi executada,
+nenhum switch foi tocado, nenhum gate foi ajudado: esta sessão só mediu.
+
+Medição em produção às **2026-09-02 13:32:48.527Z**, `config_version` 1.2.0,
+release do container da api `291a35077ff92b507e1609424874d71d277a0033` (= HEAD).
+
+### A.1 — Os seis gates (`portfolio_gate_measurements`, última medição de cada)
+
+| Gate | Status | Reason code | Número que falta |
+| --- | --- | --- | --- |
+| G1 | `INSUFFICIENT_DATA` | `G1_CALIBRATION_NOT_MET` | `model_forecasts: 0` de 100. Os 816 forecasts pontuados são o **próprio preço** (`used_signal_brier` 0,0249) — a métrica compara o preço com ele mesmo |
+| G2 | `INSUFFICIENT_DATA` | `G2_INSUFFICIENT_PAPER` | `closed_positions` **0/100**, `distinct_markets` **0/30**, `distinct_close_days` **0/20**, `categories` **0/2**, `bootstrap_blocks` **0/10**, `days` **4,70/60** |
+| G3 | `INSUFFICIENT_DATA` | `G3_RISK_BREACH` | 2 breakers nunca exercitados: `UMA_PROPOSED_OR_DISPUTED`, `RULE_CLARIFICATION`. (Drawdown 0,0023 < 0,1 e `unblocked_breaches` 0 já passam) |
+| G4 | `INSUFFICIENT_DATA` | `G4_RECONCILIATION_OFF` | `fee_samples` **0/100**, `slippage_samples` **0/100** |
+| G5 | `INSUFFICIENT_DATA` | `G5_REGIME_STALE` | `below_minimum_days: [crypto, macro]`. **`fingerprint_mismatch` está vazio** — só o relógio falta |
+| G6 | `INSUFFICIENT_DATA` | `G6_NOT_REVIEWED` | "no written owner review on record", `current_report_id: 1` |
+
+**Relógio do G2** (`portfolio_g2_clock`): `crypto` e `macro` ambos com
+`clock_start = 2026-08-28 20:38:47.23Z`, `last_reset_reason =
+regime_fingerprint_changed`. **4,73 dias corridos de 60.** Nenhum reset novo
+desde 28/08 — o piso do G5 cai em **2026-10-27 20:38:47Z**.
+
+### A.2 — `rfc_009_status` = `BLOCKED`, e o relatório **está** correto
+
+`gates-cli show`: `overall_status: BLOCKED`, seis vereditos
+`INSUFFICIENT_DATA`, `already_approved: false`.
+
+Existe **um** relatório (`report_id` 1), gerado em **2026-08-27 03:11:02.307Z**.
+Ele **não está velho**: essa é exatamente a marca do último *cambio de veredito*
+(G3 `FAIL` → `INSUFFICIENT_DATA`, mesma timestamp ao microssegundo). Nas **190
+medições** desde então nenhum veredito se moveu, e a cunhagem só sai quando um
+veredito muda. A regra do runbook está sendo honrada.
+
+O histórico também confirma o incidente conhecido: G1 teve **5 medições `PASS`**
+entre 2026-08-26 19:53:19Z e 23:48:13Z — o falso `PASS` de ~4 h.
+
+### A.3 — Replay e saúde dos serviços
+
+- **Replay limpo**: 17 × `PORTFOLIO_REPLAY_OK` em 24 h, `total: 50, matched: 50`,
+  último em 2026-09-02 13:32:50Z. **Zero `PORTFOLIO_REPLAY_MISMATCH`.**
+- Erros na última hora: `api` 0, `market-engine` 0, `polymarket-recorder` 0,
+  `polymarket-estimator` 0, `polymarket-portfolio` 0, `polymarket-resolution` 0
+  — e **`polymarket-paper` 60**, exatamente um por minuto. É o achado abaixo.
+
+### O ACHADO — o book de paper **nunca fechou uma posição**, e é defeito, não espera
+
+O número que reorganiza o calendário: **`closed_positions = 0`, não desde 28/08,
+mas desde sempre.** E a causa não é falta de tempo.
+
+Medido:
+
+- `paper_positions`: **2 linhas, ambas com `resolved_at` NULL**. Aberturas em
+  2026-08-28 14:30:35Z e 2026-09-01 11:59:06Z.
+- `paper_ledger_events`: 8.705 `mark`, 18 `order_accepted`, 16
+  `cancel_effective`, **2 `fill`**, 1 `fill_denied_degradation` e
+  **zero `resolution` — nenhum, em toda a história da tabela.**
+- `polymarket_markets`: **1.201 mercados, 0 com `closed = true`**, 1.201 `active`.
+
+O mercado `0x71b5721c…` ("Will the price of Bitcoin be above $78,000 on
+September 1?", `end_ts` 2026-09-01 16:00:00Z) **resolveu na venue** e o coletor
+gravou: `polymarket_resolution_events` id 1718, `event_type: resolved`, recebido
+**2026-09-01 16:37:12.336Z**, payload `raw.closed: true`, `raw.outcomePrices:
+["0","1"]`. A posição continua aberta, `mark_stale = t`, marca caída de
+US$ 4,6227 de custo para US$ 0,1622.
+
+Desde então o `polymarket-paper` loga, **a cada 60 s** (772 vezes em 24 h, a mais
+antiga retida em 2026-09-02 01:16:05Z):
+
+```
+reason_code: PAPER_RESOLUTION_DATA_ERROR
+condition_id: 0x71b5721c…  token_id: 59334650…204469  reason: TOKEN_NOT_IN_MARKET
+```
+
+**E o token ESTÁ no mercado.** `clob_token_ids` do condition é
+`["59334650…204469", "47173201…406362"]` — o token é o **índice 0** e é o
+próprio `affirmative_token_id`. O reason code está mentindo sobre a causa.
+
+A causa real, em uma linha. `apps/api/src/polymarket/paper/brokerstore.ts:2462`:
+
+```ts
+const pricesRaw = payload["outcomePrices"];
+```
+
+O coletor de resolução escreve os preços em **`payload_json.raw.outcomePrices`**,
+não no topo. Então `prices = []`, e o guard em
+`apps/api/src/polymarket/paper/broker.ts:183` —
+`if (index === -1 || index >= outcomePrices.length)` — dispara pelo **segundo**
+termo (`0 >= 0`), devolvendo `TOKEN_NOT_IN_MARKET`, que descreve o primeiro. Um
+reason code para duas falhas diferentes: "o token não é deste mercado" e "não
+vieram preços no payload".
+
+**Todo o resto do código já sabe que o caminho é duplo** — e só o paper não:
+
+- `polymarket/resolution/store.ts:727-728` testa `payload_json->'raw'->'outcomePrices'` **e** `payload_json->'outcomePrices'`;
+- `polymarket/resolution/timeline.ts:73` lê `record.outcomePrices ?? raw?.outcomePrices`;
+- `polymarket/fundamental/labels.ts:59` carrega `OUTCOME_PRICE_KEYS` com as variantes.
+
+É por isso que o **G1 enxerga 485 mercados resolvidos** (caminho do `labels.ts`,
+que funciona) enquanto o **book de paper fechou zero** (caminho do `brokerstore`,
+que falha). Duas noções de "resolvido" no mesmo sistema, e a divergência entre
+elas é o gate.
+
+**Consequência para o calendário:** enquanto isso não for corrigido,
+`closed_positions` do G2 e `fee_samples`/`slippage_samples` do G4 ficam em **0
+para sempre** — passar 60 dias não os move. O relógio de 60 dias **não é o
+gargalo**; é a única dimensão que está acumulando.
+
+### Projeção honesta (e por que "melhor caso 2026-10-27" não vale para o G2)
+
+| Gate | Data mecânica? | Projeção |
+| --- | --- | --- |
+| G5 | **Sim** | **2026-10-27 20:38:47Z**, se nenhum reset de regime ocorrer. Única data confiável do conjunto |
+| G2 | **Não** | Precisa de 100 posições fechadas. Taxa realizada: **2 fills em 5,2 dias ≈ 0,38/dia**, e 16 dos 18 pedidos foram cancelados. Mesmo com o defeito de settlement corrigido, 100 fechamentos a 0,38/dia ≈ **260 dias**. O próprio repositório já mediu o alvo: o comentário em `brokerstore.ts:60` diz que o gate precisa de **2–3 fills/dia** — estamos ~6× abaixo |
+| G4 | **Não** | Mesmo dado do G2 (fills reconciliados). Segue o G2 |
+| G1 | **Não** | Precisa de **modelo promovido**. `fundamental_models` tem 3 linhas, **todas `shadow`**: `crypto_updown_gbm@1.1.0`, `@1.0.0`, `macro_scheduled_consensus@1.0.0`. Sem promoção, `model_forecasts` fica em 0. É o único item sem data mecânica — depende de achar alpha |
+| G3 | **Não** | 2 breakers por exercitar. `RULE_CLARIFICATION` espera dado real **por decisão do proprietário** |
+| G6 | **Não** | Ato do proprietário, e só é aceito com os outros cinco em `PASS` (`GATES_NOT_READY`) |
+
+**A data de novembro/2026 do roadmap era o piso do relógio, não a projeção do
+conjunto.** O caminho crítico não é o calendário: é (1) o settlement travado,
+(2) a vazão de fills ~6× abaixo do necessário e (3) um modelo promovido.
+
+### O que falta, com dono
+
+**IA (código, mensurável):**
+
+1. Settlement do paper lê `payload_json.raw.outcomePrices` além do topo, e
+   `TOKEN_NOT_IN_MARKET` deixa de cobrir "sem preços" — **destrava G2 e G4**.
+   Com teste de regressão que falhe no código anterior.
+2. Vazão de fills: 16 cancelamentos em 18 pedidos. Sem isso, G2 leva ~260 dias.
+3. Exercitar `UMA_PROPOSED_OR_DISPUTED` (a metade `proposed` já foi corrigida nos
+   PRs #79–#84, mas **ainda não disparou em produção**) — G3.
+4. Modelo com alpha para promoção — G1.
+5. `polymarket_markets.closed` está em 0/1.201 mesmo com `raw.closed: true`
+   recebido; verificar se o registry deveria refletir isso.
+
+**Proprietário (não verificável por código):**
+
+6. G6 — revisão escrita. **Bloqueada hoje**: a CLI recusa com `GATES_NOT_READY`
+   enquanto os cinco não estiverem `PASS`. O pacote não foi preparado por regra
+   do próprio checklist (A.4).
+7. Parecer jurídico/tributário (pré-condição 2 da RFC-009) — **sem registro nos
+   docs**.
+8. Burn wallet Polygon com capital limitado e cópia de recuperação offline fora
+   do servidor (pré-condição 3) — **sem registro**. Só a existência se registra;
+   seed/private key nunca.
+9. Número do capital real, sobre o qual o PRD §6.6 aplica os caps (entrada 2%,
+   mercado 5%, perda diária 3%, drawdown 10%) — **sem número**.
+10. Aprovação explícita do beta live (pré-condição 4), ato separado do G6.
+11. Decisão sobre `RULE_CLARIFICATION` (hoje esperando dado real) — G3.
+
+Os itens 7–10 são a **trilha humana de maior lead time** do caminho e não
+dependem de nenhum gate: podem começar hoje.
+
+### Achado incidental (a seção C não foi verificada, por regra)
+
+O checklist parou em A.4 e **não** executou B nem C. Um fato apareceu durante a
+medição de A e é material demais para omitir:
+
+**O kill switch está ENGATADO agora.** `paper_kill_switch`: `engaged = t`,
+`reason = RECORDER_STALE`, `engaged_at = 2026-09-02 02:21:05.007Z`,
+`rearmed_at = 2026-09-01 23:51:48.591Z` — o engate é **posterior** ao último
+rearme. `frozen_markets_json` contém exatamente `0x71b5721c…`, o mercado travado
+acima. O ledger tem 6 `kill_switch_engaged` contra 5 `kill_switch_rearmed`, com
+três engates por `RECORDER_STALE` nas últimas 24 h (22:49Z, 23:12Z, 02:21Z) —
+padrão de flapping do recorder, não evento único.
+
+**Não foi rearmado** — rearme é ato do proprietário e condição de parada deste
+prompt. Fica registrado como pendência sua, e como pré-condição de qualquer
+medição de vazão de fills: com o switch engatado, o book não toma entrada nova.
 
 ## DECISÃO DE ESCOPO — caminho único Polymarket (2026-08-18)
 
