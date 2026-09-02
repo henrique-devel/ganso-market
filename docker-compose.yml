@@ -356,6 +356,11 @@ services:
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       GANSO_PORTFOLIO_CONFIG_FILE: /etc/ganso/portfolio.json
       GANSO_PORTFOLIO_FACTOR_MAP_FILE: /etc/ganso/factor-map.json
+      # RFC-018 D2: the `fonteResolucao` cap buckets by family of resolution
+      # clause, classified with the RFC-012 vocabulary. The SAME file the
+      # resolution service reads, not a copy — two vocabularies would be two
+      # answers to "what decides this market".
+      GANSO_RESOLUTION_LEXICON_FILE: /etc/ganso/resolution-lexicon.json
       GANSO_RELEASE_SHA_FILE: /etc/ganso/release-sha
     secrets:
       - postgres_password
@@ -369,6 +374,7 @@ services:
       - ./config/runtime.json:/etc/ganso/runtime.json:ro
       - ./config/portfolio.json:/etc/ganso/portfolio.json:ro
       - ./config/factor-map.json:/etc/ganso/factor-map.json:ro
+      - ./config/resolution-lexicon.json:/etc/ganso/resolution-lexicon.json:ro
     networks:
       - backend
     depends_on:

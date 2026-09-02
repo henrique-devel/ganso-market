@@ -13,11 +13,21 @@ import {
   PortfolioScopeError,
   createPortfolioRunner,
 } from "./polymarket/portfolio/runner.js";
+import {
+  ResolutionLexiconError,
+  loadResolutionLexicon,
+} from "./polymarket/resolution/lexicon.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
   const portfolio = await loadPortfolioConfig();
   const factorMap = await loadFactorMap();
+  // RFC-018 D2: the `fonteResolucao` cap is keyed on the family of resolution
+  // clause, classified with the RFC-012 vocabulary. Loaded from the same
+  // versioned file the resolution service reads — an unreadable or invalid file
+  // fails the boot, which is the right direction: an engine that cannot tell
+  // two clauses apart would size every market into one bucket.
+  const lexicon = await loadResolutionLexicon();
   // The engine reads wide as-of windows (estimates, books, resolution state)
   // and writes small batches, like the resolution service: a forgiving query
   // timeout and a small pool.
@@ -34,6 +44,7 @@ async function run(): Promise<void> {
     pool,
     config: portfolio,
     factorMap,
+    lexicon,
     executionMode: config.executionMode,
   });
 
@@ -79,6 +90,7 @@ void run().catch((error: unknown) => {
     error instanceof ConfigError ||
     error instanceof PortfolioConfigError ||
     error instanceof FactorMapError ||
+    error instanceof ResolutionLexiconError ||
     error instanceof PortfolioScopeError
       ? error.reasonCode
       : "PORTFOLIO_FAILED";

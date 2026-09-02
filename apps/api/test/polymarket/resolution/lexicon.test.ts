@@ -7,6 +7,7 @@ import {
   lexiconHash,
   loadResolutionLexicon,
   parseResolutionLexicon,
+  ruleClauseFamily,
   scoreRulePrecision,
   type ResolutionLexicon,
   type RulePrecisionResult,
@@ -347,5 +348,65 @@ describe("lexiconHash", () => {
     expect(lexiconHash(extended)).not.toBe(
       lexiconHash(DEFAULT_RESOLUTION_LEXICON),
     );
+  });
+});
+
+describe("rule clause family (RFC-018 D2)", () => {
+  const lexicon = DEFAULT_RESOLUTION_LEXICON;
+  const family = (
+    description: string,
+    resolutionSource: string | null = null,
+  ) => ruleClauseFamily({ description, resolutionSource }, lexicon);
+
+  it("names the feed, because two markets on one feed are one bet", () => {
+    expect(family("Settled by the Binance 1 minute candle.").key).toBe(
+      "OBJETIVA_UNICA:binance",
+    );
+    expect(family("Settled by the Chainlink stream.").key).toBe(
+      "OBJETIVA_UNICA:chainlink",
+    );
+  });
+
+  it("walks the SAME escada scoreRulePrecision walks", () => {
+    // Subjective wins over objective: a rule that names a feed AND leaves the
+    // call to "credible reporting" is decided by the reporting.
+    const text = "Resolves per the Binance close, per credible reporting.";
+    expect(family(text).sourceClass).toBe("SUBJETIVA");
+    expect(
+      scoreRulePrecision(
+        { question: "", description: text, resolutionSource: null },
+        lexicon,
+      ).riskComponents.source,
+    ).toBe(1);
+  });
+
+  it("is deterministic when several feeds are named", () => {
+    const a = family("Coinbase or Binance, whichever prints first.");
+    const b = family("Binance or Coinbase, whichever prints first.");
+    expect(a.key).toBe(b.key);
+    expect(a.key).toBe("OBJETIVA_UNICA:binance+coinbase");
+  });
+
+  it("reads the resolutionSource field too, not only the rule text", () => {
+    expect(
+      family("The market resolves at the end of the window.", "chainlink").key,
+    ).toBe("OBJETIVA_UNICA:chainlink");
+  });
+
+  it("names the fallback instead of inventing a silent unknown", () => {
+    // Measured on the live universe 2026-09-02: 5 of 92 markets, and every one
+    // of them is a real source the vocabulary does not carry (ECB, EIA, Bank of
+    // Japan, IMF Portwatch). One named bucket over-concentrates them, which is
+    // the safe direction; an unnamed one would be the oversized bucket back.
+    expect(
+      family("Official information from the European Central Bank.").key,
+    ).toBe("CLAUSULA_NAO_CLASSIFICADA");
+    expect(family("").key).toBe("CLAUSULA_NAO_CLASSIFICADA");
+  });
+
+  it("never returns an empty key", () => {
+    for (const text of ["", "   ", "anything at all", "binance"]) {
+      expect(family(text).key.length).toBeGreaterThan(0);
+    }
   });
 });

@@ -18,6 +18,10 @@
 
 import { parseScaled, SCALE } from "../fundamental/fixed.js";
 import {
+  ruleClauseFamily,
+  type ResolutionLexicon,
+} from "../resolution/lexicon.js";
+import {
   detectBreakers,
   entryFrozenBy,
   executableMid,
@@ -171,6 +175,13 @@ export interface PortfolioRunnerDeps {
   readonly pool: PortfolioPool;
   readonly config: PortfolioConfig;
   readonly factorMap: FactorMap;
+  /**
+   * The RFC-012 vocabulary, for the resolution-clause cap key (RFC-018 D2).
+   * Read from the same versioned file the resolution service reads, not from a
+   * copy: two vocabularies that could drift would be two answers to "what
+   * decides this market", and the point of the lexicon is that there is one.
+   */
+  readonly lexicon: ResolutionLexicon;
   readonly executionMode: string;
   readonly clock?: () => Date;
 }
@@ -384,6 +395,26 @@ export function createPortfolioRunner(
     return ((walk.bestScaled - walk.vwapScaled) * walk.filledScaled) / SCALE;
   }
 
+  /**
+   * The bucket key of the `fonteResolucao` cap (RFC-018 D2).
+   *
+   * Derived from the rule version in force AS-OF the decision, which is the
+   * same text the panel excerpts — so the key cannot disagree with what the
+   * operator is shown, and nothing knowable only later enters it.
+   */
+  function clauseFamilyFor(market: {
+    readonly ruleDescription: string | null;
+    readonly resolutionSource: string | null;
+  }): string {
+    return ruleClauseFamily(
+      {
+        description: market.ruleDescription,
+        resolutionSource: market.resolutionSource,
+      },
+      deps.lexicon,
+    ).key;
+  }
+
   function toOpenPosition(
     row: OpenPositionRow,
     unwindCostScaled: bigint | null,
@@ -402,7 +433,7 @@ export function createPortfolioRunner(
       costScaled: row.costScaled,
       category: row.category,
       eventId: row.eventId,
-      resolutionSource: row.resolutionSource,
+      clauseFamily: clauseFamilyFor(row),
       factor: factor.factor,
       catalystWindow: catalystWindow(row.endDate),
       unresolved: row.unresolved,
@@ -778,7 +809,7 @@ export function createPortfolioRunner(
           conditionId: market.conditionId,
           eventId: market.eventId,
           category: market.category,
-          resolutionSource: market.resolutionSource,
+          clauseFamily: clauseFamilyFor(market),
           factor: factor.factor,
           catalystWindow: window,
         },

@@ -45,7 +45,16 @@ export interface OpenPositionRow {
   readonly question: string;
   readonly negRisk: boolean;
   readonly eventId: string | null;
+  /**
+   * The resolution source of the rule version in force — the adapter when
+   * Gamma names nothing. This is what the exit's "source changed" criterion
+   * compares against the entry; the exposure cap is keyed on the rule CLAUSE
+   * instead (RFC-018 D2), and the two must not be collapsed: a source that
+   * moves inside one clause family still has to fire that criterion.
+   */
   readonly resolutionSource: string | null;
+  /** Rule text of the version in force, for the clause-family bucket key. */
+  readonly ruleDescription: string | null;
   readonly endDate: Date | null;
   readonly ruleVersion: number | null;
   readonly paramVersion: number | null;
@@ -73,6 +82,7 @@ export async function loadOpenPositions(
             par.version AS param_version,
             ev.event_id,
             COALESCE(r.resolution_source, r.resolved_by) AS resolution_source,
+            r.description AS rule_description,
             r.end_date,
             r.version AS rule_version
        FROM paper_positions p
@@ -88,7 +98,7 @@ export async function loadOpenPositions(
           ORDER BY pv.version DESC LIMIT 1
        ) par ON TRUE
        LEFT JOIN LATERAL (
-         SELECT version, resolution_source, resolved_by, end_date
+         SELECT version, resolution_source, resolved_by, end_date, description
            FROM polymarket_rule_versions rv
           WHERE rv.condition_id = p.condition_id AND rv.valid_to IS NULL
           ORDER BY rv.version DESC LIMIT 1
@@ -111,6 +121,7 @@ export async function loadOpenPositions(
     negRisk: row.neg_risk === true,
     eventId: text(row.event_id),
     resolutionSource: text(row.resolution_source),
+    ruleDescription: text(row.rule_description),
     endDate: date(row.end_date),
     ruleVersion: integer(row.rule_version),
     paramVersion: integer(row.param_version),
