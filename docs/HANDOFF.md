@@ -3495,3 +3495,75 @@ Linhas por hora, medidas depois: 01:00 **488.218** (saudável) · 02:00 **152** 
 cai **dentro** da faixa que a decisão usou, o que é a confirmação que importa:
 a escolha não dependeu do período parado. **Efeito na medição:** as taxas da
 série são um piso, não um teto — o dia 02/09 carrega duas horas de buraco.
+
+## SESSÃO 2026-09-02 (2) — A PODA DE `book_deltas` ESTAVA TRAVADA: 0,08% de buraco bloqueava 100% da poda
+
+Achado durante a medição da quota (sessão acima) e tratado em PR próprio por
+decisão do proprietário. **Não é uma questão de tamanho de quota: qualquer
+número que ele escolhesse seria inexequível**, porque o podador não conseguia
+apagar uma linha sequer de `polymarket_book_deltas`.
+
+### O defeito
+
+`pruneCoveredToken` para no primeiro minuto sem agregado de 1 min
+(`SERIES_COVERAGE_MISSING`) — e **esse minuto vira o minuto mais antigo
+retido**. Toda execução seguinte recalcula a mesma borda, pede exclusão abaixo
+dela e apaga **zero**. O gate **se auto-trava**: ele mesmo cria a condição que o
+bloqueia.
+
+**Medido em produção (2026-09-02), simulando o gate num corte de 7 dias:**
+
+| Grandeza | Medido |
+| --- | --- |
+| Tokens com deltas mais antigos que o corte | 161 |
+| Tokens bloqueados | **161 de 161** |
+| Tokens presos no PRÓPRIO minuto mais antigo | **161** |
+| Linhas liberáveis | **0** |
+| Linhas retidas pelo gate | 24.684.160 (**7,21 GiB**) |
+| Cobertura real dos minutos | **99,917%** (223 descobertos de 267.635) |
+| Tokens com exatamente UM buraco | 119 (média 1,39, máximo 4) |
+| Liberação se o minuto de borda for atravessado | 24.092.606 linhas (**7,04 GiB**), avanço médio de **62,3 h** por token |
+
+**Controle positivo (o mecanismo, não a correlação):** o token mais pesado tem
+`series_1m` desde 20/08 01:13 mas deltas só desde 23/08 14:45 — e 14:45 é um dos
+3 minutos descobertos dele (11.249 de 11.252 cobertos). Só existe uma
+explicação: a poda rodou, parou EXATAMENTE num minuto descoberto, e esse minuto
+virou a borda. A última poda de `book_deltas` na vida do sistema foi em
+**2026-08-28 10:28Z**.
+
+### Por que atravessar a borda é correto — e só a borda
+
+O minuto da frente é **parcial por construção**: ou é a borda do subscribe, ou é
+onde a poda anterior parou. E o agregado de 1 min dele **nunca vai aparecer** —
+`bookpipe.ts` só escreve o bucket que está enchendo no momento, chaveado pelo
+mesmo relógio de ingestão do `received_at`; **não existe caminho de backfill**.
+Esperar essa cobertura é esperar por algo que não pode chegar. Um buraco
+**interior** continua parando o passe: atrás dele existe dado coberto mais
+antigo, o que o torna uma falha de agregação real, digna de relatório e não de
+exclusão.
+
+A travessia apaga **exatamente um minuto** e é reportada em
+`SERIES_COVERAGE_BOUNDARY_PRUNED` (nunca silenciosa), e o passe continua a
+partir dali — então um token com vários buracos de borda converge **dentro de
+uma execução** em vez de um buraco por varredura diária.
+
+### Teste de regressão
+
+O arquivo de teste **afirmava o congelamento como comportamento desejado**
+(`"prunes nothing (and logs) when the token's first uncovered minute is its
+oldest"`). Foi substituído por
+`"crosses a coverage hole at the token's oldest minute instead of freezing
+there"`, **verificado falhando no código anterior**: o código antigo emite o
+DELETE em `06:00:00Z` (o próprio buraco — apaga nada) e o corrigido em
+`06:01:00Z`, seguindo até o corte pedido. O teste do buraco **interior**
+(`"truncates the prune at the hole"`) segue passando sem alteração — a
+travessia não afrouxou esse caso.
+
+### Urgência
+
+O TTL de 14 dias começa a morder em **~2026-09-03 01:26Z** (o registro mais
+antigo é de 20/08 01:26Z) e, sem esta correção, vai pedir exclusão e apagar
+zero. `book_deltas` estava em **123.078.574 linhas / 37 GB físicos** às 09:51Z,
+crescendo ~13 M linhas/dia, e cruza a quota de 52 GiB em ~4 dias. Depois disso o
+único gatilho restante é o alarme global (99 GiB vivos), cuja única alavanca é
+reduzir TTL — que também não apagaria nada.

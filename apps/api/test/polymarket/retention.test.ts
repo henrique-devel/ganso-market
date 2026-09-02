@@ -256,7 +256,23 @@ describe("retention job", () => {
     }
   });
 
-  it("prunes nothing (and logs) when the token's first uncovered minute is its oldest", async () => {
+  it("crosses a coverage hole at the token's oldest minute instead of freezing there", async () => {
+    // The regression, measured in production on 2026-09-02: the pruner stopped
+    // AT the first uncovered minute, and that minute then BECAME the oldest
+    // retained minute — so every later run recomputed the same front and
+    // deleted nothing. 161 of the 161 tokens with prunable deltas were stuck
+    // exactly there, releasing ZERO rows. Coverage was 99.917%: 223 uncovered
+    // minutes out of 267 635 (0.08% of them) held 7.21 GiB, on a table whose
+    // 14-day TTL was a day away from asking for deletions it could never make.
+    //
+    // This file previously asserted the freeze AS the intended behaviour
+    // ("prunes nothing when the token's first uncovered minute is its oldest").
+    // It is sound to delete through the front minute and only the front minute:
+    // that minute is partial by construction (a subscribe boundary, or the last
+    // prune's stopping point) and its 1-minute aggregate can never arrive,
+    // because the aggregator only ever writes the bucket it is currently
+    // filling. The fixture models exactly that — the hole disappears once the
+    // minute holding it has been deleted.
     const config: RetentionTableConfig = {
       table: "polymarket_book_deltas",
       ttlDays: 14,
@@ -266,6 +282,8 @@ describe("retention job", () => {
       requiresSeriesCoverage: true,
     };
     const cutoff = new Date(NOW.getTime() - 14 * DAY_MS);
+    const oldest = new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000);
+    let boundaryDeleted = false;
     const pool = fakePool((text) => {
       if (text.includes("pg_total_relation_size")) {
         return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
@@ -274,32 +292,21 @@ describe("retention job", () => {
         text.includes("min(received_at)") &&
         text.includes("WHERE token_id = $1")
       ) {
-        // Six hours of retained history: one 12h slice covers it exactly.
-        return {
-          rows: [
-            {
-              oldest: new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
-            },
-          ],
-          rowCount: 1,
-        };
+        return { rows: [{ oldest }], rowCount: 1 };
       }
       if (text.includes("jsonb_array_elements_text")) {
         return { rows: [{ token_id: "t1" }], rowCount: 1 };
       }
       if (text.includes("LEFT JOIN polymarket_series_1m")) {
-        // The very first minute below the cutoff has no bucket, so the prune
-        // is truncated to it and nothing is actually deletable.
+        // The hole IS the oldest retained minute — until that minute is gone.
         return {
-          rows: [
-            {
-              first_uncovered: new Date(
-                NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000,
-              ),
-            },
-          ],
+          rows: [{ first_uncovered: boundaryDeleted ? null : oldest }],
           rowCount: 1,
         };
+      }
+      if (text.includes("DELETE FROM polymarket_book_deltas")) {
+        boundaryDeleted = true;
+        return { rows: [], rowCount: 0 };
       }
       return null;
     });
@@ -310,27 +317,25 @@ describe("retention job", () => {
     });
     const report = await job.runOnce();
 
-    // The delete is issued, but bounded by the hole rather than the cutoff.
     const deletes = pool.captured.filter((q) =>
       q.text.includes("DELETE FROM polymarket_book_deltas"),
     );
-    expect(deletes).toHaveLength(1);
+    // The crossing deletes exactly ONE minute — never the whole requested
+    // cutoff, which would delete unaggregated data wholesale.
     expect(deletes[0]?.params?.[0]).toEqual(
-      new Date(NOW.getTime() - 14 * DAY_MS - 6 * 3_600_000),
+      new Date(oldest.getTime() + 60_000),
     );
-    expect(deletes[0]?.params?.[0]).not.toEqual(cutoff);
+    expect(deletes[0]?.params?.[0]).not.toEqual(oldest);
+    // Having crossed, the pass keeps going and reaches the cutoff it was asked
+    // for: the token is no longer frozen, which is the whole point.
+    expect(deletes).toHaveLength(2);
+    expect(deletes[1]?.params?.[0]).toEqual(cutoff);
+    // Crossed, not skipped — and never silent.
+    expect(report.skipped).toEqual([]);
     expect(
-      pool.captured.some((q) => q.text.includes("polymarket_retention_log")),
-    ).toBe(false);
-    expect(report.skipped).toEqual([
-      {
-        table: "polymarket_book_deltas",
-        reason: "series_coverage_missing",
-        tokenId: "t1",
-      },
-    ]);
-    expect(
-      stderrLines().some((line) => line.includes("SERIES_COVERAGE_MISSING")),
+      stderrLines().some((line) =>
+        line.includes("SERIES_COVERAGE_BOUNDARY_PRUNED"),
+      ),
     ).toBe(true);
   });
 

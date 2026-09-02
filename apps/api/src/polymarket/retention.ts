@@ -107,6 +107,7 @@ const COVERAGE_SLICE_MS = 12 * 60 * 60 * 1_000;
 /** Bound on slices per token per run, so one token cannot monopolise a run. */
 const MAX_COVERAGE_SLICES = 32;
 const MAX_DELETE_BATCHES = 10_000;
+const MINUTE_MS = 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export interface RetentionTableConfig {
@@ -897,8 +898,9 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
     if (firstUncovered === null) {
       return cutoff;
     }
-    // A hole at or before the token's oldest retained minute leaves nothing
-    // prunable for this token on this pass.
+    // A hole at the token's oldest retained minute leaves nothing prunable by
+    // this cutoff alone — pruneCoveredToken decides what to do about it, and
+    // must, or the token stalls here forever (see the boundary crossing there).
     return firstUncovered;
   }
 
@@ -994,6 +996,9 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
 
     let total = 0;
     let sliceStart = oldest.getTime();
+    // The oldest minute this token still has rows in. A coverage hole sitting
+    // exactly here is the only one the pruner may delete through; see below.
+    let frontMinuteMs = Math.floor(oldest.getTime() / MINUTE_MS) * MINUTE_MS;
     for (let slice = 0; slice < MAX_COVERAGE_SLICES; slice += 1) {
       if (sliceStart >= cutoff.getTime()) {
         return total;
@@ -1030,6 +1035,44 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
       if (sliceCutoff === null || sliceCutoff.getTime() <= 0) {
         return total;
       }
+      // A hole at the FRONT of the retained window is crossed, not stopped at.
+      //
+      // Measured in production on 2026-09-02: 161 of the 161 tokens with
+      // prunable deltas were stuck exactly here and released ZERO rows. The
+      // mechanism is self-inflicted — the pruner stops at the first uncovered
+      // minute, that minute then BECOMES the oldest retained minute, and every
+      // later run recomputes the same front and deletes nothing. Coverage was
+      // 99.917% (223 uncovered minutes out of 267 635): 0.08% of holes blocked
+      // 100% of the prune, 7.21 GiB of it, on a table whose TTL was about to
+      // start asking for deletions it could never make.
+      //
+      // Crossing is sound at the front and nowhere else. The front minute is by
+      // construction a PARTIAL minute — a subscribe boundary, or the previous
+      // prune's stopping point — and its 1-minute aggregate can never appear
+      // later: the aggregator only ever writes the bucket it is currently
+      // filling, keyed on the same ingest clock as received_at (bookpipe.ts).
+      // There is no backfill path, so waiting for that coverage is waiting for
+      // something that cannot arrive. An INTERIOR hole still stops the pass:
+      // covered data older than it is still there, which makes it a real
+      // aggregation failure worth reporting instead of deleting through.
+      let crossedBoundary = false;
+      if (sliceCutoff.getTime() <= frontMinuteMs) {
+        crossedBoundary = true;
+        sliceCutoff = new Date(
+          Math.min(frontMinuteMs + MINUTE_MS, cutoff.getTime()),
+        );
+        log(
+          "warn",
+          "SERIES_COVERAGE_BOUNDARY_PRUNED",
+          "polymarket_retention_series_coverage_boundary_pruned",
+          {
+            token_id: tokenId,
+            uncovered_minute: new Date(frontMinuteMs).toISOString(),
+            pruned_before: sliceCutoff.toISOString(),
+            requested_cutoff: cutoff.toISOString(),
+          },
+        );
+      }
       try {
         total += await batchedDelete(config, sliceCutoff, tokenId, batchRowCap);
       } catch (error: unknown) {
@@ -1057,6 +1100,15 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           },
         );
         return total;
+      }
+      if (crossedBoundary) {
+        // The front advanced by exactly the minute just deleted. Look again
+        // from there instead of returning, so a token carrying several
+        // boundary holes converges inside ONE run rather than one hole per
+        // daily run (measured: mean 1.39 holes per stuck token, max 4).
+        frontMinuteMs = sliceCutoff.getTime();
+        sliceStart = sliceCutoff.getTime();
+        continue;
       }
       if (sliceCutoff.getTime() < sliceEnd.getTime()) {
         // A hole inside this slice: pruning stops here for this token, and the
