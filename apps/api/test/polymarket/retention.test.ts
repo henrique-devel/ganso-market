@@ -112,6 +112,13 @@ describe("retention config", () => {
     // aggregates): 12 -> 60 GB, 4 -> 8 GB and 3 -> 10 GB. RFC-013 then took
     // 8 GB back from the deltas (60 -> 52) to fund the expansion of the
     // RFC-010..013 reserve from 6 to 8 GB, keeping the declared total at 89 GB.
+    //
+    // Owner decision (2026-09-02): the deltas quota was redeclared with the
+    // post-repack series measured, and KEPT at 52 GiB. The ~15.3 GB/day above
+    // was a bloated rate; a delta row costs 313.67 live bytes, so at the
+    // measured 11.33-15.59 M rows/day this quota retains 15.7-11.4 days
+    // against the 14-day TTL. Asserted so the value cannot drift away from the
+    // decision that was actually recorded.
     expect(byName.get("polymarket_book_deltas")?.ttlDays).toBe(14);
     expect(byName.get("polymarket_book_deltas")?.quotaBytes).toBe(
       52 * 1024 ** 3,
@@ -201,6 +208,23 @@ describe("retention config", () => {
     // TTL reduction cannot touch, because protected tables are never pruned.
     // The remedy therefore does not fit the only cause. Open for the owner.
     expect(prunable).toBeLessThan(trigger);
+
+    // The redeclaration headroom, measured on 2026-09-02. polymarket_book_deltas
+    // is the only quota with room to move, and it has exactly the 4 GiB between
+    // the declared sum and the trigger: raising it to 56 GiB would land the sum
+    // ON the trigger, which the strict comparison above forbids. So the ceiling
+    // is exclusive, and a 14-day window at the busiest measured rate (63.8 GiB)
+    // cannot be bought without moving DEFAULT_BUDGET_BYTES in the same change.
+    // Stated as "everything except the deltas" on purpose: written as
+    // deltas + (trigger - declared) it would be algebraically constant and
+    // could never fail, which is the degenerate shape this file keeps finding.
+    // This form moves when any OTHER quota is added or raised, and that is
+    // exactly when the headroom has to be re-argued.
+    const othersDeclared = RETENTION_TABLES.filter(
+      (t) => t.table !== "polymarket_book_deltas",
+    ).reduce((sum, t) => sum + t.quotaBytes, 0);
+    expect(othersDeclared / GiB).toBeCloseTo(43, 3);
+    expect((trigger - othersDeclared) / GiB).toBeCloseTo(56, 3);
   });
 });
 

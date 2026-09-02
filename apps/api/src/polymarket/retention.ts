@@ -125,13 +125,30 @@ export interface RetentionTableConfig {
 // ttlDays null but a quota may still be pruned oldest-first when the quota
 // trips (quota beats TTL). Protected tables are never touched.
 export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
-  // 52 GB, not the original 12 GB: the measured stream is ~15.3 GB/day, so
+  // 52 GB, not the original 12 GB: the stream measured ~15.3 GB/day then, so
   // 12 GB retained under 20 hours of book depth — less than the 14-day TTL by
-  // two orders of magnitude, and not enough for any book-walk replay. At 52 GB
-  // the quota (not the TTL) still binds, at ~3.4 days. The 8 GB between this
-  // and the 60 GB of the 2026-08-25 amendment funds the RFC-010..013 reserve
-  // expansion below (6 -> 8 GB), keeping the declared total at 89 GB against
-  // the 110 GB budget.
+  // two orders of magnitude, and not enough for any book-walk replay. The 8 GB
+  // between this and the 60 GB of the 2026-08-25 amendment funds the
+  // RFC-010..013 reserve expansion below (6 -> 8 GB).
+  //
+  // Owner decision (2026-09-02): REDECLARED AND KEPT at 52 GiB. The number did
+  // not move; what it buys did. The ~15.3 GB/day that justified it was a
+  // BLOATED rate. Measured now, a delta row costs 313.67 live bytes (heap 119
+  // + 28 tuple overhead + three index entries over the 0.9 leaf fill), and the
+  // physical file agrees at ~319 B/row with n_dead_tup = 0 — so the pre-repack
+  // rate was ~4x inflated by dead tuples and index bloat, not by data. At the
+  // measured 11.33 / 13.69 / 15.59 M rows/day (post-repack mean / 7-day mean /
+  // busiest day) this quota is 3.31 / 4.00 / 4.55 GiB/day and retains
+  // 15.7 / 13.0 / 11.4 days, against a declared TTL of 14. The quota and the
+  // TTL have converged to within 8% for the first time; the same 52 GiB bought
+  // 3.4 days before the repack.
+  //
+  // Not raised, deliberately: 56 GiB would put the declared sum exactly ON the
+  // 99 GiB alarm trigger, which the invariant below forbids; 55 GiB is the
+  // ceiling without moving DEFAULT_BUDGET_BYTES and buys 0.8 day for 3 of the
+  // 4 GiB of remaining slack; and nothing operational reads past 31 minutes
+  // (the paper feature lookback). The raw window serves replay and research,
+  // and the disk is 78% free. Full rationale in docs/HANDOFF.md.
   {
     table: "polymarket_book_deltas",
     ttlDays: 14,
