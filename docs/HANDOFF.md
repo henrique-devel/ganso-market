@@ -3325,7 +3325,20 @@ por trás deles também dura mais.
 6 medições/hora mantidas (as contagens de 24 e 42 são os ciclos de boot dos
 restarts), os seis gates com o mesmo veredito de antes
 (`INSUFFICIENT_DATA`), **1 `PORTFOLIO_REPLAY_OK` e 0
-`PORTFOLIO_REPLAY_MISMATCH`** desde o rebuild, e nenhum erro no log do portfolio.
+`PORTFOLIO_REPLAY_MISMATCH`** desde o rebuild.
+
+**Rajada de DNS às 01:59:17–01:59:24Z, e não é desta sessão.** Seis
+`PORTFOLIO_FAILED` com `detail: "getaddrinfo EAI_AGAIN postgres"` durante o
+recreate de containers do CD, com o portfolio em loop de restart até o DNS
+embutido do Docker voltar. **`polymarket-paper` e `polymarket-resolution`
+tiveram exatamente 6 cada, na mesma janela** — é a rede do Compose durante o
+`up --force-recreate`, não código. Recuperou sozinho: **zero erros desde
+01:59:30Z** e o ciclo de 01:59:46Z rodou limpo.
+
+Vale registrar porque é o padrão do #37 trabalhando: o `detail` com a mensagem
+real diagnosticou isso em uma linha. Sem ele o log diria `error_name: "Error"` e
+a rajada teria custado uma investigação — que é exatamente o buraco que o item 5
+fechou no `paper/runner.ts` no mesmo dia.
 
 ### O que fica aberto
 
