@@ -31,6 +31,10 @@ interface WorldOptions {
   readonly bids?: { price: string; size: string }[];
   /** Gate reports already on record; the default is a fresh, empty table. */
   readonly gateReports?: Row[];
+  /** Eligible universe for the panel cycle; the default is empty. */
+  readonly eligibleMarkets?: Row[];
+  /** Entry verdict already on record per token; the default is none. */
+  readonly lastEntryVerdicts?: Row[];
 }
 
 interface World {
@@ -74,6 +78,17 @@ function world(options: WorldOptions = {}): World {
       }
 
       // ---- reads, most specific first ------------------------------------
+      // The eligible universe. It has to be matched FIRST: its lateral joins
+      // name polymarket_param_versions and polymarket_universe_log, so a
+      // branch on either of those would swallow it and answer with the wrong
+      // rows — which is exactly what happened while this test was written.
+      if (text.includes("meta.affirmative_token_id AS token_id")) {
+        return respond(options.eligibleMarkets ?? []);
+      }
+      // RFC-018 D1: the entry verdict already on record, one grouped scan.
+      if (text.includes("AS t(token_id)")) {
+        return respond(options.lastEntryVerdicts ?? []);
+      }
       if (text.includes("FROM portfolio_config_versions WHERE version")) {
         return respond([{ config_hash: "" }]);
       }
@@ -252,6 +267,131 @@ function runner(pool: PortfolioPool) {
     clock: () => NOW,
   });
 }
+
+/**
+ * One eligible market, priced so the entry is rejected for a stable reason.
+ * The point of these tests is the WRITE CADENCE, not the verdict.
+ */
+const MARKET: Row = {
+  condition_id: "0xb",
+  token_id: "t2",
+  question: "Will BTC be above $92,000?",
+  category: "crypto",
+  neg_risk: false,
+  event_id: "e2",
+  resolution_source: "UMA:0xadapter",
+  end_date: new Date("2026-08-28T12:00:00Z"),
+  description: "Resolves per the Binance 1 minute candle close.",
+  tick_size: "0.01",
+  min_order_size: "5",
+  taker_fee_bps: "700",
+  rule_version: 3,
+  param_version: 2,
+};
+
+/** The verdict the fixture above actually produces, as a persisted row. */
+function verdictOnRecord(overrides: Row = {}): Row {
+  return {
+    token_id: "t2",
+    decision_id: 77,
+    decision_kind: "ENTRY",
+    outcome: "ACCEPTED",
+    reason_code: null,
+    binding_constraint: "CORRELATION_FACTOR",
+    ...overrides,
+  };
+}
+
+describe("entry cycle write cadence (RFC-018 D1)", () => {
+  // "Toda intenção persiste" reads as every DISTINCT intention — the reading
+  // the exit cycle was already approved on. Measured in production on
+  // 2026-09-02, the entry cycle wrote 8.6 rows for every one that said
+  // something the log did not already know.
+  it("writes the first evaluation of a market", async () => {
+    const scene = world({ eligibleMarkets: [MARKET] });
+    await runner(scene.pool).tickOnce("panel");
+    const decisions = scene.inserts.filter(
+      (row) => row.table === "portfolio_decisions",
+    );
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.params[2]).toBe("t2");
+  });
+
+  it("does NOT rewrite the same verdict on the next cycle", async () => {
+    const scene = world({
+      eligibleMarkets: [MARKET],
+      lastEntryVerdicts: [verdictOnRecord()],
+    });
+    await runner(scene.pool).tickOnce("panel");
+    expect(
+      scene.inserts.filter((row) => row.table === "portfolio_decisions"),
+    ).toHaveLength(0);
+  });
+
+  it("writes again when any part of the signature moves", async () => {
+    // Same market, same cycle, but the log last recorded a different reason.
+    // Verdict, reason code and binding constraint are all part of the
+    // signature: a change in any one of them is a new intention.
+    for (const moved of [
+      { outcome: "REJECTED", reason_code: "LOWER_BOUND_BELOW_COSTS" },
+      { reason_code: "BOOK_STALE" },
+      { binding_constraint: "CAP_ENTRADA" },
+      { decision_kind: "VETO" },
+    ]) {
+      const scene = world({
+        eligibleMarkets: [MARKET],
+        lastEntryVerdicts: [verdictOnRecord(moved)],
+      });
+      await runner(scene.pool).tickOnce("panel");
+      expect(
+        scene.inserts.filter((row) => row.table === "portfolio_decisions"),
+        JSON.stringify(moved),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("writes the panel snapshot every cycle, verdict moved or not", async () => {
+    // The panel is the live view. Skipping the DECISION must not skip it, or
+    // the operator's screen would freeze on the last market that changed.
+    const scene = world({
+      eligibleMarkets: [MARKET],
+      lastEntryVerdicts: [verdictOnRecord()],
+    });
+    await runner(scene.pool).tickOnce("panel");
+    const panels = scene.inserts.filter(
+      (row) => row.table === "portfolio_panel_snapshots",
+    );
+    expect(panels).toHaveLength(1);
+    // ...and it points at the decision still IN FORCE, not at NULL: that row
+    // is what explains the state the panel is showing.
+    expect(panels[0]?.params[4]).toBe(77);
+  });
+
+  it("reports what it evaluated and what it wrote, separately", async () => {
+    // The proof "the engine looked" cannot live in the log's row count any
+    // more, so the cycle line has to carry both numbers.
+    const scene = world({
+      eligibleMarkets: [MARKET],
+      lastEntryVerdicts: [verdictOnRecord()],
+    });
+    const lines: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await runner(scene.pool).tickOnce("panel");
+    } finally {
+      process.stderr.write = original;
+    }
+    const cycle = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.reason_code === "PORTFOLIO_CYCLE");
+    expect(cycle?.evaluated).toBe(1);
+    expect(cycle?.decisions_written).toBe(0);
+  });
+});
 
 describe("exit cycle", () => {
   it("writes an EXIT decision for a position it has never evaluated", async () => {

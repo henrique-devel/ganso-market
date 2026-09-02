@@ -29,6 +29,7 @@ import {
 import { portfolioConfigHash, type PortfolioConfig } from "./config.js";
 import {
   entryDecisionRow,
+  entrySignature,
   exitDecisionRow,
   type DecisionProvenance,
 } from "./decisionrow.js";
@@ -106,6 +107,7 @@ import {
   ensureFactorMapVersion,
   estimateAsOf,
   insertDecision,
+  lastEntryVerdicts,
   loadEligibleMarkets,
   resolutionStateFor,
   stampBridgedOrders,
@@ -638,6 +640,12 @@ export function createPortfolioRunner(
     ];
     const changes = await loadMarketChangeStates(deps.pool, conditionIds);
     const correlated = await loadCorrelatedMarkets(deps.pool, conditionIds);
+    // The verdict already on record for each market, so the log can write only
+    // when it CHANGES (RFC-018 D1). One grouped scan, not one query per market.
+    const verdicts = await lastEntryVerdicts(
+      deps.pool,
+      markets.map((market) => market.tokenId),
+    );
 
     const books = new Map<string, BookAsOf | null>();
     const estimates = new Map<string, EstimateAsOf | null>();
@@ -750,6 +758,7 @@ export function createPortfolioRunner(
 
     // 4. Evaluate the universe.
     let entrable = 0;
+    let written = 0;
     for (const market of markets) {
       const estimate = estimates.get(market.tokenId) ?? null;
       const resolution = resolutions.get(market.conditionId) ?? null;
@@ -884,13 +893,36 @@ export function createPortfolioRunner(
         },
         replay: serializeEntryReplay(engineInput),
       });
-      const decisionId = await insertDecision(deps.pool, row);
+      // RFC-018 D1: "toda intenção persiste" reads as every DISTINCT intention,
+      // the reading the exit cycle was already approved on. Writing one row per
+      // market per minute buried the moment a verdict actually moved under a
+      // measured 8.6 rows of noise for every one that said something new, and
+      // it burned the quota that `entryProvenanceFor` reads through. The panel
+      // snapshot below is still written every cycle — it is the live view — and
+      // when the verdict did not move it points at the decision still IN FORCE,
+      // which is the row that explains the state.
+      const signature = entrySignature(row);
+      const onRecord = verdicts.get(market.tokenId) ?? null;
+      let decisionId: number | null = onRecord?.decisionId ?? null;
+      if (onRecord === null || onRecord.signature !== signature) {
+        decisionId = await insertDecision(deps.pool, row);
+        verdicts.set(market.tokenId, { decisionId, signature });
+        written += 1;
+      }
 
       await deps.pool.query(
+        // The decision in force can be one written minutes or days ago, and
+        // retention may have taken it between the scan above and this insert.
+        // The subquery resolves the reference to NULL in that case, which is
+        // exactly what the FK's ON DELETE SET NULL says about a pruned row —
+        // said once here instead of costing a cycle to a constraint violation.
         `INSERT INTO portfolio_panel_snapshots
            (condition_id, token_id, computed_at, panel_json, decision_id,
             entrable, vetoed, veto_reason, config_version)
-         VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9)
+         VALUES ($1,$2,$3,$4::jsonb,
+                 (SELECT d.decision_id FROM portfolio_decisions d
+                   WHERE d.decision_id = $5),
+                 $6,$7,$8,$9)
          ON CONFLICT (token_id, computed_at) DO NOTHING`,
         [
           market.conditionId,
@@ -909,6 +941,10 @@ export function createPortfolioRunner(
     logJson("info", "PORTFOLIO_CYCLE", {
       evaluated: markets.length,
       entrable,
+      // The whole universe is evaluated every cycle; `decisions_written` says
+      // how many of those evaluations said something the log did not already
+      // know. `evaluated` is the proof the engine looked, and it stays here.
+      decisions_written: written,
       state: evaluation.next.state,
       positions: positions.length,
       open_breakers: openBreakers.length,
