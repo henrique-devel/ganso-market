@@ -14,7 +14,7 @@
   reproduzível", é aritmética. Não existe índice em `decision_ts` sozinho, então
   `ORDER BY decision_ts DESC LIMIT 500` era um parallel seq scan de **715 ms com
   cache frio** (12 ms quente) — e a API roda com **`statement_timeout = 1000
-  ms`**, porque `database.ts` reusa `connect_timeout_ms` como timeout de query e
+ms`**, porque `database.ts` reusa `connect_timeout_ms` como timeout de query e
   **todo worker sobrescreve para 30–120 s menos a API**, que é justamente quem
   serve o painel. Ordenar por `decision_id DESC` (a PK, monotônica com a
   inserção e uma ordem TOTAL onde `decision_ts` empata dentro de um ciclo):
@@ -89,7 +89,7 @@
   que continuavam rejeições), e os deltas vinham das colunas de 6 casas enquanto
   o motor decide em 9 (a 0,183 a carga que vira a perna é 2,5e-7). Determinismo
   provado em produção: duas rodadas sobre a janela fechada no `decision_id
-  703817` deram agregados idênticos. `make verify` verde, **1518 testes na API**.
+703817` deram agregados idênticos. `make verify` verde, **1518 testes na API**.
   Sem migration. Evidência:
   [`docs/test-results/RFC-017-shadow-replay.md`](test-results/RFC-017-shadow-replay.md).
   Registro anterior do dia: **RFC-014 + RFC-019: o modelo deixa de calar
@@ -127,7 +127,7 @@
   e encontrou no lugar um defeito muito maior: **o label store lia a coluna
   date-only**, punha 94% dos `publicly_knowable_ts` à meia-noite (mediana 16 h
   adiantados) e, como a calibração filtra por `decision_ts <
-  publicly_knowable_ts`, descartava **38.200 de 74.412** estimativas MODEL — e
+publicly_knowable_ts`, descartava **38.200 de 74.412** estimativas MODEL — e
   **8.063 de 8.063** das feitas na última hora de vida do mercado, que é
   exatamente o que a cadência de 10 s existe para produzir. É o mecanismo por
   trás do bloqueio "o gate da RFC-010 não tem como acumular evidência".
@@ -1752,7 +1752,7 @@ Release verificado DENTRO dos containers (`/etc/ganso/release-sha`, nunca
 desde então.
 
 | Re-medição   | Resultado (produção, 2026-08-31)                                                                                                                                                                                                                                                                                                                                                        |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | #50 retenção | Defeito ausente. `book_deltas` está com `n_dead_tup = 0` e 28 GB físicos — o cenário exato da degeneração antiga — e mesmo assim **zero `RETENTION_QUOTA_UNMET`, zero pedido de exclusão e zero `QUOTA_GLOBAL_TTL_REDUCED`** em 24 h, com 96.757.954 linhas vivas. Varredura de 30/08 22:09Z: `RETENTION_BLOAT` informativo nos dois snapshots (físico > vivo medido, quota satisfeita) |
 | #51 G2/G5    | **SOAK FECHADO.** Os únicos 2 `PORTFOLIO_G2_CLOCK_RESET` na vida do container são o reset final do deploy (28/08 20:38:47Z, crypto+macro, `regime_fingerprint_changed`). Desde então, **zero resets em ~65 h** sob rotação normal do universo (antes: ~5/dia). O relógio do G2 acumula janela contínua desde 20:38:47Z                                                                  |
 | #52 lag      | Fix no ar; **soak segue impossível de medir**: kill switch engatado desde 28/08 20:59:32Z (`RECORDER_STALE`), **zero ordens paper criadas em ~2,7 dias**. Zero cancelamentos no período. Rearme é 1 clique do proprietário no painel (PR #46)                                                                                                                                           |
@@ -1868,12 +1868,12 @@ ponto.
 Produção somente leitura, 2026-08-31 ~19:53–20:00Z, container de resolution com
 log contínuo desde 28/08 20:38Z:
 
-| Medida                                   | Valor                                                       |
-| ---------------------------------------- | ----------------------------------------------------------- |
-| Falhas de `state_tick` em 24 h           | **78** (233 na vida do container: 9 em 28/08, 85, 77, 62)    |
-| `condition_id` distintos nas 78          | **75** — cada mercado falha uma vez, não é poison pill        |
-| Mercados scoreable AGORA sem metadata    | **0 de 171** — nenhum mercado legítimo pendente              |
-| Estados não-`NONE` fora do scoreable sem metadata | **0** — sem risco de crash-loop no boot            |
+| Medida                                            | Valor                                                     |
+| ------------------------------------------------- | --------------------------------------------------------- |
+| Falhas de `state_tick` em 24 h                    | **78** (233 na vida do container: 9 em 28/08, 85, 77, 62) |
+| `condition_id` distintos nas 78                   | **75** — cada mercado falha uma vez, não é poison pill    |
+| Mercados scoreable AGORA sem metadata             | **0 de 171** — nenhum mercado legítimo pendente           |
+| Estados não-`NONE` fora do scoreable sem metadata | **0** — sem risco de crash-loop no boot                   |
 
 ### Causa raiz medida — DUAS populações, um mesmo trigger
 
@@ -1916,7 +1916,7 @@ absorve as ~630 rejeições/dia que não chegam a virar erro.
   tipado e contado — `RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE {source, skipped}`.
 - **`registry.ts`** — o `enter` passa a ser inserido **dentro da transação** que
   aplica a observação de metadata, no **mesmo instante** (`enter.at ==
-  metadata.valid_from`). Uma leitura as-of que enxerga a associação enxerga o
+metadata.valid_from`). Uma leitura as-of que enxerga a associação enxerga o
   mapeamento. Efeito colateral desejado: entrante cuja metadata falha **não vira
   membro** naquele ciclo (antes virava, com `logSafely` engolindo a falha) — é
   retentado no ciclo seguinte, e `entered` passa a contar entradas commitadas.
@@ -1957,7 +1957,7 @@ ausência de erro:**
   para mercados com **0 linhas em `polymarket_markets` e 0 versões de
   metadata** — a população exata. 11 s depois o tick consumiu as 3 e registrou
   `RESOLUTION_INPUT_CHANGE_OUT_OF_SCOPE {source:"universe_membership",
-  skipped:3}`, **sem `JOB_FAILED`**. Antes do fix esse input produzia
+skipped:3}`, **sem `JOB_FAILED`**. Antes do fix esse input produzia
   exatamente um `RESOLUTION_MARKET_METADATA_VERSION_MISSING` e derrubava o
   `graph_eval` e o `heartbeat` do ciclo.
 - **Causa 2 (corrida na entrada).** O mercado `0x05f71a3164a3` entrou às
@@ -1969,15 +1969,15 @@ ausência de erro:**
   `GRAPH_BUILT nodes:62` (subiu de 61 — o entrante entrou no grafo). As
   rejeições foram absorvidas e a entrada real foi pontuada no mesmo lote.
 
-| Medida (janela de 26 min pós-deploy)      | Antes                 | Depois        |
-| ----------------------------------------- | --------------------- | ------------- |
-| `RESOLUTION_MARKET_METADATA_VERSION_MISSING` | ~78/dia (~1,4 na janela) | **0**      |
-| `JOB_FAILED job:"state_tick"`             | idem                  | **0**         |
-| Erros (`level:error`) no resolution        | 6/h                   | **0**         |
-| Erros no recorder                          | 0 na classe           | **0**         |
-| `SCORES_RECOMPUTED` / `GRAPH_BUILT`        | 9 / 15 por ~45 min    | 3 / 5 por 26 min — cadência preservada |
-| `GRAPH_EVALUATED` / `RESOLUTION_HEARTBEAT` | 76 / 61 por ~45 min   | 30 / 25 por 26 min |
-| `REGISTRY_PERSIST_FAILED` / `UNIVERSE_LOG_FAILED` | 0             | **0** — entradas não foram bloqueadas pela transação nova |
+| Medida (janela de 26 min pós-deploy)              | Antes                    | Depois                                                    |
+| ------------------------------------------------- | ------------------------ | --------------------------------------------------------- |
+| `RESOLUTION_MARKET_METADATA_VERSION_MISSING`      | ~78/dia (~1,4 na janela) | **0**                                                     |
+| `JOB_FAILED job:"state_tick"`                     | idem                     | **0**                                                     |
+| Erros (`level:error`) no resolution               | 6/h                      | **0**                                                     |
+| Erros no recorder                                 | 0 na classe              | **0**                                                     |
+| `SCORES_RECOMPUTED` / `GRAPH_BUILT`               | 9 / 15 por ~45 min       | 3 / 5 por 26 min — cadência preservada                    |
+| `GRAPH_EVALUATED` / `RESOLUTION_HEARTBEAT`        | 76 / 61 por ~45 min      | 30 / 25 por 26 min                                        |
+| `REGISTRY_PERSIST_FAILED` / `UNIVERSE_LOG_FAILED` | 0                        | **0** — entradas não foram bloqueadas pela transação nova |
 
 Os inputs que disparavam as duas causas **chegaram** na janela (11 rejeições e
 1 entrada) e nenhum virou erro. A verificação de 24 h que resta é confirmatória:
@@ -2125,12 +2125,12 @@ de rebuildar:
 
 Banco, medido às 22:20Z:
 
-| medida                          | valor                                                    |
-| ------------------------------- | -------------------------------------------------------- |
-| linhas em `polymarket_macro_calendar` | 16 (15 v1 + `cpi-2026-09` v2)                      |
-| entradas com `consensus_by_variable`  | 1                                                  |
-| conteúdo                        | `{"cpi_mom": 0.36, "cpi_yoy": 3.37, "core_cpi_yoy": 2.38}` |
-| `read_at` da proveniência       | `2026-08-31`                                             |
+| medida                                | valor                                                      |
+| ------------------------------------- | ---------------------------------------------------------- |
+| linhas em `polymarket_macro_calendar` | 16 (15 v1 + `cpi-2026-09` v2)                              |
+| entradas com `consensus_by_variable`  | 1                                                          |
+| conteúdo                              | `{"cpi_mom": 0.36, "cpi_yoy": 3.37, "core_cpi_yoy": 2.38}` |
+| `read_at` da proveniência             | `2026-08-31`                                               |
 
 ### Testes
 
@@ -2165,10 +2165,10 @@ criada** — dependência nova é decisão do proprietário.
 O ciclo completo do defeito e da correção foi observado **sem ser provocado**,
 no CD do PR #64 (docs-only — e o CD reinicia os profiles até em docs-only):
 
-| instante | linha |
-| --- | --- |
+| instante        | linha                                                                                                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `22:39:14.525Z` | `MACRO_CALENDAR_SYNC_FAILED` `{"trigger":"boot"}` — o recorder reiniciou pelo CD e o boot sync **perdeu a corrida com o postgres**. É exatamente a falha de 23/08. Antes deste PR, terminal até o próximo restart. |
-| `22:49:15.516Z` | `MACRO_CALENDAR_SYNCED` `{"inserted":0,"trigger":"scheduled","recovered":true}` — **um único ciclo de 10 min depois**, o job convergiu e marcou a recuperação. |
+| `22:49:15.516Z` | `MACRO_CALENDAR_SYNCED` `{"inserted":0,"trigger":"scheduled","recovered":true}` — **um único ciclo de 10 min depois**, o job convergiu e marcou a recuperação.                                                     |
 
 `inserted: 0` porque nada tinha mudado no arquivo desde a v2 — o ponto é que a
 passada agendada **rodou e fechou o buraco** que o boot deixou aberto. Se o
@@ -2189,7 +2189,6 @@ CD normal do projeto produzindo a corrida que produz há semanas.
   passar com o universo atual, pela medição acima. Não foi forçada.
 - **Decisão do proprietário**: variável de mudança de juros para o
   `macro_scheduled` (ou aceitar que a categoria macro não produz evidência).
-
 
 ## SESSÃO 2026-09-01 — RFC-017: SHADOW REPLAY NOS DOIS MODOS (PRs #72 e #73)
 
@@ -2329,16 +2328,16 @@ primeiro porque foi ela que decidiu o desenho.
 Medido em 2026-08-31 entre 23:00Z e 23:20Z, contra o banco de produção e contra
 a API pública da Gamma:
 
-| Premissa de 28/08                        | Medido em 31/08                                                                                          |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| "gravamos só `end_date_iso` (date-only)"  | **falso onde importa**: `polymarket_rule_versions.end_date` é TIMESTAMPTZ e já tem o instante cheio em **1005/1046** versões abertas (as 41 restantes são meia-noite de verdade — Fed, fim de ano) |
-| "558 crypto ativos vencidos"              | reproduz como **703**, e **todas** são linhas de registro obsoletas de mercados que já saíram do universo. Membros com `end_date_iso` vencido: **0** |
-| "nenhum mercado com horizonte < 6 h"      | **2** membros < 1 h e **29** < 6 h no instante da medição                                                  |
-| "a cadência de 10 s nunca ativa"          | **ativa desde 23/08**: 3 tokens com gap mediano de **10,0 s** nos últimos 20 min, e **6.164 das 20.471** estimativas de 24 h no bucket `lt_1h` — o maior bucket do dia |
-| "gap nos updown vivos = 60 s"             | o número está certo, a leitura não: 60 s é a mediana da **mistura**; na última hora de vida é 10 s          |
-| "o cap rejeitou ~46 mercados/dia"         | última rejeição por cap em **2026-08-29 09:59Z**; **zero** nas últimas 24 h; universo em 83/100 mercados     |
-| "~1.586 enter/exit por semana"            | **confirmado**: 1.492 enter / 1.502 exit em 7 dias                                                          |
-| Gamma devolve `eventStartTime`            | **`null` em 100 de 100** mercados crypto; `gameStartTime` também                                            |
+| Premissa de 28/08                        | Medido em 31/08                                                                                                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "gravamos só `end_date_iso` (date-only)" | **falso onde importa**: `polymarket_rule_versions.end_date` é TIMESTAMPTZ e já tem o instante cheio em **1005/1046** versões abertas (as 41 restantes são meia-noite de verdade — Fed, fim de ano) |
+| "558 crypto ativos vencidos"             | reproduz como **703**, e **todas** são linhas de registro obsoletas de mercados que já saíram do universo. Membros com `end_date_iso` vencido: **0**                                               |
+| "nenhum mercado com horizonte < 6 h"     | **2** membros < 1 h e **29** < 6 h no instante da medição                                                                                                                                          |
+| "a cadência de 10 s nunca ativa"         | **ativa desde 23/08**: 3 tokens com gap mediano de **10,0 s** nos últimos 20 min, e **6.164 das 20.471** estimativas de 24 h no bucket `lt_1h` — o maior bucket do dia                             |
+| "gap nos updown vivos = 60 s"            | o número está certo, a leitura não: 60 s é a mediana da **mistura**; na última hora de vida é 10 s                                                                                                 |
+| "o cap rejeitou ~46 mercados/dia"        | última rejeição por cap em **2026-08-29 09:59Z**; **zero** nas últimas 24 h; universo em 83/100 mercados                                                                                           |
+| "~1.586 enter/exit por semana"           | **confirmado**: 1.492 enter / 1.502 exit em 7 dias                                                                                                                                                 |
+| Gamma devolve `eventStartTime`           | **`null` em 100 de 100** mercados crypto; `gameStartTime` também                                                                                                                                   |
 
 O `end_date_iso` **é** date-only (1056/1056) e a Gamma **devolve** o instante
 cheio. As duas coisas são verdade. O que não era verdade é que ninguém gravasse
@@ -2357,9 +2356,9 @@ vencimento — **1.572 de 1.670 labels (94%)** às 00:00:00 exatas, mediana **16
 adiantados (p90 20 h). E `calibration.ts` filtra a evidência com
 `AND e.decision_ts < l.publicly_knowable_ts`:
 
-| Conjunto                                        | Antes            | Depois (medido em produção) |
+| Conjunto                                          | Antes            | Depois (medido em produção) |
 | ------------------------------------------------- | ---------------- | --------------------------- |
-| Estimativas `MODEL` com label final, pontuáveis  | 36.212 de 74.412 | **74.412 de 74.412**        |
+| Estimativas `MODEL` com label final, pontuáveis   | 36.212 de 74.412 | **74.412 de 74.412**        |
 | Estimativas na **última hora de vida** do mercado | **0 de 8.063**   | **8.063 de 8.063**          |
 | Labels com `publicly_knowable_ts` à meia-noite    | 1.572 de 1.670   | **48 de 1.672** (2,9%)      |
 
@@ -2376,18 +2375,18 @@ date-only, o que dá **negativo** quase o dia todo, e negativo satisfazia o test
 `<= 1 h` de `windowKindsForHorizon` — o token recebia o conjunto de janelas mais
 **caro**, não o mais barato.
 
-| Janelas de feature                                    | 6 h antes do deploy       | Depois do deploy |
-| ------------------------------------------------------ | ------------------------- | ---------------- |
-| `10s`                                                 | 86.509                    | 14               |
-| `1s`                                                  | 12.980                    | 2                |
-| `1m`                                                  | 44.170                    | 1.710            |
-| Fração das `10s` em mercado com horizonte real > 6 h  | **75%** (63.951 de 84.772) | **0 de 14**      |
-| Fração das `1s` idem                                  | **38%** (3.936 de 10.481)  | **0 de 2**       |
+| Janelas de feature                                   | 6 h antes do deploy        | Depois do deploy |
+| ---------------------------------------------------- | -------------------------- | ---------------- |
+| `10s`                                                | 86.509                     | 14               |
+| `1s`                                                 | 12.980                     | 2                |
+| `1m`                                                 | 44.170                     | 1.710            |
+| Fração das `10s` em mercado com horizonte real > 6 h | **75%** (63.951 de 84.772) | **0 de 14**      |
+| Fração das `1s` idem                                 | **38%** (3.936 de 10.481)  | **0 de 2**       |
 
 ### O que foi entregue (PR #66, merge 2026-08-31 23:4xZ)
 
 - **Migration 0017 (aditiva, aplicada pelo CD):** `polymarket_markets.end_ts
-  TIMESTAMPTZ` nullable, **sem backfill** — preenchida conforme a Gamma
+TIMESTAMPTZ` nullable, **sem backfill** — preenchida conforme a Gamma
   re-observa, o padrão do `questionID` da RFC-012 — mais um índice parcial
   `WHERE end_ts IS NOT NULL`.
 - **Captura nos DOIS call sites** (lição do PR #49): o ciclo do registro e a
@@ -2470,19 +2469,19 @@ tocado** — quota 2 GB, TTL 90 dias.
 **2026-08-31 23:57:35Z**. Todos os **seis** containers em
 `/etc/ganso/release-sha` = `4bae1b92a1ffb8d9a2910470ccee3a8e1881161d`.
 
-| Critério de aceite                                     | Medido em produção                                                   |
-| ------------------------------------------------------- | --------------------------------------------------------------------- |
-| `end_ts` preenchida nos membros do universo            | **87 de 87 (100%)**, 81 com hora intradia; as 973 linhas obsoletas de mercados fora do universo seguem NULL, como o desenho prospectivo manda |
-| Membros com fim real no passado                        | **2 de 87** — os que acabaram de vencer e ainda não passaram pelo ciclo de saída (era 1 de 83 antes) |
-| Distribuição de horizonte pelo `end_ts`                | 3 em `< 1 h`, 29 em `1h–6h`, 17 em `6h–24h`, 27 em `1d–7d`, 16 em `> 7d` |
-| Labels com knowable_ts à meia-noite                    | **94% → 2,9%** (1.572/1.670 → 48/1.672), e os 48 são meia-noite real  |
-| Estimativas MODEL pontuáveis                           | **36.212 → 74.412** (100%)                                            |
-| Estimativas da última hora de vida, pontuáveis         | **0 → 8.063** (100%)                                                  |
-| Gap de estimativa na última hora de vida               | **10,0 s** (o mercado das 00:00Z)                                     |
-| Janelas `1s`/`10s` em mercado de horizonte real > 6 h  | **75% / 38% → 0 de 3.868 / 0 de 2** (amostra de 1 h 40)                |
-| Erros novos (recorder, estimator, paper, portfolio, resolution, api) | **0 em todos os seis**, acumulado em 37 min             |
-| Bucket de horizonte no motivo do `enter`               | **`priority_2_crypto_1d_7d`** às 00:27:46Z                            |
-| RAM                                                    | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192 |
+| Critério de aceite                                                   | Medido em produção                                                                                                                            |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `end_ts` preenchida nos membros do universo                          | **87 de 87 (100%)**, 81 com hora intradia; as 973 linhas obsoletas de mercados fora do universo seguem NULL, como o desenho prospectivo manda |
+| Membros com fim real no passado                                      | **2 de 87** — os que acabaram de vencer e ainda não passaram pelo ciclo de saída (era 1 de 83 antes)                                          |
+| Distribuição de horizonte pelo `end_ts`                              | 3 em `< 1 h`, 29 em `1h–6h`, 17 em `6h–24h`, 27 em `1d–7d`, 16 em `> 7d`                                                                      |
+| Labels com knowable_ts à meia-noite                                  | **94% → 2,9%** (1.572/1.670 → 48/1.672), e os 48 são meia-noite real                                                                          |
+| Estimativas MODEL pontuáveis                                         | **36.212 → 74.412** (100%)                                                                                                                    |
+| Estimativas da última hora de vida, pontuáveis                       | **0 → 8.063** (100%)                                                                                                                          |
+| Gap de estimativa na última hora de vida                             | **10,0 s** (o mercado das 00:00Z)                                                                                                             |
+| Janelas `1s`/`10s` em mercado de horizonte real > 6 h                | **75% / 38% → 0 de 3.868 / 0 de 2** (amostra de 1 h 40)                                                                                       |
+| Erros novos (recorder, estimator, paper, portfolio, resolution, api) | **0 em todos os seis**, acumulado em 37 min                                                                                                   |
+| Bucket de horizonte no motivo do `enter`                             | **`priority_2_crypto_1d_7d`** às 00:27:46Z                                                                                                    |
+| RAM                                                                  | recorder 155/832 MiB, resolution 44/192, estimator 33/192, paper 32/256, portfolio 30/192                                                     |
 
 **Taxa de volume — a re-medir em 48 h.** Duas janelas pós-deploy: 443 linhas em
 21,6 min (projeta ~29,5 k/dia) e **1.889 linhas em 1 h 40 (projeta ~27,0 k/dia)**,
@@ -2520,7 +2519,6 @@ cinco serviços seguem em zero erros.
 Evidência completa em
 [`docs/test-results/RFC-016-intraday-horizon.md`](test-results/RFC-016-intraday-horizon.md);
 o documento em [`docs/rfcs/RFC-016-polymarket-intraday-horizon.md`](rfcs/RFC-016-polymarket-intraday-horizon.md).
-
 
 ## Próximo passo mínimo
 
@@ -2939,14 +2937,14 @@ medidas de novo **depois** do deploy.
 
 ### O que a re-medição desmentiu, antes de qualquer linha de código
 
-| Premissa de 28/08 | Medido em 01/09 |
-| --- | --- |
+| Premissa de 28/08                                       | Medido em 01/09                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | "os 308 terminais `unknown` são permanentes por design" | **confirmado, e agora com a data**: os 308 estão entre `2026-08-22 01:38Z` e `2026-08-25 01:33Z`, todos anteriores ao primeiro `valid_from` de `polymarket_market_metadata_versions` (`2026-08-25 01:42:43Z`). O rótulo "anterior a 25/08" é medido, não estimado. |
-| "categorias: crypto, macro, weather" | confirmado: 1294 / 55 / 1, mais 34 sem categoria no histórico |
-| "o 500 do `/decisions` não foi investigado" | **causa-raiz encontrada** (abaixo) |
-| "`/opportunities` a ~505 ms, fica para outro escopo" | **786 ms** ao medir o plano, com sort externo em disco — entrou no escopo |
-| "RFC-016 em produção → a aba Rápidos entra" | entra, **e o universo tem 0 mercados com horizonte < 6 h** neste instante |
-| "`end_ts` serve para ranquear por horizonte" | **falso onde importa**: cobre 219 dos 372 tokens do painel; a cadeia versionada cobre 372, e onde ambos existem discordam em 0 |
+| "categorias: crypto, macro, weather"                    | confirmado: 1294 / 55 / 1, mais 34 sem categoria no histórico                                                                                                                                                                                                      |
+| "o 500 do `/decisions` não foi investigado"             | **causa-raiz encontrada** (abaixo)                                                                                                                                                                                                                                 |
+| "`/opportunities` a ~505 ms, fica para outro escopo"    | **786 ms** ao medir o plano, com sort externo em disco — entrou no escopo                                                                                                                                                                                          |
+| "RFC-016 em produção → a aba Rápidos entra"             | entra, **e o universo tem 0 mercados com horizonte < 6 h** neste instante                                                                                                                                                                                          |
+| "`end_ts` serve para ranquear por horizonte"            | **falso onde importa**: cobre 219 dos 372 tokens do painel; a cadeia versionada cobre 372, e onde ambos existem discordam em 0                                                                                                                                     |
 
 ### O 500 de 31/08 não era irreproduzível — era um orçamento de 1 segundo
 
@@ -2962,7 +2960,8 @@ liderados por `decision_kind` / `condition_id` / `token_id`. E o orçamento:
 
 ```ts
 // database.ts
-const queryTimeoutMs = overrides.queryTimeoutMs ?? config.database.connectTimeoutMs;
+const queryTimeoutMs =
+  overrides.queryTimeoutMs ?? config.database.connectTimeoutMs;
 //                                                  ^ config/runtime.json: 1000
 poolConfig.statement_timeout = queryTimeoutMs;
 ```
@@ -2974,9 +2973,9 @@ que "não reproduz": o custo depende do cache, e a tabela crescia ~545 MB/dia se
 poda até a migration 0016. Em 31/08 18:21Z, antes da poda de 449 mil linhas, a
 mesma varredura era múltiplos disso.
 
-| consulta | antes | depois | medido em produção pós-deploy |
-| --- | --- | --- | --- |
-| `/polymarket/decisions` | seq scan + sort, 92.199 buffers lidos, **715 ms** | index only scan backward na PK, 104 acertos | **2,2 ms** |
+| consulta                    | antes                                                                   | depois                                          | medido em produção pós-deploy                     |
+| --------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------- |
+| `/polymarket/decisions`     | seq scan + sort, 92.199 buffers lidos, **715 ms**                       | index only scan backward na PK, 104 acertos     | **2,2 ms**                                        |
 | `/polymarket/opportunities` | `DISTINCT ON` sem usar o índice, sort externo 9,5 MB/worker, **786 ms** | loose index scan (1 lookup por token + lateral) | **23,8 ms**, e 200/200 linhas com instante de fim |
 
 `decision_id DESC` também conserta um defeito latente de paginação: um ciclo do
@@ -3000,12 +2999,12 @@ porque "quanto está retido" e "quanto custa de disco" são perguntas diferentes
 
 ### Perímetro — verificado de dentro do servidor
 
-| location (todos `location =`, GET-only) | sem sessão | método errado |
-| --- | --- | --- |
-| `/api/polymarket/overview` | 401 | 404 em POST/PUT/DELETE/PATCH |
-| `/api/polymarket/events` | 401 | 404 em POST/PUT/DELETE/PATCH |
-| `/api/polymarket/data-quality` | 401 | 404 em POST/PUT/DELETE/PATCH |
-| `/api/polymarket/paper/performance` | 401 | 404 em POST/PUT/DELETE/PATCH |
+| location (todos `location =`, GET-only) | sem sessão | método errado                |
+| --------------------------------------- | ---------- | ---------------------------- |
+| `/api/polymarket/overview`              | 401        | 404 em POST/PUT/DELETE/PATCH |
+| `/api/polymarket/events`                | 401        | 404 em POST/PUT/DELETE/PATCH |
+| `/api/polymarket/data-quality`          | 401        | 404 em POST/PUT/DELETE/PATCH |
+| `/api/polymarket/paper/performance`     | 401        | 404 em POST/PUT/DELETE/PATCH |
 
 E as escritas seguem fechadas: `POST /paper/intents`, `/paper/orders`,
 `/paper/kill-switch`, `/portfolio/halt` e `/portfolio/resume` → **404**. Controle
@@ -3045,13 +3044,13 @@ precisa ser visível em vez de ser uma suposição.
 
 ### Controles positivos (a lente de degeneração, aplicada às verificações)
 
-| verificação | controle rodado |
-| --- | --- |
-| perímetro exato sob `/paper` | trocar `location =` por `^~` na performance → o teste falha com 2 erros |
-| trava de método nos locations novos | remover o `if ($request_method != GET)` de `/events` → o teste falha |
-| aviso de "recarregue" | escrever um sha diferente em `deploy/release-sha` e recarregar → o aviso aparece na tela com os dois shas |
-| rotas registradas na API | um caminho inventado devolve `ROUTE_NOT_FOUND`, as quatro novas devolvem 401 |
-| `budget_used_pct` em bytes vivos | a fixture dá `live_tup`/`dead_tup` de forma que vivo ≠ físico e inclui `portfolio_decisions`, que a definição antiga não enxergava |
+| verificação                         | controle rodado                                                                                                                    |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| perímetro exato sob `/paper`        | trocar `location =` por `^~` na performance → o teste falha com 2 erros                                                            |
+| trava de método nos locations novos | remover o `if ($request_method != GET)` de `/events` → o teste falha                                                               |
+| aviso de "recarregue"               | escrever um sha diferente em `deploy/release-sha` e recarregar → o aviso aparece na tela com os dois shas                          |
+| rotas registradas na API            | um caminho inventado devolve `ROUTE_NOT_FOUND`, as quatro novas devolvem 401                                                       |
+| `budget_used_pct` em bytes vivos    | a fixture dá `live_tup`/`dead_tup` de forma que vivo ≠ físico e inclui `portfolio_decisions`, que a definição antiga não enxergava |
 
 ### Limite honesto da verificação de navegador
 
@@ -3069,13 +3068,13 @@ medidas direto no banco.
 Encontrado durante a verificação, e a aba "Visão geral" nova é justamente onde
 ele apareceria primeiro (card **Coleta**, "Último livro").
 
-| fluxo | último registro | linhas nos últimos 5 min |
-| --- | --- | --- |
-| `polymarket_book_deltas` | **2026-09-01 22:43:47Z** | **0** |
-| `polymarket_book_snapshots` | 23:19:48Z | 186 |
-| `polymarket_book_snapshots_full` | 23:22:47Z | 557 |
-| `polymarket_rtds_prices` | 23:23:39Z | 548 |
-| `polymarket_trades` | 23:04:51Z | 0 |
+| fluxo                            | último registro          | linhas nos últimos 5 min |
+| -------------------------------- | ------------------------ | ------------------------ |
+| `polymarket_book_deltas`         | **2026-09-01 22:43:47Z** | **0**                    |
+| `polymarket_book_snapshots`      | 23:19:48Z                | 186                      |
+| `polymarket_book_snapshots_full` | 23:22:47Z                | 557                      |
+| `polymarket_rtds_prices`         | 23:23:39Z                | 548                      |
+| `polymarket_trades`              | 23:04:51Z                | 0                        |
 
 Universo com **93 membros, 92 ainda vivos**, próximo fim em `2026-09-02 04:00Z`.
 Nenhum `WS_SINGLE_CONNECTION_DOWN` nem `WS_BOTH_CONNECTIONS_DOWN` no período, e
@@ -3084,14 +3083,14 @@ vendo** este buraco.
 
 **Recuperou sozinho, no segundo restart.** O arco completo, medido:
 
-| instante | fato |
-| --- | --- |
-| `22:43:47Z` | último delta. O regime até ali era de ~9.000/min |
-| `23:14Z` | merge do PR #76 e CD — o recorder ainda roda a imagem de 31/08 |
-| `23:19Z` | rebuild do profile `polymarket`. **Não recuperou** |
-| `23:34Z` | restart dos containers pelo CD do PR #77 |
-| `23:36Z` | 3.662 deltas |
-| `23:38Z` | **8.892 deltas em 186 tokens** — regime cheio de volta |
+| instante    | fato                                                           |
+| ----------- | -------------------------------------------------------------- |
+| `22:43:47Z` | último delta. O regime até ali era de ~9.000/min               |
+| `23:14Z`    | merge do PR #76 e CD — o recorder ainda roda a imagem de 31/08 |
+| `23:19Z`    | rebuild do profile `polymarket`. **Não recuperou**             |
+| `23:34Z`    | restart dos containers pelo CD do PR #77                       |
+| `23:36Z`    | 3.662 deltas                                                   |
+| `23:38Z`    | **8.892 deltas em 186 tokens** — regime cheio de volta         |
 
 **Por que não é desta sessão:** a parada começou 30 min antes do merge e até
 23:19Z o recorder rodava a imagem de 31/08. E ela **sobreviveu a um restart**,
@@ -3110,3 +3109,217 @@ silêncio. É área da RFC-007 e precisa de prompt próprio.
 mostra `last_book_delta_age_ms` — durante a parada teria marcado "53 min" na
 primeira coisa que o operador vê ao abrir o painel. É a primeira vez que este
 modo de falha teria sido visível sem alguém rodar SQL.
+
+## SESSÃO 2026-09-02 — RFC-018: AS DECISÕES DE CALIBRAÇÃO DE 27/08 VIRAM CÓDIGO (PRs #79–#84)
+
+Seis PRs mergeados e **ativos em produção** (`release-sha a7c9e45`, confirmado
+DENTRO dos containers de profile, nunca por `compose ps`). Migration 0018
+aplicada às 01:05:14Z. Cada correção entrou com teste de regressão **verificado
+falhando no código anterior**, e cada premissa do escopo foi **re-medida antes de
+codar** — três caíram.
+
+### As três premissas do escopo que a re-medição desmentiu
+
+| Premissa (27–28/08)                                       | Medido em 2026-09-01/02                                                                        |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `DATA_STALENESS` nunca foi exercitado                     | **falso**: 58 aberturas desde 28/08 20:54:48Z. Faltavam **dois** breakers, não três            |
+| com (b), o TTL de 90 dias "passa a ser o limite que vale" | **falso**: a redução leva a janela a ~19 dias. A quota de 0,9 GB continua vencendo o TTL       |
+| a chave nova do cap devolve diversificação ao livro       | **falso na população de hoje**: o bucket gigante continua com 81,5% — porque ele é **verdade** |
+
+### Item 1 — o decision log grava quando o veredito muda (PR #79)
+
+**Fator medido ANTES de codar** (a decisão exige medição, não estimativa), sobre
+a janela retida de 2,17 dias, 226 953 linhas de entrada em 330 tokens:
+assinatura `veredito | reason_code | binding constraint` mudaria **26 256** vezes
+→ **8,6×** (8,3× em 31/08, 9,8× em 01/09).
+
+**Fator VERIFICADO em produção** depois do rebuild (01:15Z):
+
+| Fase                                   | Linhas/minuto |
+| -------------------------------------- | ------------- |
+| antes (00:20–01:14Z)                   | **91,3**      |
+| depois, com os minutos de restart      | 12,4          |
+| depois, em regime (01:20Z em diante)   | **11,1**      |
+| **redução real, em regime**            | **8,2×**      |
+
+O 8,2× medido em produção bate com o **8,6×** previsto do log histórico. A
+diferença são os primeiros minutos depois do restart, em que todo token cuja
+última linha não casava a assinatura conta como primeira avaliação e escreve.
+
+O painel **mantém a cadência**: 100,7 linhas/minuto depois do deploy, como
+desenhado — ele é a vista viva, e quem emagreceu foi o log.
+
+**53% do que sobra é um par de vetos de staleness trocando de lugar**
+(`BOOK_STALE` ↔ `DATA_STALE`, 14 045 transições na janela medida). Unificá-los
+daria ~18×, mas é **outra** assinatura e a decisão nomeia esta. Registrado como
+fato, não aplicado.
+
+**Interpretação registrada (RFC-018 D1):** "toda intenção persiste" (RFC-013
+tarefa 7) = toda intenção **DISTINTA** — a leitura que o ciclo de saída já tinha
+aprovada. Sem esse registro, escrever menos leria como afrouxamento silencioso da
+tarefa 7. A prova "o motor olhou" continua fora do log
+(`portfolio_gate_measurements`, horária e `protected`) e agora também no
+`PORTFOLIO_CYCLE`, que separa `evaluated` de `decisions_written`. **Nenhum
+heartbeat novo foi acrescentado ao log.**
+
+**TTL 180 → 90, e o número honesto:** 90 **continua não sendo o limite que
+vale**. A 12,4 linhas/minuto (~17,9 mil/dia) × 3 634 B/linha, a quota de 0,9 GB
+entrega **~19 dias** — "semanas", como a decisão previu, e uma ordem de grandeza
+abaixo dos 90 declarados. As duas tabelas do portfolio foram podadas por `quota`
+em **todas** as rodadas registradas no `polymarket_retention_log`, nenhuma por
+TTL. O comentário no código diz isso em vez de deixar o número decorativo.
+
+### Item 2 — o cap de fonte de resolução muda de chave, não de número (PR #80)
+
+`caps.fonteResolucao` **fica em 0,25**. A chave passa de adapter para **família
+de cláusula de regra** (léxico da RFC-012 sobre a `rule_version` em vigor as-of a
+decisão), com fallback **nomeado**.
+
+**MEDIDO sobre os 92 mercados do universo vivo — e desmente o benefício
+esperado:**
+
+| Chave NOVA                       | n   | %     | Chave de HOJE     | n   | %     |
+| -------------------------------- | --- | ----- | ----------------- | --- | ----- |
+| `OBJETIVA_UNICA:binance`         | 75  | 81,5% | adapter `0x6507…` | 74  | 80,4% |
+| `OBJETIVA_UNICA:federal_reserve` | 11  | 12,0% | adapter `0x69c4…` | 9   | 9,8%  |
+| `CLAUSULA_NAO_CLASSIFICADA`      | 5   | 5,4%  | adapter `0x2F5e…` | 5   | 5,4%  |
+| `OBJETIVA_UNICA:chainlink+twap`  | 1   | 1,1%  | 4 URLs            | 4   | 4,3%  |
+
+**O bucket gigante não some — porque ele é verdade.** 81,5% do universo vivo é
+mesmo decidido pelo candle da Binance (o mesmo fato que a RFC-019 mediu). A chave
+nova **não devolve teto ao livro**: com 0,25 de US$ 1.000 ele segue limitado a
+~US$ 250 enquanto a concentração for essa. O que muda é **do que o bucket fala** —
+antes "estes 74 usam o mesmo adapter" (encanamento de venue), agora "estes 75
+morrem juntos se o feed da Binance mentir" (risco) — e os 11 mercados de taxa do
+Fed, que o adapter jogava no mesmo balde, ganham o seu. O que a decisão temia
+**não** aconteceu: o fallback nomeado ficou em 5,4%.
+
+**Verificado em produção** (01:15:05Z): `portfolio_exposures` passou a carregar
+`OBJETIVA_UNICA:binance` e `OBJETIVA_UNICA:federal_reserve` na dimensão
+`resolution_source`, que **muda de valor, não de nome**.
+
+**ACHADO LATERAL, registrado e NÃO corrigido:** os 5 de
+`CLAUSULA_NAO_CLASSIFICADA` não são cláusulas inclassificáveis — são **quatro
+fontes reais que o léxico não nomeia**: BCE, U.S. EIA, Bank of Japan (2) e IMF
+Portwatch. Acrescentá-las mudaria `config/resolution-lexicon.json`, que é
+**conteúdo endereçado pelo `score_version` da RFC-012**: derrubaria o `sourceRisk`
+de 0,6 para 0, mudaria a precisão de regra e exigiria **cunhar versão de score
+nova e re-pontuar**. É mudança da RFC-012, não desta. Até lá as quatro dividem um
+bucket, o que **super**concentra — a direção segura.
+
+**O container do portfolio passou a montar `config/resolution-lexicon.json`**, o
+mesmo arquivo do serviço de resolução. Confirmado no boot: os dois logam
+`lexicon_hash = 82ae4c54…`, idênticos. Quando o arquivo não está montado o boot
+loga `PORTFOLIO_LEXICON_LOADED` com `level: warn` e `from_file: false` — o
+fallback para o vocabulário embutido deixou de ser invisível.
+
+### Item 3 — a metade "proposed" do breaker nunca chegava ao módulo (PR #81)
+
+**Defeito, não falta de oportunidade.** A RFC-013 item 4(i) pede o breaker em
+"`umaResolutionStatus` = **proposed/disputed** em qualquer posição". A condição
+implementada lia só `disputeActive || action === 'CIRCUIT_BREAKER'`, e o estado
+`proposed` **não chegava ao módulo**: `resolution_market_state` não tinha coluna
+para a proposta, embora o `recompute.ts` já a calculasse e a descartasse.
+
+Medido: 482 mercados em `proposed`, 340 em `settled`, `dispute_active` **falso em
+781 de 781** e `effective_action = 'CIRCUIT_BREAKER'` **nunca**. A metade
+"proposed" do nome era inalcançável nesta população — a lente de degeneração dos
+gates aplicada a um controle: ele não falhava, ele não podia rodar.
+
+**A chance real que ele perdeu:** a posição `0x71b5721c…` foi aberta em 01/09
+11:59:06Z e atravessou uma proposta UMA viva de **16:04:52Z a 16:14:48Z** (bond
+250, liveness 600 s) — ~10 ciclos de painel — em silêncio.
+
+Migration 0018 (`resolution_market_state.proposal_active`, `NOT NULL DEFAULT
+FALSE`), gravada como `proposalActive && !terminal`. **Sem backfill de
+propósito**: derivar o status UMA numa migration seria uma segunda
+implementação, divergente, do que o recompute já faz. Latência não é obstáculo —
+mediana **0 s** sobre as 483 propostas registradas.
+
+**Verificado em produção:** 3 mercados com `proposal_active = true` às 01:25Z
+(nenhum deles com posição aberta, então o breaker corretamente segue calado), e o
+G3 passou a reportar `breakers_missing: ["UMA_PROPOSED_OR_DISPUTED",
+"RULE_CLARIFICATION"]` com `DATA_STALENESS` já em `breakers_exercised`.
+
+**DECISÃO DO PROPRIETÁRIO (2026-09-02) — `RULE_CLARIFICATION`: esperar dado
+real, sem construir mecanismo de injeção.** A lógica está correta e o gate é o
+que a RFC pede; ele só nunca coincidiu (4 clarificações materiais em ~8 dias
+contra 2 posições abertas de ~200 mercados ≈ **200 dias** de espera). O G3
+devolve `INSUFFICIENT_DATA` de qualquer forma enquanto a base de evidência do G2
+não existir, e com 30–100 mercados sob posição a taxa medida dá **~13 dias** —
+dentro da janela de 60 dias do G2. Construir injeção hoje seria bypass de um gate
+travado por outro motivo.
+
+### Item 4 — `models-cli`, o registro de versão de modelo (PR #82)
+
+Fecha o **BLOQUEIO/TODO** que estava aberto neste handoff. Até agora só o
+catálogo do boot registrava versões (as **não calibradas** da imagem); treinar uma
+calibrada não tinha caminho, e a alternativa era INSERT à mão — criar a linhagem
+para a qual toda estimativa futura aponta sem nenhuma das checagens que a tornam
+confiável.
+
+CLI e não endpoint, pela razão do `gates-cli`. **Reusa `registerModel`**, então as
+garantias são as mesmas: `model_id` existente é recusado
+(`MODEL_VERSION_EXISTS`), nascimento em `shadow`, fronteira de regime antes do
+statement, evento `registered`. Sem revisão de release legível recusa com
+`GIT_SHA_UNAVAILABLE`.
+
+```sh
+docker compose exec -T api node apps/api/dist/models-cli.js list
+docker compose exec -T api node apps/api/dist/models-cli.js show crypto_updown_gbm@1.1.0
+docker compose exec -T api node apps/api/dist/models-cli.js register \
+  --family crypto_updown_gbm --version 1.2.0 --category crypto_updown \
+  --feature-set-version 1.2.0 --seed 42 < hyperparams.json
+```
+
+Hiperparâmetros por **stdin** como objeto JSON, nunca por bandeiras: são parte do
+que a versão significa, e um corpo ilegível é recusado em vez de virar `{}`.
+
+### Item 5 — a mensagem que faltava e o TTL do painel (PR #83)
+
+`FEATURES_WINDOW_FAILED` continuava sem mensagem, com **zero ocorrências nas
+últimas 24 h** — latente, e é a forma que o projeto já pagou duas vezes. O padrão
+do #37 foi aplicado aos **quatro** sítios nus do mesmo arquivo
+(`PAPER_HEARTBEAT_FAILED`, `FEATURES_WINDOW_FAILED`, `FEATURES_TICK_FAILED`,
+`PAPER_BROKER_TICK_FAILED`).
+
+`portfolio_panel_snapshots`: **TTL 30 → 2 dias**, redeclarado e não financiado.
+Medido `pg_column_size` **2 031 B/linha** (p50 2 000, p95 2 408) a 106 201
+linhas/dia contra quota de 0,54 GB → a quota entrega ~2,5 dias e a janela retida
+observada era 2,05. Nada lê fundo (a API lê `DISTINCT ON (token_id)` e o detalhe
+`LIMIT 1`). **Nenhuma quota nova foi inventada.**
+
+### Achado da própria verificação — órfãos em `portfolio_exposures` (PR #84)
+
+Às **01:14:48Z**, quando a chave da dimensão mudou, as duas linhas antigas do
+adapter **não sumiram**: o upsert só escreve o que existe e nunca apaga o que
+deixou de existir. Elas congelaram no último valor enquanto as novas avançavam.
+
+**Não é cosmético:** `loadRiskSurvival` conta `utilization > 1` sobre **toda**
+linha da tabela, então um órfão acima do cap reportaria um breach não bloqueado
+pelo resto da vida do sistema e prenderia o **G3 em FAIL** por uma posição que
+ninguém tem. O defeito é **anterior a esta sessão** (todo bucket cujo último
+membro fecha já deixava órfão), mas a troca de chave o tornou material de uma vez
+só. O sizing nunca foi afetado — `capHeadroomFor` lê as linhas em memória do
+ciclo, nunca a tabela. **Verificado em produção às 01:26:42Z:** as 14 linhas da
+tabela têm todas o mesmo `computed_at` e `resolution_source` só tem as duas
+famílias de cláusula.
+
+### Zero regressão nos gates
+
+6 medições/hora mantidas (as contagens de 24 e 42 são os ciclos de boot dos
+restarts), os seis gates com o mesmo veredito de antes
+(`INSUFFICIENT_DATA`), **1 `PORTFOLIO_REPLAY_OK` e 0
+`PORTFOLIO_REPLAY_MISMATCH`** desde o rebuild, e nenhum erro no log do portfolio.
+
+### O que fica aberto
+
+- **Léxico não cobre 4 fontes reais** (BCE, EIA, BoJ, IMF Portwatch). Corrigir
+  exige cunhar `score_version` novo e re-pontuar — trabalho da RFC-012.
+- **`RULE_CLARIFICATION`** segue por exercitar, por decisão do proprietário:
+  esperar a coincidência real, que fica provável quando a base do G2 existir.
+- **Posição em mercado liquidado sem `resolved_at`:** `0x71b5721c…` settled em
+  01/09 16:14Z, saiu do universo 16:26Z, e segue com 8,11 shares e `resolved_at`
+  NULL em `paper_positions`. Fora do escopo desta sessão; é caminho da RFC-011.
+- **Soak do item 1:** a janela retida do decision log deve crescer na direção de
+  ~19 dias ao longo dos próximos dias. Re-medir em 48 h.

@@ -1,6 +1,6 @@
 # RFC-018 — Gates mensuráveis e calibração: as decisões de 27/08 viram código
 
-**Status:** in-progress (2026-09-02)
+**Status:** implemented (2026-09-02, PRs #79–#84 — verificada em produção em `release-sha a7c9e45`, com a redução do decision log medida em **8,2×** em regime e o cap rechaveado por família de cláusula)
 **Dependências:** RFC-013 (motor de portfólio e gates, código completo), RFC-012 (léxico de cláusula e `rule_version`, ativa em produção), RFC-010 (registro de versões de modelo, ativo)
 **Habilita:** um decision log cuja janela retida serve ao `entryProvenanceFor`; um cap de fonte de resolução que diversifica em vez de ser teto global; o G3 exercitando o breaker que a RFC-013 exige e o código não conseguia disparar; o caminho operacional de registro de versão calibrada
 
