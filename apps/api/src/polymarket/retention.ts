@@ -388,9 +388,20 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
   // The decision log is the audit trail of every entry, exit, veto and resize,
   // and it carries its own book excerpt so replay survives the raw-delta
   // window. It is the largest slice for that reason.
+  //
+  // TTL 180 -> 90, owner decision 2026-08-27, applied after RFC-018 item 1 made
+  // the entry cycle write only when the verdict changes. Both numbers are
+  // declared intent and NEITHER binds: measured 2026-09-02, the log wrote
+  // 106 402 rows/day at 3 634 B/row and the quota delivered a 2,17-day window,
+  // pruned by `quota` in every recorded run. At the measured 8,6x reduction the
+  // write rate drops to ~12,4 k rows/day (~45 MB/day) and this quota delivers
+  // about NINETEEN days — weeks instead of days, which is what the decision was
+  // after, and still an order of magnitude short of the declared 90. Ninety
+  // days of the reduced rate would want ~4 GB against a 2 GB RFC-013 slice.
+  // The honest statement is: the quota still wins, at ~19 days.
   {
     table: "portfolio_decisions",
-    ttlDays: 180,
+    ttlDays: 90,
     quotaBytes: 0.9 * GB,
     timeColumn: "received_at",
     protected: false,

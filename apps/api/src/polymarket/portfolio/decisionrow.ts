@@ -54,6 +54,38 @@ export function entryDecisionKind(evaluation: Evaluation): DecisionKind {
   return evaluation.vetoed ? "VETO" : "ENTRY";
 }
 
+/**
+ * The signature of an entry-path verdict: what has to change before the log
+ * writes the row again.
+ *
+ * RFC-018 D1. The RFC-013 task 7 requirement is that every INTENTION persists;
+ * the exit cycle was already approved reading that as every DISTINCT intention
+ * (`runner.ts`, exit cycle), and this extends the same reading to the entry.
+ * Two evaluations with the same signature are the same intention observed
+ * twice, and the log keeps the first.
+ *
+ * The owner's decision (2026-08-27) names the triple verdict + reason code +
+ * binding constraint. `kind` is carried too — a market that stops being vetoed
+ * and starts being merely rejected changed its verdict — which can only make
+ * the rule write MORE often than the decision requires, never less.
+ *
+ * Derived from the persisted columns, not from a field of its own, so a row
+ * written by an earlier revision compares correctly against one written now.
+ */
+export function entrySignature(row: {
+  readonly kind: DecisionKind;
+  readonly outcome: string;
+  readonly reasonCode: string | null;
+  readonly bindingConstraint: string;
+}): string {
+  return [
+    row.kind,
+    row.outcome,
+    row.reasonCode ?? "-",
+    row.bindingConstraint,
+  ].join("|");
+}
+
 /** Build the decision row for one entry-path evaluation. */
 export function entryDecisionRow(input: {
   readonly evaluation: Evaluation;

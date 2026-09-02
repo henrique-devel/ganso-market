@@ -6,6 +6,7 @@
 // the replay test meaningful, and the migration's
 // `CHECK (newest_input_ts <= decision_ts)` is the backstop.
 
+import { entrySignature } from "./decisionrow.js";
 import type { PortfolioPool } from "./types.js";
 import type {
   BindingConstraint,
@@ -350,6 +351,67 @@ export interface DecisionRow {
   readonly outcome: DecisionOutcome;
   readonly reasonCode: string | null;
   readonly portfolioState: "NORMAL" | "REDUCE_ONLY" | "HALTED";
+}
+
+/** The entry verdict currently on record for a token, and the row that holds it. */
+export interface LastEntryVerdict {
+  readonly decisionId: number;
+  readonly signature: string;
+}
+
+/**
+ * The newest entry-path verdict of every token, in one grouped scan.
+ *
+ * RFC-018 D1: the entry cycle writes a decision only when the verdict CHANGES,
+ * so it needs the verdict already on record. The exit cycle asks this per
+ * position (`lastExitSignature`) because a book of open positions is small; the
+ * entry cycle asks about the WHOLE eligible universe every minute, so one round
+ * trip per market would be ~200 extra queries a minute for an answer that one
+ * lateral over the token index already gives.
+ *
+ * A token with no row on record is absent from the map, which the caller reads
+ * as "first evaluation" and writes. That is also what happens after retention
+ * prunes a token's last row: the log re-establishes the verdict instead of
+ * inferring it from a row that no longer exists.
+ */
+export async function lastEntryVerdicts(
+  pool: PortfolioPool,
+  tokenIds: readonly string[],
+): Promise<Map<string, LastEntryVerdict>> {
+  const verdicts = new Map<string, LastEntryVerdict>();
+  if (tokenIds.length === 0) {
+    return verdicts;
+  }
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT t.token_id, d.decision_id, d.decision_kind, d.outcome,
+            d.reason_code, d.binding_constraint
+       FROM unnest($1::text[]) AS t(token_id)
+       JOIN LATERAL (
+         SELECT decision_id, decision_kind, outcome, reason_code,
+                binding_constraint
+           FROM portfolio_decisions p
+          WHERE p.token_id = t.token_id
+            AND p.decision_kind IN ('ENTRY', 'VETO')
+          ORDER BY p.decision_ts DESC, p.decision_id DESC
+          LIMIT 1
+       ) d ON TRUE`,
+    [[...tokenIds]],
+  );
+  for (const row of result.rows) {
+    verdicts.set(String(row.token_id), {
+      decisionId: Number(row.decision_id),
+      signature: entrySignature({
+        kind: String(row.decision_kind) as DecisionKind,
+        outcome: String(row.outcome),
+        reasonCode:
+          row.reason_code === null || row.reason_code === undefined
+            ? null
+            : String(row.reason_code),
+        bindingConstraint: String(row.binding_constraint),
+      }),
+    });
+  }
+  return verdicts;
 }
 
 /** Append one decision. Returns its id so the panel can point at it. */
