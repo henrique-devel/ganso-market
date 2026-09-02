@@ -416,11 +416,29 @@ registro (nasce shadow) -> estimativas shadow -> relatório de calibração
    proveniência das estimativas que já apontam para ele). Evento
    `registered` em `fundamental_model_events`.
 
-   > **BLOQUEIO/TODO:** nesta entrega o registro é feito pela função
-   > `registerModel` do módulo `registry.ts`; **não existe CLI nem endpoint
-   > HTTP que registre modelo**. A API só lê o registry e faz promote/demote.
-   > Enquanto não houver um comando de treino/registro, registrar um modelo em
-   > produção exige código.
+   O caminho operacional é o `models-cli` (RFC-018 item 4), fora do perímetro
+   HTTP pela mesma razão do `gates-cli`: a API publica leitura, e o que muda o
+   que o sistema pode acreditar fica fechado na borda. Ele **reusa**
+   `registerModel`, então as garantias são as mesmas — identidade imutável por
+   conteúdo, nascimento em `shadow`, fronteira de regime verificada antes do
+   INSERT, evento `registered` no rastro de auditoria. Sem revisão de release
+   legível ele recusa com `GIT_SHA_UNAVAILABLE`: modelo sem proveniência
+   completa não deve existir.
+
+   ```sh
+   docker compose exec -T api node apps/api/dist/models-cli.js list
+   docker compose exec -T api node apps/api/dist/models-cli.js show crypto_updown_gbm@1.1.0
+   docker compose exec -T api node apps/api/dist/models-cli.js register \
+     --family crypto_updown_gbm --version 1.2.0 --category crypto_updown \
+     --feature-set-version 1.2.0 --seed 42 \
+     --train-window-start 2026-05-01T00:00:00Z \
+     --train-window-end 2026-08-01T00:00:00Z < hyperparams.json
+   ```
+
+   Os hiperparâmetros entram por stdin como objeto JSON — são parte do que a
+   versão SIGNIFICA, e um corpo ilegível é recusado em vez de virar `{}`.
+   Registrar não ativa nada: a versão nasce em `shadow` e não serve estimativa
+   nenhuma até um relatório de gate PASS e uma promoção explícita.
 
 2. **Estimativas shadow.** A cada ciclo, todo modelo não promovido que
    conseguir falar gera uma linha `source = 'MODEL'`, `status = 'shadow'`, ao
