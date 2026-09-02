@@ -952,6 +952,14 @@ export interface MarketStateInput {
   readonly expectedLockupS: number | null;
   readonly p95LockupS: number | null;
   readonly disputeActive: boolean;
+  /**
+   * A UMA request is proposed and its liveness window is still running.
+   *
+   * Distinct from `disputeActive`, and the RFC-013 breaker needs both: the
+   * proposal is the moment a held position is exposed to the trinary payoff,
+   * and by the time it becomes a dispute the bond is already posted.
+   */
+  readonly proposalActive: boolean;
   readonly suspectJump: boolean;
   readonly hardFlags: readonly string[];
   readonly eventIds: readonly string[];
@@ -969,9 +977,10 @@ export async function upsertMarketState(
     `INSERT INTO resolution_market_state
        (condition_id, score_id, score, score_version, action, effective_action,
         resolution_buffer, p_5050, expected_lockup_s, p95_lockup_s,
-        dispute_active, suspect_jump, hard_flags_json, event_ids_json,
+        dispute_active, proposal_active, suspect_jump, hard_flags_json,
+        event_ids_json,
         group_worst_score, justification, prior_kind, computed_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$18)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$19,$12,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$18)
      ON CONFLICT (condition_id) DO UPDATE SET
        score_id = EXCLUDED.score_id,
        score = EXCLUDED.score,
@@ -983,6 +992,7 @@ export async function upsertMarketState(
        expected_lockup_s = EXCLUDED.expected_lockup_s,
        p95_lockup_s = EXCLUDED.p95_lockup_s,
        dispute_active = EXCLUDED.dispute_active,
+       proposal_active = EXCLUDED.proposal_active,
        suspect_jump = EXCLUDED.suspect_jump,
        hard_flags_json = EXCLUDED.hard_flags_json,
        event_ids_json = EXCLUDED.event_ids_json,
@@ -1010,6 +1020,7 @@ export async function upsertMarketState(
       input.justification,
       input.priorKind,
       input.computedAt,
+      input.proposalActive,
     ],
   );
 }

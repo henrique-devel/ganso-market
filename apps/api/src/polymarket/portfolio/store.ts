@@ -210,6 +210,13 @@ export interface ResolutionStateAsOf {
   readonly p5050: string | null;
   readonly expectedLockupS: number;
   readonly disputeActive: boolean;
+  /**
+   * A UMA request is proposed and its liveness window is still running.
+   *
+   * RFC-018 item 3. The RFC-013 breaker is named UMA_PROPOSED_OR_DISPUTED and
+   * could only ever see the second half: this is the first.
+   */
+  readonly proposalActive: boolean;
   readonly justification: string | null;
   readonly computedAt: Date | null;
 }
@@ -221,7 +228,8 @@ export async function resolutionStateFor(
 ): Promise<ResolutionStateAsOf | null> {
   const result = await pool.query<Record<string, unknown>>(
     `SELECT effective_action, score, score_version, resolution_buffer, p_5050,
-            expected_lockup_s, dispute_active, justification, computed_at
+            expected_lockup_s, dispute_active, proposal_active, justification,
+            computed_at
        FROM resolution_market_state
       WHERE condition_id = $1`,
     [conditionId],
@@ -252,6 +260,7 @@ export async function resolutionStateFor(
         : String(row.p_5050),
     expectedLockupS: Number(row.expected_lockup_s ?? 0),
     disputeActive: row.dispute_active === true,
+    proposalActive: row.proposal_active === true,
     justification:
       row.justification === null || row.justification === undefined
         ? null

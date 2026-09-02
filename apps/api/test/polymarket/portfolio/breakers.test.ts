@@ -40,6 +40,7 @@ const QUIET: BreakerObservation = {
   tokenId: "t1",
   holdsPosition: true,
   disputeActive: false,
+  proposalActive: false,
   resolutionAction: "NONE",
   midNowScaled: s("0.50"),
   midBeforeScaled: s("0.49"),
@@ -66,6 +67,23 @@ describe("circuit breaker detection", () => {
     expect(detect({ disputeActive: true })).toContain(
       "UMA_PROPOSED_OR_DISPUTED",
     );
+  });
+
+  it("UMA_PROPOSED_OR_DISPUTED: a live PROPOSAL on a market we hold", () => {
+    // RFC-018 item 3. The condition used to read `disputeActive` alone, and
+    // `dispute_active` has been false in 781 of 781 production market states
+    // while 482 markets went through `proposed` — a breaker named for both
+    // halves that could only ever see one. The proposal is also the half worth
+    // acting on: by the time it is a dispute the bond is posted.
+    expect(detect({ proposalActive: true })).toContain(
+      "UMA_PROPOSED_OR_DISPUTED",
+    );
+  });
+
+  it("UMA_PROPOSED_OR_DISPUTED: a proposal on a market we do NOT hold is silent", () => {
+    expect(
+      detect({ proposalActive: true, holdsPosition: false }),
+    ).not.toContain("UMA_PROPOSED_OR_DISPUTED");
   });
 
   it("UMA_PROPOSED_OR_DISPUTED: not for a market we do NOT hold", () => {

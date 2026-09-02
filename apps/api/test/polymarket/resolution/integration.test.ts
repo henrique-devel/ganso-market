@@ -1229,6 +1229,34 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(sibling.reason).toBe("RESOLUTION_CIRCUIT_BREAKER");
     });
 
+    it("records a LIVE UMA proposal on the market state (RFC-018 item 3)", async () => {
+      // The column the RFC-013 breaker needs. Before it existed the state row
+      // carried only `dispute_active`, which has been false in 781 of 781
+      // production markets while 482 went through `proposed` — so the half of
+      // UMA_PROPOSED_OR_DISPUTED the RFC names first could never fire.
+      const proposedAt = new Date(AS_OF.getTime() - 5 * 60_000);
+      await pool.query(
+        `INSERT INTO polymarket_resolution_events
+           (condition_id, event_type, payload_json, received_at)
+         VALUES ($1,'proposed','{}'::jsonb,$2)`,
+        [CLEAN_ID, proposedAt],
+      );
+      const summary = await recomputeMarkets(deps, "status_change", AS_OF, [
+        CLEAN_ID,
+      ]);
+      expect(summary).toEqual({ scored: 1, failed: 0 });
+
+      const state = await pool.query<Record<string, unknown>>(
+        `SELECT proposal_active, dispute_active FROM resolution_market_state
+          WHERE condition_id = $1`,
+        [CLEAN_ID],
+      );
+      expect(state.rows[0]).toMatchObject({
+        proposal_active: true,
+        dispute_active: false,
+      });
+    });
+
     it("absorbs timeline replays without duplicating events", async () => {
       const before = await pool.query<Record<string, unknown>>(
         `SELECT COUNT(*)::bigint AS n FROM resolution_uma_timeline WHERE condition_id = $1`,
@@ -1269,7 +1297,8 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(summary).toEqual({ scored: 1, failed: 0 });
 
       const states = await pool.query<Record<string, unknown>>(
-        `SELECT condition_id, action, effective_action, dispute_active, justification
+        `SELECT condition_id, action, effective_action, dispute_active,
+                proposal_active, justification
            FROM resolution_market_state
           WHERE condition_id = ANY($1)
           ORDER BY condition_id`,
@@ -1281,6 +1310,11 @@ describe.skipIf(DATABASE_URL === undefined)(
         action: "NONE",
         effective_action: "NONE",
         dispute_active: false,
+        // RFC-018 item 3: a settled market is not under a live proposal, even
+        // when the proposal event arrives after the settle. The portfolio
+        // breaker reads this column, and a stuck TRUE here would freeze a
+        // market whose outcome is already decided.
+        proposal_active: false,
       });
       expect(String(byId.get(GROUP_B)?.justification)).toContain("terminal");
       expect(byId.get(GROUP_A)?.effective_action).toBe("NONE");

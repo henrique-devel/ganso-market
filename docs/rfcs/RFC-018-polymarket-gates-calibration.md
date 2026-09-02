@@ -239,6 +239,20 @@ o cap inerte e continua fora da mesa.
    injetado hoje seria criar um bypass para um gate travado por outro motivo.
 3. `DATA_STALENESS` já está exercitado com dado real (58 aberturas). Registrado.
 
+**Como o defeito é corrigido.** `recompute.ts` já calcula `proposalActive` e o
+descartava. A migration 0018 acrescenta `resolution_market_state.proposal_active`
+(`NOT NULL DEFAULT FALSE` — "ainda não recomputei" tem que ler como "não há
+proposta viva", a mesma direção da coluna vizinha), o recompute passa a gravá-lo
+como `proposalActive && !terminal` (um mercado já liquidado não está sob proposta,
+mesmo quando o evento de proposta chega depois do settle), e o breaker passa a
+ler as duas metades do próprio nome. **Latência não é obstáculo**: medido sobre
+as 483 propostas registradas, o recompute `status_change` cai em **mediana 0 s**
+depois da proposta.
+
+Sem backfill, deliberadamente: derivar o status UMA "de agora" numa migration
+seria uma segunda implementação, divergente, do que o `recompute.ts` já faz. O
+próximo recompute de cada mercado preenche a coluna com a verdade observada.
+
 ### D4 — o registro de versão de modelo é CLI, não endpoint (item 4)
 
 Mesma razão do `gates-cli`: o perímetro HTTP da RFC-013/RFC-010 publica leitura,

@@ -816,6 +816,61 @@ describe.skipIf(DATABASE_URL === undefined)(
     // The three jobs, driven against the real schema.
     // -----------------------------------------------------------------------
 
+    it("opens UMA_PROPOSED_OR_DISPUTED on a live proposal over a held position", async () => {
+      // RFC-018 item 3, the whole chain against the real schema: the resolution
+      // module records a live proposal, the panel cycle reads it, and the
+      // breaker the RFC-013 G3 requires finally has a row.
+      //
+      // It had a real chance and missed it before this: paper position
+      // 0x71b5721c… was opened 2026-09-01 11:59:06Z and sat through a live UMA
+      // proposal from 16:04:52Z to 16:14:48Z — ~10 panel cycles — in silence,
+      // because the state row had nowhere to carry the proposal.
+      await pool().query(
+        `UPDATE resolution_market_state SET proposal_active = TRUE
+          WHERE condition_id = $1`,
+        [CONDITION],
+      );
+      try {
+        await createPortfolioRunner({
+          pool: pool(),
+          config: CONFIG,
+          factorMap: DEFAULT_FACTOR_MAP,
+          lexicon: DEFAULT_RESOLUTION_LEXICON,
+          executionMode: "paper",
+          clock: () => NOW,
+        }).tickOnce("panel");
+
+        const breaker = await pool().query<{
+          kind: string;
+          scope: string;
+          detail_json: Record<string, unknown>;
+        }>(
+          `SELECT kind, scope, detail_json FROM portfolio_circuit_breakers
+            WHERE condition_id = $1 AND kind = 'UMA_PROPOSED_OR_DISPUTED'
+              AND ended_at IS NULL`,
+          [CONDITION],
+        );
+        expect(breaker.rows).toHaveLength(1);
+        expect(breaker.rows[0]?.scope).toBe("market");
+        expect(breaker.rows[0]?.detail_json.proposal_active).toBe(true);
+        expect(breaker.rows[0]?.detail_json.dispute_active).toBe(false);
+      } finally {
+        // The proposal is transient; leaving it TRUE would freeze this market
+        // for every test that runs after this one in the shared database.
+        await pool().query(
+          `UPDATE resolution_market_state SET proposal_active = FALSE
+            WHERE condition_id = $1`,
+          [CONDITION],
+        );
+        await pool().query(
+          `UPDATE portfolio_circuit_breakers SET ended_at = $2
+            WHERE condition_id = $1 AND kind = 'UMA_PROPOSED_OR_DISPUTED'
+              AND ended_at IS NULL`,
+          [CONDITION, NOW],
+        );
+      }
+    });
+
     it("runs the panel cycle end to end and writes what it decided", async () => {
       const runner = createPortfolioRunner({
         pool: pool(),
