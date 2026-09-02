@@ -3486,4 +3486,12 @@ resolveram** (o recreate do Compose às 01:59Z e o CD do #87 às 02:08Z). O kill
 switch do paper engatou às **02:21:05Z** (`RECORDER_STALE`,
 `orders_canceled: 0`) — o gatilho automático funcionando como projetado. É a
 classe já registrada no #78 ("o defeito real é o silêncio, não a parada").
-**Efeito na medição:** as taxas acima são um piso, não um teto.
+
+**Recuperou sozinho, ~2 h depois, sem intervenção** — a mesma assinatura do #78.
+Linhas por hora, medidas depois: 01:00 **488.218** (saudável) · 02:00 **152** ·
+03:00 **58** · 04:00 **19.784** (recuperando) · 05:00 386.678 · 06:00 508.398 ·
+07:00 476.446 · 08:00 592.760 · 09:00 634.192. Parada de ~01:59Z a ~04:00Z,
+~1 M linhas perdidas. O ritmo pós-recuperação (~500–630 mil/hora ≈ 13 M/dia)
+cai **dentro** da faixa que a decisão usou, o que é a confirmação que importa:
+a escolha não dependeu do período parado. **Efeito na medição:** as taxas da
+série são um piso, não um teto — o dia 02/09 carrega duas horas de buraco.
