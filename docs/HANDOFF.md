@@ -186,10 +186,10 @@ publicly_knowable_ts`, descartava **38.200 de 74.412** estimativas MODEL — e
   autorização)
 - Branch principal: `main`
 - RFC-016: **implementada e ativa em produção** desde 2026-08-31 23:57:35Z (migration 0017)
-- RFC-014 + RFC-019: **código completo (2026-09-01, PR #70)**, `crypto_updown_gbm@1.1.0`
-  em `shadow` ao lado da 1.0.0; deploy e verificação em produção na mesma sessão
-- RFC-017: **implementada e rodada em produção** (2026-09-01, PRs #72 e #73);
-  ferramenta de leitura, não muda runtime nem config
+- RFC-014 + RFC-019: **ativas em produção** desde 2026-09-01 12:15:51Z (PR #70,
+  sem migration); `crypto_updown_gbm@1.1.0` em `shadow` ao lado da 1.0.0, nenhuma
+  promovida. Próximo marco: o relatório diário materializar `formSlices` e
+  `coverage_by_form`, e o N=100 da 1.1.0 acumular (~52 mercados/dia nas formas novas)
 - RFC ativa: RFC-013 (motor de portfólio) — fases A–E mergeadas (PRs #30, #33,
   #34, #36, #39) mais os fixes #40 (G1) e o desta sessão (G2/G3/G4/G6);
   migration 0014 aplicada em produção e **nunca alterada** desde então
