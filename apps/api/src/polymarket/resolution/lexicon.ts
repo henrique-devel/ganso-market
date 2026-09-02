@@ -647,6 +647,88 @@ function disjoint(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
   return true;
 }
 
+/** How the rule text names what decides the market. */
+export type RuleClauseSourceClass =
+  | "SUBJETIVA"
+  | "OBJETIVA_UNICA"
+  | "OBJETIVA_MULTIPLA"
+  | "CLAUSULA_NAO_CLASSIFICADA";
+
+export interface RuleClauseFamily {
+  readonly sourceClass: RuleClauseSourceClass;
+  /** The objective single-source terms matched, sorted. Empty for the rest. */
+  readonly sources: readonly string[];
+  /** Bucket key: the class, and the named sources when the class has any. */
+  readonly key: string;
+}
+
+/**
+ * The family of resolution clause a rule belongs to — markets that fail
+ * TOGETHER because the same kind of clause decides them.
+ *
+ * RFC-018 D2. The RFC-013 `caps.fonteResolucao` was keyed on the adapter, and
+ * `resolved_by` is UMA for 460 of 570 live rule versions: the cap stopped being
+ * a diversification rule and became a global ceiling on the book. The owner's
+ * decision (2026-08-27) keeps the 25% and changes the KEY to this.
+ *
+ * The escada is the SAME one `scoreRulePrecision` walks for its source
+ * component, deliberately: two readings of "what decides this market" that
+ * could disagree would be two vocabularies, and the point of the lexicon is
+ * that there is one.
+ *
+ * `OBJETIVA_UNICA` carries the matched source in its name because two markets
+ * settled by the same feed ARE one bet, and two settled by different feeds are
+ * not — which is the whole thing the cap exists to say. Every other class is
+ * one bucket: what correlates a subjective clause to another subjective clause
+ * is that a human argues about both, whatever words each one used.
+ *
+ * `CLAUSULA_NAO_CLASSIFICADA` is the NAMED fallback, and it is not an
+ * exemption: it consumes the cap like any other family. It is named so it is
+ * visible — a silent "unknown" would rebuild the oversized bucket under a new
+ * name, which is the same defect wearing different clothes.
+ */
+export function ruleClauseFamily(
+  input: {
+    readonly description: string | null;
+    readonly resolutionSource: string | null;
+  },
+  lexicon: ResolutionLexicon,
+): RuleClauseFamily {
+  const sourceText = normalizeText(
+    `${input.description ?? ""} ${input.resolutionSource ?? ""}`,
+  );
+  if (hasAnyTerm(sourceText, lexicon.subjectiveTerms)) {
+    return Object.freeze({
+      sourceClass: "SUBJETIVA" as const,
+      sources: Object.freeze([]),
+      key: "SUBJETIVA",
+    });
+  }
+  const sources = lexicon.objectiveSingleTerms
+    .filter((term) => termPattern(term).test(sourceText))
+    .map((term) => term.replace(/\s+/g, "_"))
+    .sort();
+  if (sources.length > 0) {
+    return Object.freeze({
+      sourceClass: "OBJETIVA_UNICA" as const,
+      sources: Object.freeze(sources),
+      key: `OBJETIVA_UNICA:${sources.join("+")}`,
+    });
+  }
+  if (hasAnyTerm(sourceText, lexicon.objectiveMultipleTerms)) {
+    return Object.freeze({
+      sourceClass: "OBJETIVA_MULTIPLA" as const,
+      sources: Object.freeze([]),
+      key: "OBJETIVA_MULTIPLA",
+    });
+  }
+  return Object.freeze({
+    sourceClass: "CLAUSULA_NAO_CLASSIFICADA" as const,
+    sources: Object.freeze([]),
+    key: "CLAUSULA_NAO_CLASSIFICADA",
+  });
+}
+
 /**
  * Deterministic rule-precision score. Floats are used internally; the only
  * score that leaves is `precision`, a canonical 6-fraction-digit string.

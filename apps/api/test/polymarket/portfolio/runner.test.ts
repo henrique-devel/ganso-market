@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_PORTFOLIO_CONFIG } from "../../../src/polymarket/portfolio/config.js";
 import { DEFAULT_FACTOR_MAP } from "../../../src/polymarket/portfolio/factors.js";
+import { DEFAULT_RESOLUTION_LEXICON } from "../../../src/polymarket/resolution/lexicon.js";
 import { createPortfolioRunner } from "../../../src/polymarket/portfolio/runner.js";
 import type { PortfolioPool } from "../../../src/polymarket/portfolio/types.js";
 
@@ -146,6 +147,8 @@ function world(options: WorldOptions = {}): World {
             param_version: 2,
             event_id: "e1",
             resolution_source: "UMA:0xadapter",
+            rule_description:
+              "Resolves to the Binance 1 minute candle close for BTCUSDT.",
             end_date: new Date("2026-08-28T12:00:00Z"),
             rule_version: 3,
           },
@@ -263,6 +266,7 @@ function runner(pool: PortfolioPool) {
     pool,
     config: CONFIG,
     factorMap: DEFAULT_FACTOR_MAP,
+    lexicon: DEFAULT_RESOLUTION_LEXICON,
     executionMode: "paper",
     clock: () => NOW,
   });
@@ -390,6 +394,22 @@ describe("entry cycle write cadence (RFC-018 D1)", () => {
       .find((entry) => entry.reason_code === "PORTFOLIO_CYCLE");
     expect(cycle?.evaluated).toBe(1);
     expect(cycle?.decisions_written).toBe(0);
+  });
+});
+
+describe("the exposure bucket key (RFC-018 D2)", () => {
+  // The old key was COALESCE(resolution_source, resolved_by) — the UMA adapter
+  // for 460 of 570 live rule versions, which turned a diversification cap into
+  // a ceiling on the whole book. The number stayed at 0.25; the key moved.
+  it("keys resolution_source on the rule clause, not on the adapter", async () => {
+    const scene = world({ eligibleMarkets: [MARKET] });
+    await runner(scene.pool).tickOnce("panel");
+    const keys = scene.inserts
+      .filter((row) => row.table === "portfolio_exposures")
+      .filter((row) => row.params[0] === "resolution_source")
+      .map((row) => String(row.params[1]));
+    expect(keys).toEqual(["OBJETIVA_UNICA:binance"]);
+    expect(keys).not.toContain("UMA:0xadapter");
   });
 });
 
@@ -596,6 +616,7 @@ describe("scope", () => {
         pool: world().pool,
         config: CONFIG,
         factorMap: DEFAULT_FACTOR_MAP,
+        lexicon: DEFAULT_RESOLUTION_LEXICON,
         executionMode: "shadow",
       }),
     ).toThrowError(/paper/);

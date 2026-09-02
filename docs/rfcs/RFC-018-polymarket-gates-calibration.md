@@ -178,6 +178,48 @@ A dimensão gravada em `portfolio_exposures` continua se chamando
 é uma família como as outras e consome o cap como as outras — ele é nomeado para
 ser **visível**, não para ser isento.
 
+**MEDIDO DEPOIS DE ESCREVER A CHAVE, e desmente o benefício esperado.** A
+classificação foi rodada sobre os 92 mercados do universo vivo (texto de regra
+da `rule_version` em vigor, `config/resolution-lexicon.json`, 2026-09-02):
+
+| Chave de HOJE (adapter)                      | n  | %     |
+| -------------------------------------------- | -- | ----- |
+| `0x65070BE9…` (adapter)                       | 74 | 80,4% |
+| `0x69c47De9…` (adapter)                       | 9  | 9,8%  |
+| `0x2F5e3684…` (adapter)                       | 5  | 5,4%  |
+| 4 URLs de `resolution_source`                 | 4  | 4,3%  |
+
+| Chave NOVA (família de cláusula)   | n  | %     |
+| ---------------------------------- | -- | ----- |
+| `OBJETIVA_UNICA:binance`           | 75 | 81,5% |
+| `OBJETIVA_UNICA:federal_reserve`   | 11 | 12,0% |
+| `CLAUSULA_NAO_CLASSIFICADA`        | 5  | 5,4%  |
+| `OBJETIVA_UNICA:chainlink+twap`    | 1  | 1,1%  |
+
+**O bucket gigante não some — porque ele é verdade.** 81,5% do universo vivo é
+mesmo decidido pelo candle da Binance (o mesmo fato que a RFC-019 mediu quando
+descobriu que a resolução real é candle Binance, não Chainlink). A chave nova
+não devolve teto ao livro: com 0,25 de US$ 1.000, o livro continua limitado a
+~US$ 250 enquanto a concentração for essa. A diferença é **de que o bucket
+fala**: antes ele dizia "estes 74 mercados usam o mesmo adapter" — um fato sobre
+o encanamento da venue; agora diz "estes 75 mercados morrem juntos se o feed da
+Binance mentir" — um fato sobre risco. E os 11 mercados de taxa do Fed, que o
+adapter jogava no mesmo balde, passam a ter o seu.
+
+O que a decisão temia **não** aconteceu: o fallback nomeado ficou em **5,4%**,
+não virou o bucket gigante com outro nome.
+
+**Achado lateral registrado, não corrigido:** os 5 de
+`CLAUSULA_NAO_CLASSIFICADA` não são cláusulas inclassificáveis — são **quatro
+fontes reais que o léxico não nomeia**: Banco Central Europeu, U.S. Energy
+Information Administration, Bank of Japan (2 mercados) e IMF Portwatch.
+Acrescentá-las a `objective_single_terms` é mudança de `config/resolution-lexicon.json`,
+que é **conteúdo endereçado pelo `score_version` da RFC-012**: derrubaria o
+`sourceRisk` de 0,6 para 0 nesses mercados, mudaria a precisão de regra e
+exigiria cunhar uma versão de score nova e re-pontuar. É mudança da RFC-012, não
+desta. Enquanto isso as quatro fontes dividem um bucket, o que **super**concentra
+— a direção segura.
+
 Direção proibida, registrada: subir `fonteResolucao` para perto de 0,6 tornaria
 o cap inerte e continua fora da mesa.
 

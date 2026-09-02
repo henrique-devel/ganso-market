@@ -24,7 +24,12 @@ export interface OpenPosition {
   readonly costScaled: bigint;
   readonly category: string | null;
   readonly eventId: string | null;
-  readonly resolutionSource: string | null;
+  /**
+   * RFC-018 D2: the family of resolution CLAUSE, not the adapter. Never null —
+   * an unclassifiable clause gets the NAMED fallback family, because a silent
+   * "unknown" is how the oversized bucket comes back under another name.
+   */
+  readonly clauseFamily: string;
   readonly factor: string;
   readonly catalystWindow: string;
   /** True while the market has not resolved: counts as locked capital. */
@@ -52,6 +57,11 @@ const DIMENSION_CAP: Readonly<
   market: "mercado",
   event: "grupoCorrelacionado",
   category: "categoria",
+  // RFC-018 D2 changed what this dimension is KEYED on — the family of
+  // resolution clause instead of the adapter — and deliberately not its name:
+  // it is the same cap (`caps.fonteResolucao`, still 0.25) answering the same
+  // question, with a key that groups by how a market can fail rather than by
+  // which contract reports it.
   resolution_source: "fonteResolucao",
   factor: "grupoCorrelacionado",
   catalyst_window: "catalisadorJanela",
@@ -143,7 +153,7 @@ export function computeExposures(input: ExposureInput): ExposureRow[] {
     );
     addTo(
       byDimension.get("resolution_source")!,
-      position.resolutionSource ?? "unknown",
+      position.clauseFamily,
       position,
     );
     addTo(byDimension.get("factor")!, position.factor, position);
@@ -199,7 +209,8 @@ export interface CandidateExposure {
   readonly conditionId: string;
   readonly eventId: string | null;
   readonly category: string | null;
-  readonly resolutionSource: string | null;
+  /** RFC-018 D2: the family of resolution clause. Never null. */
+  readonly clauseFamily: string;
   readonly factor: string;
   readonly catalystWindow: string;
 }
@@ -239,7 +250,7 @@ export function capHeadroomFor(
     fonteResolucao: capHeadroom(
       capFractionScaled(caps.fonteResolucao),
       bankrollScaled,
-      used("resolution_source", candidate.resolutionSource ?? "unknown"),
+      used("resolution_source", candidate.clauseFamily),
     ),
     catalisadorJanela: capHeadroom(
       capFractionScaled(caps.catalisadorJanela),

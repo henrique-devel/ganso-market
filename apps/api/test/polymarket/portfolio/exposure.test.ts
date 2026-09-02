@@ -9,6 +9,10 @@ import {
   unwindAlarm,
   type OpenPosition,
 } from "../../../src/polymarket/portfolio/exposure.js";
+import {
+  DEFAULT_RESOLUTION_LEXICON,
+  ruleClauseFamily,
+} from "../../../src/polymarket/resolution/lexicon.js";
 
 function s(value: string): bigint {
   const parsed = parseScaled(value);
@@ -29,7 +33,7 @@ function position(overrides: Partial<OpenPosition> = {}): OpenPosition {
     costScaled: s("40"),
     category: "crypto",
     eventId: null,
-    resolutionSource: "binance",
+    clauseFamily: "OBJETIVA_UNICA:binance",
     factor: "btc_price",
     catalystWindow: "2026-08-28",
     unresolved: true,
@@ -184,7 +188,7 @@ describe("cap headroom for a candidate", () => {
     conditionId: "0xnew",
     eventId: "evt",
     category: "crypto",
-    resolutionSource: "binance",
+    clauseFamily: "OBJETIVA_UNICA:binance",
     factor: "btc_price",
     catalystWindow: "2026-08-28",
   };
@@ -252,6 +256,107 @@ describe("cap headroom for a candidate", () => {
     expect(headroom.mercado).toBe(0n);
   });
 });
+
+describe("the fonteResolucao cap buckets by clause family (RFC-018 D2)", () => {
+  // The owner kept the number at 0.25 and changed the KEY: `resolved_by` is
+  // the UMA adapter for 460 of 570 live rule versions, so the cap had stopped
+  // being a diversification rule and become a ceiling on the whole book.
+  const lexicon = DEFAULT_RESOLUTION_LEXICON;
+  const familyOf = (description: string): string =>
+    ruleClauseFamily({ description, resolutionSource: null }, lexicon).key;
+
+  it("stops two DIFFERENT clauses from sharing a bucket", () => {
+    const binance = familyOf("Resolves to the Binance 1 minute candle close.");
+    const fed = familyOf(
+      "Resolves per the federal reserve target announcement.",
+    );
+    expect(binance).not.toBe(fed);
+    const rows = computeExposures({
+      positions: [
+        position({
+          conditionId: "0x1",
+          clauseFamily: binance,
+          costScaled: s("40"),
+        }),
+        position({
+          conditionId: "0x2",
+          clauseFamily: fed,
+          costScaled: s("40"),
+        }),
+      ],
+      bankrollScaled: BANKROLL,
+      caps: CAPS,
+    });
+    expect(find(rows, "resolution_source", binance)?.positionCount).toBe(1);
+    expect(find(rows, "resolution_source", fed)?.positionCount).toBe(1);
+  });
+
+  it("keeps two markets on the SAME feed in one bucket — they are one bet", () => {
+    const a = familyOf("Resolves to the Binance 1 minute candle for BTCUSDT.");
+    const b = familyOf("Settled against the Binance close for ETHUSDT.");
+    expect(a).toBe(b);
+    const rows = computeExposures({
+      positions: [
+        position({ conditionId: "0x1", clauseFamily: a, costScaled: s("40") }),
+        position({ conditionId: "0x2", clauseFamily: b, costScaled: s("60") }),
+      ],
+      bankrollScaled: BANKROLL,
+      caps: CAPS,
+    });
+    const bucket = find(rows, "resolution_source", a);
+    expect(bucket?.positionCount).toBe(2);
+    expect(money(bucket?.worstCaseScaled ?? 0n)).toBe("100.000000");
+  });
+
+  it("puts an unclassifiable clause in a NAMED bucket that consumes the cap", () => {
+    // Measured on the live universe 2026-09-02: 5 of 92 markets land here, and
+    // they are real distinct sources the vocabulary does not name yet (ECB,
+    // EIA, Bank of Japan, IMF Portwatch). Sharing one bucket over-concentrates
+    // them, which is the safe direction — but the bucket must be VISIBLE, or
+    // it is the oversized bucket back under a new name.
+    const family = familyOf(
+      "Resolves per official information from the European Central Bank.",
+    );
+    expect(family).toBe("CLAUSULA_NAO_CLASSIFICADA");
+    const rows = computeExposures({
+      positions: [position({ clauseFamily: family, costScaled: s("60") })],
+      bankrollScaled: BANKROLL,
+      caps: CAPS,
+    });
+    const bucket = find(rows, "resolution_source", family);
+    expect(money(bucket?.worstCaseScaled ?? 0n)).toBe("60.000000");
+    expect(money(bucket?.capScaled ?? 0n)).toBe("250.000000");
+    const headroom = capHeadroomFor(
+      rows,
+      { ...candidateFor(family) },
+      BANKROLL,
+      CAPS,
+    );
+    expect(money(headroom.fonteResolucao!)).toBe("190.000000");
+  });
+
+  it("keeps the cap NUMBER at 0.25 — only the key moved", () => {
+    expect(CAPS.fonteResolucao).toBe(0.25);
+  });
+});
+
+function candidateFor(clauseFamily: string): {
+  conditionId: string;
+  eventId: string | null;
+  category: string | null;
+  clauseFamily: string;
+  factor: string;
+  catalystWindow: string;
+} {
+  return {
+    conditionId: "0xcandidate",
+    eventId: "evt",
+    category: "crypto",
+    clauseFamily,
+    factor: "btc_price",
+    catalystWindow: "2026-08-28",
+  };
+}
 
 describe("unwind alarm", () => {
   const rows = computeExposures({

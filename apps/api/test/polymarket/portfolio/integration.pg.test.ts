@@ -52,6 +52,7 @@ import {
   portfolioConfigHash,
 } from "../../../src/polymarket/portfolio/config.js";
 import { DEFAULT_FACTOR_MAP } from "../../../src/polymarket/portfolio/factors.js";
+import { DEFAULT_RESOLUTION_LEXICON } from "../../../src/polymarket/resolution/lexicon.js";
 import { createPortfolioRunner } from "../../../src/polymarket/portfolio/runner.js";
 import {
   ensureConfigVersion,
@@ -599,6 +600,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           pool: pool(),
           config: CONFIG,
           factorMap: DEFAULT_FACTOR_MAP,
+          lexicon: DEFAULT_RESOLUTION_LEXICON,
           executionMode: "paper",
           clock: () => at,
         }).tickOnce("gates");
@@ -819,6 +821,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         pool: pool(),
         config: CONFIG,
         factorMap: DEFAULT_FACTOR_MAP,
+        lexicon: DEFAULT_RESOLUTION_LEXICON,
         executionMode: "paper",
         clock: () => NOW,
       });
@@ -920,6 +923,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         pool: pool(),
         config: CONFIG,
         factorMap: DEFAULT_FACTOR_MAP,
+        lexicon: DEFAULT_RESOLUTION_LEXICON,
         executionMode: "paper",
         clock: () => new Date(NOW.getTime() + 60_000),
       });
@@ -948,6 +952,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         pool: pool(),
         config: CONFIG,
         factorMap: DEFAULT_FACTOR_MAP,
+        lexicon: DEFAULT_RESOLUTION_LEXICON,
         executionMode: "paper",
         clock: () => new Date(NOW.getTime() + 120_000),
       });
