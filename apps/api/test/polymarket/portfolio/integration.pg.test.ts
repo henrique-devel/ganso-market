@@ -816,6 +816,50 @@ describe.skipIf(DATABASE_URL === undefined)(
     // The three jobs, driven against the real schema.
     // -----------------------------------------------------------------------
 
+    it("deletes the exposure rows the current book no longer produces", async () => {
+      // The upsert alone leaves orphans behind, and they are not cosmetic:
+      // loadRiskSurvival counts `utilization > 1` over EVERY row, so an orphan
+      // above its cap would report an unblocked breach for the rest of the
+      // system's life and pin G3 at FAIL on a position nobody holds.
+      //
+      // Observed in production 2026-09-02 01:14:48Z, when RFC-018 D2 changed
+      // the key of the resolution_source dimension: the two adapter-keyed rows
+      // froze there while the clause-family rows advanced.
+      await pool().query(
+        `INSERT INTO portfolio_exposures
+           (dimension, dimension_key, worst_case_usd, cap_usd, utilization,
+            position_count, computed_at, updated_at)
+         VALUES ('resolution_source', $1, '900.000000', '250.000000',
+                 '3.600000', 1, $2, $2)
+         ON CONFLICT (dimension, dimension_key) DO NOTHING`,
+        [`orphan-${RUN}`, new Date(NOW.getTime() - 3_600_000)],
+      );
+
+      await createPortfolioRunner({
+        pool: pool(),
+        config: CONFIG,
+        factorMap: DEFAULT_FACTOR_MAP,
+        lexicon: DEFAULT_RESOLUTION_LEXICON,
+        executionMode: "paper",
+        clock: () => NOW,
+      }).tickOnce("panel");
+
+      const orphan = await pool().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM portfolio_exposures
+          WHERE dimension_key = $1`,
+        [`orphan-${RUN}`],
+      );
+      expect(orphan.rows[0]?.n).toBe("0");
+
+      // ...and the cycle's own rows survived, so the delete is not a truncate.
+      const live = await pool().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM portfolio_exposures
+          WHERE computed_at = $1`,
+        [NOW],
+      );
+      expect(Number(live.rows[0]?.n)).toBeGreaterThanOrEqual(7);
+    });
+
     it("opens UMA_PROPOSED_OR_DISPUTED on a live proposal over a held position", async () => {
       // RFC-018 item 3, the whole chain against the real schema: the resolution
       // module records a live proposal, the panel cycle reads it, and the
