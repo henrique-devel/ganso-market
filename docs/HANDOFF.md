@@ -3567,3 +3567,50 @@ zero. `book_deltas` estava em **123.078.574 linhas / 37 GB físicos** às 09:51Z
 crescendo ~13 M linhas/dia, e cruza a quota de 52 GiB em ~4 dias. Depois disso o
 único gatilho restante é o alarme global (99 GiB vivos), cuja única alavanca é
 reduzir TTL — que também não apagaria nada.
+
+### Deploy dos dois PRs e verificação em produção (2026-09-02 12:58–13:10Z)
+
+Pelos TRÊS passos, na ordem. O `#88` (redeclaração) mergeou às **12:58:45Z**
+(squash `8288455`) e o `#89` (travessia da borda) às **13:04:36Z** (squash
+`bf55318`). O #89 precisou de **rebase**: o squash do #88 fez as mesmas
+mudanças existirem com SHAs diferentes no `main` e no branch, e o PR virou
+`CONFLICTING` no instante em que a base foi reapontada. Rebasear só os dois
+commits do fix sobre o `main` novo resolveu sem conflito. CD verde nos dois
+(`Deploy production`, 27 s e 29 s). Como a retenção roda no recorder e o CD
+**não** troca imagem de serviço de profile, o `polymarket-recorder` foi
+rebuildado à mão às 13:09Z.
+
+**Evidência DENTRO do container** (nunca `compose ps`): `release-sha`
+**`bf55318`**, e o JS compilado em
+`/workspace/apps/api/dist/polymarket/retention.js` carrega
+`SERIES_COVERAGE_BOUNDARY_PRUNED`, `frontMinuteMs` (5 ocorrências) e
+`quotaBytes: 52 * GB`.
+
+**Primeira varredura com o código novo (boot, 13:08:38–13:09:43Z):**
+
+| Verificação | Resultado |
+| --- | --- |
+| `book_deltas` vs quota | **36,97 GiB vivos / 126.567.867 linhas < 52 GiB** — satisfeita, nenhum pedido de exclusão |
+| `RETENTION_QUOTA_UNMET` | **0** |
+| `QUOTA_GLOBAL_ALARM` / `QUOTA_GLOBAL_TTL_REDUCED` | **0** / **0** |
+| `SERIES_COVERAGE_MISSING` / `RETENTION_STEP_FAILED` | **0** / **0** |
+| Erros no recorder desde o boot | **0** (confirmado de novo aos 12 min de uptime) |
+| Controle positivo — a varredura fez trabalho real | podou `portfolio_panel_snapshots` (48.413 por quota + 36.862 por TTL) e `paper_feature_windows` (205.336 por quota) |
+
+O `RETENTION_BLOAT` informativo aparece em cinco tabelas (físico > vivo, quota
+satisfeita) e **não** em `book_deltas` — coerente com `n_dead_tup = 0`.
+
+**O que esta varredura NÃO prova, e é preciso dizer:** a travessia da borda
+ainda **não foi exercitada**. Nem o TTL nem a quota pediram poda de deltas — a
+quota está satisfeita com ~15 GiB de folga e o registro mais antigo segue sendo
+**2026-08-20 01:26:41Z**, que o TTL de 14 dias só alcança em
+**2026-09-03 01:26:41Z**. A primeira varredura depois desse instante é o teste
+real: o esperado é `SERIES_COVERAGE_BOUNDARY_PRUNED` seguido de exclusão
+efetiva, no lugar do `SERIES_COVERAGE_MISSING` com zero linhas de antes.
+**Verificar em 03/09.**
+
+**Nota de processo:** este registro foi commitado pela API do GitHub, não pelo
+worktree local — no meio da sessão o sandbox revogou o acesso ao diretório
+(`git` passou a falhar com `Unable to read current working directory`, e até
+`grep` no arquivo dava `Operation not permitted`). O deploy em si não foi
+afetado; o que ficou bloqueado foi só a escrita local.
