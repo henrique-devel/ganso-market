@@ -365,6 +365,8 @@ export interface ComposedForMarket {
   readonly composed: ReturnType<typeof composeScore>;
   readonly rule: RuleAsOf | null;
   readonly disputeActive: boolean;
+  /** A UMA request is proposed and its liveness window is still running. */
+  readonly proposalActive: boolean;
   readonly suspectJump: boolean;
   /** The market settled (resolved/market_resolved) at or before the instant. */
   readonly terminal: boolean;
@@ -460,6 +462,7 @@ export async function composeForMarket(
     composed,
     rule,
     disputeActive: status.status === "disputed",
+    proposalActive,
     suspectJump,
     terminal: status.status === "resolved",
   };
@@ -473,8 +476,14 @@ async function recomputeOne(
   asOf: Date,
 ): Promise<void> {
   const { pool } = deps;
-  const { composed, rule, disputeActive, suspectJump, terminal } =
-    await composeForMarket(deps, market, statsByCategory, asOf, true);
+  const {
+    composed,
+    rule,
+    disputeActive,
+    proposalActive,
+    suspectJump,
+    terminal,
+  } = await composeForMarket(deps, market, statsByCategory, asOf, true);
 
   // A settled market has nothing left to protect: the RFC's release rule is
   // settle + recompute. Overriding to NONE also stops the terminal market
@@ -515,6 +524,10 @@ async function recomputeOne(
     expectedLockupS: composed.expectedLockupS,
     p95LockupS: composed.p95LockupS,
     disputeActive,
+    // RFC-018 item 3: recorded, not only scored. The RFC-013 breaker on a held
+    // position needs the live proposal, and a market that has settled is not
+    // under one any more.
+    proposalActive: proposalActive && !terminal,
     suspectJump,
     hardFlags: composed.hardFlags,
     eventIds: [],

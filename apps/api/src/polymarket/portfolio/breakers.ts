@@ -51,8 +51,17 @@ export interface BreakerObservation {
   /** True when the market has an open paper position. */
   readonly holdsPosition: boolean;
 
-  /** RFC-012: UMA request proposed or disputed for this market. */
+  /** RFC-012: a UMA request is DISPUTED for this market. */
   readonly disputeActive: boolean;
+  /**
+   * RFC-012: a UMA request is PROPOSED and its liveness window is running.
+   *
+   * The other half of this breaker's name. Kept separate from `disputeActive`
+   * because they are different moments of the same risk, and only one of them
+   * is still early enough to act on: by the time a proposal becomes a dispute
+   * the bond is posted and the outcome is being argued.
+   */
+  readonly proposalActive: boolean;
   /** RFC-012 effective action, which also carries the group coupling. */
   readonly resolutionAction:
     "NONE" | "BUFFER" | "VETO" | "CIRCUIT_BREAKER" | null;
@@ -118,9 +127,19 @@ export function detectBreakers(input: {
   // (i) A UMA request proposed or disputed on a market we hold. Never increase,
   //     and re-evaluate the exit on the trinary payoff — the precedents
   //     (Ukraine-minerals, Zelensky, Strategy/BTC) did not refund.
+  //
+  //     RFC-018 item 3: the PROPOSED half used to be missing. The condition
+  //     read only `disputeActive`, `dispute_active` has been false in 781 of
+  //     781 market states, and no market has ever reached CIRCUIT_BREAKER — so
+  //     a breaker the RFC names "proposed or disputed" could not fire at all in
+  //     this population. It had its chance and missed it: a position opened
+  //     2026-09-01 11:59Z sat through a live UMA proposal from 16:04:52Z to
+  //     16:14:48Z, ~10 panel cycles, in silence.
   if (
     o.holdsPosition &&
-    (o.disputeActive || o.resolutionAction === "CIRCUIT_BREAKER")
+    (o.proposalActive ||
+      o.disputeActive ||
+      o.resolutionAction === "CIRCUIT_BREAKER")
   ) {
     signals.push({
       kind: "UMA_PROPOSED_OR_DISPUTED",
@@ -128,6 +147,7 @@ export function detectBreakers(input: {
       conditionId: o.conditionId,
       tokenId: null,
       detail: {
+        proposal_active: o.proposalActive,
         dispute_active: o.disputeActive,
         resolution_action: o.resolutionAction,
         basis: "posição aberta em mercado com pedido UMA proposto ou disputado",

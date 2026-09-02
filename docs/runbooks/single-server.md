@@ -74,7 +74,8 @@ explícito:
 
 ```sh
 docker compose --env-file deploy/server.env --profile polymarket up --build --detach \
-  polymarket-recorder polymarket-estimator polymarket-paper polymarket-resolution
+  polymarket-recorder polymarket-estimator polymarket-paper polymarket-resolution \
+  polymarket-portfolio
 ```
 
 **Cuidado com configs versionadas que nomeiam conteúdo da imagem.** O diretório

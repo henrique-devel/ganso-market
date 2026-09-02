@@ -493,7 +493,7 @@ export function createPortfolioRunner(
     readonly changes: ReadonlyMap<string, MarketChangeState>;
     readonly resolution: ReadonlyMap<
       string,
-      { action: string; disputeActive: boolean }
+      { action: string; disputeActive: boolean; proposalActive: boolean }
     >;
     readonly books: ReadonlyMap<string, BookAsOf | null>;
   }): Promise<OpenBreakerRow[]> {
@@ -539,6 +539,7 @@ export function createPortfolioRunner(
         tokenId: market.tokenId,
         holdsPosition: heldConditions.has(market.conditionId),
         disputeActive: resolution?.disputeActive === true,
+        proposalActive: resolution?.proposalActive === true,
         resolutionAction:
           resolution === undefined
             ? null
@@ -714,13 +715,14 @@ export function createPortfolioRunner(
     // 1. Circuit breakers, before anything is allowed to enter.
     const resolutionForBreakers = new Map<
       string,
-      { action: string; disputeActive: boolean }
+      { action: string; disputeActive: boolean; proposalActive: boolean }
     >();
     for (const [conditionId, state] of resolutions) {
       if (state !== null) {
         resolutionForBreakers.set(conditionId, {
           action: state.action,
           disputeActive: state.disputeActive,
+          proposalActive: state.proposalActive,
         });
       }
     }
