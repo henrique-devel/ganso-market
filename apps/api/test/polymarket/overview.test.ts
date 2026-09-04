@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabasePool, QueryResult } from "../../src/database.js";
 import {
@@ -311,6 +311,41 @@ describe("GET /polymarket/overview", () => {
     expect(response.json()).toMatchObject({
       reason_code: "OVERVIEW_API_FAILED",
     });
+  });
+
+  // The 500 that ran from 01/09 to 04/09 logged `error_name: "error"` and
+  // nothing else; the string that named the cause lived only in the PostgreSQL
+  // log. Without the message the reason code is a mute alarm.
+  it("logs the error message alongside the reason code", async () => {
+    const written: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
+      const { instance } = await build((text) => {
+        if (text.includes("portfolio_state WHERE")) {
+          throw new Error('column "occurred_at" does not exist');
+        }
+        return [];
+      });
+      await instance.inject({
+        method: "GET",
+        url: "/polymarket/overview",
+        headers: AUTH,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const line = written
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+      .find((entry) => entry["reason_code"] === "OVERVIEW_API_FAILED");
+    expect(line).toBeDefined();
+    expect(line?.["message"]).toBe('column "occurred_at" does not exist');
+    // The request never lands in the log line.
+    expect(Object.keys(line ?? {})).not.toContain("request");
   });
 });
 
