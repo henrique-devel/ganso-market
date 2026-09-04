@@ -116,7 +116,17 @@ describe.skipIf(DATABASE_URL === undefined)(
         headers: AUTH,
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({ events: [] });
+      // Shape, never emptiness: this suite runs against whatever the throwaway
+      // database happens to hold, and `events: []` would be an assertion about
+      // the fixture rather than about the 9 SELECTs. What is being proved is
+      // that every source's SQL executes and the rows come back well formed.
+      const body = response.json() as Row;
+      expect(Array.isArray(body["events"])).toBe(true);
+      expect(body["reason_code"]).toBeUndefined();
+      for (const event of body["events"] as Row[]) {
+        expect(typeof event["source"]).toBe("string");
+        expect(event).toHaveProperty("occurred_at");
+      }
     });
 
     it("still refuses an unauthenticated call before touching the database", async () => {

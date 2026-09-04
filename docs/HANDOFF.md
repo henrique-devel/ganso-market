@@ -10,10 +10,12 @@
   `closed_positions = 0` era defeito, não soak — o **G2** estava em 0 para sempre (o **G4 não**:
   a medição desmente esse acoplamento, ver a seção). O 500 do
   `/overview` também caiu (`occurred_at` → `event_ts`), e o alarme mudo que o escondeu por três
-  dias ganhou `message`. **PR-c (sombra vazando em `estimateAsOf`) NÃO FOI ABERTO** — o prompt
-  exigia linha de autorização do proprietário no HANDOFF e ela não existe; a re-medição mostra
-  o defeito **crescendo**: 179 decisões `estimate_source='MODEL'`, **11 aceitas** (eram 159/6
-  em 02/09), com **zero** modelos `active`. **O G2 saiu de zero pela primeira vez** na medição
+  dias ganhou `message`. **O PR-c (sombra vazando em `estimateAsOf`) foi aberto DEPOIS: parou
+  primeiro por falta de autorização — o prompt a exigia por escrito aqui e ela não existia — e
+  o proprietário AUTORIZOU na mesma sessão, em 2026-09-04.** Entregue no PR #96 e verificado
+  em produção. Quando a autorização chegou o defeito já havia crescido de 5 para **179
+  decisões** `estimate_source='MODEL'`, **11 aceitas** (eram 159/6 em 02/09), com **zero**
+  modelos `active`. **O G2 saiu de zero pela primeira vez** na medição
   de 22:23:18.794Z: `closed_positions` 0 → **1**, `distinct_markets` 0 → **1**,
   `distinct_close_days` 0 → **1**, `categories` 0 → **1**. Segue `INSUFFICIENT_DATA` (1 de 100),
   e é isso que se esperava: mudou a natureza do bloqueio, não o veredito — de defeito que
@@ -115,8 +117,12 @@ ms`**, porque `database.ts` reusa `connect_timeout_ms` como timeout de query e
   **zero modelos promovidos**, **5 decisões** de 01/09 gravaram
   `estimate_source='MODEL'` com os números exatos da linha shadow (a 698296 tem
   `q_lo=0,990385` do `estimate_id` 837093, não `0,997632` da ativa 837092).
-  Nenhuma foi aceita, mas a invariante da RFC-010 está quebrada. **É área da
-  RFC-010, fica fora deste escopo e vira decisão do proprietário.**
+  Nenhuma foi aceita, mas a invariante da RFC-010 está quebrada. ~~É área da
+  RFC-010, fica fora deste escopo e vira decisão do proprietário.~~
+  **SUPERADO — AUTORIZADO PELO PROPRIETÁRIO EM 2026-09-04** (autorização dada
+  em sessão, registrada aqui como manda o protocolo). Corrigido no PR #96; ver
+  a seção "SESSÃO 2026-09-04". Quando a autorização chegou o defeito já havia
+  crescido de 5 para **179 decisões**, **11 aceitas**.
   **Modo B:** das 2.576 decisões que chegaram à estimativa com shadow as-of,
   **519 (20,1%) em 9 de 22 mercados (40,9%)** teriam agido diferente — **511
   entradas só do shadow contra 8 só do baseline**. O **PnL contrafactual ainda
@@ -2462,8 +2468,9 @@ mesmo instante. Há **80.397 instantes** com mais de uma linha; passou a dispara
 depois que o PR #70 acrescentou o segundo modelo shadow às 12:14Z. **Nenhuma das
 5 foi aceita**, mas a invariante da RFC-010 ("shadow estimates … are invisible to
 consumers", migration 0006) está quebrada. O conserto é um predicado
-(`AND status = 'active'`) mais desempate determinístico, **é área da RFC-010 e
-fica como decisão do proprietário**. O modo B detecta, exclui e conta esses casos
+(`AND status = 'active'`) mais desempate determinístico, ~~é área da RFC-010 e
+fica como decisão do proprietário~~ — **AUTORIZADO PELO PROPRIETÁRIO EM
+2026-09-04 e entregue no PR #96**, exatamente nessa forma. O modo B detecta, exclui e conta esses casos
 (`BASELINE_ALREADY_SHADOW = 5`) — comparar shadow contra shadow seria inventar o
 resultado.
 
@@ -3911,7 +3918,8 @@ estimado e higiene do modelo (032), categoria macro.
 
 1. Rearmar o kill switch (ou aprovar rearme condicionado — RFC-021 P1). Sem isso, vazão zero.
 2. Política de deploy (RFC-020): Postgres fora do `--force-recreate`; docs não disparam deploy.
-3. Autorizar `status='active'` em `estimateAsOf` (PR-0 c, área da RFC-010).
+3. ~~Autorizar `status='active'` em `estimateAsOf` (PR-0 c, área da RFC-010).~~
+   **DECIDIDA em 2026-09-04: autorizada, entregue e verificada em produção (PR #96).**
 4. Semântica do `PARAM_CHANGE` (RFC-025). 5. Saídas viram ordem? (RFC-022).
 6. Sub-carteira `fast` fora dos gates e EV ≈ 0 aceito em troca de N (RFC-028).
 7. Emenda de escopo leve à RFC-017 para publicar JSON e tela (RFC-029).
@@ -3987,20 +3995,50 @@ Duas correções, e a segunda é a que fez a primeira durar:
 `payload_json: { outcomePrices: [...] }` — forma que produção **não escreve**. O teste novo usa
 a aninhada **sem chave plana de socorro**; o de forma plana fica como guarda do caminho do WS.
 
-### PR-c — NÃO ABERTO (condição de parada honrada)
+### PR-c — parou primeiro, depois foi AUTORIZADO e entregue (PR #96)
 
-O prompt: *"sem linha nova lá, este PR não abre (este prompt não autoriza)"*. O HANDOFF diz, em
-duas passagens (l. 92–99 e a seção do modo B), **"é área da RFC-010 e fica como decisão do
-proprietário"** — registro do defeito, não autorização. Nenhuma linha nova apareceu. **Zero
-linhas de código escritas para o (c).**
+**A parada foi honrada.** O prompt: *"sem linha nova lá, este PR não abre (este prompt não
+autoriza)"*. O HANDOFF dizia, em duas passagens (l. 92–99 e a seção do modo B), **"é área da
+RFC-010 e fica como decisão do proprietário"** — registro do defeito, não autorização. Nenhuma
+linha de código foi escrita para o (c) enquanto isso valia.
 
-O que a re-medição acrescenta à decisão: em dois dias as decisões com `estimate_source='MODEL'`
-foram de 159 → **179** e as **aceitas de 6 → 11**. Com **zero** modelos `active`, toda linha
-`MODEL` é uma decisão tomada com número de modelo em sombra. A invariante da RFC-010
-("shadow estimates … are invisible to consumers", 0006:108–109) segue quebrada, agora com
-consequência em decisões aceitas. O conserto continua sendo duas linhas
-(`AND status = 'active'` mais `ORDER BY decision_ts DESC, estimate_id DESC`) — falta a
-autorização, não o código. **Segue como decisão nº 3 da lista de pendências.**
+**Em 2026-09-04 o proprietário autorizou em sessão**, e pediu que estas linhas velhas fossem
+atualizadas — o que está feito acima (l. 119, a seção do modo B e a decisão nº 3, todas
+marcadas como superadas). A autorização fica registrada aqui porque é este documento que o
+protocolo consulta.
+
+O que a re-medição acrescentou à decisão: em dois dias as decisões com
+`estimate_source='MODEL'` foram de 159 → **179** e as **aceitas de 6 → 11**. Com **zero**
+modelos `active`, toda linha `MODEL` era uma decisão tomada com número de modelo em sombra.
+
+**O conserto, exatamente como previsto:** `AND status = 'active'` mais `ORDER BY decision_ts
+DESC, estimate_id DESC` em `estimateAsOf` (`portfolio/store.ts`).
+
+**Medições que precederam o código** (produção, read-only, 04/09):
+
+| Pergunta | Número | Consequência |
+| --- | --- | --- |
+| `fundamental_estimates` por status | **840.057** `active`/`MARKET_BASELINE`, **153.241** `shadow`/`MODEL` | toda linha `MODEL` da tabela é sombra; nenhuma é `active` |
+| instantes com mais de uma linha | **132.198** (eram 80.397 em 02/09) | o empate é a regra, não a exceção |
+| tokens **sem** nenhuma linha `active` | **0** | o predicado não deixa nenhum token sem estimativa |
+| `EXPLAIN ANALYZE` do token mais denso | **0,210 ms** (index scan + incremental sort) | sem risco do `statement_timeout` |
+
+A terceira linha é a que fecha o risco de fail-closed: o filtro poderia, em tese, transformar
+"tinha estimativa" em "não tem" e fazer o motor recusar. Não acontece nesta população — e se um
+dia acontecer, recusar é o comportamento correto: a alternativa é decidir com número de sombra.
+
+**Efeito colateral esperado e desejado:** enquanto nenhum modelo for promovido, **toda** decisão
+passa a gravar `estimate_source='MARKET_BASELINE'`. `MODEL = 0` não é o motor parando de usar
+modelo; é o motor parando de usar modelo **que não foi promovido**.
+
+**Um teste que NÃO é regressão, e o comentário no arquivo diz isso.** O caso "duas linhas no
+mesmo `decision_ts`" — a forma que produção tinha — **passou no código anterior**: sem
+desempate, qual linha volta é escolha do planner, um cara-ou-coroa que produção perdeu 179
+vezes. Ele fica porque é a forma real do defeito e porque depois do fix deixa de ser sorteio.
+Quem prova o conserto são os outros dois, deterministicamente: uma linha shadow **mais nova**
+(`expected 'MODEL' to be 'MARKET_BASELINE'`) e a ausência de `active` antes do instante
+(`expected { … } to be null`). Preferir o teste que não pode passar por sorte é a mesma lente
+que o resto da sessão usou.
 
 ### Falha antes / passa depois (regressões verificadas contra o HEAD anterior)
 
