@@ -1,6 +1,26 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-03 — **Diagnóstico profundo (02–03/09) e roadmap 11–21 escritos;
+- Última atualização: 2026-09-04 — **PR-0 (prompt 11): dois dos três hotfixes entregues,
+  verificados em produção; o terceiro PAROU por falta de autorização**. PRs #93 e #94,
+  merge `c14fd53`, `release-sha` idêntico em `api`, `polymarket-paper` e
+  `polymarket-portfolio`. **O número da sessão: às 2026-09-04 21:23:56.924Z o livro de paper
+  fechou a PRIMEIRA posição da sua história** — `event_id` 15543, `outcome_price` 0,000000,
+  perda realizada **US$ −4,6227** no mercado `0x71b5721c…`, e o
+  `PAPER_RESOLUTION_DATA_ERROR` que saía 1×/min desde 01/09 **cessou** (1.440 em 24 h → 0).
+  `closed_positions = 0` era defeito, não soak — o **G2** estava em 0 para sempre (o **G4 não**:
+  a medição desmente esse acoplamento, ver a seção). O 500 do
+  `/overview` também caiu (`occurred_at` → `event_ts`), e o alarme mudo que o escondeu por três
+  dias ganhou `message`. **PR-c (sombra vazando em `estimateAsOf`) NÃO FOI ABERTO** — o prompt
+  exigia linha de autorização do proprietário no HANDOFF e ela não existe; a re-medição mostra
+  o defeito **crescendo**: 179 decisões `estimate_source='MODEL'`, **11 aceitas** (eram 159/6
+  em 02/09), com **zero** modelos `active`. **O G2 saiu de zero pela primeira vez** na medição
+  de 22:23:18.794Z: `closed_positions` 0 → **1**, `distinct_markets` 0 → **1**,
+  `distinct_close_days` 0 → **1**, `categories` 0 → **1**. Segue `INSUFFICIENT_DATA` (1 de 100),
+  e é isso que se esperava: mudou a natureza do bloqueio, não o veredito — de defeito que
+  nenhuma espera resolveria para amostra que agora acumula. Ver a seção "SESSÃO 2026-09-04" ao
+  final.
+  Kill switch **segue engatado** desde 02/09 02:21Z; `frozen_markets_json` não foi limpo.
+- 2026-09-03 — **Diagnóstico profundo (02–03/09) e roadmap 11–21 escritos;
   nenhum código, deploy ou escrita em produção**. Achados novos verificados: `GET
   /polymarket/overview` responde **500 em 100 % das chamadas** desde o PR #76 (coluna
   `occurred_at` inexistente — não era o timeout de 1 s); o disjuntor `PARAM_CHANGE` congela
@@ -3897,3 +3917,206 @@ estimado e higiene do modelo (032), categoria macro.
 7. Emenda de escopo leve à RFC-017 para publicar JSON e tela (RFC-029).
 8. Operar a menos de 30 min do fim (regra B4). 9. Macro. 10. Retirar a 1.0.0.
 11. Config 1.3.0 só após a varredura na tela. 12. Backup do Postgres e trilha humana da RFC-009.
+
+## SESSÃO 2026-09-04 — PR-0 (prompt 11): dois hotfixes entregues, o terceiro parado
+
+Prompt 11 do roadmap ("três hotfixes sem RFC"). **Dois PRs mergeados e verificados em
+produção; o terceiro não foi aberto por condição de parada do próprio prompt.** Sem
+migration, tudo em SIMULAÇÃO, nenhum endpoint de escrita novo, gates/disjuntores/policy/quotas
+intocados. Escrita em produção só no deploy.
+
+### RE-MEDIÇÃO ANTES DE CODAR (2026-09-04 ~21:00Z, read-only) — os três defeitos ATIVOS
+
+| # | Medição de 02–03/09 | Medição de 04/09 | Veredito |
+| --- | --- | --- | --- |
+| a | 5/5 chamadas em 500 | ver a armadilha abaixo | **ATIVO** |
+| b | 0 `resolution`; 824 `TOKEN_NOT_IN_MARKET`/24 h | **0** `resolution`; **1.440**/24 h (1/min) | **ATIVO, e maior** |
+| c | 159 `MODEL`, 6 aceitas, 0 `active` | **179** `MODEL`, **11** aceitas, **0** `active` | **ATIVO, e crescendo** |
+
+**A armadilha do (a), e por que a lente de degeneração de gate volta a valer.** O comando de
+re-medição do prompt (`logs postgres --since 24h | grep -c occurred_at`) devolveu **0**, que
+lido de frente diz "já corrigido". Não é. O container do `postgres` tinha **7 h de vida** (o
+`--force-recreate` de todo merge o recria) e o log da `api` mostra **0 chamadas** a
+`/polymarket/overview` em 24 h — o proprietário não abriu o painel. **Zero sem denominador não
+é aprovação: é ausência de medição.** O defeito foi então confirmado nos dois lugares onde ele
+não tem como se esconder: o código segue com `occurred_at` em `overview.ts` e a query exata,
+rodada contra o banco de produção, responde
+
+```
+ERROR:  column "occurred_at" does not exist
+```
+
+As outras seis ocorrências de `occurred_at` no arquivo são o **alias** que o feed de eventos dá
+à coluna de tempo de cada fonte (`${tsColumn} AS occurred_at`) — não são coluna real, não
+foram tocadas. A tabela tem `event_ts` (0008:64), confirmado no `information_schema`.
+
+### PR-a — `/overview` volta a responder (PR #93)
+
+`occurred_at` → `event_ts` no `fills_24h`, e `logOverviewError` passa a gravar `message`
+(`error.message`, nunca payload de request).
+
+**O segundo defeito é o que fez o primeiro durar três dias.** O log gravava só `error_name`, e
+para um erro do driver `pg` isso é a string `"error"`:
+`{"reason_code":"OVERVIEW_API_FAILED","error_name":"error"}`. O reason code era **alarme mudo**
+— a frase que nomeava a causa só existia no log do PostgreSQL, que o `--force-recreate` apaga.
+
+**Por que a suíte não pegou:** `overview.test.ts` responde toda query com um pool falso que
+casa substrings; coluna inexistente volta `[]`, `int(undefined)` dá 0, a rota responde **200**.
+O teste concordava com o código contra a realidade. Novo `overview.pg.test.ts`: mesmo harness
+(authService falso, clock fixo), **pool real** contra banco migrado. O agregador nomeia 20
+tabelas — agora existe o lugar que percebe qualquer uma derivar.
+
+### PR-b — a liquidação lê o payload onde ele está (PR #94)
+
+Duas correções, e a segunda é a que fez a primeira durar:
+
+1. **`raw.outcomePrices ?? outcomePrices`**, na ordem que `resolution/store.ts:727–728`,
+   `resolution/timeline.ts:73` e `fundamental/labels.ts` (`candidateRecords`) já usavam. O
+   paper era o **único** consumidor que lia só a forma plana — a que só o evento WS
+   `market_resolved` entrega e que o poller de status da UMA nunca produz. É por isso que o G1
+   via 485 resolvidos e o G2 via 0.
+2. **`resolveOutcomeForToken` separou dois defeitos que respondiam o mesmo reason code.**
+   Antes, `index === -1 || index >= outcomePrices.length` devolvia os dois como
+   `TOKEN_NOT_IN_MARKET`. O que produção emitia 60×/h era o **segundo** caso: o token estava no
+   mercado (era o `clob_token_ids[0]` **e** o `affirmative_token_id`), o array de preços estava
+   vazio. O código apontava para o mercado enquanto a causa era o payload. Agora índice além do
+   array (vazio incluído) → **`RESOLUTION_PRICES_MISSING`**; `TOKEN_NOT_IN_MARKET` só para
+   `index === -1`.
+
+**Por que a suíte não pegou:** as cinco provas de settlement fabricavam
+`payload_json: { outcomePrices: [...] }` — forma que produção **não escreve**. O teste novo usa
+a aninhada **sem chave plana de socorro**; o de forma plana fica como guarda do caminho do WS.
+
+### PR-c — NÃO ABERTO (condição de parada honrada)
+
+O prompt: *"sem linha nova lá, este PR não abre (este prompt não autoriza)"*. O HANDOFF diz, em
+duas passagens (l. 92–99 e a seção do modo B), **"é área da RFC-010 e fica como decisão do
+proprietário"** — registro do defeito, não autorização. Nenhuma linha nova apareceu. **Zero
+linhas de código escritas para o (c).**
+
+O que a re-medição acrescenta à decisão: em dois dias as decisões com `estimate_source='MODEL'`
+foram de 159 → **179** e as **aceitas de 6 → 11**. Com **zero** modelos `active`, toda linha
+`MODEL` é uma decisão tomada com número de modelo em sombra. A invariante da RFC-010
+("shadow estimates … are invisible to consumers", 0006:108–109) segue quebrada, agora com
+consequência em decisões aceitas. O conserto continua sendo duas linhas
+(`AND status = 'active'` mais `ORDER BY decision_ts DESC, estimate_id DESC`) — falta a
+autorização, não o código. **Segue como decisão nº 3 da lista de pendências.**
+
+### Falha antes / passa depois (regressões verificadas contra o HEAD anterior)
+
+Com o `src/` revertido ao HEAD anterior e os testes novos no lugar:
+
+```
+× logs the error message alongside the reason code
+  AssertionError: expected undefined to be 'column "occurred_at" does not exist'
+× answers 200 — every column the aggregator names exists
+  AssertionError: expected 500 to be 200
+Tests  2 failed | 20 passed (22)
+
+× separates a missing price from a missing token
+× settles from the nested payload the collector actually writes
+× a payload with no prices anywhere freezes with the new reason code
+  AssertionError: expected 'TOKEN_NOT_IN_MARKET' to be 'RESOLUTION_PRICES_MISSING'
+Tests  3 failed | 104 passed (107)
+```
+
+Com os fixes: suíte completa **1572 passed | 68 skipped**, `format:check` e `lint` limpos,
+`make verify` verde nos dois PRs (CI: Verify source + Verify Compose runtime).
+`overview.pg.test.ts` roda contra banco com as 18 migrations aplicadas (o CI a pula por
+`describe.skipIf`).
+
+### DEPLOY (três passos) e VERIFICAÇÃO EM PRODUÇÃO
+
+Merge `c14fd535c6c4ad2f1bd18a556721e8983efde670` (PRs #93 e #94) → CD `success` → rebuild de
+profile às **21:17Z** (`--profile polymarket up --build --detach polymarket-paper
+polymarket-portfolio`). `release-sha` = `c14fd53…` em **api, polymarket-paper e
+polymarket-portfolio** (o CD tinha trocado só a `api`; paper estava em `e0f227e0…` e portfolio
+em `a7c9e451…` — a assimetria de sempre).
+
+**Aceite do (b) — o primeiro fechamento da história do livro:**
+
+| Evidência | Número |
+| --- | --- |
+| Primeiro `resolution` em `paper_ledger_events` | `event_id` **15543**, 2026-09-04 **21:23:56.924Z** |
+| Mercado | `0x71b5721c…50091c` (BTC > US$ 78.000 em 1/set, "Não" em 01/09 16:37Z) |
+| `outcome_price` | `0.000000` (token é o índice 0; índice 0 resolveu em 0) |
+| Posição | `shares` 0,000000, `cost_usd` 0,000000, **`realized_pnl_usd` −4,622700**, `lockup_s` 293.090 |
+| `PAPER_RESOLUTION_DATA_ERROR` desde o rebuild | **0** (era 1.440/24 h) |
+| Erros de qualquer nível no `polymarket-paper` | **0** |
+
+A perda realizada de **US$ −4,6227** casa com a previsão do prompt (≈ US$ 4,62) até o centavo.
+`frozen_markets_json` **não** foi limpo e o kill switch **não** foi rearmado, como manda o
+prompt.
+
+**Aceite do (a):**
+
+- A query exata do agregador, com `event_ts`, roda contra produção: `ordens_abertas` 0,
+  `posicoes` 2, `fills_24h` 0.
+- `occurred_at` no log do `postgres` desde o deploy: **0**. `OVERVIEW_API_FAILED` no log da
+  `api` desde o deploy: **0**.
+- Rota montada e recusando corretamente no bundle novo: **401** sem sessão e **401** com token
+  inválido (o guard corre antes do banco).
+- **O que esta sessão NÃO pôde executar:** a linha `"route":"/polymarket/overview"` com
+  `"status_code":200` exige uma **sessão do proprietário**, e a sessão não manipula
+  credenciais. Fica como a última confirmação de ponta a ponta, de um clique: abrir o painel e
+  conferir o `status_code` no log da `api`. Tudo que estava quebrado — a coluna — está provado
+  corrigido contra o banco real.
+
+**Saúde pós-deploy (20 min após o rebuild):** zero erros em `api`, `market-engine`,
+`polymarket-estimator`, `polymarket-portfolio`, `polymarket-resolution` e `polymarket-paper`;
+**1** no `polymarket-recorder`, um `MACRO_CALENDAR_SYNC_FAILED` de boot — a categoria macro já
+conhecida (prompt 02), não este deploy. Dez containers `Up`, três `healthy`.
+
+**Pendente do (b), e é leitura de LINHA NOVA, não de linha velha:** `closed_positions` do G2.
+A cadência do ciclo de gates é `gateMs = 3_600_000` (1 h) e a última medição do G2 saiu às
+**21:23:17Z — 39 s ANTES** do fechamento. Ler o `0` dessa linha como veredito seria
+exatamente o defeito de linha velha que a lente de degeneração de gate já pegou antes. O
+insumo que o gate conta já está no lugar: `loadClosedPositions` (`gatestore.ts:122`) filtra
+`paper_positions` por `resolved_at IS NOT NULL`, e `closedPositions = closedInWindow.length`
+conta o que caiu dentro do relógio do G2 — que começou em 28/08 20:38:47Z, muito antes deste
+fechamento.
+
+**Confirmado às 2026-09-04 22:23:18.794Z, na primeira medição posterior ao fechamento:**
+
+| Métrica do G2 | 21:23:17Z (linha velha) | 22:23:18Z (linha nova) |
+| --- | --- | --- |
+| `closed_positions` | 0 / 100 | **1** / 100 |
+| `distinct_markets` | 0 / 30 | **1** / 30 |
+| `distinct_close_days` | 0 / 20 | **1** / 20 |
+| `categories` | 0 / 2 | **1** / 2 |
+
+O gate segue `INSUFFICIENT_DATA` / `G2_INSUFFICIENT_PAPER` — como deve: 1 de 100 posições
+fechadas. **O que mudou não é o veredito, é a natureza do bloqueio.** Antes de hoje o G2 estava
+em 0 por defeito e **nenhuma espera o tiraria de lá**; agora está em 1 por falta de amostra, e
+a amostra acumula. **Nenhum gate foi afrouxado, nenhum limiar foi tocado, nenhuma aprovação
+foi executada.**
+
+**Correção a um acoplamento que o prompt e o checklist pré-live afirmavam, e que a medição
+desmente: este fix NÃO destrava o G4.** As duas fontes dizem "G2 e G4 ficam em 0 para sempre
+até isso ser corrigido"; para o G4 isso não se sustenta. Às 22:23:18.794Z ele segue
+`G4_RECONCILIATION_OFF` com `fee_samples` **0**, `slippage_samples` **0** e
+`self_referential_fee_samples` **0** — inalterados pelo fechamento. O motivo está em
+`reconcile` (`measure.ts:241`): `feeSamples` conta **fills takers** com `realFeeUsd > 0` e
+referência `VENUE_TRADE_FEED`, e `slippageSamples` conta fills com referência
+`DECISION_BOOK`. Nenhum dos dois olha para `resolution` ou para posição fechada. O ledger
+inteiro tem **2 `fill`** em toda a sua história (contra 15.391 `mark`, 18 `order_accepted`, 16
+`cancel_effective`), e a posição que fechou tinha `fees_paid_usd` 0. **O gargalo do G4 é
+vazão de ordens — que o kill switch engatado desde 02/09 02:21Z impede — e não a liquidação.**
+Registrado porque o acoplamento errado mandaria a próxima sessão esperar do G4 um movimento
+que não vem.
+
+**Soak de 1 h após o rebuild:** zero erros de qualquer nível no `polymarket-paper`, 1 evento
+`resolution` (o único que havia para fechar), zero `occurred_at` no log do `postgres` e zero
+`OVERVIEW_API_FAILED` no da `api`.
+
+### O que fica para a próxima sessão
+
+1. **Um clique:** abrir o painel e confirmar `"route":"/polymarket/overview"` com
+   `"status_code":200` no log da `api`. É a única parte do aceite do (a) que exige sessão do
+   proprietário.
+2. **Decisão nº 3** (autorizar `status='active'` em `estimateAsOf`) — o PR-c está desenhado e
+   medido, falta a linha de autorização. Enquanto não vier, o contador sobe: 179 decisões
+   `MODEL`, 11 aceitas.
+3. **O G2 agora acumula**, e o que o limita é vazão: com o kill switch engatado desde 02/09
+   02:21Z não há ordem nova, logo não há fill, logo não há fechamento novo nem amostra de G4.
+   A decisão nº 1 (rearme) volta a ser o gargalo — e agora com o livro capaz de fechar posição.
