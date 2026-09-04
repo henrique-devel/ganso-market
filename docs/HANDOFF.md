@@ -1,6 +1,16 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-02 — **Checklist pré-live da RFC-009: NO-GO**.
+- Última atualização: 2026-09-03 — **Diagnóstico profundo (02–03/09) e roadmap 11–21 escritos;
+  nenhum código, deploy ou escrita em produção**. Achados novos verificados: `GET
+  /polymarket/overview` responde **500 em 100 % das chamadas** desde o PR #76 (coluna
+  `occurred_at` inexistente — não era o timeout de 1 s); o disjuntor `PARAM_CHANGE` congela
+  todo mercado novo por 24 h (100 % dos "Up or Down" avaliados); a ponte perde 75 % dos aceites
+  por fase de relógio; 242 saídas aceitas sem ordem; a sombra vaza em `estimateAsOf` (159
+  decisões, 6 aceites); `make server-update --force-recreate` recria o Postgres a cada merge (19
+  deploys em 24 h). Relatório: <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6>.
+  Mockups: <https://claude.ai/code/artifact/60e2fbdd-23eb-45ab-92a6-834b166ea95e>. Ver a seção
+  "SESSÃO 2026-09-02/03" ao final. Kill switch **segue engatado** desde 02/09 02:21Z.
+- 2026-09-02 — **Checklist pré-live da RFC-009: NO-GO**.
   Os seis gates estão `INSUFFICIENT_DATA` e `rfc_009_status` é `BLOCKED`; o
   prompt 10 **não** fica liberado. O achado que reorganiza o calendário: o book
   de paper **nunca fechou uma posição** — `closed_positions = 0` não por falta
@@ -3796,3 +3806,94 @@ worktree local — no meio da sessão o sandbox revogou o acesso ao diretório
 (`git` passou a falhar com `Unable to read current working directory`, e até
 `grep` no arquivo dava `Operation not permitted`). O deploy em si não foi
 afetado; o que ficou bloqueado foi só a escrita local.
+
+## SESSÃO 2026-09-02/03 — DIAGNÓSTICO PROFUNDO E ROADMAP 11–21 (somente documentação)
+
+**Nenhum código, deploy, rearme ou escrita em produção nesta sessão.** Toda medição foi
+somente leitura (psql direto, `docker logs`, `docker inspect`, CLI do shadow replay, que é
+read-only por construção). Método: 7 leitores independentes sobre o repositório e a produção,
+50 verificações adversariais (2 alegações refutadas, 48 confirmadas com correções de número),
+6 propostas de desenho julgadas por 4 avaliadores, 2 sínteses e 1 crítico de completude.
+
+- Relatório completo (14 seções, em português):
+  <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6>
+- Mockups do painel no padrão home broker (Mesa, Decisões, Laboratório/Sombra), desenhados
+  sobre dados reais de 02/09: <https://claude.ai/code/artifact/60e2fbdd-23eb-45ab-92a6-834b166ea95e>
+
+### Os achados que reorganizam o plano (FATOS VERIFICADOS, datados 02–03/09)
+
+1. **`GET /polymarket/overview` devolve 500 em 100 % das chamadas autenticadas desde o PR #76
+   (01/09)**: `overview.ts:466` filtra `paper_ledger_events` por `occurred_at`; a coluna é
+   `event_ts` (migration 0008). A API loga `OVERVIEW_API_FAILED` sem mensagem; o teste usa pool
+   falso e passa. A faixa de PnL e a aba "Visão geral" estão em erro em produção. **Não** era o
+   `statement_timeout` de 1 s (essa atribuição, registrada na sessão da RFC-015, foi refutada).
+2. **O disjuntor `PARAM_CHANGE` congela todo mercado novo por 24 h**: 92 % dos 939 disparos
+   vieram da versão 1 dos parâmetros ou do preenchimento `fee_base_bps` NULL→1000; 55,9 % das
+   avaliações de entrada das 24 h morrem em `PORTFOLIO_CIRCUIT_BREAKER` (98,6 % por ele) e
+   **100 % dos mercados "Up or Down" avaliados** (40/40) nunca chegaram à conta.
+3. **A ponte decisão→ordem perde 75 % das aceitas por fase de relógio**: a linha só existe no
+   banco 8–33 s após o `decision_ts` e a ponte exige < 30 s e tica a cada 30 s
+   (`BRIDGE_TICK considered: 0, aged_out: 36–39`). A explicação anterior ("decisões anteriores à
+   ponte") não vale para o log atual.
+4. **Não existe caminho de saída**: 242 decisões `EXIT ACCEPTED`, zero ordens; só `exitstore.ts`
+   lê `decision_kind='EXIT'`.
+5. **A sombra vaza**: `estimateAsOf` sem `status='active'` → 159 decisões com
+   `estimate_source='MODEL'` sem modelo promovido, 6 `ACCEPTED` (02–03/09). Só o kill switch
+   impediu ordens.
+6. **Todo merge em `main` recria o Postgres** (`make server-update` com `--force-recreate` sobre
+   os 6 serviços default): 19 deploys em 24 h, 7–10 só de documentação; ~11 s sem banco; o pool
+   do `pg` não tem `on("error")` e os workers morrem (RestartCount portfolio 31, resolution 30);
+   4,4–5,6 mil deltas perdidos por deploy e a lacuna raramente registrada (o INSERT da lacuna usa
+   o mesmo pool). Os engates do kill switch **não** coincidem com deploys.
+7. **O recorder descobre os horários BTC a 21 min do fim** (top-500 por volume a cada 10 min) e
+   só 8 % dos horários vencidos têm livro nas 3 h finais; hipótese não testada no fio: o WS do
+   CLOB ignora `subscribe` adicional em conexão viva.
+8. **Não há edge ingênuo em "sobe ou desce"**: N=162–168 horários, comprar o favorito rende de
+   −0,080 a +0,021 líquido/cota, nenhum IC95 positivo. A fatia rápida vale como máquina de
+   amostra (labels em ~69 min), não como lucro esperado.
+9. **Shadow replay re-rodado com os labels de hoje** (03/09): janela de 01/09 liquidou 353 de 515
+   entradas contrafactuais, +US$ 324,55 HIPOTÉTICO — soma de linhas em ≤ 9 mercados, sem dedup,
+   sombras 1.0.0/1.1.0 misturadas, zero decisões updown alcançáveis. Não decide promoção.
+   Operacional: o modo B via SSH ocioso morre em silêncio (exit 255); rodar destacado (~710 s).
+10. **Modelo**: a 1.0.0 é pior que o preço em log loss com IC95 inteiro > 0; a 1.1.0 aponta
+    melhor (Brier −14 %, N=7–15) mas é pior em updown (+9 %) e no horizonte 6–24 h (+236 %).
+
+Kill switch segue engatado desde 02/09 02:21:05Z (`RECORDER_STALE`); o TTL de 14 d de
+`book_deltas` venceu em 03/09 01:26Z sem rodada de retenção até 09:40Z (a rodada de boot de
+14:51Z de 02/09 falhou com o banco fora) — a prova da travessia da borda (#89) segue pendente.
+
+### Roadmap 11–21 (prompts autocontidos, contexto mínimo por sessão)
+
+Escritos nesta sessão, um autor por RFC com apenas o seu recorte do diagnóstico, cada um
+revisado por um cético (arquivo:linha, invariantes, autonomia, tamanho) e um passe de
+consistência cruzada. Vão até "paper rodando fluido em SOMBRA + telas novas":
+
+| Prompt | RFC | Tema |
+| --- | --- | --- |
+| 11 | — (hotfixes) | `/overview` 500; settlement lê `raw.outcomePrices`; `estimateAsOf` com `status='active'` |
+| 12 | RFC-020 | deploy sem recriar o Postgres; `pool.on("error")`; lacunas com retry |
+| 13 | RFC-021 | silêncio do feed como lacuna; kill switch honesto; `closed` persistido |
+| 14 | RFC-022 | ponte por `received_at`; graça para `NOT_READY`/`GENERATION_MISMATCH`; saídas (decisão) |
+| 15 | RFC-023 | `statement_timeout` por endpoint; erros com mensagem; `/live-volume` |
+| 16 | RFC-024 | descoberta por série; prova no fio do resubscribe; livro dos rápidos |
+| 17 | RFC-025 | `PARAM_CHANGE` sem versão 1 nem preenchimento de fee |
+| 18, 18a–c | RFC-026 | painel home broker: Mesa, Carteira, Decisões, Resolução, séries (3 PRs) |
+| 19 | RFC-027 | funil pré-agregado; Sistema com natureza do bloqueio |
+| 20a–b | RFC-028 | estratégia `fast_btc_updown@0.1.0` em SOMBRA, sub-carteira, braços A/C/D/E |
+| 21 | RFC-029 | tela Sombra: shadow replay por job diário + JSON, sem escrita no banco |
+
+Todas as RFCs estão em `draft — aguardando aprovação do proprietário` e listam, em seção
+própria, as decisões que exigem. Fora deste roadmap (RFCs futuras registradas no relatório):
+persistência do replay por mercado/forma/braço (030), RTDS por símbolo + spot (031), universo
+estimado e higiene do modelo (032), categoria macro.
+
+### Decisões do proprietário pendentes (com o efeito de não decidir)
+
+1. Rearmar o kill switch (ou aprovar rearme condicionado — RFC-021 P1). Sem isso, vazão zero.
+2. Política de deploy (RFC-020): Postgres fora do `--force-recreate`; docs não disparam deploy.
+3. Autorizar `status='active'` em `estimateAsOf` (PR-0 c, área da RFC-010).
+4. Semântica do `PARAM_CHANGE` (RFC-025). 5. Saídas viram ordem? (RFC-022).
+6. Sub-carteira `fast` fora dos gates e EV ≈ 0 aceito em troca de N (RFC-028).
+7. Emenda de escopo leve à RFC-017 para publicar JSON e tela (RFC-029).
+8. Operar a menos de 30 min do fim (regra B4). 9. Macro. 10. Retirar a 1.0.0.
+11. Config 1.3.0 só após a varredura na tela. 12. Backup do Postgres e trilha humana da RFC-009.
