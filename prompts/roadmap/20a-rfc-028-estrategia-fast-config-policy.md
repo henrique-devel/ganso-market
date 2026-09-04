@@ -50,7 +50,7 @@ mesmo que 11–19 faltem).
 | `paper_orders.source` CHECK; migration mais alta | `('manual','intent','portfolio')`; 0018 | `\d paper_orders`; `ls migrations/` |
 | RTDS | só `twap30`/`twap60` `btc/usd`; 16,9 % dos buckets ausentes em 7 d | `SELECT feed, count(*) FROM polymarket_rtds_1m WHERE bucket_start > now()-'7 days'::interval GROUP BY 1` |
 | Universo horário | `question` = `Bitcoin Up or Down - <Mês> <dia>, <h>(AM\|PM) ET` | `count(*) FROM polymarket_markets WHERE question ~ '^Bitcoin Up or Down - '` |
-| Dependências PR-0, RFC-022, RFC-025 | **todas draft** em 03/09 (`RFC-022…:3`, `RFC-025…:3`) | PR-0: `count(*) FROM paper_ledger_events WHERE event_type='resolution'` (0 ⇒ ausente); RFC-025: `count(*) FROM portfolio_circuit_breakers WHERE kind='PARAM_CHANGE' AND ended_at IS NULL`; RFC-022: status no repo |
+| Dependências PR-0, RFC-022, RFC-025 | RFC-022 e RFC-025 em **`accepted`** em 04/09 (`RFC-022…:3`, `RFC-025…:3`); **nenhuma das três implementada** (PR-0 sem PR) | PR-0: `count(*) FROM paper_ledger_events WHERE event_type='resolution'` (0 ⇒ ausente); RFC-025: `count(*) FROM portfolio_circuit_breakers WHERE kind='PARAM_CHANGE' AND ended_at IS NULL`; RFC-022: status no repo |
 
 Dependência ausente **não** para esta parte (só config, policy, migration, retenção): registre
 no HANDOFF; quem PARA é a parte B. `POLICY_VERSION` ≠ 1.0.0 ou `strategy_id` já em

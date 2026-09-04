@@ -1,6 +1,6 @@
 # RFC-020 — Deploy que não derruba o banco: o merge deixa de recriar o Postgres e de matar os workers
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
+**Status:** accepted — autorizado para implementação (2026-09-04)
 **Dependências:** RFC-001 (runtime e Compose), RFC-007 (recorder, `polymarket_data_gaps`, retenção), RFC-010 (`release-sha` na imagem, provenance); convenção de deploy em três passos em `prompts/roadmap/README.md`
 **Habilita:** um merge em `main` que não custa ~1,5–12,7 s de banco fora, ~4,4–5,6 mil deltas perdidos e um crash-loop dos workers; um `polymarket_data_gaps` que registra a lacuna que ele mesmo hoje perde; docs que não disparam deploy
 **Origem:** diagnóstico operacional de 2026-09-02 (relatório publicado: <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6>; leitor de ops, seções 1 e 6; céticos 21, 23–28)

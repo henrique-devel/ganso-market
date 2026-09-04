@@ -50,7 +50,7 @@ Nada além disso. Se precisar de outro arquivo, anote o motivo no HANDOFF.
 | Modo A `costs.edgeLiqMin` | 0,01 → +64/10; 0,015 → +37/6; 0,03 → −35/8; 13 viradas 0,0201–0,0232 | `latest-A.json` |
 | `BASELINE_ALREADY_SHADOW` | 159 (vazamento `store.ts:179–190`; fora do escopo) | `exclusions` no JSON |
 | Nginx `proxy_read_timeout 5s`; `^~ /api/polymarket/gates` GET-only | `nginx.conf:22`, `:129–136` | `grep -n` |
-| RFC-026 em produção? | draft em 03/09 (tecla `4`, `RFC-026:88`) | `git log --oneline \| grep -i 026` — decide P5 |
+| RFC-026 em produção? | `accepted` em 04/09, ainda não implementada (tecla `4`, `RFC-026:88`) | `git log --oneline \| grep -i 026` — decide P5 |
 
 Antes do PR 1, confirme no HANDOFF que **P1, P2 e P3 estão aprovados**.
 

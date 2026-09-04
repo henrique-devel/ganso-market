@@ -1,6 +1,6 @@
 # RFC-026 — Painel home broker (paper): Mesa, Carteira, Decisões, Resolução e séries de preço sobre o React existente, só GET, perímetro intacto
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03; decisões P1–P5 abaixo)
+**Status:** accepted — autorizado para implementação (2026-09-04); seguir as recomendações da tabela P1–P5
 **Origem:** diagnóstico de 2026-09-02/03 (relatório publicado: https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 — item RFC-026, auditoria UX, claims C1–C9); mockups no canvas "Ganso Market · Mesa do Operador": https://claude.ai/code/artifact/60e2fbdd-23eb-45ab-92a6-834b166ea95e
 **Dependências:** **PR-0 (a)** — hotfix sem RFC (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item a): `GET /polymarket/overview` responde 500 em produção porque `apps/api/src/polymarket/overview.ts:466` filtra por `occurred_at` (a coluna é `event_ts`). A faixa da carteira lê o `/overview`; sem o PR-0 (a) esta RFC nasce cega. RFC-015 (faixa de PnL, `/overview`, `/events`, `dicionario.ts` — mantidos), RFC-002 (perímetro: GET-only, sessão, `location =` sob `/paper`), RFC-013 (`panel_json` do motor — lido, não alterado)
 **Habilita:** o operador lê o nome do mercado em toda célula, vê por que o motor recusa ("faltam 0,004 para aceitar"), vê o livro de 10 níveis que já viaja e é descartado, vê posições com PnL calculado no servidor e ordens com fila, e vê o primeiro gráfico de preço do painel. Base de tela para a RFC-027 (funil pré-agregado e Sistema fase 1) e para a tela Sombra da RFC-029 (tecla `4`)

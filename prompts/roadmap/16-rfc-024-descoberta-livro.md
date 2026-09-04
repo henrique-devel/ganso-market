@@ -3,11 +3,11 @@
 Leve a RFC-024 ATÉ O FINAL (re-medição → prova no fio → código → deploy → soak de 3 dias →
 HANDOFF). Tudo em SIMULAÇÃO e somente leitura de mercado. Origem: diagnóstico de
 02–03/09/2026 (relatório linkado no cabeçalho da RFC-024).
-A RFC está em draft: procure em `docs/HANDOFF.md` a aprovação de P1–P4 (grep `RFC-024`).
+A RFC está em `accepted` (04/09): procure em `docs/HANDOFF.md` a aprovação de P1–P4 (grep `RFC-024`).
 **Sem registro de aprovação de P1 e P3, PARE e devolva ao proprietário.** Depende de
 RFC-020 (`docs/rfcs/RFC-020-deploy-sem-derrubar-o-banco.md`) e RFC-021
-(`docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md`), ambas em draft: sem elas o soak não
-é mensurável.
+(`docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md`), ambas em `accepted` e ainda não
+implementadas: sem elas o soak não é mensurável.
 
 ## Contexto mínimo: leia só…
 

@@ -1,7 +1,7 @@
 # RFC-021 — Silêncio do feed com conexões vivas e kill switch honesto
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
-**Dependências:** RFC-007 (recorder, `polymarket_data_gaps`), RFC-011 (kill switch paper, gatilho `RECORDER_STALE`), **RFC-020** (`RFC-020-deploy-sem-derrubar-o-banco.md`, draft — sem ela, cada merge recria os containers, o INSERT da lacuna falha junto com o banco e o detector novo produz ruído em vez de sinal)
+**Status:** accepted — autorizado para implementação (2026-09-04)
+**Dependências:** RFC-007 (recorder, `polymarket_data_gaps`), RFC-011 (kill switch paper, gatilho `RECORDER_STALE`), **RFC-020** (`RFC-020-deploy-sem-derrubar-o-banco.md`, `accepted` e ainda não implementada — sem ela, cada merge recria os containers, o INSERT da lacuna falha junto com o banco e o detector novo produz ruído em vez de sinal)
 **Habilita:** a próxima parada silenciosa do WebSocket do livro vira uma linha em `polymarket_data_gaps` em vez de sumir; o engate do kill switch diz qual série calou; o paper broker deixa de ficar engatado por horas com feed saudável (se o rearme condicionado for aprovado); `polymarket_markets.closed` passa a refletir a venue
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (dívidas D03, D04, D07; céticos 16, 17, 19, 20, 29, 30)
 

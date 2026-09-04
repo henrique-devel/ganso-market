@@ -46,7 +46,7 @@ estão na RFC; `BREAKER_EVENT_WINDOW_MS` (`breakers.ts:102`) você **importa, n�
 
 ## Estado medido (02–03/09/2026; re-verifique)
 
-**Primeiro:** a RFC-026 é draft. Se o PR 1 dela (teclas `3` Decisões e `6` Sistema, modo
+**Primeiro:** a RFC-026 está em `accepted` (04/09) e ainda não implementada. Se o PR 1 dela (teclas `3` Decisões e `6` Sistema, modo
 engenheiro) não estiver mergeado — `grep -n "Sistema" apps/web/src/App.tsx` vazio — **PARE e
 registre**. Nada abaixo se mede antes.
 

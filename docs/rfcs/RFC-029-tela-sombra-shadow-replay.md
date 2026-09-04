@@ -1,7 +1,7 @@
 # RFC-029 — Tela Sombra: shadow replay publicado por job diário e JSON em volume só-leitura
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
-**Dependências:** RFC-017 (CLI `shadow-replay`, em produção desde PRs #72/#73) **com emenda de escopo leve aprovada** (P1); RFC-015 (dicionário PT em `apps/web/src/dicionario.ts`, em produção); RFC-026 (aba nova e tecla `4` reservada à Sombra — `docs/rfcs/RFC-026-painel-home-broker.md:88`, draft); aprovação do job no host e do volume no compose (P2, P3)
+**Status:** accepted — autorizado para implementação (2026-09-04)
+**Dependências:** RFC-017 (CLI `shadow-replay`, em produção desde PRs #72/#73) **com emenda de escopo leve aprovada** (P1); RFC-015 (dicionário PT em `apps/web/src/dicionario.ts`, em produção); RFC-026 (aba nova e tecla `4` reservada à Sombra — `docs/rfcs/RFC-026-painel-home-broker.md:88`, `accepted` e ainda não implementada); aprovação do job no host e do volume no compose (P2, P3)
 **Habilita:** os números do shadow replay deixam de existir só no stdout em inglês de uma sessão SSH e passam a ser lidos em português, todo dia, com as ressalvas fixas na tela; base de leitura para a decisão sobre a config 1.3.0 e para a RFC-030 (cortes por mercado/forma/modelo, persistência)
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (leitor do shadow replay, claims C1–C9; síntese de UI, seção 5 "Tela Sombra"). Layout: canvas da RFC-026 (link no cabeçalho dela), só para layout
 
