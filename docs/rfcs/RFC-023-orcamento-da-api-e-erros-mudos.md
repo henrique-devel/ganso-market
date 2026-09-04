@@ -1,6 +1,6 @@
 # RFC-023 — Orçamento de 1 s da API e erros mudos: cada consulta declara o que pode custar, cada falha diz o que falhou
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
+**Status:** accepted — autorizado para implementação (2026-09-04)
 **Origem:** diagnóstico de 2026-09-02 (relatório publicado: https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 — item RFC-023, dívidas D15/D16/D44, céticos 13 e 15) e a seção "O 500 de 31/08 não era irreproduzível" do `docs/HANDOFF.md`
 **Dependências:** PR-0 (a) — hotfix sem RFC (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item a): `overview.ts` `occurred_at` → `event_ts`, mensagem no `OVERVIEW_API_FAILED` e teste que executa o SQL contra o esquema real. Esta RFC **não** refaz o PR-0; ela parte dele. RFC-015 (endpoints do painel), RFC-002 (perímetro: nada novo é publicado)
 **Habilita:** diagnóstico em minutos em vez de dias (o defeito do `occurred_at` ficou 40 h invisível porque o log dizia só `error_name: "error"`); painel sem 500 com cache frio; `live_volume` deixa de ser um `NULL` mudo há mais de 30 h

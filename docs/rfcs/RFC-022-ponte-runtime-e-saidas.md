@@ -1,6 +1,6 @@
 # RFC-022 — Ponte decisão→ordem, runtime de resolução e saídas: por que 44 aceites viraram 8 ordens e 2 fills
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03; decisões P1–P3 abaixo)
+**Status:** accepted — autorizado para implementação (2026-09-04); seguir as recomendações da tabela P1–P3
 **Dependências:** RFC-013 (ponte e critérios de saída, código completo), RFC-012 (runtime de resolução com geração/lease), PR-0 (b), liquidação (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item b; `brokerstore.ts:2462` lê `payload_json.outcomePrices` e sem o fix nenhum fechamento é medível)
 **Habilita:** vazão de fills mensurável para o G2; saída de posição com semântica declarada (ordem ou sinal); cancelamento por runtime só quando o runtime está de fato indisponível
 **Origem:** diagnóstico de 02–03/09/2026, relatório publicado em <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6> (funil §3, §4.2, §4.4, §5; céticos 18 e 22)

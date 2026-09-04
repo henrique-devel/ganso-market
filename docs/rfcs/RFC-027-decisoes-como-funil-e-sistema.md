@@ -1,7 +1,7 @@
 # RFC-027 — Decisões como funil e Sistema com natureza do bloqueio: o painel diz onde as entradas morrem e por que cada gate não anda
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
-**Dependências:** RFC-026 (`docs/rfcs/RFC-026-painel-home-broker.md`, draft; **PR 1 mergeado é pré-condição** — ver Condições de parada; esta RFC ocupa as telas Decisões e Sistema que ela define), RFC-015 (`GET /overview`, `GET /events`, dicionário PT), RFC-018 (decision log grava só mudança de veredito — é o que torna a amostra de 500 linhas inútil para funil), RFC-023 (orçamento por rota — se estiver em produção, o teto da consulta do funil é o orçamento da rota, não 1 s)
+**Status:** accepted — autorizado para implementação (2026-09-04)
+**Dependências:** RFC-026 (`docs/rfcs/RFC-026-painel-home-broker.md`, `accepted` e ainda não implementada; **PR 1 mergeado é pré-condição** — ver Condições de parada; esta RFC ocupa as telas Decisões e Sistema que ela define), RFC-015 (`GET /overview`, `GET /events`, dicionário PT), RFC-018 (decision log grava só mudança de veredito — é o que torna a amostra de 500 linhas inútil para funil), RFC-023 (orçamento por rota — se estiver em produção, o teto da consulta do funil é o orçamento da rota, não 1 s)
 **Habilita:** o operador lê o funil inteiro numa tela; três gates deixam de parecer "esperando" quando estão travados; `/data-quality` e `/portfolio/limits` passam a ter consumidor; o feed deixa de mostrar JSON cru
 **Origem:** diagnóstico de 02–03/09/2026, relatório publicado em <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6> (leitores 1 e 3; síntese de UI, seções 4.3 e 4.5). **Não é necessário abrir o relatório**: tudo o que o prompt precisa está nas tabelas abaixo. Layout das telas Decisões e Sistema: canvas da RFC-026 (link no cabeçalho dela), só para layout
 

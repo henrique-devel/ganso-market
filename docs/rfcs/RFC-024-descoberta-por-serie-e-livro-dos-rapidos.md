@@ -1,7 +1,7 @@
 # RFC-024 — Descoberta por série e livro garantido para o universo rápido (BTC horário)
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
-**Dependências:** RFC-007 (recorder: registry, WS dual, `book_deltas`), RFC-016 (`end_ts`, reserva de 25 slots do cap), decisão #88 (quota de `book_deltas` mantida em 52 GiB), RFC-020 (`docs/rfcs/RFC-020-deploy-sem-derrubar-o-banco.md`, deploy que não recria o Postgres) e RFC-021 (`docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md`, silêncio do feed com conexões vivas) — ambas em draft nesta rodada; sem elas o soak de 3 dias desta RFC não é mensurável
+**Status:** accepted — autorizado para implementação (2026-09-04)
+**Dependências:** RFC-007 (recorder: registry, WS dual, `book_deltas`), RFC-016 (`end_ts`, reserva de 25 slots do cap), decisão #88 (quota de `book_deltas` mantida em 52 GiB), RFC-020 (`docs/rfcs/RFC-020-deploy-sem-derrubar-o-banco.md`, deploy que não recria o Postgres) e RFC-021 (`docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md`, silêncio do feed com conexões vivas) — ambas em `accepted` nesta rodada e ainda não implementadas; sem elas o soak de 3 dias desta RFC não é mensurável
 **Habilita:** qualquer estratégia rápida em simulação (não faz parte desta RFC); cobertura da `crypto_updown_gbm@1.1.0` em `updown` (hoje 5 de 457 mercados com estimativa); evidência do G1 por forma de mercado
 **Origem:** diagnóstico operacional de 02–03/09/2026 em produção, somente leitura — relatório publicado em <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6> (estudo updown §1; síntese, seção 2). Não é preciso abri-lo: todos os números estão nas tabelas abaixo com o comando ou arquivo de origem
 

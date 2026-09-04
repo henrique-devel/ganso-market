@@ -1,6 +1,6 @@
 # RFC-025 — Disjuntor de mudança de parâmetro redefinido: `PARAM_CHANGE` abre em mudança real, não em nascimento
 
-**Status:** draft — exige decisão registrada do proprietário (tabela P1–P3, coluna "Decisão do proprietário") (2026-09-03)
+**Status:** accepted — autorizado para implementação (2026-09-04); seguir as recomendações da tabela P1–P3
 **Dependências:** nenhuma de código. RFC-013 (item 4 (iv): "mudança de fee schedule/tick/status", `docs/rfcs/RFC-013-polymarket-portfolio-engine.md:154–158`) é a especificação que esta RFC interpreta; RFC-018 (o G3 já viu `PARAM_CHANGE` disparar 939 vezes — nada aqui o devolve a zero). **Exige decisão registrada (tabela P1–P3).**
 **Habilita:** o universo rápido da RFC-016/RFC-019 (mercados "Up or Down" horários) deixa de nascer congelado; a vazão de que o G2 depende passa a ser possível de medir; o `PARAM_CHANGE` volta a significar o que a RFC-013 escreveu
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (funil, seções 1 e 2)

@@ -43,7 +43,7 @@ Nada além disso, salvo `docs/HANDOFF.md` (60 primeiras linhas) e `git log --one
 | --- | --- | --- |
 | Parte A em produção | tabelas novas; 0.1.0 congelada | `\d strategy_decisions`; `SELECT version, hash FROM fast_config_versions` |
 | Kill switch | engatado `RECORDER_STALE` desde 02/09 02:21Z (`HANDOFF.md:377-379`) | `SELECT engaged, reason FROM paper_kill_switch`; engatado ⇒ janela **não conta**; rearme é do proprietário |
-| PR-0, RFC-022, RFC-025 | **todas draft** em 03/09 (`RFC-022…:3`, `RFC-025…:3`) | PR-0: `count(*) FROM paper_ledger_events WHERE event_type='resolution'` > 0; RFC-025: `count(*) FROM portfolio_circuit_breakers WHERE kind='PARAM_CHANGE' AND ended_at IS NULL` = 0 em mercados vivos; RFC-022: status no repo. **Ausente ⇒ PARE antes do merge do PR 3** |
+| PR-0, RFC-022, RFC-025 | RFC-022 e RFC-025 em **`accepted`** em 04/09 (`RFC-022…:3`, `RFC-025…:3`); **nenhuma das três implementada** (PR-0 sem PR) | PR-0: `count(*) FROM paper_ledger_events WHERE event_type='resolution'` > 0; RFC-025: `count(*) FROM portfolio_circuit_breakers WHERE kind='PARAM_CHANGE' AND ended_at IS NULL` = 0 em mercados vivos; RFC-022: status no repo. **Ausente ⇒ PARE antes do merge do PR 3** |
 | Universo hoje | 0 updown com `end_ts` futuro (03/09); RFC-024 fecha a lacuna; cobertura é sobre os **descobertos** | `count(*) FROM polymarket_markets WHERE end_ts > now() AND question ~ '^Bitcoin Up or Down'` |
 | Idade do RTDS | só `polymarket_rtds_prices.received_at` carimba por amostra (`rtds.ts:427-429`) | `SELECT feed, max(received_at) FROM polymarket_rtds_prices GROUP BY 1` |
 
