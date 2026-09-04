@@ -4152,9 +4152,42 @@ que não vem.
 1. **Um clique:** abrir o painel e confirmar `"route":"/polymarket/overview"` com
    `"status_code":200` no log da `api`. É a única parte do aceite do (a) que exige sessão do
    proprietário.
-2. **Decisão nº 3** (autorizar `status='active'` em `estimateAsOf`) — o PR-c está desenhado e
-   medido, falta a linha de autorização. Enquanto não vier, o contador sobe: 179 decisões
-   `MODEL`, 11 aceitas.
+2. ~~**Decisão nº 3**~~ — **RESOLVIDA na mesma sessão**: autorizada pelo proprietário,
+   entregue no PR #96 e verificada em produção. O contador parou em 179/11.
 3. **O G2 agora acumula**, e o que o limita é vazão: com o kill switch engatado desde 02/09
    02:21Z não há ordem nova, logo não há fill, logo não há fechamento novo nem amostra de G4.
-   A decisão nº 1 (rearme) volta a ser o gargalo — e agora com o livro capaz de fechar posição.
+   **A decisão nº 1 (rearme) é agora o único gargalo do bloco** — e agora com o livro capaz de
+   fechar posição e com o consumidor cego para a sombra.
+
+### PR-c em produção — verificado (merge `b381f21`, rebuild às 23:17:31Z)
+
+`release-sha` = `b381f216245453b5299a1683436c7f1b19296a37` em **api, polymarket-paper e
+polymarket-portfolio**. Linha de corte gravada ANTES do merge, às 23:12:51Z: 179 decisões
+`MODEL`, 11 aceitas.
+
+**Aceite (medido às 23:27:16Z, 201 decisões depois do corte):**
+
+| Evidência | Número |
+| --- | --- |
+| Decisões gravadas após o deploy, por `estimate_source` | **201 `MARKET_BASELINE`**, **0 `MODEL`** |
+| Aceitas entre elas com número de sombra | **0** |
+| Total histórico `MODEL` | **179 / 11 — parou de crescer** |
+| `fundamental_models` com `status='active'` | **0** (o denominador que dá sentido ao critério) |
+| Erros em `api`, `portfolio`, `paper`, `estimator`, `resolution`, `recorder`, `market-engine` | **0** em todos os sete |
+| `PORTFOLIO_REPLAY_OK` | 1, zero mismatch |
+
+O contador histórico congelado em 179 é a prova mais forte que a contagem zero: **zero** pode
+ser ausência de decisão, mas "179 que não virou 180 enquanto 201 decisões novas eram gravadas"
+não pode.
+
+**Uma linha com `estimate_source` nulo apareceu na janela — e NÃO é o filtro tirando estimativa
+de alguém.** `decision_id` 814357, `PORTFOLIO_CIRCUIT_BREAKER`. A escada de recusa rejeita
+antes de ler a estimativa, e o mesmo padrão já existia antes do deploy (6 linhas assim entre
+22:00Z e o corte). Verificado explicitamente porque era o risco real do predicado: transformar
+"tinha estimativa" em "não tem". Na população atual não transforma — os 0 tokens sem linha
+`active` medidos antes do código previam exatamente isso.
+
+**O que este PR NÃO faz:** não promove modelo nenhum, não toca gate, disjuntor, policy, quota
+ou migration, não limpa `frozen_markets_json` e não rearma o kill switch. Enquanto
+`fundamental_models` não tiver uma linha `active`, `estimate_source='MODEL'` fica em 0 **por
+construção** — que é a invariante da RFC-010 funcionando, não um efeito colateral.
