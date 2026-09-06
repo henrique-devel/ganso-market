@@ -16,3 +16,9 @@ infra/secrets/local/*
 !infra/secrets/local/.gitkeep
 *.log
 .DS_Store
+
+# Configuração local do Claude Code: por-desenvolvedor, nunca versionada.
+# `settings.local.json` guarda as permissões que cada máquina foi aceitando; commitá-lo
+# aplicaria essas concessões a quem clonar. Permissão compartilhada, se um dia houver,
+# entra como `.claude/settings.json` deliberado — e este ignore não a atrapalha.
+.claude/settings.local.json

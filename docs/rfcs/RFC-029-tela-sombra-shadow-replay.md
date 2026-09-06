@@ -1,6 +1,6 @@
 # RFC-029 — Tela Sombra: shadow replay publicado por job diário e JSON em volume só-leitura
 
-**Status:** accepted — autorizado para implementação (2026-09-04)
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 concedidas, P4/P5 como propostos (2026-09-05)
 **Dependências:** RFC-017 (CLI `shadow-replay`, em produção desde PRs #72/#73) **com emenda de escopo leve aprovada** (P1); RFC-015 (dicionário PT em `apps/web/src/dicionario.ts`, em produção); RFC-026 (aba nova e tecla `4` reservada à Sombra — `docs/rfcs/RFC-026-painel-home-broker.md:88`, `accepted` e ainda não implementada); aprovação do job no host e do volume no compose (P2, P3)
 **Habilita:** os números do shadow replay deixam de existir só no stdout em inglês de uma sessão SSH e passam a ser lidos em português, todo dia, com as ressalvas fixas na tela; base de leitura para a decisão sobre a config 1.3.0 e para a RFC-030 (cortes por mercado/forma/modelo, persistência)
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (leitor do shadow replay, claims C1–C9; síntese de UI, seção 5 "Tela Sombra"). Layout: canvas da RFC-026 (link no cabeçalho dela), só para layout
@@ -147,6 +147,18 @@ emenda da restrição 6 da RFC-017 ("só agregados acumulam", `RFC-017:173`). O 
 ---
 
 ## Decisões do proprietário que esta RFC exige
+
+> **APROVADAS — 2026-09-05, e leia esta nota antes da tabela.** A coluna abaixo é
+> **"Padrão se não houver resposta"** — um fallback fail-closed, **não** uma recomendação: em
+> P1, P2 e P3 esse padrão é *recusar*, e aplicá-lo faria "nada desta RFC começa", em contradição
+> direta com o `Status: accepted` do cabeçalho. Houve resposta, então o padrão não se aplica:
+> **P1 (emenda de escopo leve da RFC-017), P2 (job no host) e P3 (volume `:ro` no `api`) estão
+> CONCEDIDAS**; **P4** fica como proposto (03:30Z, janela de 72 h) e **P5** como escrito
+> (esperar a RFC-026). Não há decisão pendente nesta RFC.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
 
 | # | Decisão | Padrão se não houver resposta |
 | --- | --- | --- |

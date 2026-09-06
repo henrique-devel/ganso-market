@@ -1,6 +1,6 @@
 # RFC-023 — Orçamento de 1 s da API e erros mudos: cada consulta declara o que pode custar, cada falha diz o que falhou
 
-**Status:** accepted — autorizado para implementação (2026-09-04)
+**Status:** accepted — autorizado para implementação (2026-09-04); sem decisão pendente (2026-09-05)
 **Origem:** diagnóstico de 2026-09-02 (relatório publicado: https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 — item RFC-023, dívidas D15/D16/D44, céticos 13 e 15) e a seção "O 500 de 31/08 não era irreproduzível" do `docs/HANDOFF.md`
 **Dependências:** PR-0 (a) — hotfix sem RFC (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item a): `overview.ts` `occurred_at` → `event_ts`, mensagem no `OVERVIEW_API_FAILED` e teste que executa o SQL contra o esquema real. Esta RFC **não** refaz o PR-0; ela parte dele. RFC-015 (endpoints do painel), RFC-002 (perímetro: nada novo é publicado)
 **Habilita:** diagnóstico em minutos em vez de dias (o defeito do `occurred_at` ficou 40 h invisível porque o log dizia só `error_name: "error"`); painel sem 500 com cache frio; `live_volume` deixa de ser um `NULL` mudo há mais de 30 h
@@ -112,10 +112,18 @@ Registro da chamada: `status … | corpo … | data …` — a preencher pela se
 
 ## Decisões do proprietário que esta RFC exige
 
+> **APROVADAS — 2026-09-05.** O proprietário aprovou **todas** as decisões desta seção,
+> cada uma **na recomendação da própria tabela** (coluna "Recomendação"). Não há decisão
+> pendente nesta RFC.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
+
 1. Aprovar `ceiling 4 000 ms` e `default 2 000 ms` (D1), ou fixar outros dentro de `≤ 4 000`.
 2. Aceitar que a API e os CLIs **não sobem** sem timeout declarado (`QUERY_TIMEOUT_UNDECLARED`, D1).
 3. Na saída "endpoint extinto" de D4: manter `live_volume: null` explícito (padrão) **ou** remover o campo de `series?metric=oi`.
-4. Confirmar a ordem: PR-0 (a) antes desta RFC; sem ele, a sessão para.
+4. Confirmar a ordem: PR-0 (a) antes desta RFC. **Satisfeito em 04/09 (PR #93)** — a sessão só para se a re-medição mostrar o contrário.
 
 ## Escopo, em PRs
 

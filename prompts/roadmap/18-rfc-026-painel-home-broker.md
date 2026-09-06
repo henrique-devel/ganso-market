@@ -28,8 +28,10 @@ Sem P1 registrado no HANDOFF, a sessão 2 executa só a parte web e os filtros d
 
 ## Pré-condição única, verificável
 
-`grep -n "AND occurred_at" apps/api/src/polymarket/overview.ts` deve vir **vazio** (03/09 ainda
-devolve `:466`; o grep cru de `occurred_at` não serve — é alias legítimo em outras linhas). Enquanto devolver, `GET /polymarket/overview` responde 500 em produção e a
+`grep -n "AND occurred_at" apps/api/src/polymarket/overview.ts` deve vir **vazio**. **Em 04/09
+já vem vazio: o PR-0 (a) foi entregue no PR #93 e o `/overview` responde de novo.** Confirme
+mesmo assim antes de começar (o grep cru de `occurred_at` não serve — é alias legítimo em
+outras linhas). Se algum dia voltar a devolver `:466`, `GET /polymarket/overview` responde 500 em produção e a
 faixa da carteira — que toda tela desta RFC carrega — não tem dado. **Nenhuma das três
 sessões começa antes disso.**
 

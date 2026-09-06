@@ -1,7 +1,7 @@
 # RFC-022 — Ponte decisão→ordem, runtime de resolução e saídas: por que 44 aceites viraram 8 ordens e 2 fills
 
-**Status:** accepted — autorizado para implementação (2026-09-04); seguir as recomendações da tabela P1–P3
-**Dependências:** RFC-013 (ponte e critérios de saída, código completo), RFC-012 (runtime de resolução com geração/lease), PR-0 (b), liquidação (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item b; `brokerstore.ts:2462` lê `payload_json.outcomePrices` e sem o fix nenhum fechamento é medível)
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela (2026-09-05)
+**Dependências:** RFC-013 (ponte e critérios de saída, código completo), RFC-012 (runtime de resolução com geração/lease), **PR-0 (b) — SATISFEITA** (PR #94, mergeado e verificado em produção em 2026-09-04): `brokerstore.ts` lia `payload_json.outcomePrices` enquanto o coletor grava `payload_json.raw.outcomePrices`, e nenhum fechamento era medível. O livro fechou a primeira posição da sua história em 2026-09-04 21:23:56.924Z
 **Habilita:** vazão de fills mensurável para o G2; saída de posição com semântica declarada (ordem ou sinal); cancelamento por runtime só quando o runtime está de fato indisponível
 **Origem:** diagnóstico de 02–03/09/2026, relatório publicado em <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6> (funil §3, §4.2, §4.4, §5; céticos 18 e 22)
 
@@ -79,6 +79,14 @@ runtime de resolução. Nesta rodada só esta RFC altera o frescor em `bridge.ts
 ---
 
 ## Decisões que esta RFC exige do proprietário
+
+> **APROVADAS — 2026-09-05.** O proprietário aprovou **todas** as decisões desta seção,
+> cada uma **na recomendação da própria tabela** (coluna "Recomendação"). Não há decisão
+> pendente nesta RFC.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
 
 | # | Pergunta | Recomendação | Se recusada |
 | --- | --- | --- | --- |

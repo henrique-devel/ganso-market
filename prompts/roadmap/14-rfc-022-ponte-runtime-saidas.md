@@ -80,7 +80,7 @@ reutilizando `conservativeBound`; rebuild `polymarket-paper`. B: `consequencia` 
 recarrega o SPA (lição de 31/08). Nunca os dois; nunca FAK.
 
 Fora do escopo: FAK/taker (`taker_fee_bps` NULL em 1.195/1.195; RFC-028), disjuntor
-`PARAM_CHANGE` (RFC-025), liquidação (PR-0 b, prompt 11 — sem ele fechamentos não medem),
+`PARAM_CHANGE` (RFC-025), liquidação (PR-0 b, prompt 11 — **entregue em 04/09, PR #94**: fechamentos já medem),
 rearme do kill switch.
 
 ## Verificação (produção, kill switch desarmado, 7 dias)
