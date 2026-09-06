@@ -1,6 +1,6 @@
 # RFC-020 — Deploy que não derruba o banco: o merge deixa de recriar o Postgres e de matar os workers
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
+**Status:** accepted — autorizado para implementação (2026-09-04); DP1 e DP2 aprovadas (2026-09-05, ver "Decisões do proprietário que esta RFC exige")
 **Dependências:** RFC-001 (runtime e Compose), RFC-007 (recorder, `polymarket_data_gaps`, retenção), RFC-010 (`release-sha` na imagem, provenance); convenção de deploy em três passos em `prompts/roadmap/README.md`
 **Habilita:** um merge em `main` que não custa ~1,5–12,7 s de banco fora, ~4,4–5,6 mil deltas perdidos e um crash-loop dos workers; um `polymarket_data_gaps` que registra a lacuna que ele mesmo hoje perde; docs que não disparam deploy
 **Origem:** diagnóstico operacional de 2026-09-02 (relatório publicado: <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6>; leitor de ops, seções 1 e 6; céticos 21, 23–28)
@@ -37,13 +37,21 @@ falta.
 
 ## Decisões do proprietário que esta RFC exige
 
+> **APROVADAS — 2026-09-05.** O proprietário aprovou **DP1 e DP2**, que são as decisões que
+> esta RFC exige para rodar. **DP3 segue fora desta RFC** — por escopo, não por falta de
+> decisão.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
+
 | # | Decisão | O que muda para o proprietário |
 | --- | --- | --- |
 | DP1 | O Postgres **não** é recriado no deploy | "Todo merge reinicia tudo" deixa de valer. Trocar a imagem do Postgres passa a ser ato deliberado: mudar o digest em `docker-compose.yml:11` e rodar `make server-update` (o `up` sem `--force-recreate` recria só o que mudou) |
 | DP2 | Merge que toca só texto **não** gera deploy | O checkout em `/opt/ganso-market` fica com docs defasadas até o próximo merge de código; `workflow_dispatch` continua deployando sempre. `verify` e `integration` continuam rodando em todo push |
 | DP3 (futura, não nesta RFC) | Pôr os workers de profile no CD | Exige tirar o `release-sha` da imagem (`Dockerfile:26`), senão todo merge recria os 5 workers. Fica registrada; o "terceiro passo" manual continua |
 
-Sem DP1 e DP2 aprovadas, o prompt não roda.
+Sem DP1 e DP2 aprovadas, o prompt não roda. **DP1 e DP2 estão aprovadas (2026-09-05) — o prompt roda.** DP3 segue fora desta RFC, por escopo e não por falta de decisão.
 
 ---
 

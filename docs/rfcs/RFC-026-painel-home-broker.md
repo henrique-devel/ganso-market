@@ -1,8 +1,8 @@
 # RFC-026 — Painel home broker (paper): Mesa, Carteira, Decisões, Resolução e séries de preço sobre o React existente, só GET, perímetro intacto
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03; decisões P1–P5 abaixo)
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P5 aprovadas no padrão da tabela (2026-09-05)
 **Origem:** diagnóstico de 2026-09-02/03 (relatório publicado: https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 — item RFC-026, auditoria UX, claims C1–C9); mockups no canvas "Ganso Market · Mesa do Operador": https://claude.ai/code/artifact/60e2fbdd-23eb-45ab-92a6-834b166ea95e
-**Dependências:** **PR-0 (a)** — hotfix sem RFC (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item a): `GET /polymarket/overview` responde 500 em produção porque `apps/api/src/polymarket/overview.ts:466` filtra por `occurred_at` (a coluna é `event_ts`). A faixa da carteira lê o `/overview`; sem o PR-0 (a) esta RFC nasce cega. RFC-015 (faixa de PnL, `/overview`, `/events`, `dicionario.ts` — mantidos), RFC-002 (perímetro: GET-only, sessão, `location =` sob `/paper`), RFC-013 (`panel_json` do motor — lido, não alterado)
+**Dependências:** **PR-0 (a) — SATISFEITA** (PR #93, mergeado e verificado em produção em 2026-09-04): `apps/api/src/polymarket/overview.ts` filtrava `paper_ledger_events` por `occurred_at`, cuja coluna é `event_ts` (migration 0008), e o endpoint respondia 500 a 100 % das chamadas autenticadas. A faixa da carteira lê o `/overview`, então esta RFC nascia cega; **não nasce mais**. RFC-015 (faixa de PnL, `/overview`, `/events`, `dicionario.ts` — mantidos), RFC-002 (perímetro: GET-only, sessão, `location =` sob `/paper`), RFC-013 (`panel_json` do motor — lido, não alterado)
 **Habilita:** o operador lê o nome do mercado em toda célula, vê por que o motor recusa ("faltam 0,004 para aceitar"), vê o livro de 10 níveis que já viaja e é descartado, vê posições com PnL calculado no servidor e ordens com fila, e vê o primeiro gráfico de preço do painel. Base de tela para a RFC-027 (funil pré-agregado e Sistema fase 1) e para a tela Sombra da RFC-029 (tecla `4`)
 
 ## Prompt a executar
@@ -47,7 +47,7 @@ Linhas conferidas no worktree em 2026-09-03 (`git rev-parse --short HEAD` = `ef7
 | Limites de frescor e de edge só na config: nenhuma rota GET os expõe e o front não lê `config/portfolio.json` | `config/portfolio.json:46-47` (`bookMaxAgeMs 30000`, `estimateMaxAgeMs 300000`); `edgeLiqMin 0.02` (`:14`), `safetyMarginMin 0.01` (`:10`); `grep -rn 'edgeLiqMin\|safetyMarginMin\|bookMaxAgeMs\|estimateMaxAgeMs' apps/api/src/polymarket/portfolio/api.ts apps/api/src/polymarket/overview.ts apps/web/src` | **0 ocorrências** (03/09) → D6 acrescenta o bloco `config` a `/portfolio/limits` |
 | Decisões nas 24 h | psql 02/09: `SELECT outcome, count(*) FROM portfolio_decisions WHERE decision_ts > now() - interval '24 hours' GROUP BY 1` | **94 `ACCEPTED`** contra **52 868 `REJECTED`** |
 | Kill switch engatado | `docs/HANDOFF.md:378` | desde 02/09 02:21:05Z, `RECORDER_STALE` |
-| PR-0 (a) ainda pendente | `grep -n "AND occurred_at" apps/api/src/polymarket/overview.ts` → `:466` (o grep cru de `occurred_at` **não** serve: é alias legítimo em `:157`, `:297`, `:600`) | pré-condição aberta em 03/09 |
+| PR-0 (a) — **satisfeita em 04/09 (PR #93)** | `grep -n "AND occurred_at" apps/api/src/polymarket/overview.ts` → **vazio** (o grep cru de `occurred_at` **não** serve: é alias legítimo em `:157`, `:297`, `:600`) | pré-condição fechada; re-verifique mesmo assim antes de codar |
 
 ---
 
@@ -119,6 +119,14 @@ Mesmo padrão do `performance` (aprovado em 28/08, `nginx.conf:193-200`): `locat
 
 ## Decisões do proprietário que esta RFC exige
 
+> **APROVADAS — 2026-09-05.** O proprietário aprovou **todas** as decisões desta seção,
+> cada uma **no padrão listado na coluna "Padrão se aprovada"**. Não há decisão pendente
+> nesta RFC.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
+
 | # | Decisão | Padrão se aprovada |
 | --- | --- | --- |
 | P1 | Publicar `GET /paper/positions` e `GET /paper/orders` como `location =` (dois locations novos sob `/paper`) | D8 |
@@ -160,7 +168,7 @@ Cada PR passa `make verify` e `scripts/tests/test_nginx_perimeter.py`; nenhum to
 
 ## Condições de parada
 
-- PR-0 (a) ausente (`AND occurred_at` ainda em `overview.ts:466`).
+- PR-0 (a) ausente — **hoje satisfeita (PR #93, 04/09)**; a parada só volta a valer se o `grep -n "AND occurred_at" apps/api/src/polymarket/overview.ts` voltar a casar.
 - Qualquer prefixo sob `/api/polymarket/paper`; qualquer endpoint de escrita novo; qualquer escrita em tabela de decisão pelo painel.
 - Migration, índice novo, gate, disjuntor, config de gate ou `replayDecision` tocados.
 - Biblioteca de gráfico ou de UI adicionada ao `apps/web`.

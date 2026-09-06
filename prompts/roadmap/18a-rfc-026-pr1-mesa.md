@@ -84,7 +84,7 @@ premissas caídas); HANDOFF; linha 18 do README (modelo no índice).
 
 ## Condições de parada
 
-- PR-0 (a) ausente.
+- PR-0 (a) ausente — **satisfeito em 04/09 (PR #93)**; a parada só volta a valer se o grep da pré-condição voltar a casar.
 - Location, endpoint, migration, índice, gate, disjuntor, config ou `replayDecision` tocados;
   biblioteca nova em `apps/web`.
 - EXPLAIN a frio > 500 ms no JOIN de `/decisions`: cai para o cliente, não sobe orçamento.

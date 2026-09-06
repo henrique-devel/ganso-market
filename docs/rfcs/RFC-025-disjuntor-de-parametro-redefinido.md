@@ -1,7 +1,7 @@
 # RFC-025 — Disjuntor de mudança de parâmetro redefinido: `PARAM_CHANGE` abre em mudança real, não em nascimento
 
-**Status:** draft — exige decisão registrada do proprietário (tabela P1–P3, coluna "Decisão do proprietário") (2026-09-03)
-**Dependências:** nenhuma de código. RFC-013 (item 4 (iv): "mudança de fee schedule/tick/status", `docs/rfcs/RFC-013-polymarket-portfolio-engine.md:154–158`) é a especificação que esta RFC interpreta; RFC-018 (o G3 já viu `PARAM_CHANGE` disparar 939 vezes — nada aqui o devolve a zero). **Exige decisão registrada (tabela P1–P3).**
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela e registradas na coluna de decisão (2026-09-05)
+**Dependências:** nenhuma de código. RFC-013 (item 4 (iv): "mudança de fee schedule/tick/status", `docs/rfcs/RFC-013-polymarket-portfolio-engine.md:154–158`) é a especificação que esta RFC interpreta; RFC-018 (o G3 já viu `PARAM_CHANGE` disparar 939 vezes — nada aqui o devolve a zero). **Decisão registrada e APROVADA na recomendação (tabela P1–P3, 2026-09-05).**
 **Habilita:** o universo rápido da RFC-016/RFC-019 (mercados "Up or Down" horários) deixa de nascer congelado; a vazão de que o G2 depende passa a ser possível de medir; o `PARAM_CHANGE` volta a significar o que a RFC-013 escreveu
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (funil, seções 1 e 2)
 
@@ -68,13 +68,21 @@ Num token a US$ 0,045, 15 % é 0,7 centavo — um tick. Não trava o funil (p50 
 
 ## Decisões que esta RFC exige do proprietário
 
-Mudança de **semântica** de um disjuntor da RFC-013, não de limiar: não afrouxa gate nem número, mas muda o que conta como evento. O registro é **a última coluna desta tabela** — o prompt 17 a lê e PARA se P1 estiver `pendente`.
+> **APROVADAS — 2026-09-05.** O proprietário aprovou **todas** as decisões desta seção,
+> cada uma **na recomendação da própria tabela** (coluna "Recomendação"). Não há decisão
+> pendente nesta RFC.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
+
+Mudança de **semântica** de um disjuntor da RFC-013, não de limiar: não afrouxa gate nem número, mas muda o que conta como evento. O registro é **a última coluna desta tabela** — o prompt 17 a lê e PARA se P1 estiver `pendente`. **Em 2026-09-05 o proprietário aprovou as três, cada uma na recomendação da coluna anterior; a coluna está preenchida e o prompt 17 não para por este motivo.**
 
 | # | Pergunta | Recomendação | Se recusada | Decisão do proprietário (data) |
 | --- | --- | --- | --- | --- |
-| **P1** | A versão 1 dos parâmetros e um preenchimento `NULL → valor` contam como "mudança de fee schedule/tick/status" (RFC-013 4(iv))? | **Não.** Só mudança de valor não nulo para valor não nulo diferente em `taker_fee_bps`, `fee_curve_json`, `tick_size` ou `fee_base_bps` conta (D1) | Nada muda; o universo rápido continua 100 % em disjuntor e o G2 não tem como andar | pendente |
-| **P2** | A janela de 24 h fica **fixa** para mudanças reais (D2-A) ou vira **proporcional** à vida restante do mercado (D2-B: `min(24 h, 20 % de (end_ts − mudança))`, piso 5 min **a calibrar**)? | **D2-A** neste PR: menor mudança, constante intocada; a mudança real medida (tick em 0,96/0,04) atinge mercados que `PRICE_OUT_OF_BAND` já recusa. Re-medir após 7 dias; se mercados rápidos continuarem presos por tick real, D2-B em RFC seguinte | D2-B entra no PR 1 com `endDate: Date \| null` já disponível em `runner.ts:524` | pendente |
-| **P3** | `PRICE_JUMP_NO_CATALYST` deixa de abrir para token **sem posição** cujos `mid_before` **e** `mid_now` estão **ambos** fora de `priceBand` (D3)? | **Sim**, opcional (PR 2): só nesse caso o veredito de entrada é idêntico (`PRICE_OUT_OF_BAND` recusa o preço atual); com um dos dois dentro da banda, ou com posição, o disjuntor continua abrindo | PR 2 não existe; medição publicada mesmo assim | pendente |
+| **P1** | A versão 1 dos parâmetros e um preenchimento `NULL → valor` contam como "mudança de fee schedule/tick/status" (RFC-013 4(iv))? | **Não.** Só mudança de valor não nulo para valor não nulo diferente em `taker_fee_bps`, `fee_curve_json`, `tick_size` ou `fee_base_bps` conta (D1) | Nada muda; o universo rápido continua 100 % em disjuntor e o G2 não tem como andar | **aprovada — recomendação** (proprietário, 2026-09-05) |
+| **P2** | A janela de 24 h fica **fixa** para mudanças reais (D2-A) ou vira **proporcional** à vida restante do mercado (D2-B: `min(24 h, 20 % de (end_ts − mudança))`, piso 5 min **a calibrar**)? | **D2-A** neste PR: menor mudança, constante intocada; a mudança real medida (tick em 0,96/0,04) atinge mercados que `PRICE_OUT_OF_BAND` já recusa. Re-medir após 7 dias; se mercados rápidos continuarem presos por tick real, D2-B em RFC seguinte | D2-B entra no PR 1 com `endDate: Date \| null` já disponível em `runner.ts:524` | **aprovada — recomendação** (proprietário, 2026-09-05) |
+| **P3** | `PRICE_JUMP_NO_CATALYST` deixa de abrir para token **sem posição** cujos `mid_before` **e** `mid_now` estão **ambos** fora de `priceBand` (D3)? | **Sim**, opcional (PR 2): só nesse caso o veredito de entrada é idêntico (`PRICE_OUT_OF_BAND` recusa o preço atual); com um dos dois dentro da banda, ou com posição, o disjuntor continua abrindo | PR 2 não existe; medição publicada mesmo assim | **aprovada — recomendação** (proprietário, 2026-09-05) |
 
 ## Decisões desta RFC
 
@@ -133,7 +141,7 @@ As consultas A1, A2 e A3 do Apêndice A, **sem reescrever**, antes do deploy e 2
 ## Condições de parada
 
 - A re-medição (A1) mostrar atribuição ao `PARAM_CHANGE` abaixo de 50 %, ou a SQL em `exitstore.ts:401–402` já não ser `max(valid_from)`: outra sessão chegou antes — parar.
-- P1 `pendente` na tabela acima.
+- P1 `pendente` na tabela acima. **Satisfeita em 2026-09-05** (aprovada na recomendação: versão 1 e preenchimento `NULL → valor` **não** contam como mudança). A parada só volta a valer se o proprietário reverter a decisão — leia a tabela, não esta linha.
 - Qualquer necessidade de migration ou de chave nova em `config/portfolio.json`.
 - Qualquer alteração em `BREAKER_EVENT_WINDOW_MS` sem P2 = D2-B aprovado.
 - Qualquer mudança nos ramos (i), (iii) ou (v) de `detectBreakers`.

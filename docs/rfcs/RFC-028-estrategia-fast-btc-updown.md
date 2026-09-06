@@ -1,7 +1,7 @@
 # RFC-028 — Estratégia `fast_btc_updown@0.1.0`: máquina de amostra com controle, em sub-carteira imaginária, primeiro em SOMBRA
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03; decisões P1–P8 abaixo)
-**Dependências:** PR-0 (b), liquidação (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item b; sem ele nenhuma posição fecha e nada é rotulado); RFC-022 (`RFC-022-ponte-runtime-e-saidas.md` — ponte, runtime de resolução e saídas); RFC-025 (`RFC-025-disjuntor-de-parametro-redefinido.md` — `PARAM_CHANGE` sem contar a versão 1; sem ela todo mercado novo nasce com disjuntor aberto e a estratégia recusa tudo); RFC-011 (simulador pessimista, kill switch); RFC-016/019 (`end_ts`, abertura da janela). **RFC-024** (`RFC-024-descoberta-por-serie-e-livro-dos-rapidos.md`) é pré-condição para o braço E emitir ordem e para a cobertura do braço C — **não** para a fase sombra desta RFC. Em 03/09 as três dependências estão em `Status: draft` no worktree (`RFC-022…:3`, `RFC-025…:3`; PR-0 sem PR); os prompts re-medem cada uma em produção antes do merge do PR 3.
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P8 aprovadas como escritas (2026-09-05). A primeira ordem do braço C segue **fora** desta RFC
+**Dependências:** PR-0 (b), liquidação (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item b; sem ele nenhuma posição fecha e nada é rotulado); RFC-022 (`RFC-022-ponte-runtime-e-saidas.md` — ponte, runtime de resolução e saídas); RFC-025 (`RFC-025-disjuntor-de-parametro-redefinido.md` — `PARAM_CHANGE` sem contar a versão 1; sem ela todo mercado novo nasce com disjuntor aberto e a estratégia recusa tudo); RFC-011 (simulador pessimista, kill switch); RFC-016/019 (`end_ts`, abertura da janela). **RFC-024** (`RFC-024-descoberta-por-serie-e-livro-dos-rapidos.md`) é pré-condição para o braço E emitir ordem e para a cobertura do braço C — **não** para a fase sombra desta RFC. Em 04/09 a RFC-022 e a RFC-025 estão em `Status: accepted` no worktree (`RFC-022…:3`, `RFC-025…:3`) e **ainda não implementadas**; o **PR-0 está implementado e verificado em produção** (PRs #93, #94 e #96). Os prompts re-medem cada uma em produção antes do merge do PR 3.
 **Habilita:** o primeiro conjunto de regras rápidas registrado, versionado e replayável; N experimental em dias (24 mercados-hora/dia) com braço de controle, sem tocar carteira principal, gates, policy global, disjuntores ou perímetro; a evidência para decidir, depois, se algum braço emite ordem paper.
 **Origem:** diagnóstico de 02–03/09/2026, relatório publicado em <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6> (síntese da estratégia; dois juízes com enxertos; estudo updown §3, §5, §6).
 
@@ -134,6 +134,15 @@ inalcançável em sombra por teste. Sair da sombra exige versão 0.2.0 da config
 
 ## Decisões do proprietário exigidas
 
+> **APROVADAS — 2026-09-05.** O proprietário aprovou **todas** as decisões listadas nesta
+> seção, como escritas. Não há decisão pendente nesta RFC. Onde a linha diz "fora desta RFC"
+> (p. ex. autorizar a primeira ordem do braço C), ela continua fora — por escopo, não por
+> falta de decisão, e volta ao proprietário no seu próprio momento.
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
+
 | # | Decisão |
 | --- | --- |
 | P1 | Aceitar EV esperado ≈ 0 ou levemente negativo em troca de N com controle (D1) |
@@ -172,7 +181,7 @@ inalcançável em sombra por teste. Sair da sombra exige versão 0.2.0 da config
 | --- | --- |
 | 4 braços gravando em ≥ 90 % dos horários BTC **descobertos**, por 3 dias | `strategy_decisions`: `count(DISTINCT condition_id)` por `arm` ÷ mercados do universo casando a regex com `end_ts` na janela e ≥ 15 min de vida catalogada. O denominador pode ser pequeno (03/09: 0 updown com `end_ts` futuro — lacuna de descoberta que a RFC-024 fecha); registrar o denominador no HANDOFF |
 | Braços **exercitados** (anti-degeneração) | ≥ **20** decisões por braço (A, C, D, E) que passaram todas as pré-condições e chegaram ao veredito do sinal (`reason` fora de `FAST_SKIPPED_KILL_SWITCH`, `_BREAKER_OPEN`, `_RTDS_STALE`, `_NO_S0`, `_WARMUP`, `_BOOK_STALE`): `SELECT arm, reason, count(*) FROM strategy_decisions GROUP BY 1,2 ORDER BY 1,3 DESC`. 100 % de recusa por pré-condição **não** é aceite |
-| Janela válida | kill switch engatado ou disjuntor aberto em **qualquer** instante dos 3 dias ⇒ a janela é **inválida e recomeça** (a recusa está certa, mas não é evidência). Hoje (02/09) o kill switch está engatado e a RFC-025 é draft: a janela só começa depois de rearme e disjuntores fechados |
+| Janela válida | kill switch engatado ou disjuntor aberto em **qualquer** instante dos 3 dias ⇒ a janela é **inválida e recomeça** (a recusa está certa, mas não é evidência). Em 04/09 o kill switch segue engatado e a RFC-025 segue não implementada: a janela só começa depois de rearme e disjuntores fechados |
 | Zero ordens | `SELECT count(*) FROM paper_orders WHERE strategy_id IS NOT NULL OR source = 'fast'` = 0 |
 | Zero contaminação | G1–G6 e `/paper/performance` idênticos antes/depois do deploy; contagem excluída = 0 |
 | Replay determinístico | amostra ≥ 200 decisões reproduzida 100 % pela policy da estratégia |

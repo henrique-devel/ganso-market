@@ -1,7 +1,7 @@
 # RFC-021 — Silêncio do feed com conexões vivas e kill switch honesto
 
-**Status:** draft — aguardando aprovação do proprietário (2026-09-03)
-**Dependências:** RFC-007 (recorder, `polymarket_data_gaps`), RFC-011 (kill switch paper, gatilho `RECORDER_STALE`), **RFC-020** (`RFC-020-deploy-sem-derrubar-o-banco.md`, draft — sem ela, cada merge recria os containers, o INSERT da lacuna falha junto com o banco e o detector novo produz ruído em vez de sinal)
+**Status:** accepted — autorizado para implementação (2026-09-04) **para D1/D2 (detector de silêncio) e o kill switch honesto**. A **D3 (rearme automático condicionado) NÃO está autorizada**: P1 segue com o proprietário e o rearme continua manual — ver a nota na seção "Decisões do proprietário que esta RFC exige"
+**Dependências:** RFC-007 (recorder, `polymarket_data_gaps`), RFC-011 (kill switch paper, gatilho `RECORDER_STALE`), **RFC-020** (`RFC-020-deploy-sem-derrubar-o-banco.md`, `accepted` e ainda não implementada — sem ela, cada merge recria os containers, o INSERT da lacuna falha junto com o banco e o detector novo produz ruído em vez de sinal)
 **Habilita:** a próxima parada silenciosa do WebSocket do livro vira uma linha em `polymarket_data_gaps` em vez de sumir; o engate do kill switch diz qual série calou; o paper broker deixa de ficar engatado por horas com feed saudável (se o rearme condicionado for aprovado); `polymarket_markets.closed` passa a refletir a venue
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (dívidas D03, D04, D07; céticos 16, 17, 19, 20, 29, 30)
 
@@ -123,7 +123,7 @@ O motivo persistido em `paper_kill_switch.reason` **continua** `RECORDER_STALE` 
 
 ### D3 — rearme automático condicionado: SOMENTE com aprovação do proprietário
 
-Sem aprovação, o rearme fica **manual** e esta RFC registra a decisão. Se aprovado, a D3 **supersede** a RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`, "bloqueia novas ordens até rearm manual"); o comentário de projeto em `infra/nginx/nginx.conf:215–217` ("stopping does not need a human") já aponta nessa direção. O rearme automático obedece a todas estas condições, no mesmo tick de 60 s do gatilho:
+Sem aprovação, o rearme fica **manual** e esta RFC registra a decisão. **Em 2026-09-05 a D3 NÃO foi aprovada (P1 segue com o proprietário): o rearme é manual e este PR não implementa D3.** Se aprovado, a D3 **supersede** a RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`, "bloqueia novas ordens até rearm manual"); o comentário de projeto em `infra/nginx/nginx.conf:215–217` ("stopping does not need a human") já aponta nessa direção. O rearme automático obedece a todas estas condições, no mesmo tick de 60 s do gatilho:
 
 1. `reason = 'RECORDER_STALE'` — nunca para perda diária, disputa UMA ou engate manual.
 2. As **duas** séries da D2 frescas (< `RECORDER_STALE_MS`) em `M` ticks consecutivos
@@ -156,6 +156,25 @@ algum muda de comportamento.
 ---
 
 ## Decisões do proprietário que esta RFC exige
+
+> **PARCIAL — 2026-09-05. Leia antes de implementar.** A coluna abaixo é **"Padrão se não
+> houver resposta"**, um fallback fail-closed, **não** uma recomendação. **P3 está aprovada**
+> como escrita (esperar a RFC-020 em produção antes do PR 1), e o `Status: accepted` do
+> cabeçalho vale para o **detector de silêncio (D1/D2) e o kill switch honesto** — o corpo
+> desta RFC.
+>
+> **P1 e P2 continuam sendo do proprietário, e nenhum PR as executa:**
+> - **P1 — rearme automático condicionado (D3):** o padrão da coluna é *recusar*, e a RFC não
+>   recomenda nenhum dos lados; ela apresenta o desenho para decisão. Enquanto não houver
+>   aprovação explícita **por escrito** de D3, **o rearme segue MANUAL**. Não implemente D3.
+> - **P2 — rearmar o switch engatado desde 2026-09-02 02:21:05Z:** é ato exclusivo do
+>   proprietário no painel. Medido em 2026-09-04: **segue engatado**. Nenhum PR o rearma, e
+>   nenhuma linha deste documento deve ser lida como se ele tivesse sido rearmado.
+>
+> Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
+> Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
+> só volta a valer se o proprietário reverter a decisão por escrito.
+
 
 | # | Decisão | Padrão se não houver resposta |
 | --- | --- | --- |

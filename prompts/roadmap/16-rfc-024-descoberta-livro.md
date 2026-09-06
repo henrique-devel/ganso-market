@@ -3,11 +3,13 @@
 Leve a RFC-024 ATÉ O FINAL (re-medição → prova no fio → código → deploy → soak de 3 dias →
 HANDOFF). Tudo em SIMULAÇÃO e somente leitura de mercado. Origem: diagnóstico de
 02–03/09/2026 (relatório linkado no cabeçalho da RFC-024).
-A RFC está em draft: procure em `docs/HANDOFF.md` a aprovação de P1–P4 (grep `RFC-024`).
-**Sem registro de aprovação de P1 e P3, PARE e devolva ao proprietário.** Depende de
+A RFC está em `accepted` e **P1–P4 estão aprovadas na recomendação** (proprietário, 2026-09-05):
+confira em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029" (grep `RFC-024`), e na própria
+RFC. **A parada por falta de aprovação está satisfeita**; ela só volta a valer se esse registro
+não estiver mais lá. Depende de
 RFC-020 (`docs/rfcs/RFC-020-deploy-sem-derrubar-o-banco.md`) e RFC-021
-(`docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md`), ambas em draft: sem elas o soak não
-é mensurável.
+(`docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md`), ambas em `accepted` e ainda não
+implementadas: sem elas o soak não é mensurável.
 
 ## Contexto mínimo: leia só…
 
@@ -94,7 +96,7 @@ re-medição desmentiu).
 
 ## Condições de parada
 
-- Sem aprovação registrada de P1 e P3; premissa caiu na re-medição.
+- Sem aprovação registrada de P1 e P3 (satisfeita em 2026-09-05 — só reabre se o registro sumir); premissa caiu na re-medição.
 - PR 1 sem controle positivo válido em 3 rodadas: não codar o PR 3.
 - Escrita fora de tabelas de coleta; location, endpoint de escrita, gate, quota, TTL ou
   disjuntor alterados.
