@@ -1,6 +1,6 @@
 # RFC-021 — Silêncio do feed com conexões vivas e kill switch honesto
 
-**Status:** accepted — autorizado para implementação (2026-09-04) **para D1/D2 (detector de silêncio) e o kill switch honesto**. A **D3 (rearme automático condicionado) NÃO está autorizada**: P1 segue com o proprietário e o rearme continua manual — ver a nota na seção "Decisões do proprietário que esta RFC exige"
+**Status:** accepted — autorizado para implementação (2026-09-04). **A D3 (rearme automático condicionado) foi APROVADA pelo proprietário em 2026-09-05**, com `M` = 15 ticks (15 min) como proposto; ela entra no escopo desta RFC e **supersede** a cláusula de rearme manual da RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`). Segue com o proprietário apenas o **P2** — rearmar à mão o switch engatado hoje —, que nenhum PR executa
 **Dependências:** RFC-007 (recorder, `polymarket_data_gaps`), RFC-011 (kill switch paper, gatilho `RECORDER_STALE`), **RFC-020** (`RFC-020-deploy-sem-derrubar-o-banco.md`, `accepted` e ainda não implementada — sem ela, cada merge recria os containers, o INSERT da lacuna falha junto com o banco e o detector novo produz ruído em vez de sinal)
 **Habilita:** a próxima parada silenciosa do WebSocket do livro vira uma linha em `polymarket_data_gaps` em vez de sumir; o engate do kill switch diz qual série calou; o paper broker deixa de ficar engatado por horas com feed saudável (se o rearme condicionado for aprovado); `polymarket_markets.closed` passa a refletir a venue
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (dívidas D03, D04, D07; céticos 16, 17, 19, 20, 29, 30)
@@ -123,7 +123,7 @@ O motivo persistido em `paper_kill_switch.reason` **continua** `RECORDER_STALE` 
 
 ### D3 — rearme automático condicionado: SOMENTE com aprovação do proprietário
 
-Sem aprovação, o rearme fica **manual** e esta RFC registra a decisão. **Em 2026-09-05 a D3 NÃO foi aprovada (P1 segue com o proprietário): o rearme é manual e este PR não implementa D3.** Se aprovado, a D3 **supersede** a RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`, "bloqueia novas ordens até rearm manual"); o comentário de projeto em `infra/nginx/nginx.conf:215–217` ("stopping does not need a human") já aponta nessa direção. O rearme automático obedece a todas estas condições, no mesmo tick de 60 s do gatilho:
+Sem aprovação, o rearme fica **manual** e esta RFC registra a decisão. **APROVADA pelo proprietário em 2026-09-05 (P1), com `M` = 15: a D3 entra no escopo e deve ser implementada com as quatro condições abaixo intactas.** Se aprovado, a D3 **supersede** a RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`, "bloqueia novas ordens até rearm manual"); o comentário de projeto em `infra/nginx/nginx.conf:215–217` ("stopping does not need a human") já aponta nessa direção. O rearme automático obedece a todas estas condições, no mesmo tick de 60 s do gatilho:
 
 1. `reason = 'RECORDER_STALE'` — nunca para perda diária, disputa UMA ou engate manual.
 2. As **duas** séries da D2 frescas (< `RECORDER_STALE_MS`) em `M` ticks consecutivos
@@ -157,19 +157,29 @@ algum muda de comportamento.
 
 ## Decisões do proprietário que esta RFC exige
 
-> **PARCIAL — 2026-09-05. Leia antes de implementar.** A coluna abaixo é **"Padrão se não
-> houver resposta"**, um fallback fail-closed, **não** uma recomendação. **P3 está aprovada**
-> como escrita (esperar a RFC-020 em produção antes do PR 1), e o `Status: accepted` do
-> cabeçalho vale para o **detector de silêncio (D1/D2) e o kill switch honesto** — o corpo
-> desta RFC.
+> **APROVADAS — 2026-09-05. Leia antes de implementar.** A coluna abaixo é **"Padrão se não
+> houver resposta"**, um fallback fail-closed, **não** uma recomendação; houve resposta, então
+> ela não se aplica.
 >
-> **P1 e P2 continuam sendo do proprietário, e nenhum PR as executa:**
-> - **P1 — rearme automático condicionado (D3):** o padrão da coluna é *recusar*, e a RFC não
->   recomenda nenhum dos lados; ela apresenta o desenho para decisão. Enquanto não houver
->   aprovação explícita **por escrito** de D3, **o rearme segue MANUAL**. Não implemente D3.
-> - **P2 — rearmar o switch engatado desde 2026-09-02 02:21:05Z:** é ato exclusivo do
->   proprietário no painel. Medido em 2026-09-04: **segue engatado**. Nenhum PR o rearma, e
->   nenhuma linha deste documento deve ser lida como se ele tivesse sido rearmado.
+> - **P1 — rearme automático condicionado (D3): APROVADO**, com `M` = 15 ticks (15 min) como
+>   proposto. A D3 entra no escopo desta RFC e **supersede** a cláusula "bloqueia novas ordens
+>   até rearm manual" da RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`). As
+>   quatro guardas da D3 são parte da aprovação e **não** podem ser afrouxadas na
+>   implementação: só `reason = 'RECORDER_STALE'` (nunca perda diária, disputa UMA ou engate
+>   manual); as **duas** séries da D2 frescas por `M` ticks consecutivos; **nenhuma** lacuna
+>   `stream_silent` aberta; e evento `kill_switch_rearmed` com `{"mode":"auto"}` mais o log
+>   `PAPER_KILL_SWITCH_AUTO_REARMED`. **Nenhum endpoint novo** — o manual segue sendo o único
+>   caminho humano.
+> - **P3 — APROVADA** como escrita: esperar a RFC-020 em produção antes do PR 1.
+> - **P2 — segue com o proprietário.** Rearmar à mão o switch engatado desde 2026-09-02
+>   02:21:05Z é ato exclusivo dele no painel; **nenhum PR o rearma**, e nenhuma linha deste
+>   documento deve ser lida como se ele já tivesse sido rearmado.
+>
+> **O que a aprovação da D3 muda no switch que está engatado AGORA: nada, até a D3 ir a
+> produção.** Aprovada ≠ implementada. Quando o PR da D3 subir, o engate atual passa a ser
+> *elegível* — ele é `RECORDER_STALE`, que é justamente o único motivo que a D3 rearma —, e o
+> switch volta sozinho após 15 min de séries frescas sem lacuna aberta. Até lá a vazão segue
+> zero e só o clique do proprietário (P2) a destrava.
 >
 > Registro correspondente em `docs/HANDOFF.md`, seção "APROVAÇÃO DAS RFC-020…029".
 > Condição de parada abaixo que exija "decisão registrada" está **satisfeita** por esta linha;
@@ -178,8 +188,8 @@ algum muda de comportamento.
 
 | # | Decisão | Padrão se não houver resposta |
 | --- | --- | --- |
-| P1 | Aprovar ou recusar o rearme automático condicionado (D3) e o `M` (proposta: 15 min) | **Recusado**: rearme segue manual; a decisão é registrada no HANDOFF |
-| P2 | Rearmar manualmente o switch engatado desde 02/09 02:21:05Z (ato exclusivo do proprietário; nenhum PR o faz) | Continua engatado |
+| P1 | Aprovar ou recusar o rearme automático condicionado (D3) e o `M` (proposta: 15 min) | ~~**Recusado**: rearme segue manual~~ → **APROVADO em 2026-09-05, `M` = 15** (o padrão era o fallback de não-resposta; houve resposta) |
+| P2 | Rearmar manualmente o switch engatado desde 02/09 02:21:05Z (ato exclusivo do proprietário; nenhum PR o faz) | Continua engatado — **ainda pendente em 2026-09-05**; a D3 aprovada só o destrava quando FOR A PRODUÇÃO |
 | P3 | Ordem: esperar a RFC-020 em produção antes do PR 1 | **Esperar** — sem ela o detector mede o deploy, não a venue |
 
 ---
