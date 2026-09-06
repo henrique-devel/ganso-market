@@ -2711,6 +2711,101 @@ describe("settlement (C5)", () => {
     expect(world.positions[0]?.["shares"]).toBe("10");
     expect(world.orders[0]?.["status"]).toBe("canceled");
   });
+
+  // Every settlement test above hands settlement a FLAT `outcomePrices`, and
+  // production never writes that shape: the UMA status poller nests it under
+  // `raw` (samplers.ts). 1.017 of 1.017 resolved markets carried
+  // `payload_json.raw.outcomePrices`, settlement read `payload_json
+  // .outcomePrices`, found nothing, and answered TOKEN_NOT_IN_MARKET 60x/h
+  // for as long as the book existed. `closed_positions` was 0 by defect, not
+  // by clock.
+  it("settles from the nested payload the collector actually writes", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.48", "0.52");
+    await acceptOrder(world);
+    seedPosition(world, "10", "5");
+    world.resolutions.push({
+      resolution_event_id: 99,
+      condition_id: "0xcond",
+      event_type: "resolved",
+      // The production shape: nested, and NO flat key to fall back on.
+      payload_json: { raw: { outcomePrices: ["0", "1"] } },
+      received_at: at(0),
+    });
+
+    await settlementTick(worldPool(world), {
+      clock: () => at(0),
+      logSink: silentSink,
+    });
+
+    // Before the fix: zero resolution events and a frozen market.
+    const resolution = world.ledger.find(
+      (e) => e["event_type"] === "resolution",
+    );
+    expect((resolution?.["payload_json"] as Row)["outcome_price"]).toBe(
+      "0.000000",
+    );
+    // tok-yes is index 0, and index 0 resolved at 0: the whole cost is lost.
+    expect(world.positions[0]?.["shares"]).toBe("0.000000");
+    expect(world.positions[0]?.["realized_pnl_usd"]).toBe("-5.000000");
+    expect(world.kill["frozen_markets_json"]).not.toContain("0xcond");
+  });
+
+  it("still reads the flat payload the WS market_resolved event delivers", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedPosition(world, "10", "5");
+    world.resolutions.push({
+      resolution_event_id: 99,
+      condition_id: "0xcond",
+      event_type: "resolved",
+      payload_json: { outcomePrices: ["1", "0"] },
+      received_at: at(0),
+    });
+
+    await settlementTick(worldPool(world), {
+      clock: () => at(0),
+      logSink: silentSink,
+    });
+
+    const resolution = world.ledger.find(
+      (e) => e["event_type"] === "resolution",
+    );
+    expect((resolution?.["payload_json"] as Row)["outcome_price"]).toBe(
+      "1.000000",
+    );
+  });
+
+  it("a payload with no prices anywhere freezes with the new reason code", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedPosition(world, "10", "5");
+    const lines: string[] = [];
+    world.resolutions.push({
+      resolution_event_id: 99,
+      condition_id: "0xcond",
+      event_type: "resolved",
+      payload_json: { raw: { closed: true } },
+      received_at: at(0),
+    });
+
+    await settlementTick(worldPool(world), {
+      clock: () => at(0),
+      logSink: (line) => lines.push(line),
+    });
+
+    const error = lines
+      .map((line) => JSON.parse(line) as Row)
+      .find((line) => line["reason_code"] === "PAPER_RESOLUTION_DATA_ERROR");
+    // The token IS in the market; only the price is missing. Saying
+    // TOKEN_NOT_IN_MARKET here is what hid the defect for as long as it did.
+    expect(error?.["reason"]).toBe("RESOLUTION_PRICES_MISSING");
+    expect(
+      world.ledger.filter((e) => e["event_type"] === "resolution"),
+    ).toHaveLength(0);
+    expect(world.kill["frozen_markets_json"]).toContain("0xcond");
+  });
 });
 
 describe("mark to executable bid (D2)", () => {

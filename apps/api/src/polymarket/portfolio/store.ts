@@ -175,7 +175,24 @@ export interface EstimateAsOf {
   readonly decisionTs: Date;
 }
 
-/** Newest RFC-010 estimate at or before the instant. Never a later one. */
+/**
+ * Newest ACTIVE RFC-010 estimate at or before the instant. Never a later one,
+ * and never a shadow one.
+ *
+ * `status = 'active'` is the invariant of migration 0006 ("shadow estimates
+ * exist for gating only and are invisible to consumers"), and it was missing
+ * here. One instant carries one consumer row plus one row per shadow model, all
+ * sharing the same `decision_ts` — the unique index is
+ * `(token_id, decision_ts, COALESCE(model_id, ''))` — so `ORDER BY decision_ts
+ * DESC LIMIT 1` picked whichever the scan reached first. Measured 2026-09-04:
+ * 132.198 instants had more than one row and 179 decisions had been taken on a
+ * shadow model's numbers, 11 of them accepted, with ZERO models promoted.
+ *
+ * The `estimate_id` tiebreak is what keeps this deterministic once the filter
+ * admits more than one row again — a future promotion can put two active rows
+ * at one instant, and "whichever the scan reached first" must never decide
+ * anything twice.
+ */
 export async function estimateAsOf(
   pool: PortfolioPool,
   tokenId: string,
@@ -184,8 +201,8 @@ export async function estimateAsOf(
   const result = await pool.query<Record<string, unknown>>(
     `SELECT q, q_lo, q_hi, source, decision_ts
        FROM fundamental_estimates
-      WHERE token_id = $1 AND decision_ts <= $2
-      ORDER BY decision_ts DESC
+      WHERE token_id = $1 AND decision_ts <= $2 AND status = 'active'
+      ORDER BY decision_ts DESC, estimate_id DESC
       LIMIT 1`,
     [tokenId, asOf],
   );

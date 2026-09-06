@@ -56,6 +56,7 @@ import { DEFAULT_RESOLUTION_LEXICON } from "../../../src/polymarket/resolution/l
 import { createPortfolioRunner } from "../../../src/polymarket/portfolio/runner.js";
 import {
   ensureConfigVersion,
+  estimateAsOf,
   insertDecision,
   loadEligibleMarkets,
   stampBridgedOrders,
@@ -1233,6 +1234,98 @@ describe.skipIf(DATABASE_URL === undefined)(
           validFrom: NOW,
         }),
       ).rejects.toThrow(/CONTENT_MISMATCH/);
+    });
+
+    // The RFC-010 invariant, in the exact shape production had it. The seed
+    // already holds one ACTIVE MARKET_BASELINE row at 11:59:30 with q 0,800000;
+    // these two cases add shadow rows around it. Only a real server can prove
+    // this: the unique index is (token_id, decision_ts, COALESCE(model_id, ''))
+    // and a fake pool matching substrings cannot hold two rows at one instant.
+    describe("shadow estimates stay invisible to consumers (RFC-010)", () => {
+      const SHADOW_MODEL = `mdl-shadow-${RUN}`;
+      const SAME_TS = new Date("2026-08-26T11:59:30.000Z");
+      const LATER_TS = new Date("2026-08-26T11:59:45.000Z");
+
+      async function insertShadow(
+        modelId: string,
+        decisionTs: Date,
+        q: string,
+      ): Promise<void> {
+        await pool().query(
+          `INSERT INTO fundamental_estimates
+             (market_id, token_id, category, decision_ts, q, q_lo, q_hi,
+              source, status, model_id, model_version, feature_set_version,
+              git_sha, data_refs, interval_version, microprice_version)
+           VALUES ($1, $2, 'crypto', $3, $4, $4, $4, 'MODEL', 'shadow', $5,
+                   '1.0.0', 'fs-1', $6, '{}'::jsonb, '1.0.0', '1.0.0')`,
+          [CONDITION, TOKEN, decisionTs, q, modelId, "a".repeat(40)],
+        );
+      }
+
+      beforeAll(async () => {
+        if (DATABASE_URL === undefined) {
+          return;
+        }
+        // Three shadow models, because `model_id` is a foreign key and
+        // (model_family, version) is unique. None is ever promoted: the point
+        // of the suite is what a consumer sees while `active` stays empty.
+        for (const suffix of ["", "-newer", "-early"]) {
+          await pool().query(
+            `INSERT INTO fundamental_models
+               (model_id, model_family, category, version, git_sha,
+                feature_set_version, status)
+             VALUES ($1, $2, 'crypto_updown', '1.0.0', $3, 'fs-1', 'shadow')`,
+            [`${SHADOW_MODEL}${suffix}`, `fam-${RUN}${suffix}`, "a".repeat(40)],
+          );
+        }
+      });
+
+      // NOT a regression, and the comment has to say so: on the old code this
+      // case PASSED. With equal `decision_ts` and no tiebreak, which row comes
+      // back is the planner's choice — a coin flip that production lost 179
+      // times (11 of them accepted). It is kept because it is the shape the
+      // defect actually had, and because after the fix it is no longer a coin
+      // flip. The two cases below are the ones that prove the fix.
+      it("a shadow row at the SAME instant never wins over the active one", async () => {
+        // Production's shape: one consumer row plus one row per shadow model,
+        // all sharing a decision_ts. 132.198 such instants on 2026-09-04.
+        await insertShadow(SHADOW_MODEL, SAME_TS, "0.990385");
+
+        const estimate = await estimateAsOf(pool(), TOKEN, NOW);
+
+        expect(estimate?.source).toBe("MARKET_BASELINE");
+        expect(estimate?.q).toBe("0.800000");
+        expect(estimate?.qLo).toBe("0.750000");
+      });
+
+      it("a NEWER shadow row never wins either — the filter decides, not the clock", async () => {
+        // The deterministic half. With only `ORDER BY decision_ts DESC` this
+        // row wins on every planner and every run: it is strictly newer and
+        // still at or before `asOf`. That is the regression that cannot pass
+        // by luck on the old code.
+        await insertShadow(`${SHADOW_MODEL}-newer`, LATER_TS, "0.123456");
+
+        const estimate = await estimateAsOf(pool(), TOKEN, NOW);
+
+        expect(estimate?.source).toBe("MARKET_BASELINE");
+        expect(estimate?.q).toBe("0.800000");
+        expect(estimate?.decisionTs.toISOString()).toBe(
+          "2026-08-26T11:59:30.000Z",
+        );
+      });
+
+      it("still returns nothing when no active estimate precedes the instant", async () => {
+        // Fail-closed, not fall-back-to-shadow: an engine with no admissible
+        // estimate must refuse, never reach for the gating-only row.
+        const before = new Date("2026-08-26T11:00:00.000Z");
+        await insertShadow(
+          `${SHADOW_MODEL}-early`,
+          new Date("2026-08-26T10:00:00.000Z"),
+          "0.500000",
+        );
+
+        expect(await estimateAsOf(pool(), TOKEN, before)).toBeNull();
+      });
     });
   },
 );

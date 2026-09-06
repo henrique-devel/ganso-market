@@ -77,6 +77,11 @@ function logOverviewError(reasonCode: string, error: unknown): void {
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
       error_name: error instanceof Error ? error.name : "UnknownError",
+      // The error's own message, and nothing else: `error_name` alone said
+      // only "error" for the 500 that ran from 01/09 to 04/09, and the one
+      // string that named the cause — `column "occurred_at" does not exist` —
+      // was reachable only from the PostgreSQL log. Never a request payload.
+      message: error instanceof Error ? error.message : null,
     })}\n`,
   );
 }
@@ -463,7 +468,7 @@ export function registerOverviewRoutes(
                  WHERE shares::numeric <> 0) AS posicoes,
                (SELECT COUNT(*)::int FROM paper_ledger_events
                  WHERE event_type = 'fill'
-                   AND occurred_at > $1::timestamptz - INTERVAL '24 hours')
+                   AND event_ts > $1::timestamptz - INTERVAL '24 hours')
                  AS fills_24h`,
             [now],
           ),

@@ -180,8 +180,15 @@ export function resolveOutcomeForToken(
   negRisk: boolean,
 ): { ok: true; value: ResolutionOutcome } | { ok: false; reason: string } {
   const index = clobTokenIds.indexOf(tokenId);
-  if (index === -1 || index >= outcomePrices.length) {
+  if (index === -1) {
     return { ok: false, reason: "TOKEN_NOT_IN_MARKET" };
+  }
+  // Two different failures used to answer TOKEN_NOT_IN_MARKET, and the wrong
+  // one is what production logged 60x/h until 04/09: the token WAS in the
+  // market, the price array was empty because it was read from the wrong key.
+  // A missing price is a payload problem; a missing token is a market problem.
+  if (index >= outcomePrices.length) {
+    return { ok: false, reason: "RESOLUTION_PRICES_MISSING" };
   }
   const raw = outcomePrices[index];
   const parsed = raw === undefined ? null : parseScaled(raw);

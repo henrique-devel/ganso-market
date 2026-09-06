@@ -2459,7 +2459,19 @@ export async function settlementTick(
             event["payload_json"] !== null
               ? (event["payload_json"] as Record<string, unknown>)
               : {};
-          const pricesRaw = payload["outcomePrices"];
+          // The UMA status poller nests the venue payload under `raw`
+          // (samplers.ts) and the WS `market_resolved` event delivers it flat.
+          // Reading only the flat shape made settlement fail on 100 % of the
+          // 1.017 resolved markets in production, masked as
+          // TOKEN_NOT_IN_MARKET, 60x/h: zero positions ever closed.
+          // resolution/store.ts, resolution/timeline.ts and
+          // fundamental/labels.ts already read both; this was the one that
+          // did not.
+          const nested =
+            typeof payload["raw"] === "object" && payload["raw"] !== null
+              ? (payload["raw"] as Record<string, unknown>)
+              : {};
+          const pricesRaw = nested["outcomePrices"] ?? payload["outcomePrices"];
           const prices = Array.isArray(pricesRaw)
             ? pricesRaw.filter(
                 (item): item is string => typeof item === "string",

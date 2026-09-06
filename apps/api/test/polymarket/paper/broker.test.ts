@@ -123,6 +123,31 @@ describe("C5 trinary resolution", () => {
       resolveOutcomeForToken("tok-yes", tokens, ["0.7", "0.3"], false),
     ).toEqual({ ok: false, reason: "OUTCOME_NOT_TRINARY" });
   });
+
+  // Two distinct failures used to answer the same reason code, and the one
+  // production emitted 60x/h for a whole book's lifetime was the misleading
+  // half: the token was in the market, the price array was empty. A reason
+  // code that names the wrong cause costs more than one that says nothing.
+  it("separates a missing price from a missing token", () => {
+    expect(resolveOutcomeForToken("tok-yes", tokens, [], false)).toEqual({
+      ok: false,
+      reason: "RESOLUTION_PRICES_MISSING",
+    });
+    // Short array: the token is known, its index is past the end.
+    expect(resolveOutcomeForToken("tok-no", tokens, ["1"], false)).toEqual({
+      ok: false,
+      reason: "RESOLUTION_PRICES_MISSING",
+    });
+    // Absent token stays TOKEN_NOT_IN_MARKET even with prices present.
+    expect(
+      resolveOutcomeForToken("tok-other", tokens, ["1", "0"], false),
+    ).toEqual({ ok: false, reason: "TOKEN_NOT_IN_MARKET" });
+    // And with no prices at all, the missing token still wins the report.
+    expect(resolveOutcomeForToken("tok-other", tokens, [], false)).toEqual({
+      ok: false,
+      reason: "TOKEN_NOT_IN_MARKET",
+    });
+  });
 });
 
 describe("D2 mark to executable", () => {
