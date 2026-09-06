@@ -2,13 +2,15 @@
 
 - Última atualização: 2026-09-05 — **As RFC-020…029 foram aprovadas em bloco**, cada
   decisão na recomendação ou padrão da sua própria tabela; registro item a item na seção
-  "APROVAÇÃO DAS RFC-020…029", que é onde os prompts do roadmap mandam procurar. **Duas
-  exceções, ambas na RFC-021 e ambas do proprietário:** a **D3 (rearme automático
-  condicionado, P1) NÃO foi aprovada** — o rearme segue manual e a D3 não deve ser
-  implementada — e o **rearme manual do kill switch (P2)** segue pendente, engatado desde
-  02/09 02:21:05Z. **Aprovada ≠ implementada:** nenhuma das dez RFCs está em produção, a
-  ordem do roadmap continua valendo e todo prompt re-mede antes de codar. No mesmo PR os
-  arquivos pararam de se contradizer sobre o PR-0 (que está inteiro em produção desde
+  "APROVAÇÃO DAS RFC-020…029", que é onde os prompts do roadmap mandam procurar. **Isso inclui
+  a D3 da RFC-021** — rearme automático condicionado do kill switch, `M` = 15 ticks —,
+  aprovada no mesmo dia e que **supersede** a cláusula "bloqueia novas ordens até rearm manual"
+  da RFC-011 (`:266–270`). **Segue com o proprietário uma única coisa: rearmar à mão o switch
+  engatado desde 02/09 02:21:05Z (RFC-021 P2)** — nenhum PR o faz, e a D3 aprovada só o destrava
+  **quando for a produção**, porque o engate atual é `RECORDER_STALE`, o único motivo que ela
+  rearma. **Aprovada ≠ implementada:** nenhuma das dez RFCs está em produção, a vazão segue
+  zero, a ordem do roadmap continua valendo e todo prompt re-mede antes de codar. No mesmo
+  bloco os arquivos pararam de se contradizer sobre o PR-0 (que está inteiro em produção desde
   04/09) e o `.claude/settings.local.json` saiu do repositório para o `.gitignore`.
 - 2026-09-04 — **PR-0 (prompt 11): dois dos três hotfixes entregues,
   verificados em produção; o terceiro PAROU por falta de autorização**. PRs #93 e #94,
@@ -3936,18 +3938,15 @@ que é onde os prompts do roadmap mandam procurar (`grep RFC-0xx`). Isso resolve
 1. **Rearmar o kill switch** (engatado desde 2026-09-02 02:21:05Z; medido ainda engatado em
    04/09). Ato exclusivo do proprietário no painel. Sem isso, **vazão zero** — e é hoje o único
    gargalo do bloco: o livro já fecha posição (PR #94) e o consumidor já é cego para a sombra
-   (PR #96). **RFC-021 P2.**
-2. **Rearme automático condicionado (RFC-021 P1 / D3).** *Não* aprovado: a coluna da RFC-021 é
-   "Padrão se não houver resposta" e o padrão é recusar; a RFC não recomenda nenhum dos lados,
-   ela apresenta o desenho. **O rearme segue MANUAL e a D3 não deve ser implementada** enquanto
-   não houver aprovação explícita por escrito. Registrado assim para não ser lido como aprovado
-   pela aprovação em bloco das outras decisões.
-3. Operar a menos de 30 min do fim (regra B4).
-4. Macro (mercados de MUDANÇA de juros contra modelo de NÍVEL).
-5. Retirar a `crypto_updown_gbm@1.0.0`.
-6. Config 1.3.0 só após a varredura na tela.
-7. Backup do Postgres e trilha humana da RFC-009.
-8. Fora da RFC-028: autorizar a **primeira ordem do braço C** (só após 3 dias de sombra limpos
+   (PR #96). **RFC-021 P2.** A D3 aprovada **não** substitui este clique enquanto não estiver em
+   produção; quando estiver, o engate atual passa a ser elegível ao rearme automático (é
+   `RECORDER_STALE`) e a vazão volta sem clique.
+2. Operar a menos de 30 min do fim (regra B4).
+3. Macro (mercados de MUDANÇA de juros contra modelo de NÍVEL).
+4. Retirar a `crypto_updown_gbm@1.0.0`.
+5. Config 1.3.0 só após a varredura na tela.
+6. Backup do Postgres e trilha humana da RFC-009.
+7. Fora da RFC-028: autorizar a **primeira ordem do braço C** (só após 3 dias de sombra limpos
    + RFC-024 em produção). Fora por escopo, não por falta de decisão.
 
 *(Itens já decididos e entregues: `status='active'` em `estimateAsOf` — PR-0 c, autorizado e
@@ -3964,12 +3963,13 @@ proprietário (data)" preenchidas.
 têm coluna "Recomendação"; RFC-026 tem "Padrão se aprovada"; RFC-027 tem "Default se não
 houver resposta"; **RFC-021 e RFC-029 têm "Padrão se não houver resposta", que é um fallback
 fail-closed e NÃO uma recomendação** — nessas duas, aplicar a coluna ao pé da letra significaria
-recusar. Por isso as duas estão registradas explicitamente abaixo.
+recusar, e em ambas houve resposta explícita do proprietário. Por isso as duas estão registradas
+item a item abaixo, e não por atacado.
 
 | RFC | Decisões | Registro |
 | --- | --- | --- |
 | **RFC-020** | DP1, DP2 | **Aprovadas.** Postgres fora do `--force-recreate`; merge que toca só texto não gera deploy. DP3 (workers de profile no CD) segue **fora** da RFC, por escopo |
-| **RFC-021** | P3 | **Aprovada** (esperar a RFC-020 em produção antes do PR 1). **P1 e P2 NÃO** — ver a lista de decisões abertas acima. O `accepted` da RFC-021 vale para D1/D2 e o kill switch honesto, **não** para a D3 |
+| **RFC-021** | P1, P3 | **Aprovadas.** **P1 = D3, o rearme automático condicionado, com `M` = 15 ticks (15 min)**: entra no escopo da RFC e supersede a cláusula de rearme manual da RFC-011 (`:266–270`). As quatro guardas da D3 fazem parte da aprovação e não podem ser afrouxadas — só `reason = 'RECORDER_STALE'`, as duas séries frescas por `M` ticks, nenhuma lacuna `stream_silent` aberta, evento `{"mode":"auto"}` e nenhum endpoint novo. P3: esperar a RFC-020 em produção antes do PR 1. **P2 (rearmar à mão o switch de hoje) segue com o proprietário** |
 | **RFC-022** | P1–P3 | **Aprovadas na recomendação:** saída fica como **sinal** (D4-B, só rótulo no painel, zero código na ponte); ordem viva sobrevive à rotação transitória; frescor da ponte por `received_at` |
 | **RFC-023** | — | Sem decisão de proprietário pendente; a tabela da RFC é de itens, não de decisões |
 | **RFC-024** | P1–P4 | **Aprovadas na recomendação:** P1 sim (é leitura pública), P2 sim com o número real registrado no HANDOFF antes do PR 2, P3 sim, P4 janela rolante primeiro |
@@ -3980,8 +3980,9 @@ recusar. Por isso as duas estão registradas explicitamente abaixo.
 | **RFC-029** | P1–P5 | **P1, P2 e P3 CONCEDIDAS** (emenda de escopo leve da RFC-017; job no host; volume `:ro` no `api`) — a coluna da tabela é o fallback de não-resposta e aplicá-la faria "nada desta RFC começa", contra o próprio `Status: accepted`. P4 como proposto (03:30Z, 72 h); P5 esperar a RFC-026 |
 
 **O que a aprovação NÃO é:** não é ordem de implementar tudo agora (a ordem do roadmap continua
-valendo), não promove modelo, não rearma o kill switch, não afrouxa gate, disjuntor, policy ou
-quota, e não autoriza execução real. Cada prompt segue re-medindo em produção antes de codar, e
+valendo), não promove modelo, **não rearma o kill switch** (a D3 aprovada só o faz depois de ir a
+produção, e sob as quatro guardas dela), não afrouxa gate, disjuntor, policy ou quota, e não
+autoriza execução real. Cada prompt segue re-medindo em produção antes de codar, e
 suas condições de parada continuam de pé — o que saiu de cena foi só a parada "falta decisão do
 proprietário".
 
