@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     error::Error,
     ffi::OsString,
@@ -18,6 +19,14 @@ const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 const MAX_SECRET_BYTES: u64 = 4 * 1024;
 const MIN_READINESS_TIMEOUT_MS: u64 = 100;
 const MAX_READINESS_TIMEOUT_MS: u64 = 30_000;
+// RFC-023 D1. `config/runtime.json` is one file read by three services, so the
+// API's statement budgets have to parse here too — this binary refuses a file
+// with an unknown key, and silently ignoring the section would let the two
+// parsers drift until one of them booted on a config the other rejected. The
+// bounds are the same ones `apps/api/src/config.ts` enforces; the ceiling is
+// what `infra/nginx/nginx.conf`'s `proxy_read_timeout 5s` leaves room for.
+const MIN_STATEMENT_TIMEOUT_MS: u32 = 100;
+const MAX_STATEMENT_TIMEOUT_CEILING_MS: u32 = 4_000;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -264,7 +273,7 @@ impl FileConfig {
                 "database.port must be greater than zero",
             ));
         }
-        validate_service("services.api", &self.services.api)?;
+        validate_api_service(&self.services.api)?;
         validate_service("services.market_engine", &self.services.market_engine)?;
         validate_service("services.model_worker", &self.services.model_worker)?;
 
@@ -297,7 +306,7 @@ impl Default for DatabaseFileConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ServicesFileConfig {
-    api: ServiceFileConfig,
+    api: ApiServiceFileConfig,
     market_engine: ServiceFileConfig,
     model_worker: ServiceFileConfig,
 }
@@ -305,7 +314,7 @@ struct ServicesFileConfig {
 impl Default for ServicesFileConfig {
     fn default() -> Self {
         Self {
-            api: ServiceFileConfig::new("127.0.0.1", 3_000),
+            api: ApiServiceFileConfig::new("127.0.0.1", 3_000),
             market_engine: ServiceFileConfig::new("127.0.0.1", 8_081),
             model_worker: ServiceFileConfig::new("127.0.0.1", 8_090),
         }
@@ -332,6 +341,41 @@ impl Default for ServiceFileConfig {
     fn default() -> Self {
         Self::new("127.0.0.1", 1)
     }
+}
+
+/// RFC-023 D1. Same as a service section, plus the API's per-route query
+/// budgets. Only the API acts on them; this binary parses and validates them so
+/// that a file it accepts is a file the API accepts too.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ApiServiceFileConfig {
+    bind_address: String,
+    port: u16,
+    statement_timeout_ms: Option<StatementTimeoutFileConfig>,
+}
+
+impl ApiServiceFileConfig {
+    fn new(bind_address: &str, port: u16) -> Self {
+        Self {
+            bind_address: bind_address.to_owned(),
+            port,
+            statement_timeout_ms: None,
+        }
+    }
+}
+
+impl Default for ApiServiceFileConfig {
+    fn default() -> Self {
+        Self::new("127.0.0.1", 1)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct StatementTimeoutFileConfig {
+    ceiling: u32,
+    default: u32,
+    routes: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -448,6 +492,43 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_api_service(service: &ApiServiceFileConfig) -> Result<(), ConfigError> {
+    service.bind_address.parse::<IpAddr>().map_err(|_| {
+        ConfigError::InvalidValue("service bind_address must be a valid IP address")
+    })?;
+    if service.port == 0 {
+        return Err(ConfigError::InvalidValue(
+            "services.api.port must be greater than zero",
+        ));
+    }
+    if let Some(budgets) = &service.statement_timeout_ms {
+        if !(MIN_STATEMENT_TIMEOUT_MS..=MAX_STATEMENT_TIMEOUT_CEILING_MS).contains(&budgets.ceiling)
+        {
+            return Err(ConfigError::InvalidValue(
+                "services.api.statement_timeout_ms.ceiling must be between 100 and 4000",
+            ));
+        }
+        if !(MIN_STATEMENT_TIMEOUT_MS..=budgets.ceiling).contains(&budgets.default) {
+            return Err(ConfigError::InvalidValue(
+                "services.api.statement_timeout_ms.default must be between 100 and the ceiling",
+            ));
+        }
+        for (route, budget) in &budgets.routes {
+            if !route.starts_with('/') {
+                return Err(ConfigError::InvalidValue(
+                    "services.api.statement_timeout_ms.routes keys must start with /",
+                ));
+            }
+            if !(MIN_STATEMENT_TIMEOUT_MS..=budgets.ceiling).contains(budget) {
+                return Err(ConfigError::InvalidValue(
+                    "services.api.statement_timeout_ms.routes values must be between 100 and the ceiling",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_service(field: &'static str, service: &ServiceFileConfig) -> Result<(), ConfigError> {
     service.bind_address.parse::<IpAddr>().map_err(|_| {
         ConfigError::InvalidValue("service bind_address must be a valid IP address")
@@ -493,6 +574,63 @@ mod tests {
     impl Drop for TestFile {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.path);
+        }
+    }
+
+    // RFC-023 D1. `config/runtime.json` is shared by three services and this
+    // parser refuses unknown keys, so the API's budgets have to be legal here.
+    // Before this existed, adding them stopped the engine from booting at all:
+    // "configuration JSON is invalid at line 15, column 28".
+    #[test]
+    fn accepts_the_api_statement_budgets_it_does_not_itself_use() {
+        let config = TestFile::new(
+            "config",
+            r#"{
+                "services": {
+                    "api": {
+                        "bind_address": "0.0.0.0",
+                        "port": 3000,
+                        "statement_timeout_ms": {
+                            "ceiling": 4000,
+                            "default": 2000,
+                            "routes": { "/polymarket/overview": 1500 }
+                        }
+                    },
+                    "market_engine": { "bind_address": "127.0.0.1", "port": 9091 }
+                }
+            }"#,
+        );
+        let password = TestFile::new("password", "unit-test-placeholder\n");
+
+        let loaded = RuntimeConfig::load(Some(&config.path), &password.path)
+            .expect("the API's budgets must not stop the engine from booting");
+        assert_eq!(loaded.bind_address().port(), 9_091);
+    }
+
+    #[test]
+    fn refuses_an_api_budget_above_the_ceiling_the_edge_allows() {
+        for body in [
+            r#""statement_timeout_ms": { "ceiling": 4001, "default": 2000 }"#,
+            r#""statement_timeout_ms": { "ceiling": 2000, "default": 2001 }"#,
+            r#""statement_timeout_ms": { "ceiling": 4000, "default": 99 }"#,
+            r#""statement_timeout_ms": { "ceiling": 4000, "default": 2000,
+                 "routes": { "/x": 4001 } }"#,
+            r#""statement_timeout_ms": { "ceiling": 4000, "default": 2000,
+                 "routes": { "x": 500 } }"#,
+            r#""statement_timeout_ms": { "ceiling": 4000, "default": 2000, "celing": 1 }"#,
+        ] {
+            let config = TestFile::new(
+                "config",
+                &format!(
+                    r#"{{ "services": {{ "api": {{ "bind_address": "0.0.0.0",
+                        "port": 3000, {body} }} }} }}"#
+                ),
+            );
+            let password = TestFile::new("password", "unit-test-placeholder\n");
+            assert!(
+                RuntimeConfig::load(Some(&config.path), &password.path).is_err(),
+                "expected rejection for: {body}"
+            );
         }
     }
 

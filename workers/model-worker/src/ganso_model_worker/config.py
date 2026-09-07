@@ -54,12 +54,58 @@ def _port(value: Any, location: str) -> int:
     return value
 
 
+# RFC-023 D1. The API's per-route query budgets. This worker never reads them,
+# but `config/runtime.json` is one file for three services and this parser
+# refuses unknown keys, so it has to know the shape — and validate it with the
+# same bounds as `apps/api/src/config.ts`, or the two parsers drift until one
+# boots on a file the other rejects. The 4000 ms ceiling is what the Nginx
+# `proxy_read_timeout 5s` leaves room for.
+_MIN_STATEMENT_TIMEOUT_MS = 100
+_MAX_STATEMENT_TIMEOUT_CEILING_MS = 4_000
+
+
+def _statement_timeout_ms(raw: Any, location: str) -> None:
+    section = _expect_object(raw, location)
+    _reject_unknown(section, {"ceiling", "default", "routes"}, location)
+    ceiling = section.get("ceiling")
+    if (
+        type(ceiling) is not int
+        or not _MIN_STATEMENT_TIMEOUT_MS <= ceiling <= _MAX_STATEMENT_TIMEOUT_CEILING_MS
+    ):
+        raise ConfigError(
+            f"{location}.ceiling must be an integer from "
+            f"{_MIN_STATEMENT_TIMEOUT_MS} to {_MAX_STATEMENT_TIMEOUT_CEILING_MS}"
+        )
+    default = section.get("default")
+    if type(default) is not int or not _MIN_STATEMENT_TIMEOUT_MS <= default <= ceiling:
+        raise ConfigError(
+            f"{location}.default must be an integer from {_MIN_STATEMENT_TIMEOUT_MS} to the ceiling"
+        )
+    routes = section.get("routes")
+    if routes is None:
+        return
+    for route, budget in _expect_object(routes, f"{location}.routes").items():
+        if not route.startswith("/"):
+            raise ConfigError(f"{location}.routes keys must start with /")
+        if type(budget) is not int or not _MIN_STATEMENT_TIMEOUT_MS <= budget <= ceiling:
+            raise ConfigError(
+                f"{location}.routes.{route} must be an integer from "
+                f"{_MIN_STATEMENT_TIMEOUT_MS} to the ceiling"
+            )
+
+
 def _service(services: Mapping[str, Any], name: str, default: ServiceConfig) -> ServiceConfig:
     raw = services.get(name)
     if raw is None:
         return default
     section = _expect_object(raw, f"services.{name}")
-    _reject_unknown(section, {"bind_address", "port"}, f"services.{name}")
+    allowed = {"bind_address", "port"}
+    if name == "api":
+        allowed.add("statement_timeout_ms")
+    _reject_unknown(section, allowed, f"services.{name}")
+    budgets = section.get("statement_timeout_ms")
+    if budgets is not None:
+        _statement_timeout_ms(budgets, f"services.{name}.statement_timeout_ms")
     bind_address = section.get("bind_address", default.bind_address)
     if not isinstance(bind_address, str) or not bind_address.strip():
         raise ConfigError(f"services.{name}.bind_address must be a non-empty string")
