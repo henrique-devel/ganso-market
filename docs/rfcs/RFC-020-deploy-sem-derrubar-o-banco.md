@@ -1,6 +1,6 @@
 # RFC-020 — Deploy que não derruba o banco: o merge deixa de recriar o Postgres e de matar os workers
 
-**Status:** accepted — autorizado para implementação (2026-09-04); DP1 e DP2 aprovadas (2026-09-05, ver "Decisões do proprietário que esta RFC exige")
+**Status:** implemented (2026-09-07; PRs [#101](https://github.com/henrique-devel/ganso-market/pull/101), [#102](https://github.com/henrique-devel/ganso-market/pull/102), [#103](https://github.com/henrique-devel/ganso-market/pull/103), [#104](https://github.com/henrique-devel/ganso-market/pull/104), [#105](https://github.com/henrique-devel/ganso-market/pull/105) — o PR 4 saiu dividido em 4a/4b, como esta RFC prevê). Verificada em produção: `Created` do postgres inalterado (`2026-09-07T00:11:02.045Z`) atravessando cinco deploys de código, `RestartCount` dos cinco workers 0 → 0, e o teste controlado de 5,2 s sem banco gravou 1.350 deltas perdidos em 2 linhas de `polymarket_data_gaps` com `dropped`. Registro completo em `docs/HANDOFF.md`, seção "SESSÃO 2026-09-07". DP1 e DP2 aprovadas (2026-09-05); DP3 segue fora desta RFC, por escopo
 **Dependências:** RFC-001 (runtime e Compose), RFC-007 (recorder, `polymarket_data_gaps`, retenção), RFC-010 (`release-sha` na imagem, provenance); convenção de deploy em três passos em `prompts/roadmap/README.md`
 **Habilita:** um merge em `main` que não custa ~1,5–12,7 s de banco fora, ~4,4–5,6 mil deltas perdidos e um crash-loop dos workers; um `polymarket_data_gaps` que registra a lacuna que ele mesmo hoje perde; docs que não disparam deploy
 **Origem:** diagnóstico operacional de 2026-09-02 (relatório publicado: <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6>; leitor de ops, seções 1 e 6; céticos 21, 23–28)
@@ -32,6 +32,20 @@ nenhum endpoint de escrita nasce, nenhuma migration aplicada muda.
 Registrado em HANDOFF desde 23/08 (`docs/HANDOFF.md:3511-3517`, rajada `EAI_AGAIN` de
 01:59Z) e nunca corrigido. Não é rede nem venue: é a flag no Makefile e um handler que
 falta.
+
+### Re-medição de 2026-09-07 (antes de codar) — nenhuma premissa caiu
+
+| Premissa | Medido | Veredito |
+| --- | --- | --- |
+| Postgres recriado a cada deploy | `Created=2026-09-06T19:50:21.908Z`, 2 s depois do backup `.deploy/backups/20260906T195019Z`; `pg_postmaster_start_time()` `19:50:23.045Z` | de pé |
+| Deploys de texto | os **três** deploys mais recentes eram merges de texto; **10 de 19** commits de primeiro pai casam o critério de D2 — o mesmo 10 de 02/09 | de pé, e mais forte |
+| Pool sem `on("error")` | 1 ocorrência de `\.on("error"` em `apps/api/src`, o WebSocket (`recorder.ts:175`) | de pé |
+| Workers morrem com o banco | **2** "Unhandled" por worker em 24 h = **um por deploy**, nos cinco; `RestartCount` 13/17/46/4/8 | de pé |
+
+A cadeia inteira, na palavra do log: `throw er; // Unhandled 'error' event` seguido de
+`error: terminating connection due to administrator command`. A condição de parada "o
+`Created` já não muda" **não** se aplicou — mudava, e mudou de novo às 00:11Z de 07/09,
+durante a própria re-medição, num merge de `docs/HANDOFF.md` + `prompts/roadmap/README.md`.
 
 ---
 
