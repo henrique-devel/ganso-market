@@ -4444,7 +4444,7 @@ comportamento desejado.
 
 | Critério da RFC | Evidência |
 | --- | --- |
-| Merge de código não recria o Postgres | `Created` **`2026-09-07T00:11:02.045Z`** e `pg_postmaster_start_time()` **`00:11:03.171Z`** idênticos antes e depois dos deploys de 00:26Z, 00:36Z, 00:52Z, 01:02Z e 01:07Z — **cinco deploys seguidos**. api/web/nginx/market-engine com `Created` novo em cada um |
+| Merge de código não recria o Postgres | `Created` **`2026-09-07T00:11:02.045Z`** e `pg_postmaster_start_time()` **`00:11:03.171Z`** idênticos antes e depois dos **cinco** deploys de código — **00:26:14Z, 00:36:10Z, 00:52:15Z, 01:02:16Z e 01:06:36Z** (horário do login da chave restrita, um por deploy). api/web/nginx/market-engine com `Created` novo em cada um |
 | O log do servidor diz o mesmo | `Container ganso-market-postgres-1  Running` (não `Recreated`), e a linha literal `docker compose --env-file deploy/server.env run --rm migrate` antes dos serviços de código |
 | Migration continua aplicada pelo CD | `migrate` no log do deploy; `SELECT max(version) … 'foundation'` = **18** = `0018_resolution_proposal_active.sql`, a última do repositório |
 | Zero erro no minuto do deploy | recorder: `RETENTION_STEP_FAILED` 0, `BOOKPIPE_PERSIST_FAILED` 0, `GAP_PERSIST_FAILED` 0; zero linhas de shutdown no `postgres` |
@@ -4551,3 +4551,32 @@ Ausência de login poderia ser ausência de medição; **uma fingerprint diferen
 deploy de código e nenhuma no minuto do merge de texto** não pode.
 
 Com isso os **seis** critérios de aceite da RFC-020 estão medidos em produção.
+
+### Os números exatos dos deploys, e a única vez que o postmaster se moveu
+
+Cinco deploys de código e dois merges de texto, com o servidor contando os dois lados da mesma
+história:
+
+| Evento | Login da chave restrita | Backup em `.deploy/backups` | postgres `Created` |
+| --- | --- | --- | --- |
+| #101 D1 | 00:26:14Z | `20260907T002616Z` | `00:11:02.045Z` |
+| #102 D2 | 00:36:10Z | `20260907T003612Z` | `00:11:02.045Z` |
+| #103 D3 | 00:52:15Z | `20260907T005217Z` | `00:11:02.045Z` |
+| #104 D4a | 01:02:16Z | `20260907T010218Z` | `00:11:02.045Z` |
+| #105 D4b | 01:06:36Z | `20260907T010639Z` | `00:11:02.045Z` |
+| #106 docs | **nenhum** | **nenhum** | `00:11:02.045Z` |
+| #107 docs | **nenhum** | **nenhum** | `00:11:02.045Z` |
+
+Cinco deploys, cinco logins, cinco backups, e um `Created` que não se moveu em nenhum deles.
+Dois merges de texto, zero logins, zero backups.
+
+**Uma ressalva que a medição exige, e que sem ela vira número errado:**
+`pg_postmaster_start_time()` **mudou uma vez**, de `00:11:03.171Z` para **`01:08:01.628Z`**.
+Não foi deploy nenhum — foi o **teste controlado desta sessão**, o `docker stop` deliberado das
+01:07:56Z. O container não foi recriado (`Created` segue `00:11:02.045Z`, porque `docker start`
+religa o mesmo container), só o processo do Postgres subiu de novo. Registrado assim porque
+quem ler a linha depois vai comparar os dois números, e a diferença tem dono.
+
+Sobrevivência final, 30 min depois do último deploy: dez containers `Up`, três `healthy`,
+`RestartCount` **0** nos cinco workers de perfil, os **seis** em `2ac761b`, e o recorder
+gravando 14.366 deltas por minuto.
