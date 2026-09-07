@@ -12,6 +12,7 @@ import {
   createGapWriter,
   createFeedHealth,
   createReconciler,
+  type InstantGapInput,
 } from "./quality.js";
 import {
   runGammaCycle,
@@ -46,6 +47,7 @@ export interface OrchestratorIntervals {
   readonly retentionMs?: number;
   readonly macroReleaseMs?: number;
   readonly statusMs?: number;
+  readonly gapRetryMs?: number;
 }
 
 export interface OrchestratorDeps {
@@ -103,6 +105,250 @@ function safeJob(name: string, job: () => Promise<void>): () => void {
   };
 }
 
+/**
+ * RFC-020 D4.1. The recorder used to call orchestrator.start() the instant the
+ * process booted, which on a deploy meant subscribing sockets and scheduling
+ * jobs against a database that was still coming back. That is what turned the
+ * boot into 100 RETENTION_STEP_FAILED (`EAI_AGAIN postgres`) on 2026-09-02.
+ *
+ * Waiting is the whole fix: no socket is subscribed before the database
+ * answers, so nothing is collected and lost. If it never answers, the recorder
+ * exits with its own reason code and Docker restarts it
+ * (`restart: unless-stopped`) — a restart loop with Docker's backoff, which is
+ * the honest outcome when there is no database.
+ */
+export class DatabaseUnavailableError extends Error {
+  public readonly reasonCode = "RECORDER_DATABASE_UNAVAILABLE";
+  public readonly attempts: number;
+  public readonly waitedMs: number;
+
+  public constructor(attempts: number, waitedMs: number) {
+    super(
+      `database did not answer SELECT 1 after ${attempts} attempts in ${waitedMs} ms`,
+    );
+    this.name = "DatabaseUnavailableError";
+    this.attempts = attempts;
+    this.waitedMs = waitedMs;
+  }
+}
+
+export interface WaitForDatabaseOptions {
+  /** Hard ceiling on the whole wait. RFC-020 D4 fixes it at 60s. */
+  readonly totalTimeoutMs?: number;
+  readonly initialDelayMs?: number;
+  readonly maxDelayMs?: number;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly clock?: () => number;
+  readonly log?: (
+    level: "info" | "warn" | "error",
+    reasonCode: string,
+    extra?: Record<string, unknown>,
+  ) => void;
+}
+
+export async function waitForDatabase(
+  pool: Pick<DatabasePool, "query">,
+  options: WaitForDatabaseOptions = {},
+): Promise<void> {
+  const totalTimeoutMs = options.totalTimeoutMs ?? 60_000;
+  const maxDelayMs = options.maxDelayMs ?? 5_000;
+  const clock = options.clock ?? Date.now;
+  const log = options.log ?? logJson;
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+
+  const startedAt = clock();
+  let delayMs = options.initialDelayMs ?? 250;
+  let attempts = 0;
+
+  for (;;) {
+    attempts += 1;
+    try {
+      await pool.query("SELECT 1");
+      if (attempts > 1) {
+        log("info", "RECORDER_DATABASE_READY", {
+          attempts,
+          waited_ms: clock() - startedAt,
+        });
+      }
+      return;
+    } catch (error: unknown) {
+      const elapsedMs = clock() - startedAt;
+      if (elapsedMs + delayMs >= totalTimeoutMs) {
+        throw new DatabaseUnavailableError(attempts, elapsedMs);
+      }
+      log("warn", "RECORDER_DATABASE_WAITING", {
+        attempt: attempts,
+        delay_ms: delayMs,
+        elapsed_ms: elapsedMs,
+        error_name: error instanceof Error ? error.name : "UnknownError",
+      });
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, maxDelayMs);
+    }
+  }
+}
+
+/**
+ * RFC-020 D4.3. A gap is written to the same database that just failed, so the
+ * write that records the loss fails for the same reason the loss happened. On
+ * 2026-09-02 that produced 63 GAP_PERSIST_FAILED against ONE surviving
+ * `internal/delta_persist_failed` row — and the log line carried no `dropped`,
+ * so the number was gone for good.
+ *
+ * The queue holds the gap in memory and retries it until the pool comes back.
+ * Windows for the same (source, cause, token) coalesce, so a 12-second outage
+ * that loses 32 batches becomes one row with the summed `dropped` and the union
+ * of the windows rather than 32 rows or one row that lies about its size. When
+ * the retries are exhausted the number still reaches the log: `dropped`,
+ * `window_start` and `window_end` go into GAP_PERSIST_FAILED.
+ */
+export interface GapRetryQueueDeps {
+  readonly record: (input: InstantGapInput) => Promise<unknown>;
+  readonly log?: (
+    level: "info" | "warn" | "error",
+    reasonCode: string,
+    extra?: Record<string, unknown>,
+  ) => void;
+  /** ~1s ticks for 120 attempts covers a two-minute outage. */
+  readonly maxAttempts?: number;
+  readonly maxEntries?: number;
+}
+
+export interface GapRetryEntry {
+  readonly source: InstantGapInput["source"];
+  readonly cause: string;
+  readonly tokenId?: string;
+  readonly dropped: number;
+  readonly windowStart: Date;
+  readonly windowEnd: Date;
+}
+
+export interface GapRetryQueue {
+  enqueue(entry: GapRetryEntry): void;
+  flushOnce(): Promise<void>;
+  size(): number;
+}
+
+interface PendingGap {
+  source: InstantGapInput["source"];
+  cause: string;
+  tokenId: string | undefined;
+  dropped: number;
+  windowStart: Date;
+  windowEnd: Date;
+  attempts: number;
+}
+
+export function createGapRetryQueue(deps: GapRetryQueueDeps): GapRetryQueue {
+  const log = deps.log ?? logJson;
+  const maxAttempts = deps.maxAttempts ?? 120;
+  const maxEntries = deps.maxEntries ?? 500;
+  const pending = new Map<string, PendingGap>();
+
+  function abandon(entry: PendingGap, reason: string): void {
+    log("error", "GAP_PERSIST_FAILED", {
+      cause: entry.cause,
+      source: entry.source,
+      ...(entry.tokenId === undefined ? {} : { token_id: entry.tokenId }),
+      dropped: entry.dropped,
+      window_start: entry.windowStart.toISOString(),
+      window_end: entry.windowEnd.toISOString(),
+      attempts: entry.attempts,
+      reason,
+    });
+  }
+
+  return {
+    enqueue(entry: GapRetryEntry): void {
+      const key = `${entry.source}|${entry.cause}|${entry.tokenId ?? ""}`;
+      const existing = pending.get(key);
+      if (existing === undefined) {
+        if (pending.size >= maxEntries) {
+          // Shed the oldest so a long outage cannot grow the queue without
+          // bound; the number it carries still reaches the log.
+          const [oldestKey, oldest] = pending.entries().next().value as [
+            string,
+            PendingGap,
+          ];
+          pending.delete(oldestKey);
+          abandon(oldest, "queue_full");
+        }
+        pending.set(key, {
+          source: entry.source,
+          cause: entry.cause,
+          tokenId: entry.tokenId,
+          dropped: entry.dropped,
+          windowStart: entry.windowStart,
+          windowEnd: entry.windowEnd,
+          attempts: 0,
+        });
+        return;
+      }
+      existing.dropped += entry.dropped;
+      if (entry.windowStart < existing.windowStart) {
+        existing.windowStart = entry.windowStart;
+      }
+      if (entry.windowEnd > existing.windowEnd) {
+        existing.windowEnd = entry.windowEnd;
+      }
+    },
+
+    async flushOnce(): Promise<void> {
+      while (pending.size > 0) {
+        const next = pending.entries().next().value as
+          [string, PendingGap] | undefined;
+        if (next === undefined) {
+          return;
+        }
+        const [key, entry] = next;
+        try {
+          await deps.record({
+            source: entry.source,
+            cause: entry.cause,
+            ...(entry.tokenId === undefined ? {} : { tokenId: entry.tokenId }),
+            at: entry.windowEnd,
+            details: {
+              dropped: entry.dropped,
+              window_start: entry.windowStart.toISOString(),
+              window_end: entry.windowEnd.toISOString(),
+            },
+          });
+          pending.delete(key);
+        } catch {
+          // One probe answers for the whole queue: they all target the same
+          // pool and fail for the same reason. Charging every entry an attempt
+          // here is what keeps the 120-attempt ceiling honest without firing
+          // hundreds of doomed queries per tick.
+          const exhausted: string[] = [];
+          for (const [pendingKey, pendingEntry] of pending) {
+            pendingEntry.attempts += 1;
+            if (pendingEntry.attempts >= maxAttempts) {
+              exhausted.push(pendingKey);
+            }
+          }
+          for (const exhaustedKey of exhausted) {
+            const dead = pending.get(exhaustedKey);
+            pending.delete(exhaustedKey);
+            if (dead !== undefined) {
+              abandon(dead, "retries_exhausted");
+            }
+          }
+          return;
+        }
+      }
+    },
+
+    size(): number {
+      return pending.size;
+    },
+  };
+}
+
 export interface ScheduleOptions {
   /**
    * Fire the job once immediately, in addition to the interval.
@@ -148,6 +394,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const timers: ReturnType<typeof setInterval>[] = [];
 
   const gaps = createGapWriter(pool);
+  // RFC-020 D4.3: gaps are written to the database that just failed, so the
+  // record of the loss needs to outlive the outage that caused it.
+  const gapRetries = createGapRetryQueue({
+    record: (input) => gaps.recordInstantGap(input),
+    log: logJson,
+  });
   const feedHealth = createFeedHealth(Date.now);
 
   let universe: readonly UniverseMember[] = [];
@@ -219,36 +471,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
     },
     onPersistFailure: (info) => {
-      gaps
-        .recordInstantGap({
-          source: "internal",
-          cause: "delta_persist_failed",
-          at: info.lastReceivedAt,
-          details: {
-            dropped: info.count,
-            window_start: info.firstReceivedAt.toISOString(),
-            window_end: info.lastReceivedAt.toISOString(),
-          },
-        })
-        .catch(() => {
-          logJson("error", "GAP_PERSIST_FAILED", {
-            cause: "delta_persist_failed",
-          });
-        });
+      gapRetries.enqueue({
+        source: "internal",
+        cause: "delta_persist_failed",
+        dropped: info.count,
+        windowStart: info.firstReceivedAt,
+        windowEnd: info.lastReceivedAt,
+      });
     },
     onOverflow: (count: number) => {
-      gaps
-        .recordInstantGap({
-          source: "internal",
-          cause: "delta_queue_overflow",
-          at: new Date(),
-          details: { dropped: count },
-        })
-        .catch(() => {
-          logJson("error", "GAP_PERSIST_FAILED", {
-            cause: "delta_queue_overflow",
-          });
-        });
+      // Same treatment as a failed persist: the overflow gap was written with
+      // the same `.catch` that logged GAP_PERSIST_FAILED without `dropped`.
+      const now = new Date();
+      gapRetries.enqueue({
+        source: "internal",
+        cause: "delta_queue_overflow",
+        dropped: count,
+        windowStart: now,
+        windowEnd: now,
+      });
     },
   });
 
@@ -484,6 +725,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await macroReleases.pollOnce();
         },
       );
+      schedule("gap_retry", intervals.gapRetryMs ?? 1_000, async () => {
+        await gapRetries.flushOnce();
+      });
       schedule("status", intervals.statusMs ?? 300_000, async () => {
         statusReport();
       });

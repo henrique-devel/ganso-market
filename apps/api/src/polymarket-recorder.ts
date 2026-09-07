@@ -1,6 +1,9 @@
 import { ConfigError, loadConfig } from "./config.js";
 import { createDatabasePool } from "./database.js";
-import { createOrchestrator } from "./polymarket/orchestrator.js";
+import {
+  createOrchestrator,
+  waitForDatabase,
+} from "./polymarket/orchestrator.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
@@ -45,14 +48,35 @@ async function run(): Promise<void> {
     shutdown("SIGINT");
   });
 
+  // RFC-020 D4.1: nothing is subscribed before the database answers. Booting
+  // into a database that is still coming back is what produced 100
+  // RETENTION_STEP_FAILED (EAI_AGAIN postgres) on the 14:47 and 14:51 boots of
+  // 2026-09-02. If it never answers, this throws DatabaseUnavailableError and
+  // the catch below exits non-zero so Docker restarts the container.
+  await waitForDatabase(pool);
   await orchestrator.start();
   // The orchestrator owns timers and sockets; keep the process alive.
   await new Promise<void>(() => undefined);
 }
 
+/** ConfigError and DatabaseUnavailableError both carry their own code. */
+function reasonCodeOf(error: unknown): string {
+  if (error instanceof ConfigError) {
+    return error.reasonCode;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "reasonCode" in error &&
+    typeof (error as { reasonCode: unknown }).reasonCode === "string"
+  ) {
+    return (error as { reasonCode: string }).reasonCode;
+  }
+  return "RECORDER_FAILED";
+}
+
 void run().catch((error: unknown) => {
-  const reasonCode =
-    error instanceof ConfigError ? error.reasonCode : "RECORDER_FAILED";
+  const reasonCode = reasonCodeOf(error);
   const errorName = error instanceof Error ? error.name : "UnknownError";
   process.stderr.write(
     `${JSON.stringify({
