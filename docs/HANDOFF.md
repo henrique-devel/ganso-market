@@ -1,6 +1,28 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-07 — **RFC-020 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** O merge
+- Última atualização: 2026-09-07 (2) — **RFC-022 CODADA E TESTADA, NENHUM PR MERGEADO OU
+  DEPLOYADO.** Os três PRs estão abertos ([#109](https://github.com/henrique-devel/ganso-market/pull/109)
+  D1 ponte, [#110](https://github.com/henrique-devel/ganso-market/pull/110) D2+D3 runtime,
+  [#111](https://github.com/henrique-devel/ganso-market/pull/111) D4-A saídas), com `make verify`
+  verde e cada regressão vista falhando no código anterior — o merge foi recusado ao agente no
+  meio da sessão, então **zero aceite em produção**. **A re-medição não derrubou nenhuma
+  premissa e piorou quatro:** `aged_out` subiu de 36–39 para **86** por tick, o lag
+  `received_at − decision_ts` das aceitas foi a **p50 17,15 s / p90 27,31 s / max 42,36 s** com
+  **5 de 94 acima dos 30 s** que a ponte exigia, os dois cortes de "aceites sem ordem" foram
+  **reconciliados numa consulta só** (94 aceitas, 8 com ordem, **86 sem**), e as saídas foram de
+  242 para **293 com `paper_order_id` nulo em 293 de 293**. A rotação de geração em processo se
+  **repetiu hoje**: `JOB_FAILED state_tick RESOLUTION_MARKET_PARAM_VERSION_MISSING` às
+  15:27:29.311Z, geração nova pronta às 15:27:41.801Z, container no ar desde 01:07 — 12 s de
+  soluço, e `started_at` rescrito para 15:27:38.927Z, que é a prova de que **nenhum carimbo do
+  banco pode ancorar a idade da graça**. **A P1 estava registrada contra si mesma** (a linha
+  4003 dizia "na recomendação" e descrevia D4-B, que é a coluna "Se recusada"); levada ao
+  proprietário, foi decidida em **D4-A — ordem**. **Dois números que quem retomar precisa saber
+  antes de abrir a consulta de aceite:** a última `ENTRY ACCEPTED` é de 06/09 12:32Z contra
+  20.451 `ENTRY REJECTED` em 24 h — o critério dos 80 % tem denominador zero e o gargalo segue
+  sendo cobertura (RFC-024) —, e a contagem de 7 dias de rotações **não existe**, porque a D3
+  não está em produção e o log do `polymarket-resolution` só retém 17,7 h. Ver a seção
+  "SESSÃO 2026-09-07 (2)" ao final.
+- 2026-09-07 — **RFC-020 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** O merge
   em `main` parou de recriar o Postgres e de matar os workers. Às **00:26:23Z** um deploy de
   código passou por cima da produção e o `Created` do `ganso-market-postgres-1` **não se
   moveu** (`2026-09-07T00:11:02.045Z`, `pg_postmaster_start_time()` `00:11:03.171Z`) — o
@@ -66,7 +88,7 @@
   Kill switch **segue engatado** desde 02/09 02:21Z; `frozen_markets_json` não foi limpo.
 - 2026-09-03 — **Diagnóstico profundo (02–03/09) e roadmap 11–21 escritos;
   nenhum código, deploy ou escrita em produção**. Achados novos verificados: `GET
-  /polymarket/overview` responde **500 em 100 % das chamadas** desde o PR #76 (coluna
+/polymarket/overview` responde **500 em 100 % das chamadas** desde o PR #76 (coluna
   `occurred_at` inexistente — não era o timeout de 1 s); o disjuntor `PARAM_CHANGE` congela
   todo mercado novo por 24 h (100 % dos "Up or Down" avaliados); a ponte perde 75 % dos aceites
   por fase de relógio; 242 saídas aceitas sem ordem; a sombra vaza em `estimateAsOf` (159
@@ -301,14 +323,14 @@ release do container da api `291a35077ff92b507e1609424874d71d277a0033` (= HEAD).
 
 ### A.1 — Os seis gates (`portfolio_gate_measurements`, última medição de cada)
 
-| Gate | Status | Reason code | Número que falta |
-| --- | --- | --- | --- |
-| G1 | `INSUFFICIENT_DATA` | `G1_CALIBRATION_NOT_MET` | `model_forecasts: 0` de 100. Os 816 forecasts pontuados são o **próprio preço** (`used_signal_brier` 0,0249) — a métrica compara o preço com ele mesmo |
-| G2 | `INSUFFICIENT_DATA` | `G2_INSUFFICIENT_PAPER` | `closed_positions` **0/100**, `distinct_markets` **0/30**, `distinct_close_days` **0/20**, `categories` **0/2**, `bootstrap_blocks` **0/10**, `days` **4,70/60** |
-| G3 | `INSUFFICIENT_DATA` | `G3_RISK_BREACH` | 2 breakers nunca exercitados: `UMA_PROPOSED_OR_DISPUTED`, `RULE_CLARIFICATION`. (Drawdown 0,0023 < 0,1 e `unblocked_breaches` 0 já passam) |
-| G4 | `INSUFFICIENT_DATA` | `G4_RECONCILIATION_OFF` | `fee_samples` **0/100**, `slippage_samples` **0/100** |
-| G5 | `INSUFFICIENT_DATA` | `G5_REGIME_STALE` | `below_minimum_days: [crypto, macro]`. **`fingerprint_mismatch` está vazio** — só o relógio falta |
-| G6 | `INSUFFICIENT_DATA` | `G6_NOT_REVIEWED` | "no written owner review on record", `current_report_id: 1` |
+| Gate | Status              | Reason code              | Número que falta                                                                                                                                                 |
+| ---- | ------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1   | `INSUFFICIENT_DATA` | `G1_CALIBRATION_NOT_MET` | `model_forecasts: 0` de 100. Os 816 forecasts pontuados são o **próprio preço** (`used_signal_brier` 0,0249) — a métrica compara o preço com ele mesmo           |
+| G2   | `INSUFFICIENT_DATA` | `G2_INSUFFICIENT_PAPER`  | `closed_positions` **0/100**, `distinct_markets` **0/30**, `distinct_close_days` **0/20**, `categories` **0/2**, `bootstrap_blocks` **0/10**, `days` **4,70/60** |
+| G3   | `INSUFFICIENT_DATA` | `G3_RISK_BREACH`         | 2 breakers nunca exercitados: `UMA_PROPOSED_OR_DISPUTED`, `RULE_CLARIFICATION`. (Drawdown 0,0023 < 0,1 e `unblocked_breaches` 0 já passam)                       |
+| G4   | `INSUFFICIENT_DATA` | `G4_RECONCILIATION_OFF`  | `fee_samples` **0/100**, `slippage_samples` **0/100**                                                                                                            |
+| G5   | `INSUFFICIENT_DATA` | `G5_REGIME_STALE`        | `below_minimum_days: [crypto, macro]`. **`fingerprint_mismatch` está vazio** — só o relógio falta                                                                |
+| G6   | `INSUFFICIENT_DATA` | `G6_NOT_REVIEWED`        | "no written owner review on record", `current_report_id: 1`                                                                                                      |
 
 **Relógio do G2** (`portfolio_g2_clock`): `crypto` e `macro` ambos com
 `clock_start = 2026-08-28 20:38:47.23Z`, `last_reset_reason =
@@ -321,7 +343,7 @@ desde 28/08 — o piso do G5 cai em **2026-10-27 20:38:47Z**.
 `INSUFFICIENT_DATA`, `already_approved: false`.
 
 Existe **um** relatório (`report_id` 1), gerado em **2026-08-27 03:11:02.307Z**.
-Ele **não está velho**: essa é exatamente a marca do último *cambio de veredito*
+Ele **não está velho**: essa é exatamente a marca do último _cambio de veredito_
 (G3 `FAIL` → `INSUFFICIENT_DATA`, mesma timestamp ao microssegundo). Nas **190
 medições** desde então nenhum veredito se moveu, e a cunhagem só sai quando um
 veredito muda. A regra do runbook está sendo honrada.
@@ -402,14 +424,14 @@ gargalo**; é a única dimensão que está acumulando.
 
 ### Projeção honesta (e por que "melhor caso 2026-10-27" não vale para o G2)
 
-| Gate | Data mecânica? | Projeção |
-| --- | --- | --- |
-| G5 | **Sim** | **2026-10-27 20:38:47Z**, se nenhum reset de regime ocorrer. Única data confiável do conjunto |
-| G2 | **Não** | Precisa de 100 posições fechadas. Taxa realizada: **2 fills em 5,2 dias ≈ 0,38/dia**, e 16 dos 18 pedidos foram cancelados. Mesmo com o defeito de settlement corrigido, 100 fechamentos a 0,38/dia ≈ **260 dias**. O próprio repositório já mediu o alvo: o comentário em `brokerstore.ts:60` diz que o gate precisa de **2–3 fills/dia** — estamos ~6× abaixo |
-| G4 | **Não** | Mesmo dado do G2 (fills reconciliados). Segue o G2 |
-| G1 | **Não** | Precisa de **modelo promovido**. `fundamental_models` tem 3 linhas, **todas `shadow`**: `crypto_updown_gbm@1.1.0`, `@1.0.0`, `macro_scheduled_consensus@1.0.0`. Sem promoção, `model_forecasts` fica em 0. É o único item sem data mecânica — depende de achar alpha |
-| G3 | **Não** | 2 breakers por exercitar. `RULE_CLARIFICATION` espera dado real **por decisão do proprietário** |
-| G6 | **Não** | Ato do proprietário, e só é aceito com os outros cinco em `PASS` (`GATES_NOT_READY`) |
+| Gate | Data mecânica? | Projeção                                                                                                                                                                                                                                                                                                                                                        |
+| ---- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G5   | **Sim**        | **2026-10-27 20:38:47Z**, se nenhum reset de regime ocorrer. Única data confiável do conjunto                                                                                                                                                                                                                                                                   |
+| G2   | **Não**        | Precisa de 100 posições fechadas. Taxa realizada: **2 fills em 5,2 dias ≈ 0,38/dia**, e 16 dos 18 pedidos foram cancelados. Mesmo com o defeito de settlement corrigido, 100 fechamentos a 0,38/dia ≈ **260 dias**. O próprio repositório já mediu o alvo: o comentário em `brokerstore.ts:60` diz que o gate precisa de **2–3 fills/dia** — estamos ~6× abaixo |
+| G4   | **Não**        | Mesmo dado do G2 (fills reconciliados). Segue o G2                                                                                                                                                                                                                                                                                                              |
+| G1   | **Não**        | Precisa de **modelo promovido**. `fundamental_models` tem 3 linhas, **todas `shadow`**: `crypto_updown_gbm@1.1.0`, `@1.0.0`, `macro_scheduled_consensus@1.0.0`. Sem promoção, `model_forecasts` fica em 0. É o único item sem data mecânica — depende de achar alpha                                                                                            |
+| G3   | **Não**        | 2 breakers por exercitar. `RULE_CLARIFICATION` espera dado real **por decisão do proprietário**                                                                                                                                                                                                                                                                 |
+| G6   | **Não**        | Ato do proprietário, e só é aceito com os outros cinco em `PASS` (`GATES_NOT_READY`)                                                                                                                                                                                                                                                                            |
 
 **A data de novembro/2026 do roadmap era o piso do relógio, não a projeção do
 conjunto.** O caminho crítico não é o calendário: é (1) o settlement travado,
@@ -3629,15 +3651,15 @@ não mudou — o que ele compra mudou por um fator de ~4.**
 
 ### Medição em produção (somente leitura, 2026-09-02 02:05–02:35Z)
 
-| Grandeza | Medido |
-| --- | --- |
-| `book_deltas` vivo | **35,174 GiB** / 120.407.970 linhas |
-| `book_deltas` físico | 35,82 GiB, `n_dead_tup = 0` (sem bloat) |
-| Custo por linha | **313,67 B vivos** (heap 119 + 28 de tupla + (102 + 3×16)/0,9 de índice); o arquivo concorda em ~319 B/linha |
-| Janela retida | 2026-08-20 01:26:41Z → **12,99 dias** |
-| Última poda de `book_deltas` | **2026-08-28 10:28Z** — nenhuma desde então |
-| Global (61 tabelas de retenção) | 51,72 GiB vivos / 58,48 GiB físicos, contra gatilho de 99 GiB |
-| Disco do host | 64 G / 301 G (22%) |
+| Grandeza                        | Medido                                                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `book_deltas` vivo              | **35,174 GiB** / 120.407.970 linhas                                                                          |
+| `book_deltas` físico            | 35,82 GiB, `n_dead_tup = 0` (sem bloat)                                                                      |
+| Custo por linha                 | **313,67 B vivos** (heap 119 + 28 de tupla + (102 + 3×16)/0,9 de índice); o arquivo concorda em ~319 B/linha |
+| Janela retida                   | 2026-08-20 01:26:41Z → **12,99 dias**                                                                        |
+| Última poda de `book_deltas`    | **2026-08-28 10:28Z** — nenhuma desde então                                                                  |
+| Global (61 tabelas de retenção) | 51,72 GiB vivos / 58,48 GiB físicos, contra gatilho de 99 GiB                                                |
+| Disco do host                   | 64 G / 301 G (22%)                                                                                           |
 
 **Linhas/dia (UTC), a série completa:** 20/08 542.416 (parcial, borda de poda) ·
 21/08 4.308.116 · 22/08 4.695.202 · 23/08 2.008.609 · 24/08 4.871.448 ·
@@ -3691,12 +3713,12 @@ nada. Tratado em PR separado por decisão do proprietário.
 
 ### Tabela de opções APRESENTADA ao proprietário (verbatim)
 
-| Quota | Dias retidos (11,33 / 13,69 / 15,59 M linhas/dia) | % do orçamento | Folga até o gatilho | Efeito nos consumidores | Custo/risco |
-| --- | --- | --- | --- | --- | --- |
-| 32 GiB (~7 dias) | 9,7 / 8,0 / 7,0 | 29,1% de 110 GiB | 24,0 GiB | replay cai para ~1 semana; paper, G4 e RFC-013 intactos | joga fora 20 GiB de janela num disco 78% livre e força a poda a rodar justamente enquanto ela está travada |
-| **52 GiB (manter)** | **15,7 / 13,0 / 11,4** | **47,3%** | **4,0 GiB** | replay ~13 dias; nada mais muda | nenhum; a quota passa a encostar no TTL de 14 dias |
-| 55 GiB (teto sem mexer no orçamento) | 16,6 / 13,8 / 12,1 | 50,0% | 1,0 GiB | +0,8 dia de replay | queima 3 dos 4 GiB de folga do gatilho por menos de um dia |
-| 64 GiB + orçamento 110 → 124 GiB | 19,3 / 16,0 / 14,1 | 51,6% de 124 GiB | 4,6 GiB (gatilho 111,6) | o TTL de 14 dias passa a ser o limite real | exige mover o orçamento global junto e redeclarar o alarme; ganho real de 1 a 3 dias |
+| Quota                                | Dias retidos (11,33 / 13,69 / 15,59 M linhas/dia) | % do orçamento   | Folga até o gatilho     | Efeito nos consumidores                                 | Custo/risco                                                                                                |
+| ------------------------------------ | ------------------------------------------------- | ---------------- | ----------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 32 GiB (~7 dias)                     | 9,7 / 8,0 / 7,0                                   | 29,1% de 110 GiB | 24,0 GiB                | replay cai para ~1 semana; paper, G4 e RFC-013 intactos | joga fora 20 GiB de janela num disco 78% livre e força a poda a rodar justamente enquanto ela está travada |
+| **52 GiB (manter)**                  | **15,7 / 13,0 / 11,4**                            | **47,3%**        | **4,0 GiB**             | replay ~13 dias; nada mais muda                         | nenhum; a quota passa a encostar no TTL de 14 dias                                                         |
+| 55 GiB (teto sem mexer no orçamento) | 16,6 / 13,8 / 12,1                                | 50,0%            | 1,0 GiB                 | +0,8 dia de replay                                      | queima 3 dos 4 GiB de folga do gatilho por menos de um dia                                                 |
+| 64 GiB + orçamento 110 → 124 GiB     | 19,3 / 16,0 / 14,1                                | 51,6% de 124 GiB | 4,6 GiB (gatilho 111,6) | o TTL de 14 dias passa a ser o limite real              | exige mover o orçamento global junto e redeclarar o alarme; ganho real de 1 a 3 dias                       |
 
 **Efeito nos consumidores, medido no código, não estimado:** o paper lê uma
 janela de features de **31 minutos** (`featurestore.ts`), então nenhuma opção
@@ -3774,15 +3796,15 @@ bloqueia.
 
 **Medido em produção (2026-09-02), simulando o gate num corte de 7 dias:**
 
-| Grandeza | Medido |
-| --- | --- |
-| Tokens com deltas mais antigos que o corte | 161 |
-| Tokens bloqueados | **161 de 161** |
-| Tokens presos no PRÓPRIO minuto mais antigo | **161** |
-| Linhas liberáveis | **0** |
-| Linhas retidas pelo gate | 24.684.160 (**7,21 GiB**) |
-| Cobertura real dos minutos | **99,917%** (223 descobertos de 267.635) |
-| Tokens com exatamente UM buraco | 119 (média 1,39, máximo 4) |
+| Grandeza                                       | Medido                                                                 |
+| ---------------------------------------------- | ---------------------------------------------------------------------- |
+| Tokens com deltas mais antigos que o corte     | 161                                                                    |
+| Tokens bloqueados                              | **161 de 161**                                                         |
+| Tokens presos no PRÓPRIO minuto mais antigo    | **161**                                                                |
+| Linhas liberáveis                              | **0**                                                                  |
+| Linhas retidas pelo gate                       | 24.684.160 (**7,21 GiB**)                                              |
+| Cobertura real dos minutos                     | **99,917%** (223 descobertos de 267.635)                               |
+| Tokens com exatamente UM buraco                | 119 (média 1,39, máximo 4)                                             |
 | Liberação se o minuto de borda for atravessado | 24.092.606 linhas (**7,04 GiB**), avanço médio de **62,3 h** por token |
 
 **Controle positivo (o mecanismo, não a correlação):** o token mais pesado tem
@@ -3849,14 +3871,14 @@ rebuildado à mão às 13:09Z.
 
 **Primeira varredura com o código novo (boot, 13:08:38–13:09:43Z):**
 
-| Verificação | Resultado |
-| --- | --- |
-| `book_deltas` vs quota | **36,97 GiB vivos / 126.567.867 linhas < 52 GiB** — satisfeita, nenhum pedido de exclusão |
-| `RETENTION_QUOTA_UNMET` | **0** |
-| `QUOTA_GLOBAL_ALARM` / `QUOTA_GLOBAL_TTL_REDUCED` | **0** / **0** |
-| `SERIES_COVERAGE_MISSING` / `RETENTION_STEP_FAILED` | **0** / **0** |
-| Erros no recorder desde o boot | **0** (confirmado de novo aos 12 min de uptime) |
-| Controle positivo — a varredura fez trabalho real | podou `portfolio_panel_snapshots` (48.413 por quota + 36.862 por TTL) e `paper_feature_windows` (205.336 por quota) |
+| Verificação                                         | Resultado                                                                                                           |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `book_deltas` vs quota                              | **36,97 GiB vivos / 126.567.867 linhas < 52 GiB** — satisfeita, nenhum pedido de exclusão                           |
+| `RETENTION_QUOTA_UNMET`                             | **0**                                                                                                               |
+| `QUOTA_GLOBAL_ALARM` / `QUOTA_GLOBAL_TTL_REDUCED`   | **0** / **0**                                                                                                       |
+| `SERIES_COVERAGE_MISSING` / `RETENTION_STEP_FAILED` | **0** / **0**                                                                                                       |
+| Erros no recorder desde o boot                      | **0** (confirmado de novo aos 12 min de uptime)                                                                     |
+| Controle positivo — a varredura fez trabalho real   | podou `portfolio_panel_snapshots` (48.413 por quota + 36.862 por TTL) e `paper_feature_windows` (205.336 por quota) |
 
 O `RETENTION_BLOAT` informativo aparece em cinco tabelas (físico > vivo, quota
 satisfeita) e **não** em `book_deltas` — coerente com `n_dead_tup = 0`.
@@ -3937,19 +3959,19 @@ Escritos nesta sessão, um autor por RFC com apenas o seu recorte do diagnóstic
 revisado por um cético (arquivo:linha, invariantes, autonomia, tamanho) e um passe de
 consistência cruzada. Vão até "paper rodando fluido em SOMBRA + telas novas":
 
-| Prompt | RFC | Tema |
-| --- | --- | --- |
-| 11 | — (hotfixes) | `/overview` 500; settlement lê `raw.outcomePrices`; `estimateAsOf` com `status='active'` |
-| 12 | RFC-020 | deploy sem recriar o Postgres; `pool.on("error")`; lacunas com retry |
-| 13 | RFC-021 | silêncio do feed como lacuna; kill switch honesto; `closed` persistido |
-| 14 | RFC-022 | ponte por `received_at`; graça para `NOT_READY`/`GENERATION_MISMATCH`; saídas (decisão) |
-| 15 | RFC-023 | `statement_timeout` por endpoint; erros com mensagem; `/live-volume` |
-| 16 | RFC-024 | descoberta por série; prova no fio do resubscribe; livro dos rápidos |
-| 17 | RFC-025 | `PARAM_CHANGE` sem versão 1 nem preenchimento de fee |
-| 18, 18a–c | RFC-026 | painel home broker: Mesa, Carteira, Decisões, Resolução, séries (3 PRs) |
-| 19 | RFC-027 | funil pré-agregado; Sistema com natureza do bloqueio |
-| 20a–b | RFC-028 | estratégia `fast_btc_updown@0.1.0` em SOMBRA, sub-carteira, braços A/C/D/E |
-| 21 | RFC-029 | tela Sombra: shadow replay por job diário + JSON, sem escrita no banco |
+| Prompt    | RFC          | Tema                                                                                     |
+| --------- | ------------ | ---------------------------------------------------------------------------------------- |
+| 11        | — (hotfixes) | `/overview` 500; settlement lê `raw.outcomePrices`; `estimateAsOf` com `status='active'` |
+| 12        | RFC-020      | deploy sem recriar o Postgres; `pool.on("error")`; lacunas com retry                     |
+| 13        | RFC-021      | silêncio do feed como lacuna; kill switch honesto; `closed` persistido                   |
+| 14        | RFC-022      | ponte por `received_at`; graça para `NOT_READY`/`GENERATION_MISMATCH`; saídas (decisão)  |
+| 15        | RFC-023      | `statement_timeout` por endpoint; erros com mensagem; `/live-volume`                     |
+| 16        | RFC-024      | descoberta por série; prova no fio do resubscribe; livro dos rápidos                     |
+| 17        | RFC-025      | `PARAM_CHANGE` sem versão 1 nem preenchimento de fee                                     |
+| 18, 18a–c | RFC-026      | painel home broker: Mesa, Carteira, Decisões, Resolução, séries (3 PRs)                  |
+| 19        | RFC-027      | funil pré-agregado; Sistema com natureza do bloqueio                                     |
+| 20a–b     | RFC-028      | estratégia `fast_btc_updown@0.1.0` em SOMBRA, sub-carteira, braços A/C/D/E               |
+| 21        | RFC-029      | tela Sombra: shadow replay por job diário + JSON, sem escrita no banco                   |
 
 Todas as RFCs estão em `draft — aguardando aprovação do proprietário` e listam, em seção
 própria, as decisões que exigem. Fora deste roadmap (RFCs futuras registradas no relatório):
@@ -3977,10 +3999,10 @@ que é onde os prompts do roadmap mandam procurar (`grep RFC-0xx`). Isso resolve
 5. Config 1.3.0 só após a varredura na tela.
 6. Backup do Postgres e trilha humana da RFC-009.
 7. Fora da RFC-028: autorizar a **primeira ordem do braço C** (só após 3 dias de sombra limpos
-   + RFC-024 em produção). Fora por escopo, não por falta de decisão.
+   - RFC-024 em produção). Fora por escopo, não por falta de decisão.
 
-*(Itens já decididos e entregues: `status='active'` em `estimateAsOf` — PR-0 c, autorizado e
-verificado em produção em 2026-09-04, PR #96.)*
+_(Itens já decididos e entregues: `status='active'` em `estimateAsOf` — PR-0 c, autorizado e
+verificado em produção em 2026-09-04, PR #96.)_
 
 ### APROVAÇÃO DAS RFC-020…029 — registro item a item (2026-09-05)
 
@@ -3996,18 +4018,18 @@ fail-closed e NÃO uma recomendação** — nessas duas, aplicar a coluna ao pé
 recusar, e em ambas houve resposta explícita do proprietário. Por isso as duas estão registradas
 item a item abaixo, e não por atacado.
 
-| RFC | Decisões | Registro |
-| --- | --- | --- |
-| **RFC-020** | DP1, DP2 | **Aprovadas.** Postgres fora do `--force-recreate`; merge que toca só texto não gera deploy. DP3 (workers de profile no CD) segue **fora** da RFC, por escopo |
-| **RFC-021** | P1, P3 | **Aprovadas.** **P1 = D3, o rearme automático condicionado, com `M` = 15 ticks (15 min)**: entra no escopo da RFC e supersede a cláusula de rearme manual da RFC-011 (`:266–270`). As quatro guardas da D3 fazem parte da aprovação e não podem ser afrouxadas — só `reason = 'RECORDER_STALE'`, as duas séries frescas por `M` ticks, nenhuma lacuna `stream_silent` aberta, evento `{"mode":"auto"}` e nenhum endpoint novo. P3: esperar a RFC-020 em produção antes do PR 1. **P2 (rearmar à mão o switch de hoje) segue com o proprietário** |
-| **RFC-022** | P1–P3 | **Aprovadas na recomendação:** saída fica como **sinal** (D4-B, só rótulo no painel, zero código na ponte); ordem viva sobrevive à rotação transitória; frescor da ponte por `received_at` |
-| **RFC-023** | — | Sem decisão de proprietário pendente; a tabela da RFC é de itens, não de decisões |
-| **RFC-024** | P1–P4 | **Aprovadas na recomendação:** P1 sim (é leitura pública), P2 sim com o número real registrado no HANDOFF antes do PR 2, P3 sim, P4 janela rolante primeiro |
-| **RFC-025** | P1–P3 | **Aprovadas na recomendação**, e gravadas na coluna de decisão da própria RFC. P1: versão 1 dos parâmetros e preenchimento `NULL → valor` **não** contam como mudança de parâmetro. P2: janela de 24 h **fixa** (D2-A). P3: sim, opcional no PR 2 |
-| **RFC-026** | P1–P5 | **Aprovadas no padrão da tabela** (D8; D10; D5; D5+D10; D3+D9) |
-| **RFC-027** | P1–P4 | **Aprovadas no default**, migration do funil incluída quando o caminho escolhido a exigir |
-| **RFC-028** | P1–P8 | **Aprovadas como escritas**, incluindo EV ≈ 0 aceito em troca de N com controle, sub-carteira fora da evidência dos gates (`strategy_id IS NULL` em G1–G6), US$ 100 reservados e migration nova. **A primeira ordem do braço C continua fora da RFC** |
-| **RFC-029** | P1–P5 | **P1, P2 e P3 CONCEDIDAS** (emenda de escopo leve da RFC-017; job no host; volume `:ro` no `api`) — a coluna da tabela é o fallback de não-resposta e aplicá-la faria "nada desta RFC começa", contra o próprio `Status: accepted`. P4 como proposto (03:30Z, 72 h); P5 esperar a RFC-026 |
+| RFC         | Decisões | Registro                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **RFC-020** | DP1, DP2 | **Aprovadas.** Postgres fora do `--force-recreate`; merge que toca só texto não gera deploy. DP3 (workers de profile no CD) segue **fora** da RFC, por escopo                                                                                                                                                                                                                                                                                                                                                                                    |
+| **RFC-021** | P1, P3   | **Aprovadas.** **P1 = D3, o rearme automático condicionado, com `M` = 15 ticks (15 min)**: entra no escopo da RFC e supersede a cláusula de rearme manual da RFC-011 (`:266–270`). As quatro guardas da D3 fazem parte da aprovação e não podem ser afrouxadas — só `reason = 'RECORDER_STALE'`, as duas séries frescas por `M` ticks, nenhuma lacuna `stream_silent` aberta, evento `{"mode":"auto"}` e nenhum endpoint novo. P3: esperar a RFC-020 em produção antes do PR 1. **P2 (rearmar à mão o switch de hoje) segue com o proprietário** |
+| **RFC-022** | P1–P3    | **Aprovadas na recomendação:** saída fica como **sinal** (D4-B, só rótulo no painel, zero código na ponte); ordem viva sobrevive à rotação transitória; frescor da ponte por `received_at`                                                                                                                                                                                                                                                                                                                                                       |
+| **RFC-023** | —        | Sem decisão de proprietário pendente; a tabela da RFC é de itens, não de decisões                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **RFC-024** | P1–P4    | **Aprovadas na recomendação:** P1 sim (é leitura pública), P2 sim com o número real registrado no HANDOFF antes do PR 2, P3 sim, P4 janela rolante primeiro                                                                                                                                                                                                                                                                                                                                                                                      |
+| **RFC-025** | P1–P3    | **Aprovadas na recomendação**, e gravadas na coluna de decisão da própria RFC. P1: versão 1 dos parâmetros e preenchimento `NULL → valor` **não** contam como mudança de parâmetro. P2: janela de 24 h **fixa** (D2-A). P3: sim, opcional no PR 2                                                                                                                                                                                                                                                                                                |
+| **RFC-026** | P1–P5    | **Aprovadas no padrão da tabela** (D8; D10; D5; D5+D10; D3+D9)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **RFC-027** | P1–P4    | **Aprovadas no default**, migration do funil incluída quando o caminho escolhido a exigir                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **RFC-028** | P1–P8    | **Aprovadas como escritas**, incluindo EV ≈ 0 aceito em troca de N com controle, sub-carteira fora da evidência dos gates (`strategy_id IS NULL` em G1–G6), US$ 100 reservados e migration nova. **A primeira ordem do braço C continua fora da RFC**                                                                                                                                                                                                                                                                                            |
+| **RFC-029** | P1–P5    | **P1, P2 e P3 CONCEDIDAS** (emenda de escopo leve da RFC-017; job no host; volume `:ro` no `api`) — a coluna da tabela é o fallback de não-resposta e aplicá-la faria "nada desta RFC começa", contra o próprio `Status: accepted`. P4 como proposto (03:30Z, 72 h); P5 esperar a RFC-026                                                                                                                                                                                                                                                        |
 
 **O que a aprovação NÃO é:** não é ordem de implementar tudo agora (a ordem do roadmap continua
 valendo), não promove modelo, **não rearma o kill switch** (a D3 aprovada só o faz depois de ir a
@@ -4025,11 +4047,11 @@ intocados. Escrita em produção só no deploy.
 
 ### RE-MEDIÇÃO ANTES DE CODAR (2026-09-04 ~21:00Z, read-only) — os três defeitos ATIVOS
 
-| # | Medição de 02–03/09 | Medição de 04/09 | Veredito |
-| --- | --- | --- | --- |
-| a | 5/5 chamadas em 500 | ver a armadilha abaixo | **ATIVO** |
-| b | 0 `resolution`; 824 `TOKEN_NOT_IN_MARKET`/24 h | **0** `resolution`; **1.440**/24 h (1/min) | **ATIVO, e maior** |
-| c | 159 `MODEL`, 6 aceitas, 0 `active` | **179** `MODEL`, **11** aceitas, **0** `active` | **ATIVO, e crescendo** |
+| #   | Medição de 02–03/09                            | Medição de 04/09                                | Veredito               |
+| --- | ---------------------------------------------- | ----------------------------------------------- | ---------------------- |
+| a   | 5/5 chamadas em 500                            | ver a armadilha abaixo                          | **ATIVO**              |
+| b   | 0 `resolution`; 824 `TOKEN_NOT_IN_MARKET`/24 h | **0** `resolution`; **1.440**/24 h (1/min)      | **ATIVO, e maior**     |
+| c   | 159 `MODEL`, 6 aceitas, 0 `active`             | **179** `MODEL`, **11** aceitas, **0** `active` | **ATIVO, e crescendo** |
 
 **A armadilha do (a), e por que a lente de degeneração de gate volta a valer.** O comando de
 re-medição do prompt (`logs postgres --since 24h | grep -c occurred_at`) devolveu **0**, que
@@ -4087,8 +4109,8 @@ a aninhada **sem chave plana de socorro**; o de forma plana fica como guarda do 
 
 ### PR-c — parou primeiro, depois foi AUTORIZADO e entregue (PR #96)
 
-**A parada foi honrada.** O prompt: *"sem linha nova lá, este PR não abre (este prompt não
-autoriza)"*. O HANDOFF dizia, em duas passagens (l. 92–99 e a seção do modo B), **"é área da
+**A parada foi honrada.** O prompt: _"sem linha nova lá, este PR não abre (este prompt não
+autoriza)"_. O HANDOFF dizia, em duas passagens (l. 92–99 e a seção do modo B), **"é área da
 RFC-010 e fica como decisão do proprietário"** — registro do defeito, não autorização. Nenhuma
 linha de código foi escrita para o (c) enquanto isso valia.
 
@@ -4106,12 +4128,12 @@ DESC, estimate_id DESC` em `estimateAsOf` (`portfolio/store.ts`).
 
 **Medições que precederam o código** (produção, read-only, 04/09):
 
-| Pergunta | Número | Consequência |
-| --- | --- | --- |
-| `fundamental_estimates` por status | **840.057** `active`/`MARKET_BASELINE`, **153.241** `shadow`/`MODEL` | toda linha `MODEL` da tabela é sombra; nenhuma é `active` |
-| instantes com mais de uma linha | **132.198** (eram 80.397 em 02/09) | o empate é a regra, não a exceção |
-| tokens **sem** nenhuma linha `active` | **0** | o predicado não deixa nenhum token sem estimativa |
-| `EXPLAIN ANALYZE` do token mais denso | **0,210 ms** (index scan + incremental sort) | sem risco do `statement_timeout` |
+| Pergunta                              | Número                                                               | Consequência                                              |
+| ------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------- |
+| `fundamental_estimates` por status    | **840.057** `active`/`MARKET_BASELINE`, **153.241** `shadow`/`MODEL` | toda linha `MODEL` da tabela é sombra; nenhuma é `active` |
+| instantes com mais de uma linha       | **132.198** (eram 80.397 em 02/09)                                   | o empate é a regra, não a exceção                         |
+| tokens **sem** nenhuma linha `active` | **0**                                                                | o predicado não deixa nenhum token sem estimativa         |
+| `EXPLAIN ANALYZE` do token mais denso | **0,210 ms** (index scan + incremental sort)                         | sem risco do `statement_timeout`                          |
 
 A terceira linha é a que fecha o risco de fail-closed: o filtro poderia, em tese, transformar
 "tinha estimativa" em "não tem" e fazer o motor recusar. Não acontece nesta população — e se um
@@ -4163,14 +4185,14 @@ em `a7c9e451…` — a assimetria de sempre).
 
 **Aceite do (b) — o primeiro fechamento da história do livro:**
 
-| Evidência | Número |
-| --- | --- |
-| Primeiro `resolution` em `paper_ledger_events` | `event_id` **15543**, 2026-09-04 **21:23:56.924Z** |
-| Mercado | `0x71b5721c…50091c` (BTC > US$ 78.000 em 1/set, "Não" em 01/09 16:37Z) |
-| `outcome_price` | `0.000000` (token é o índice 0; índice 0 resolveu em 0) |
-| Posição | `shares` 0,000000, `cost_usd` 0,000000, **`realized_pnl_usd` −4,622700**, `lockup_s` 293.090 |
-| `PAPER_RESOLUTION_DATA_ERROR` desde o rebuild | **0** (era 1.440/24 h) |
-| Erros de qualquer nível no `polymarket-paper` | **0** |
+| Evidência                                      | Número                                                                                       |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Primeiro `resolution` em `paper_ledger_events` | `event_id` **15543**, 2026-09-04 **21:23:56.924Z**                                           |
+| Mercado                                        | `0x71b5721c…50091c` (BTC > US$ 78.000 em 1/set, "Não" em 01/09 16:37Z)                       |
+| `outcome_price`                                | `0.000000` (token é o índice 0; índice 0 resolveu em 0)                                      |
+| Posição                                        | `shares` 0,000000, `cost_usd` 0,000000, **`realized_pnl_usd` −4,622700**, `lockup_s` 293.090 |
+| `PAPER_RESOLUTION_DATA_ERROR` desde o rebuild  | **0** (era 1.440/24 h)                                                                       |
+| Erros de qualquer nível no `polymarket-paper`  | **0**                                                                                        |
 
 A perda realizada de **US$ −4,6227** casa com a previsão do prompt (≈ US$ 4,62) até o centavo.
 `frozen_markets_json` **não** foi limpo e o kill switch **não** foi rearmado, como manda o
@@ -4206,12 +4228,12 @@ fechamento.
 
 **Confirmado às 2026-09-04 22:23:18.794Z, na primeira medição posterior ao fechamento:**
 
-| Métrica do G2 | 21:23:17Z (linha velha) | 22:23:18Z (linha nova) |
-| --- | --- | --- |
-| `closed_positions` | 0 / 100 | **1** / 100 |
-| `distinct_markets` | 0 / 30 | **1** / 30 |
-| `distinct_close_days` | 0 / 20 | **1** / 20 |
-| `categories` | 0 / 2 | **1** / 2 |
+| Métrica do G2         | 21:23:17Z (linha velha) | 22:23:18Z (linha nova) |
+| --------------------- | ----------------------- | ---------------------- |
+| `closed_positions`    | 0 / 100                 | **1** / 100            |
+| `distinct_markets`    | 0 / 30                  | **1** / 30             |
+| `distinct_close_days` | 0 / 20                  | **1** / 20             |
+| `categories`          | 0 / 2                   | **1** / 2              |
 
 O gate segue `INSUFFICIENT_DATA` / `G2_INSUFFICIENT_PAPER` — como deve: 1 de 100 posições
 fechadas. **O que mudou não é o veredito, é a natureza do bloqueio.** Antes de hoje o G2 estava
@@ -4258,14 +4280,14 @@ polymarket-portfolio**. Linha de corte gravada ANTES do merge, às 23:12:51Z: 17
 
 **Aceite (medido às 23:27:16Z, 201 decisões depois do corte):**
 
-| Evidência | Número |
-| --- | --- |
-| Decisões gravadas após o deploy, por `estimate_source` | **201 `MARKET_BASELINE`**, **0 `MODEL`** |
-| Aceitas entre elas com número de sombra | **0** |
-| Total histórico `MODEL` | **179 / 11 — parou de crescer** |
-| `fundamental_models` com `status='active'` | **0** (o denominador que dá sentido ao critério) |
-| Erros em `api`, `portfolio`, `paper`, `estimator`, `resolution`, `recorder`, `market-engine` | **0** em todos os sete |
-| `PORTFOLIO_REPLAY_OK` | 1, zero mismatch |
+| Evidência                                                                                    | Número                                           |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Decisões gravadas após o deploy, por `estimate_source`                                       | **201 `MARKET_BASELINE`**, **0 `MODEL`**         |
+| Aceitas entre elas com número de sombra                                                      | **0**                                            |
+| Total histórico `MODEL`                                                                      | **179 / 11 — parou de crescer**                  |
+| `fundamental_models` com `status='active'`                                                   | **0** (o denominador que dá sentido ao critério) |
+| Erros em `api`, `portfolio`, `paper`, `estimator`, `resolution`, `recorder`, `market-engine` | **0** em todos os sete                           |
+| `PORTFOLIO_REPLAY_OK`                                                                        | 1, zero mismatch                                 |
 
 O contador histórico congelado em 179 é a prova mais forte que a contagem zero: **zero** pode
 ser ausência de decisão, mas "179 que não virou 180 enquanto 201 decisões novas eram gravadas"
@@ -4283,7 +4305,6 @@ ou migration, não limpa `frozen_markets_json` e não rearma o kill switch. Enqu
 `fundamental_models` não tiver uma linha `active`, `estimate_source='MODEL'` fica em 0 **por
 construção** — que é a invariante da RFC-010 funcionando, não um efeito colateral.
 
-
 ## SESSÃO 2026-09-06 — o kill switch foi rearmado, e o funil não se moveu
 
 O proprietário rearmou o kill switch do paper às **2026-09-06 23:03:10.474Z** (6.º
@@ -4293,42 +4314,42 @@ deploy ou escrita nesta sessão.**
 
 ### O resultado, e ele contraria a expectativa
 
-| Janela: 23:03:10 → 23:19:15Z (16 min) | Número |
-| --- | --- |
-| Decisões gravadas | **211** |
-| Aceites | **0** |
-| Ordens criadas | **0** (o total segue 18, todas de 01/09) |
-| Fills | **0** |
-| Eventos de ledger novos | só `mark` |
+| Janela: 23:03:10 → 23:19:15Z (16 min) | Número                                   |
+| ------------------------------------- | ---------------------------------------- |
+| Decisões gravadas                     | **211**                                  |
+| Aceites                               | **0**                                    |
+| Ordens criadas                        | **0** (o total segue 18, todas de 01/09) |
+| Fills                                 | **0**                                    |
+| Eventos de ledger novos               | só `mark`                                |
 
 **Tirar o switch do caminho não destravou nada.** Ele era vinculante — com ele engatado nada
 passava —, mas a fila atrás dele é mais longa do que o roadmap supunha.
 
 ### Onde as 211 morrem, e por que não é o que se esperava
 
-| Reason code | Decisões | Mercados |
-| --- | --- | --- |
-| `DATA_STALE` | 76 | 34 |
-| `BOOK_STALE` | 64 | 25 |
-| `LOWER_BOUND_BELOW_COSTS` | 19 | — |
-| `PRICE_OUT_OF_BAND` | 15 | — |
-| `PORTFOLIO_CIRCUIT_BREAKER` | **5** | — |
+| Reason code                 | Decisões | Mercados |
+| --------------------------- | -------- | -------- |
+| `DATA_STALE`                | 76       | 34       |
+| `BOOK_STALE`                | 64       | 25       |
+| `LOWER_BOUND_BELOW_COSTS`   | 19       | —        |
+| `PRICE_OUT_OF_BAND`         | 15       | —        |
+| `PORTFOLIO_CIRCUIT_BREAKER` | **5**    | —        |
 
 **77 % é frescor**, e o disjuntor — o suspeito da RFC-025 — responde por **5 de 211**.
 
 ### E frescor aqui NÃO é o feed morrendo. O controle fecha a questão.
 
 Primeira hipótese, a da parada silenciosa por token ([[silent-delta-feed-stall]]): **refutada
-pela medição.** O feed está vivo no agregado *e* nos mercados recusados:
+pela medição.** O feed está vivo no agregado _e_ nos mercados recusados:
 
-| | Valor |
-| --- | --- |
-| Último delta | **0,15 s** atrás |
-| Deltas/min (8 min) | **7.632 – 13.170** |
-| Tokens distintos com delta em 1 h | **130** |
-| Lacunas `polymarket_data_gaps` abertas | **0** |
-| Tokens dos 25 mercados `BOOK_STALE` com delta em 10 min | **50 de 50** |
-| Controle — tokens dos mercados que PASSARAM do book | **16 de 16** |
+|                                                         | Valor              |
+| ------------------------------------------------------- | ------------------ |
+| Último delta                                            | **0,15 s** atrás   |
+| Deltas/min (8 min)                                      | **7.632 – 13.170** |
+| Tokens distintos com delta em 1 h                       | **130**            |
+| Lacunas `polymarket_data_gaps` abertas                  | **0**              |
+| Tokens dos 25 mercados `BOOK_STALE` com delta em 10 min | **50 de 50**       |
+| Controle — tokens dos mercados que PASSARAM do book     | **16 de 16**       |
 
 Os recusados recebem dado com a mesma atualidade dos que passam. O reason code não estava
 descrevendo o que parecia.
@@ -4365,10 +4386,10 @@ no do `postgres`: o defeito da coluna não voltou.
 do `message` que o PR #93 acrescentou.** Na mesma janela houve **12 × 500**, e a mensagem diz
 qual é:
 
-| Mensagem | Vezes |
-| --- | --- |
-| `canceling statement due to statement timeout` | 3 |
-| `Query read timeout` | 9 |
+| Mensagem                                       | Vezes |
+| ---------------------------------------------- | ----- |
+| `canceling statement due to statement timeout` | 3     |
+| `Query read timeout`                           | 9     |
 
 É o **`statement_timeout` de 1 s da API** ([[api-statement-timeout-1s]]) contra um agregador que
 lê ~20 consultas e o tamanho de 74 tabelas — 24 sucessos contra 12 estouros, isto é,
@@ -4397,7 +4418,6 @@ Zero erros em `polymarket-portfolio`, `-paper`, `-estimator`, `-resolution`, `-r
 `market-engine`. Os 12 da `api` são os 500 do `/overview` acima. O switch **seguia desarmado**
 ao fim da janela.
 
-
 ## SESSÃO 2026-09-07 — RFC-020: o deploy parou de derrubar o banco
 
 Prompt 12 do roadmap. **Cinco PRs mergeados** (#101, #102, #103, #104, #105 — o 4 foi dividido
@@ -4406,12 +4426,12 @@ no código anterior**, e verificação em produção a cada passo.
 
 ### Re-medição antes de codar — as quatro premissas decisivas
 
-| Premissa | Medido em 2026-09-06/07 | Veredito |
-| --- | --- | --- |
-| Postgres recriado a cada deploy | `Created=2026-09-06T19:50:21.908Z`, 2 s depois do backup `.deploy/backups/20260906T195019Z`; `pg_postmaster_start_time()` `19:50:23.045Z` | **de pé** |
-| Deploys de texto | os **três** deploys mais recentes eram merges de texto; **10 de 19** commits de primeiro pai casam o critério de D2 — o mesmo 10 da RFC | **de pé, e mais forte** |
-| Pool sem `on("error")` | `grep -rn '\.on("error"' apps/api/src` → **1**, o WebSocket (`recorder.ts:175`). Sem o ponto, casa 39 (`logJson("error"`) | **de pé** |
-| Workers morrem com o banco | **2** "Unhandled" por worker em 24 h = **um por deploy**, nos cinco; `RestartCount` 13/17/46/4/8 | **de pé** |
+| Premissa                        | Medido em 2026-09-06/07                                                                                                                   | Veredito                |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Postgres recriado a cada deploy | `Created=2026-09-06T19:50:21.908Z`, 2 s depois do backup `.deploy/backups/20260906T195019Z`; `pg_postmaster_start_time()` `19:50:23.045Z` | **de pé**               |
+| Deploys de texto                | os **três** deploys mais recentes eram merges de texto; **10 de 19** commits de primeiro pai casam o critério de D2 — o mesmo 10 da RFC   | **de pé, e mais forte** |
+| Pool sem `on("error")`          | `grep -rn '\.on("error"' apps/api/src` → **1**, o WebSocket (`recorder.ts:175`). Sem o ponto, casa 39 (`logJson("error"`)                 | **de pé**               |
+| Workers morrem com o banco      | **2** "Unhandled" por worker em 24 h = **um por deploy**, nos cinco; `RestartCount` 13/17/46/4/8                                          | **de pé**               |
 
 A causa literal, no log do recorder, fecha a cadeia inteira em uma linha:
 
@@ -4430,11 +4450,11 @@ sessão trabalhava, num merge de `docs/HANDOFF.md` + `prompts/roadmap/README.md`
 A RFC exige "o `docker compose` observado, não uma teoria". Projeto Compose isolado, `make
 server-update` de verdade:
 
-| Rodada | postgres `Created` | container id | `pg_postmaster_start_time()` | Compose diz |
-| --- | --- | --- | --- | --- |
-| Makefile novo, 1ª | 00:13:47.553Z | `82bb22de9203` | 00:13:48.777Z | `Started` |
-| Makefile novo, 2ª | **00:13:47.553Z** | **`82bb22de9203`** | **00:13:48.777Z** | **`Running`** |
-| Makefile ANTIGO | 00:14:54.215Z | `c7313bb111ce` | 00:15:05.346Z | `Recreated` |
+| Rodada            | postgres `Created` | container id       | `pg_postmaster_start_time()` | Compose diz   |
+| ----------------- | ------------------ | ------------------ | ---------------------------- | ------------- |
+| Makefile novo, 1ª | 00:13:47.553Z      | `82bb22de9203`     | 00:13:48.777Z                | `Started`     |
+| Makefile novo, 2ª | **00:13:47.553Z**  | **`82bb22de9203`** | **00:13:48.777Z**            | **`Running`** |
+| Makefile ANTIGO   | 00:14:54.215Z      | `c7313bb111ce`     | 00:15:05.346Z                | `Recreated`   |
 
 A janela sem banco no controle é de **~11 s**, dentro da faixa de 1,55–12,67 s medida em
 produção em 02/09. api, web, nginx e market-engine ganham id novo nas três rodadas — que é o
@@ -4442,16 +4462,16 @@ comportamento desejado.
 
 ### Aceite em produção, critério a critério
 
-| Critério da RFC | Evidência |
-| --- | --- |
+| Critério da RFC                       | Evidência                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Merge de código não recria o Postgres | `Created` **`2026-09-07T00:11:02.045Z`** e `pg_postmaster_start_time()` **`00:11:03.171Z`** idênticos antes e depois dos **cinco** deploys de código — **00:26:14Z, 00:36:10Z, 00:52:15Z, 01:02:16Z e 01:06:36Z** (horário do login da chave restrita, um por deploy). api/web/nginx/market-engine com `Created` novo em cada um |
-| O log do servidor diz o mesmo | `Container ganso-market-postgres-1  Running` (não `Recreated`), e a linha literal `docker compose --env-file deploy/server.env run --rm migrate` antes dos serviços de código |
-| Migration continua aplicada pelo CD | `migrate` no log do deploy; `SELECT max(version) … 'foundation'` = **18** = `0018_resolution_proposal_active.sql`, a última do repositório |
-| Zero erro no minuto do deploy | recorder: `RETENTION_STEP_FAILED` 0, `BOOKPIPE_PERSIST_FAILED` 0, `GAP_PERSIST_FAILED` 0; zero linhas de shutdown no `postgres` |
-| Workers não caem no deploy | `release-sha` conferido **dentro** dos cinco containers; `RestartCount` **0 → 0** e **zero** "Unhandled" nos cinco atravessando o deploy de código seguinte |
-| Classificador vivo no CD | `deploy=true: 3 de 3 arquivos fora das listas de texto: .github/workflows/ci-cd.yml, deploy/deploy_paths.py, scripts/tests/test_deploy_paths.py` |
-| Lacuna registrada quando houver perda | teste controlado abaixo |
-| Merge docs-only não gera deploy | **`deploy=false: deploy pulado: só texto (3 arquivos)`** no merge `2afa6ad` às 01:26:22Z, com `Deploy production` em **sucesso**; `.deploy/current-sha` inalterado e **zero** logins da chave restrita — ver "D2 medida" abaixo |
+| O log do servidor diz o mesmo         | `Container ganso-market-postgres-1  Running` (não `Recreated`), e a linha literal `docker compose --env-file deploy/server.env run --rm migrate` antes dos serviços de código                                                                                                                                                    |
+| Migration continua aplicada pelo CD   | `migrate` no log do deploy; `SELECT max(version) … 'foundation'` = **18** = `0018_resolution_proposal_active.sql`, a última do repositório                                                                                                                                                                                       |
+| Zero erro no minuto do deploy         | recorder: `RETENTION_STEP_FAILED` 0, `BOOKPIPE_PERSIST_FAILED` 0, `GAP_PERSIST_FAILED` 0; zero linhas de shutdown no `postgres`                                                                                                                                                                                                  |
+| Workers não caem no deploy            | `release-sha` conferido **dentro** dos cinco containers; `RestartCount` **0 → 0** e **zero** "Unhandled" nos cinco atravessando o deploy de código seguinte                                                                                                                                                                      |
+| Classificador vivo no CD              | `deploy=true: 3 de 3 arquivos fora das listas de texto: .github/workflows/ci-cd.yml, deploy/deploy_paths.py, scripts/tests/test_deploy_paths.py`                                                                                                                                                                                 |
+| Lacuna registrada quando houver perda | teste controlado abaixo                                                                                                                                                                                                                                                                                                          |
+| Merge docs-only não gera deploy       | **`deploy=false: deploy pulado: só texto (3 arquivos)`** no merge `2afa6ad` às 01:26:22Z, com `Deploy production` em **sucesso**; `.deploy/current-sha` inalterado e **zero** logins da chave restrita — ver "D2 medida" abaixo                                                                                                  |
 
 **A assimetria de sempre acabou.** Antes do rebuild os cinco workers rodavam três releases
 diferentes — recorder `bf55318`, estimator e resolution `e0f227e`, paper e portfolio `b381f21`
@@ -4464,17 +4484,17 @@ diferentes — recorder `bf55318`, estimator e resolution `e0f227e`, paper e por
 escrevendo ~311 deltas/s (18.662 em 60 s). **Exercitou D1, D3 e os quatro itens de D4 de uma
 vez:**
 
-| Evidência | Número |
-| --- | --- |
-| `RestartCount` do recorder | **0 → 0**; `StartedAt` `01:07:19.873Z` **inalterado** — o mesmo processo atravessou a queda |
-| "Unhandled 'error' event" nos cinco workers | **0** |
-| `DB_POOL_CLIENT_ERROR` | 2, com `detail: "terminating connection due to administrator command"` — a MESMA string que antes vinha ao lado de `throw er;` |
-| `BOOKPIPE_PERSIST_FAILED` | 186, agora com `count` (14, 76, …) |
-| Lacunas gravadas | **2 linhas**, `dropped` **1.308** + **42** = **1.350** deltas, janela `01:07:55.804Z → 01:08:01.152Z` |
-| `GAP_PERSIST_FAILED` do caminho de deltas | **0** (os 6 do log são `RTDS_GAP_PERSIST_FAILED`, caminho que a RFC deixa fora de escopo) |
-| Retenção — reagendamento | `RETENTION_RETRY_SCHEDULED` às **01:07:58.754Z**, `failed_steps: 38`, `retry_in_ms: 600000` |
-| Retenção — a tentativa reagendada **rodou e passou** | `RETENTION_RETRY_OK` às **01:18:28.315Z**, com **0** `RETENTION_STEP_FAILED` na janela. Dez minutos, não 24 h |
-| Recuperação | 22.760 deltas nos 60 s seguintes |
+| Evidência                                            | Número                                                                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `RestartCount` do recorder                           | **0 → 0**; `StartedAt` `01:07:19.873Z` **inalterado** — o mesmo processo atravessou a queda                                    |
+| "Unhandled 'error' event" nos cinco workers          | **0**                                                                                                                          |
+| `DB_POOL_CLIENT_ERROR`                               | 2, com `detail: "terminating connection due to administrator command"` — a MESMA string que antes vinha ao lado de `throw er;` |
+| `BOOKPIPE_PERSIST_FAILED`                            | 186, agora com `count` (14, 76, …)                                                                                             |
+| Lacunas gravadas                                     | **2 linhas**, `dropped` **1.308** + **42** = **1.350** deltas, janela `01:07:55.804Z → 01:08:01.152Z`                          |
+| `GAP_PERSIST_FAILED` do caminho de deltas            | **0** (os 6 do log são `RTDS_GAP_PERSIST_FAILED`, caminho que a RFC deixa fora de escopo)                                      |
+| Retenção — reagendamento                             | `RETENTION_RETRY_SCHEDULED` às **01:07:58.754Z**, `failed_steps: 38`, `retry_in_ms: 600000`                                    |
+| Retenção — a tentativa reagendada **rodou e passou** | `RETENTION_RETRY_OK` às **01:18:28.315Z**, com **0** `RETENTION_STEP_FAILED` na janela. Dez minutos, não 24 h                  |
+| Recuperação                                          | 22.760 deltas nos 60 s seguintes                                                                                               |
 
 Antes desta sessão, essa mesma queda de 5 s teria matado os cinco workers e deixado ~1.600
 deltas perdidos **sem registro do número**. A comparação mais honesta é a linha do `dropped`:
@@ -4491,13 +4511,13 @@ a guarda de uma rodada que falha **no meio**, que é o que aconteceu aqui.
 
 ### O que cada PR entregou
 
-| PR | Decisão | Teste que falha no código anterior |
-| --- | --- | --- |
+| PR                                                              | Decisão                                                                                                                                | Teste que falha no código anterior                                                                                                              |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | [#101](https://github.com/henrique-devel/ganso-market/pull/101) | D1 — `server-update` em três passos, `postgres` sem `--force-recreate`, `run --rm migrate` literal, `--no-deps` nos serviços de código | `test_server_update_target.py`: **4 de 6** falham; o assert que carrega a regressão devolve `[]` para a lista de serviços do `--force-recreate` |
-| [#102](https://github.com/henrique-devel/ganso-market/pull/102) | D2 — passo `paths` no job `deploy`, `fetch-depth: 0`, `deploy/deploy_paths.py` | sem o módulo, `FileNotFoundError` no import; com o módulo e o workflow antigo, **6 falhas + 1 erro** |
-| [#103](https://github.com/henrique-devel/ganso-market/pull/103) | D3 — `pool.on("error")` com `DB_POOL_CLIENT_ERROR` | `database.test.ts`: **5 de 6** falham, com `ERR_UNHANDLED_ERROR` e o `Error: terminating connection…` sendo lançado |
-| [#104](https://github.com/henrique-devel/ganso-market/pull/104) | D4.1 e D4.3 — espera do banco no boot; fila de retry das lacunas | `orchestrator.test.ts`: **10** falham (`waitForDatabase is not a function`, `createGapRetryQueue is not a function`) |
-| [#105](https://github.com/henrique-devel/ganso-market/pull/105) | D4.2 e D4.4 — lote com 1 retry; `failedSteps` e reagendamento em 10 min | **11** falham: 4 em `bookpipe.test.ts`, 7 em `retention.test.ts` |
+| [#102](https://github.com/henrique-devel/ganso-market/pull/102) | D2 — passo `paths` no job `deploy`, `fetch-depth: 0`, `deploy/deploy_paths.py`                                                         | sem o módulo, `FileNotFoundError` no import; com o módulo e o workflow antigo, **6 falhas + 1 erro**                                            |
+| [#103](https://github.com/henrique-devel/ganso-market/pull/103) | D3 — `pool.on("error")` com `DB_POOL_CLIENT_ERROR`                                                                                     | `database.test.ts`: **5 de 6** falham, com `ERR_UNHANDLED_ERROR` e o `Error: terminating connection…` sendo lançado                             |
+| [#104](https://github.com/henrique-devel/ganso-market/pull/104) | D4.1 e D4.3 — espera do banco no boot; fila de retry das lacunas                                                                       | `orchestrator.test.ts`: **10** falham (`waitForDatabase is not a function`, `createGapRetryQueue is not a function`)                            |
+| [#105](https://github.com/henrique-devel/ganso-market/pull/105) | D4.2 e D4.4 — lote com 1 retry; `failedSteps` e reagendamento em 10 min                                                                | **11** falham: 4 em `bookpipe.test.ts`, 7 em `retention.test.ts`                                                                                |
 
 `make verify` verde antes de cada PR (**1.598 testes** ao final, 71 skipped).
 
@@ -4532,14 +4552,14 @@ O merge `2afa6ad` (`docs/HANDOFF.md`, `docs/rfcs/RFC-020-…`,
 `prompts/roadmap/README.md`) é o aceite de D2, e é a única coisa desta RFC que não podia ser
 verificada antes de existir um merge só de texto.
 
-| Critério | Medido em 2026-09-07 01:26Z |
-| --- | --- |
-| Linha explícita no log | **`deploy=false: deploy pulado: só texto (3 arquivos)`** |
-| `Deploy production` | **success** — não `failure`, não `skipped` mudo |
-| `verify` e `integration` | rodaram, os dois em sucesso: o gatilho `on.push` segue intocado |
-| `.deploy/current-sha` | **`2ac761b…` inalterado** (o merge anterior, de código) |
+| Critério                         | Medido em 2026-09-07 01:26Z                                                |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| Linha explícita no log           | **`deploy=false: deploy pulado: só texto (3 arquivos)`**                   |
+| `Deploy production`              | **success** — não `failure`, não `skipped` mudo                            |
+| `verify` e `integration`         | rodaram, os dois em sucesso: o gatilho `on.push` segue intocado            |
+| `.deploy/current-sha`            | **`2ac761b…` inalterado** (o merge anterior, de código)                    |
 | Novo backup em `.deploy/backups` | **nenhum** — o último é `20260907T010639Z`, do deploy de código das 01:06Z |
-| Login da chave restrita | **zero** |
+| Login da chave restrita          | **zero**                                                                   |
 
 A prova do login é um contraste, não uma ausência. Entre 01:20 e 01:30Z o `journalctl
 _COMM=sshd` aceitou **6** conexões, todas com a **mesma** fingerprint —
@@ -4557,15 +4577,15 @@ Com isso os **seis** critérios de aceite da RFC-020 estão medidos em produçã
 Cinco deploys de código e dois merges de texto, com o servidor contando os dois lados da mesma
 história:
 
-| Evento | Login da chave restrita | Backup em `.deploy/backups` | postgres `Created` |
-| --- | --- | --- | --- |
-| #101 D1 | 00:26:14Z | `20260907T002616Z` | `00:11:02.045Z` |
-| #102 D2 | 00:36:10Z | `20260907T003612Z` | `00:11:02.045Z` |
-| #103 D3 | 00:52:15Z | `20260907T005217Z` | `00:11:02.045Z` |
-| #104 D4a | 01:02:16Z | `20260907T010218Z` | `00:11:02.045Z` |
-| #105 D4b | 01:06:36Z | `20260907T010639Z` | `00:11:02.045Z` |
-| #106 docs | **nenhum** | **nenhum** | `00:11:02.045Z` |
-| #107 docs | **nenhum** | **nenhum** | `00:11:02.045Z` |
+| Evento    | Login da chave restrita | Backup em `.deploy/backups` | postgres `Created` |
+| --------- | ----------------------- | --------------------------- | ------------------ |
+| #101 D1   | 00:26:14Z               | `20260907T002616Z`          | `00:11:02.045Z`    |
+| #102 D2   | 00:36:10Z               | `20260907T003612Z`          | `00:11:02.045Z`    |
+| #103 D3   | 00:52:15Z               | `20260907T005217Z`          | `00:11:02.045Z`    |
+| #104 D4a  | 01:02:16Z               | `20260907T010218Z`          | `00:11:02.045Z`    |
+| #105 D4b  | 01:06:36Z               | `20260907T010639Z`          | `00:11:02.045Z`    |
+| #106 docs | **nenhum**              | **nenhum**                  | `00:11:02.045Z`    |
+| #107 docs | **nenhum**              | **nenhum**                  | `00:11:02.045Z`    |
 
 Cinco deploys, cinco logins, cinco backups, e um `Created` que não se moveu em nenhum deles.
 Dois merges de texto, zero logins, zero backups.
@@ -4580,3 +4600,182 @@ quem ler a linha depois vai comparar os dois números, e a diferença tem dono.
 Sobrevivência final, 30 min depois do último deploy: dez containers `Up`, três `healthy`,
 `RestartCount` **0** nos cinco workers de perfil, os **seis** em `2ac761b`, e o recorder
 gravando 14.366 deltas por minuto.
+
+## SESSÃO 2026-09-07 (2) — RFC-022: os três defeitos do funil, medidos de novo e corrigidos
+
+**Estado: os três PRs estão ABERTOS e nenhum foi mergeado nem deployado.** O merge foi
+recusado ao agente no meio da sessão (permissão bloqueada no ambiente), então tudo abaixo é
+código com teste verde e regressão provada, mais números re-medidos em produção **antes** do
+código — e nada de aceite em produção, porque o passo 3 (rebuild de profile) nunca rodou.
+Quem retomar: mergear #109, depois #110, depois #111 (o #111 tem base no #109), esperar o CD,
+conferir a correção no disco de `/opt/ganso-market` e só então rebuildar.
+
+| PR                                                              | Escopo                                        | Rebuild que falta                                | Estado               |
+| --------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ | -------------------- |
+| [#109](https://github.com/henrique-devel/ganso-market/pull/109) | D1 — ponte por `received_at`                  | `polymarket-paper`                               | aberto, CI verde     |
+| [#110](https://github.com/henrique-devel/ganso-market/pull/110) | D2 + D3 — graça do runtime, rotação por causa | `polymarket-paper` **e** `polymarket-resolution` | aberto               |
+| [#111](https://github.com/henrique-devel/ganso-market/pull/111) | D4-A — saída vira venda passiva               | `polymarket-paper`                               | aberto, base no #109 |
+
+### RE-MEDIÇÃO: as sete premissas, conferidas às 18:51Z de 2026-09-07
+
+Kill switch **desarmado** (`engaged = f`, `rearmed_at` 2026-09-06 23:03:10.474Z). Containers
+em `2ac761b`. `PAPER_BOOT` 01:07:20.145Z. Nenhuma premissa caiu, e quatro ficaram piores.
+
+| Premissa                         | RFC (02–03/09)                                           | Medido 07/09                                                 | Veredito         |
+| -------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------ | ---------------- |
+| `BRIDGE_TICK`                    | `considered 0, aged_out 36–39`                           | `considered 0, **aged_out 86**`, a cada 30 s                 | confirmada, pior |
+| Lag `received_at − decision_ts`  | p50 12,9 / p90 20,6 / max 33,3 s                         | **p50 17,15 / p90 27,31 / max 42,36 s** (n = 94)             | confirmada, pior |
+| Aceites acima de 30 s de lag     | não medido                                               | **5 de 94** — 4 em 03/09, 1 em 06/09                         | fato novo        |
+| Aceites → ordem                  | 44:8 (corte A) vs 45:37 (corte B), **não reconciliados** | **94 aceitas, 8 com ordem, 86 sem**                          | reconciliada     |
+| Cancelamentos pós-#52            | 5 `NOT_READY` + 2 `MISMATCH`, 0 `LAGGING`                | idêntico                                                     | confirmada       |
+| `age_ms` nos cancelamentos       | ausente                                                  | **ausente em 100 %** (`NOT_READY` grava só `{"generation"}`) | confirmada       |
+| Rotação em processo              | 02/09 15:01Z                                             | **07/09 15:27:29.311Z**, container no ar desde 01:07         | confirmada       |
+| `started_at` rescrito na rotação | inferência de código                                     | `started_at = 15:27:38.927Z` contra `PAPER_BOOT` 01:07:20    | confirmada       |
+| Saídas                           | 242 `EXIT ACCEPTED`, 0 com ordem                         | **293, 0 com ordem**, 16 nas últimas 24 h                    | confirmada       |
+
+**A reconciliação do corte A vs corte B.** A RFC pedia "UMA consulta datada". A retenção de
+`portfolio_decisions` começa em **2026-09-01 11:22:09.501Z**, ou seja, o corte
+`received_at >= '2026-09-01'` e o corte "tudo o que está retido" devolvem **o mesmo número**:
+94 aceitas, 8 com ordem, 86 sem. A diferença de 1 aceita entre os dois cortes da RFC era
+diferença de **instante de medição**, não de critério — e não é mais recuperável, porque as
+linhas de 30–31/08 que davam 44 já saíram pela poda.
+
+**Nenhuma condição de parada disparou.** A da ponte exigia `aged_out = 0` **e**
+`considered > 0` no HEAD; o medido é `aged_out = 86` e `considered = 0`.
+
+**Um fato que reordena a leitura, e que não é desta RFC.** A última `ENTRY ACCEPTED` retida é
+de **2026-09-06 12:32:22.611Z** — 30 h antes desta medição — contra 20.451 `ENTRY REJECTED`
+nas últimas 24 h. O kill switch está desarmado desde 06/09 23:03Z e **nenhum aceite de entrada
+aconteceu desde então**. Isso confirma a leitura da sessão de 06/09: o gargalo é cobertura de
+modelo e de snapshot (RFC-024), não a ponte. O PR-1 conserta o que a ponte perde **quando**
+houver aceite; ele não produz aceite. As saídas, ao contrário, estão vivas: 16 nas últimas
+24 h, a última às 18:14:15Z, sobre uma posição aberta de **12,09 shares**.
+
+### P1–P3, respondidas
+
+**P2 e P3: aprovadas na recomendação**, sem ambiguidade, e implementadas como tal.
+
+**P1 estava registrada de duas formas que se contradizem.** A linha 4003 deste arquivo diz
+_"Aprovadas na recomendação: saída fica como **sinal** (D4-B, só rótulo no painel, zero código
+na ponte)"_. Mas a coluna "Recomendação" da P1 na RFC-022 é **D4-A**, e "sinal / só rótulo no
+painel / zero código na ponte" é **literalmente o texto da coluna "Se recusada"**. O preâmbulo
+dizia recomendação e o texto dizia o oposto dela. A seção "APROVAÇÃO DAS RFC-020…029" até
+avisa que a forma da coluna varia entre RFCs e que a RFC-022 tem coluna "Recomendação" — o
+que torna a leitura literal do preâmbulo D4-A.
+
+A contradição foi levada ao proprietário nesta sessão, com o fato que a torna consequente
+(existe posição aberta de 12,09 shares agora, com `EXIT ACCEPTED` disparando nela), e ele
+decidiu **D4-A — ordem**. O PR #111 é D4-A. A linha 4003 continua como está, porque é registro
+histórico; esta seção é a que vale para a P1.
+
+### O que cada PR faz, e por que assim
+
+**PR #109 — D1.** A ponte media frescor por `decision_ts`, que é quando o _motor_ decidiu. O
+ciclo do portfólio grava mercado a mercado, e as duas fases estão travadas: o tick único que
+poderia ver a linha sempre a via já expirada. Agora `received_at > now − 60 s`
+(`MAX_RECEIVED_AGE_MS`, **dois** ticks, porque `bridgeTickOnce` **pula** o tick cujo antecessor
+ainda roda) e `decision_ts > now − 90 s` (`MAX_DECISION_TS_AGE_MS`, teto absoluto para que um
+ciclo travado não despeje decisões velhas ao destravar). `MAX_BOOK_AGE_MS` intocado: a proteção
+econômica é o livro fresco mais a re-cotação de `decideOrderType`. E `aged_out` conta só
+`received_at > bootAt` — sem esse piso o contador é o backlog inteiro e **nenhuma correção
+poderia levá-lo a zero**, que é exatamente o que os 86 significavam.
+
+**PR #110 — D2 e D3.** A idade de uma falha de runtime **não pode ser lida do banco**:
+`markBooting` rescreve `started_at` E `updated_at` a cada rotação (e zera `failure_reason`), e
+`markFailed`/heartbeat/state tick rescrevem `updated_at`. No ciclo boot→falha→boot que produção
+roda de verdade, uma idade tirada de qualquer desses carimbos fica permanentemente abaixo dos
+180 s e a ordem **nunca** cancela — fail-open, condição de parada da própria RFC. A âncora é a
+observação do worker: primeiro instante em que ESTE processo viu ESTA ordem sob runtime falho,
+`Map<order_id, Date>` na memória, zerada no reinício. Debaixo dela, o teto duro de
+`ready_at IS NULL` por > 180 s, limpo só por um runtime que fica pronto e **nunca** por troca
+de geração. `MISSING`, `STOPPED`, `STALE` e `GRAPH_*` cancelam na hora.
+
+Sob geração divergente o runtime é necessariamente ready, leased, graph-fresh e em dia com
+todas as cabeças — a comparação de geração é o **último** teste de `resolutionRuntimeFailure`.
+Então a ordem **adota** a geração nova, mas só depois de a política re-autorizar o token: sem
+re-validação, sem adoção. Verificado em produção que `paper_orders` não tem trigger
+append-only (só `paper_ledger_events` tem). **Fills seguem estritos:** nenhuma das seis
+chamadas de `revalidateResolutionRuntimeForFill` ganhou graça, a adoção **retorna** em vez de
+seguir para o fill no mesmo tick, e o cancelamento pelo caminho de fill passou a carimbar
+`cancel_path: "risk_check_incomplete"` — os dois caminhos podem gravar `GENERATION_MISMATCH` e
+querem dizer coisas opostas.
+
+**PR #111 — D4-A.** Segundo seletor de `EXIT`, tamanho pela posição replayada do **ledger** (e
+não por `paper_positions`, que é projeção atualizada depois do fill), `conservativeBound`
+reutilizado para que a barra da venda seja `q_hi`, uma saída aberta por token, `HOLD` posterior
+não cancela. Plano medido em produção: `portfolio_decisions_kind_idx`, **0,113 ms**; a guarda
+de saída aberta, 0,050 ms; o `aged_out` com disjunção, 1,757 ms. **Nenhuma migration.**
+
+### Contagem de 7 dias de `RESOLUTION_GENERATION_ROTATED`: NÃO MEDIDA, e por quê
+
+O entregável pedia essa contagem. Ela **não existe e não podia existir nesta sessão**, por dois
+motivos independentes:
+
+1. **A D3 não está em produção.** O reason code `RESOLUTION_GENERATION_ROTATED` é criado pelo
+   PR #110, que não foi mergeado nem deployado. Contar 7 dias de um log que ainda não é escrito
+   seria inventar número.
+2. **O log do `polymarket-resolution` não retém 7 dias.** A linha mais antiga é de
+   **2026-09-07T01:07:24.891Z**, o boot do próprio container: 17,7 h, não 168 h. A retenção do
+   Docker anda com o container, e o container subiu no deploy do #105.
+
+O que **está** medido, como linha de base pré-deploy dessas 17,7 h: **1** `JOB_FAILED`, job
+`state_tick`, detalhe `RESOLUTION_MARKET_PARAM_VERSION_MISSING`; **2** `SCORES_RECOMPUTED` com
+`trigger: "boot"` (o boot do container e a rotação das 15:27); e a linha de
+`resolution_runtime_state` provando a rotação em processo. Ou seja: **1 rotação em processo em
+17,7 h**, causa nomeada, `failure_reason` que `markFailed` gravaria = `STATE_TICK_FAILED`.
+Quem deployar o #110 deve reabrir esta seção com a contagem real de 7 dias agrupada por
+`failure_reason`, e comparar com esse 1.
+
+Vale notar que o `RESOLUTION_MARKET_PARAM_VERSION_MISSING` de hoje é primo do
+`RESOLUTION_MARKET_METADATA_VERSION_MISSING` que o PR #61 eliminou — mesmo formato, coluna
+diferente. A RFC-022 D3 diz explicitamente que corrigir as causas fica para quando houver
+contagem; esta é a primeira linha dela.
+
+### Aceite em produção: o que ainda falta, e o que já se sabe que não vai medir
+
+Nenhum critério de aceite foi medido, porque nenhum PR foi deployado. Dois deles têm um
+problema **anterior** ao deploy, e quem retomar precisa saber antes de olhar a consulta:
+
+- **"≥ 80 % das `ENTRY ACCEPTED` com `paper_order_id` em 7 dias"** tem denominador zero hoje. A
+  última entrada aceita é de 06/09 12:32Z e o motor está gerando só `REJECTED` (20.451 em
+  24 h). Enquanto a cobertura não voltar (RFC-024), esse critério não é falsificável: 0 de 0 não
+  é 80 % nem é reprovação. Medir `aged_out ≈ 0` **é** possível e imediato — é o número que os 86
+  de hoje devem virar assim que o `polymarket-paper` for reconstruído.
+- **"0 cancelamentos `NOT_READY`/`MISMATCH` com `age_ms < 180000`"** também depende de haver
+  ordem aberta, e o livro tem 1 posição e 0 ordens abertas. A parte falsificável hoje é a
+  segunda metade: **toda** linha desses motivos gravada pós-deploy tem de trazer `age_ms` não
+  nulo. As 9 linhas históricas (6 `NOT_READY` + 3 `MISMATCH`) não trazem, e é por isso que a
+  consulta de aceite precisa filtrar por `created_at > deploy` — senão ela lê NULL das linhas
+  velhas e "passa" por vazio.
+- **Saídas (D4-A)** é o único critério com fluxo vivo para medir: 16 `EXIT ACCEPTED` nas últimas
+  24 h e uma posição de 12,09 shares esperando. Depois do rebuild, toda `EXIT ACCEPTED` fresca
+  com posição deve ter `paper_order_id` ou um `BRIDGE_DECISION_SKIPPED` com motivo.
+
+### Testes: cada regressão vista falhando no código anterior
+
+`make verify` **exit 0** nos três PRs. As suítes contra PostgreSQL real rodaram num banco
+recém-migrado (0001–0018) e **isoladas**, que é como `docs/test-results/` sempre as descreveu:
+rodar `bridge.pg` junto de `resolution/integration` no mesmo banco faz as duas se atropelarem
+pelo journal compartilhado (o `HEAD` intocado já falha 10 testes assim, antes de qualquer
+mudança desta sessão). Isoladas: `bridge.pg` 9/9, `resolution/integration` 22/22.
+
+| PR   | Teste                                          | Como falhava antes                                  |
+| ---- | ---------------------------------------------- | --------------------------------------------------- |
+| #109 | decidida 45 s atrás, logada 5 s atrás → ordem  | `expected '0' to be '1'` (PostgreSQL real)          |
+| #109 | `received_at` pré-boot fora de `aged_out`      | `expected 4 to be 5`                                |
+| #110 | adota geração nova com política autorizando    | `expected 'canceled' to be 'open'`                  |
+| #110 | política recusando → cancela                   | `expected 'MISMATCH' to be 'RESOLUTION_VETO'`       |
+| #110 | 60 s sob `ready = false` sobrevive             | `expected 'canceled' to be 'open'`                  |
+| #110 | **boot/falha a cada 20 s por 200 s → cancela** | `expected NaN to be >= 180000` (não havia `age_ms`) |
+| #110 | graça recomeça do boot do worker               | `expected 'canceled' to be 'open'`                  |
+| #110 | fill sob geração rotacionada segue recusado    | `expected undefined to be 'risk_check_incomplete'`  |
+| #110 | rotação logada com a causa                     | `expected [] to have a length of 1`                 |
+| #111 | `EXIT` com 8,11 shares → `SELL` 8,11 passiva   | `expected undefined to be 1` (PostgreSQL real)      |
+| #111 | segunda saída com ordem aberta é pulada        | `expected undefined to match object`                |
+
+Uma mudança de método vale registro, porque é ela que dá força ao teste unitário da ponte: o
+fake de `bridge.test.ts` passou a **aplicar** os limites que a store manda como parâmetro, em
+vez de devolver as linhas cruas. Antes, um cutoff derivado da constante errada — ou ligado ao
+placeholder errado — passaria; agora muda as linhas que o fake devolve. É a mesma lição do
+`overview.pg.test.ts` de 04/09, em que a suíte antiga concordava com o código contra a
+realidade.
