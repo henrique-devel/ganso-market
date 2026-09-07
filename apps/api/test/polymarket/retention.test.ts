@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryResult } from "../../src/database.js";
+import { createRetentionSupervisor } from "../../src/polymarket/orchestrator.js";
 import {
   createRetentionJob,
   DEFAULT_BUDGET_BYTES,
@@ -2202,5 +2203,183 @@ describe("retention job", () => {
     );
     expect(failure).toBeDefined();
     expect(failure).toContain("canceling statement due to statement timeout");
+  });
+});
+
+describe("retention run reports its own failures (RFC-020 D4.4)", () => {
+  it("counts a failed step instead of reporting a clean run", async () => {
+    // Before this, runOnce() returned the same shape whether every step
+    // succeeded or every step threw. The boots of 2026-09-02 logged 100
+    // RETENTION_STEP_FAILED and still looked clean to the caller.
+    const config: RetentionTableConfig = {
+      table: "polymarket_book_deltas",
+      ttlDays: 14,
+      quotaBytes: 12 * 1024 ** 3,
+      timeColumn: "received_at",
+      protected: false,
+      requiresSeriesCoverage: true,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        throw new Error("getaddrinfo EAI_AGAIN postgres");
+      }
+      throw new Error("getaddrinfo EAI_AGAIN postgres");
+    });
+
+    const report = await createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    }).runOnce();
+
+    expect(report.failedSteps).toBeGreaterThan(0);
+  });
+
+  it("reports zero failed steps on a clean run", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_paper_orders",
+      ttlDays: 90,
+      quotaBytes: 1024 ** 3,
+      timeColumn: "created_at",
+      protected: false,
+    };
+    const pool = fakePool((text) => {
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    const report = await createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    }).runOnce();
+
+    expect(report.failedSteps).toBe(0);
+  });
+
+  it("resets the count between runs", async () => {
+    const config: RetentionTableConfig = {
+      table: "polymarket_paper_orders",
+      ttlDays: 90,
+      quotaBytes: 1024 ** 3,
+      timeColumn: "created_at",
+      protected: false,
+    };
+    let broken = true;
+    const pool = fakePool((text) => {
+      if (broken) {
+        throw new Error("EAI_AGAIN postgres");
+      }
+      if (text.includes("pg_total_relation_size")) {
+        return { rows: [{ bytes: "1000", reltuples: "10" }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const job = createRetentionJob({
+      pool,
+      clock: () => NOW,
+      tables: [config],
+    });
+
+    const failed = await job.runOnce();
+    broken = false;
+    const clean = await job.runOnce();
+
+    expect(failed.failedSteps).toBeGreaterThan(0);
+    expect(clean.failedSteps).toBe(0);
+  });
+});
+
+describe("retention supervisor reschedules a failed boot run (RFC-020 D4.4)", () => {
+  it("arms one retry ten minutes out when a step failed", async () => {
+    const timers: { run: () => void; delayMs: number }[] = [];
+    const log = vi.fn();
+    const runOnce = vi.fn().mockResolvedValue({ failedSteps: 4 });
+    const supervisor = createRetentionSupervisor({
+      runOnce,
+      setTimer: (run, delayMs) => {
+        timers.push({ run, delayMs });
+        return timers.length;
+      },
+      log,
+    });
+
+    await supervisor.run();
+
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.delayMs).toBe(600_000);
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "RETENTION_RETRY_SCHEDULED",
+      expect.objectContaining({ failed_steps: 4, retry_in_ms: 600_000 }),
+    );
+  });
+
+  it("does not wait 24 h: the retry actually runs the job again", async () => {
+    const timers: { run: () => void }[] = [];
+    const runOnce = vi
+      .fn()
+      .mockResolvedValueOnce({ failedSteps: 2 })
+      .mockResolvedValue({ failedSteps: 0 });
+    const supervisor = createRetentionSupervisor({
+      runOnce,
+      setTimer: (run) => {
+        timers.push({ run });
+        return timers.length;
+      },
+      log: vi.fn(),
+    });
+
+    await supervisor.run();
+    expect(runOnce).toHaveBeenCalledTimes(1);
+    timers[0]?.run();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("arms nothing on a clean run", async () => {
+    const timers: unknown[] = [];
+    const supervisor = createRetentionSupervisor({
+      runOnce: vi.fn().mockResolvedValue({ failedSteps: 0 }),
+      setTimer: (run, delayMs) => {
+        timers.push({ run, delayMs });
+        return timers.length;
+      },
+      log: vi.fn(),
+    });
+
+    await supervisor.run();
+
+    expect(timers).toHaveLength(0);
+  });
+
+  it("is ONE retry, not a ten-minute loop", async () => {
+    const timers: { run: () => void }[] = [];
+    const log = vi.fn();
+    const supervisor = createRetentionSupervisor({
+      runOnce: vi.fn().mockResolvedValue({ failedSteps: 1 }),
+      setTimer: (run) => {
+        timers.push({ run });
+        return timers.length;
+      },
+      log,
+    });
+
+    await supervisor.run();
+    timers[0]?.run();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(timers).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "RETENTION_RUN_DEGRADED",
+      expect.objectContaining({ retry_scheduled: false }),
+    );
   });
 });

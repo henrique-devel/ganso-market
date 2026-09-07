@@ -140,6 +140,15 @@ export interface BookPipeline {
 }
 
 interface QueuedDelta {
+  /**
+   * RFC-020 D4.2: how many times this delta has already been in a failed
+   * INSERT. A batch that fails once goes back to the head of the queue; the
+   * second failure is a definitive loss and opens a gap. One retry, not a
+   * loop: the pool that just refused the write is usually gone for seconds,
+   * and an unbounded retry would trade lost deltas for a queue that never
+   * drains.
+   */
+  attempts: number;
   readonly tokenId: string;
   readonly side: "BUY" | "SELL";
   readonly price: string;
@@ -248,6 +257,7 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
     label: string,
     text: string,
     params: readonly unknown[],
+    count = 1,
   ): Promise<boolean> {
     // A persistence failure must never take the pipeline down (regression of
     // the source_ts crash-loop, commit 350d3c9): log, count, keep going.
@@ -262,6 +272,9 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
         "polymarket_bookpipe_persist_failed",
         {
           insert: label,
+          // The number of rows the failed statement carried: without it the
+          // log says a write failed and nothing about how much was at stake.
+          count,
           error_name: error instanceof Error ? error.name : "UnknownError",
         },
       );
@@ -361,16 +374,37 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
          (token_id, side, price, size, source_ts, received_at, ingest_lag_ms)
        VALUES ${values.join(",")}`,
       params,
+      batch.length,
     );
     if (ok) {
       deltasFlushed += batch.length;
-    } else {
-      // The batch is lost definitively (no retry): after the persist-failure
-      // log above, hand the caller the exact window so a gap gets recorded.
+      return;
+    }
+    // RFC-020 D4.2. The batch used to be lost on the first failure, and the
+    // measured cost of that was ~4.4k and ~5.6k deltas per deploy: 32 batches
+    // per outage window, none of them retried. One retry covers the case that
+    // actually happens — a pool that refused the write while the database was
+    // restarting and answers again a moment later.
+    const returning = batch.filter((delta) => delta.attempts === 0);
+    const doomed = batch.filter((delta) => delta.attempts > 0);
+    if (returning.length > 0) {
+      for (const delta of returning) {
+        delta.attempts += 1;
+      }
+      // Back to the HEAD: these are the oldest deltas in flight, and putting
+      // them anywhere else would reorder the stream.
+      deltaQueue = [...returning, ...deltaQueue];
+      enforceQueueMax();
+    }
+    if (doomed.length > 0) {
+      // Second failure: definitively lost. Hand the caller the exact window so
+      // a gap gets recorded.
+      const firstDoomed = doomed[0] ?? first;
+      const lastDoomed = doomed[doomed.length - 1] ?? last;
       deps.onPersistFailure?.({
-        count: batch.length,
-        firstReceivedAt: first.receivedAt,
-        lastReceivedAt: last.receivedAt,
+        count: doomed.length,
+        firstReceivedAt: firstDoomed.receivedAt,
+        lastReceivedAt: lastDoomed.receivedAt,
       });
     }
   }
@@ -380,24 +414,33 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
     return flushChain;
   }
 
+  function enforceQueueMax(): void {
+    if (deltaQueue.length <= deltaQueueMax) {
+      return;
+    }
+    // Backpressure: shed the OLDEST entries and tell the caller exactly how
+    // many were lost so a data gap (source 'internal') gets recorded. A
+    // returned batch sits at the head, so it is the first thing shed if the
+    // outage outlasts the queue — which is the honest trade: the gap is
+    // recorded either way, and the newest deltas are the ones still worth
+    // keeping.
+    const excess = deltaQueue.length - deltaQueueMax;
+    deltaQueue.splice(0, excess);
+    overflowDropped += excess;
+    logJson(
+      "warn",
+      "BOOKPIPE_DELTA_OVERFLOW",
+      "polymarket_bookpipe_delta_overflow",
+      {
+        dropped: excess,
+      },
+    );
+    deps.onOverflow?.(excess);
+  }
+
   function enqueueDelta(delta: QueuedDelta): Promise<void> {
     deltaQueue.push(delta);
-    if (deltaQueue.length > deltaQueueMax) {
-      // Backpressure: shed the OLDEST entries and tell the caller exactly how
-      // many were lost so a data gap (source 'internal') gets recorded.
-      const excess = deltaQueue.length - deltaQueueMax;
-      deltaQueue.splice(0, excess);
-      overflowDropped += excess;
-      logJson(
-        "warn",
-        "BOOKPIPE_DELTA_OVERFLOW",
-        "polymarket_bookpipe_delta_overflow",
-        {
-          dropped: excess,
-        },
-      );
-      deps.onOverflow?.(excess);
-    }
+    enforceQueueMax();
     if (deltaQueue.length >= deltaBatchSize) {
       return scheduleFlush();
     }
@@ -621,6 +664,7 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
     const touched = new Set<string>();
     for (const change of msg.price_changes) {
       await enqueueDelta({
+        attempts: 0,
         tokenId: change.asset_id,
         side: change.side,
         price: change.price,

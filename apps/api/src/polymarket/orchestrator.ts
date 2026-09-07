@@ -48,6 +48,7 @@ export interface OrchestratorIntervals {
   readonly macroReleaseMs?: number;
   readonly statusMs?: number;
   readonly gapRetryMs?: number;
+  readonly retentionRetryMs?: number;
 }
 
 export interface OrchestratorDeps {
@@ -346,6 +347,80 @@ export function createGapRetryQueue(deps: GapRetryQueueDeps): GapRetryQueue {
     size(): number {
       return pending.size;
     },
+  };
+}
+
+/**
+ * RFC-020 D4.4. The retention job runs at boot and then every 24 h. When the
+ * boot run lost the race with postgres — 100 RETENTION_STEP_FAILED
+ * (`EAI_AGAIN postgres`) across the 14:47 and 14:51 boots of 2026-09-02 — the
+ * run still returned a report and the next attempt was a full day away. With
+ * the recorder restarting on every deploy, "a day away" in practice meant
+ * never: the daily prune was unreachable, which is how polymarket_book_deltas
+ * reached 6.3x its quota.
+ *
+ * One retry, ten minutes out, and only one: the retry does not re-arm, so a
+ * database that stays down produces a single extra attempt rather than a
+ * ten-minute loop that outlives the outage.
+ */
+export interface RetentionSupervisorDeps {
+  readonly runOnce: () => Promise<{ readonly failedSteps: number }>;
+  readonly setTimer: (run: () => void, delayMs: number) => unknown;
+  readonly retryDelayMs?: number;
+  readonly log?: (
+    level: "info" | "warn" | "error",
+    reasonCode: string,
+    extra?: Record<string, unknown>,
+  ) => void;
+}
+
+export interface RetentionSupervisor {
+  /** The scheduled job body: runs retention and arms one retry if it needs it. */
+  run(): Promise<void>;
+}
+
+export function createRetentionSupervisor(
+  deps: RetentionSupervisorDeps,
+): RetentionSupervisor {
+  const log = deps.log ?? logJson;
+  const retryDelayMs = deps.retryDelayMs ?? 600_000;
+  let retryArmed = false;
+
+  async function runRetention(isRetry: boolean): Promise<void> {
+    const report = await deps.runOnce();
+    if (report.failedSteps === 0) {
+      if (isRetry) {
+        log("info", "RETENTION_RETRY_OK", {});
+      }
+      return;
+    }
+    if (isRetry || retryArmed) {
+      // A retry that also fails waits for the daily interval: one extra
+      // attempt, not a loop.
+      log("warn", "RETENTION_RUN_DEGRADED", {
+        failed_steps: report.failedSteps,
+        retry_scheduled: false,
+      });
+      return;
+    }
+    retryArmed = true;
+    log("warn", "RETENTION_RETRY_SCHEDULED", {
+      failed_steps: report.failedSteps,
+      retry_in_ms: retryDelayMs,
+    });
+    deps.setTimer(() => {
+      void runRetention(true).catch((error: unknown) => {
+        log("error", "JOB_FAILED", {
+          job: "retention_retry",
+          error_name: error instanceof Error ? error.name : "UnknownError",
+          detail: error instanceof Error ? error.message : undefined,
+        });
+      });
+    }, retryDelayMs);
+  }
+
+  return {
+    run: () => runRetention(false),
   };
 }
 
@@ -706,11 +781,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       schedule("reconcile", intervals.reconcileMs ?? 3_600_000, async () => {
         await reconciler.reconcileOnce(tokenIds);
       });
+      const retentionSupervisor = createRetentionSupervisor({
+        runOnce: () => retention.runOnce(),
+        setTimer: (run, delayMs) => {
+          const timer = setTimeout(run, delayMs);
+          timers.push(timer);
+          return timer;
+        },
+        ...(intervals.retentionRetryMs === undefined
+          ? {}
+          : { retryDelayMs: intervals.retentionRetryMs }),
+        log: logJson,
+      });
       schedule(
         "retention",
         intervals.retentionMs ?? 86_400_000,
         async () => {
-          await retention.runOnce();
+          await retentionSupervisor.run();
         },
         { runAtBoot: true },
       );
