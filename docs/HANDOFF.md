@@ -1,6 +1,20 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-05 — **As RFC-020…029 foram aprovadas em bloco**, cada
+- Última atualização: 2026-09-06 — **O proprietário rearmou o kill switch às 23:03:10.474Z, e a
+  vazão NÃO voltou.** Em 16 min: **211 decisões, 0 aceites, 0 ordens, 0 fills**. O gargalo nunca
+  foi só o switch — 77 % das recusas são `DATA_STALE` (76) e `BOOK_STALE` (64), e nenhuma delas
+  é o feed morrendo: o feed está vivo (8–13 mil deltas/min, último a 0,15 s, 130 tokens, **zero
+  lacunas abertas**), e os 50 tokens dos 25 mercados `BOOK_STALE` têm delta nos últimos 10 min —
+  igual ao grupo de controle que passou. Separadas as causas: **`DATA_STALE` é a estimativa fora
+  do TTL de 5 min** (a mais velha tem **20 h 21 min**; o estado de resolução não pode ser a
+  causa — o mais velho tem 8 min contra TTL de 1 h), e **`BOOK_STALE` é o snapshot passando dos
+  30 s** enquanto os deltas continuam chegando. **É cobertura de modelo e de snapshot, não
+  kill switch nem `PARAM_CHANGE`** (só 5 das 211). **Dois achados de brinde:** o `/overview`
+  respondeu **200 vinte e quatro vezes** — o aceite do PR-0 (a) que faltava —, e os **12 × 500**
+  restantes têm causa NOVA e diferente, lida em segundos graças ao campo `message` do PR #93:
+  `canceling statement due to statement timeout` (3) e `Query read timeout` (9). É o
+  `statement_timeout` de 1 s, exatamente a RFC-023. Ver a seção "SESSÃO 2026-09-06" ao final.
+- 2026-09-05 — **As RFC-020…029 foram aprovadas em bloco**, cada
   decisão na recomendação ou padrão da sua própria tabela; registro item a item na seção
   "APROVAÇÃO DAS RFC-020…029", que é onde os prompts do roadmap mandam procurar. **Isso inclui
   a D3 da RFC-021** — rearme automático condicionado do kill switch, `M` = 15 ticks —,
@@ -3935,12 +3949,12 @@ que é onde os prompts do roadmap mandam procurar (`grep RFC-0xx`). Isso resolve
 
 **Continuam abertas — e nenhuma delas um PR executa:**
 
-1. **Rearmar o kill switch** (engatado desde 2026-09-02 02:21:05Z; medido ainda engatado em
-   04/09). Ato exclusivo do proprietário no painel. Sem isso, **vazão zero** — e é hoje o único
-   gargalo do bloco: o livro já fecha posição (PR #94) e o consumidor já é cego para a sombra
-   (PR #96). **RFC-021 P2.** A D3 aprovada **não** substitui este clique enquanto não estiver em
-   produção; quando estiver, o engate atual passa a ser elegível ao rearme automático (é
-   `RECORDER_STALE`) e a vazão volta sem clique.
+1. ~~**Rearmar o kill switch** (RFC-021 P2).~~ **FEITO em 2026-09-06 23:03:10.474Z pelo
+   proprietário.** E a medição das 16 h seguintes desmentiu a expectativa: **a vazão não voltou**
+   — 211 decisões, 0 aceites, 0 ordens. O gargalo não era só o switch. Ver a seção
+   "SESSÃO 2026-09-06": 77 % das recusas são frescor, e frescor aqui é **cobertura do estimador**
+   (estimativa de até 20 h contra TTL de 5 min) e **cadência do snapshot** (até 2 min 38 s contra
+   TTL de 30 s) — não o feed, que está vivo, e não o `PARAM_CHANGE`, que responde por 5 de 211.
 2. Operar a menos de 30 min do fim (regra B4).
 3. Macro (mercados de MUDANÇA de juros contra modelo de NÍVEL).
 4. Retirar a `crypto_updown_gbm@1.0.0`.
@@ -4217,7 +4231,8 @@ que não vem.
 3. **O G2 agora acumula**, e o que o limita é vazão: com o kill switch engatado desde 02/09
    02:21Z não há ordem nova, logo não há fill, logo não há fechamento novo nem amostra de G4.
    **A decisão nº 1 (rearme) é agora o único gargalo do bloco** — e agora com o livro capaz de
-   fechar posição e com o consumidor cego para a sombra.
+   fechar posição e com o consumidor cego para a sombra. **(Corrigido em 06/09: o rearme
+   aconteceu e a vazão NÃO voltou. O gargalo não era o switch — ver "SESSÃO 2026-09-06".)**
 
 ### PR-c em produção — verificado (merge `b381f21`, rebuild às 23:17:31Z)
 
@@ -4251,3 +4266,117 @@ antes de ler a estimativa, e o mesmo padrão já existia antes do deploy (6 linh
 ou migration, não limpa `frozen_markets_json` e não rearma o kill switch. Enquanto
 `fundamental_models` não tiver uma linha `active`, `estimate_source='MODEL'` fica em 0 **por
 construção** — que é a invariante da RFC-010 funcionando, não um efeito colateral.
+
+
+## SESSÃO 2026-09-06 — o kill switch foi rearmado, e o funil não se moveu
+
+O proprietário rearmou o kill switch do paper às **2026-09-06 23:03:10.474Z** (6.º
+`kill_switch_rearmed` do ledger; `engaged = f`, engate anterior de 02/09 02:21:05Z, portanto
+**4 dias e 21 h parado**). Esta seção é só medição em produção, read-only. **Nenhum código,
+deploy ou escrita nesta sessão.**
+
+### O resultado, e ele contraria a expectativa
+
+| Janela: 23:03:10 → 23:19:15Z (16 min) | Número |
+| --- | --- |
+| Decisões gravadas | **211** |
+| Aceites | **0** |
+| Ordens criadas | **0** (o total segue 18, todas de 01/09) |
+| Fills | **0** |
+| Eventos de ledger novos | só `mark` |
+
+**Tirar o switch do caminho não destravou nada.** Ele era vinculante — com ele engatado nada
+passava —, mas a fila atrás dele é mais longa do que o roadmap supunha.
+
+### Onde as 211 morrem, e por que não é o que se esperava
+
+| Reason code | Decisões | Mercados |
+| --- | --- | --- |
+| `DATA_STALE` | 76 | 34 |
+| `BOOK_STALE` | 64 | 25 |
+| `LOWER_BOUND_BELOW_COSTS` | 19 | — |
+| `PRICE_OUT_OF_BAND` | 15 | — |
+| `PORTFOLIO_CIRCUIT_BREAKER` | **5** | — |
+
+**77 % é frescor**, e o disjuntor — o suspeito da RFC-025 — responde por **5 de 211**.
+
+### E frescor aqui NÃO é o feed morrendo. O controle fecha a questão.
+
+Primeira hipótese, a da parada silenciosa por token ([[silent-delta-feed-stall]]): **refutada
+pela medição.** O feed está vivo no agregado *e* nos mercados recusados:
+
+| | Valor |
+| --- | --- |
+| Último delta | **0,15 s** atrás |
+| Deltas/min (8 min) | **7.632 – 13.170** |
+| Tokens distintos com delta em 1 h | **130** |
+| Lacunas `polymarket_data_gaps` abertas | **0** |
+| Tokens dos 25 mercados `BOOK_STALE` com delta em 10 min | **50 de 50** |
+| Controle — tokens dos mercados que PASSARAM do book | **16 de 16** |
+
+Os recusados recebem dado com a mesma atualidade dos que passam. O reason code não estava
+descrevendo o que parecia.
+
+### Separando as causas (o mesmo defeito de nomenclatura do `TOKEN_NOT_IN_MARKET`)
+
+`engine.ts:365–392` esconde três testes sob dois códigos, e um deles ainda mistura ausência com
+idade — `BOOK_STALE` dispara também quando `bookAgeMs === null`. TTLs vigentes:
+`bookMaxAgeMs` 30 s, `estimateMaxAgeMs` 300 s, `resolutionMaxAgeMs` 3.600 s.
+
+- **`DATA_STALE` é a ESTIMATIVA, não o estado de resolução.** Nos 35 mercados: nenhum sem
+  estimativa e nenhum sem estado de resolução, mas a estimativa mais velha tem **20 h 21 min**
+  (contra TTL de 5 min) e o estado de resolução mais velho tem **8 min 12 s** — folgadamente
+  dentro do TTL de 1 h, logo **esse ramo não pode ter disparado para nenhum**. É **cobertura de
+  modelo**: o estimador não está produzindo para esses mercados. Área da RFC-019/RFC-024.
+- **`BOOK_STALE` é o SNAPSHOT, não o delta.** Os 50 tokens têm snapshot; o mais novo com
+  **0,12 s** e o mais velho com **2 min 38 s**, contra TTL de 30 s. O passe de snapshot não
+  cobre todos os tokens dentro da janela enquanto o stream de deltas segue cheio.
+
+**Consequência para o calendário:** o primeiro fill não depende de rearme nem do
+`PARAM_CHANGE`. Depende de **cobertura do estimador** e de **cadência do snapshot** — o que
+reordena o bloco a favor da RFC-024 (descoberta e livro garantido) e da cobertura da
+`crypto_updown_gbm@1.1.0`, e tira a RFC-022 (fase da ponte) do caminho crítico: sem aceite não
+há o que a ponte perca.
+
+### Dois achados de brinde no log da API
+
+**1. O aceite que faltava do PR-0 (a) chegou.** Ao abrir o painel, o proprietário produziu
+**24 × `"route":"/polymarket/overview","status_code":200`**. Era a única parte do aceite do
+PR #93 que exigia sessão dele. **Fechado.** Zero ocorrências de `occurred_at` no log da `api` e
+no do `postgres`: o defeito da coluna não voltou.
+
+**2. E o mesmo endpoint tem um defeito NOVO, de causa diferente — visível em segundos por causa
+do `message` que o PR #93 acrescentou.** Na mesma janela houve **12 × 500**, e a mensagem diz
+qual é:
+
+| Mensagem | Vezes |
+| --- | --- |
+| `canceling statement due to statement timeout` | 3 |
+| `Query read timeout` | 9 |
+
+É o **`statement_timeout` de 1 s da API** ([[api-statement-timeout-1s]]) contra um agregador que
+lê ~20 consultas e o tamanho de 74 tabelas — 24 sucessos contra 12 estouros, isto é,
+**intermitente por cache frio**, não quebrado. Nenhum outro endpoint deu 500 na janela.
+**Isto é exatamente a RFC-023**, agora com as strings exatas e um denominador real. E é o
+argumento do campo `message` se pagando: o defeito anterior levou **três dias** para ser
+nomeado; este levou **um comando**.
+
+### O resíduo: um mercado congelado que não existe mais
+
+`frozen_markets_json` ainda contém `0x71b5721c…` — o mercado que **resolveu e fechou em 04/09
+21:23:56.924Z** (`shares` 0, PnL −4,6227). O congelamento é resto do defeito da liquidação
+(PR #94) e sobreviveu ao mercado que ele protegia: referência que durou mais que o referente.
+Inócuo hoje (o mercado está resolvido), mas é ruído que deve sair junto com a próxima limpeza —
+**e não foi tocado aqui**, porque limpar `frozen_markets_json` não é ato desta sessão.
+
+### `PARAM_CHANGE` segue nascendo
+
+**39 abertos**, dos quais **3 abriram depois do rearme** — o defeito da RFC-025 está vivo e
+continua congelando mercado novo. Ele não é o gargalo de hoje (5 recusas em 211), mas continua
+sendo o que impede o universo rápido de existir.
+
+### Saúde
+
+Zero erros em `polymarket-portfolio`, `-paper`, `-estimator`, `-resolution`, `-recorder` e
+`market-engine`. Os 12 da `api` são os 500 do `/overview` acima. O switch **seguia desarmado**
+ao fim da janela.

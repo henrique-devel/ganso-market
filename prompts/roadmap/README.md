@@ -59,6 +59,16 @@ por símbolo e feed spot (031), universo estimado e higiene do modelo (032), cat
 > à mão do switch engatado desde 02/09 02:21:05Z (RFC-021 P2); nenhum PR o faz, e a D3 só o
 > destrava quando for a produção. Aprovação de RFC não é ordem de implementar já: a ordem abaixo
 > continua valendo e todo prompt re-mede antes de codar.
+>
+> **2026-09-06 — o kill switch foi rearmado (23:03:10.474Z) e a vazão NÃO voltou:** 211
+> decisões, **0 aceites, 0 ordens** em 16 min. O gargalo não era o switch. 77 % das recusas são
+> frescor, e a medição separa a causa: **`DATA_STALE` = estimativa fora do TTL de 5 min**
+> (a mais velha com 20 h) e **`BOOK_STALE` = snapshot passando dos 30 s**, com o feed vivo
+> (8–13 mil deltas/min, zero lacunas) e `PARAM_CHANGE` respondendo por só 5 de 211. Isso
+> **reordena a prioridade** a favor da **RFC-024** (descoberta e livro dos rápidos) e da
+> cobertura da `crypto_updown_gbm@1.1.0`, e tira a **RFC-022** (fase da ponte) do caminho
+> crítico — sem aceite não há o que a ponte perca. Números em `docs/HANDOFF.md`, seção
+> "SESSÃO 2026-09-06".
 
 | # | Prompt | Tipo | Depende de | Status |
 |---|--------|------|------------|--------|
