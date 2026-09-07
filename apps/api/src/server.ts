@@ -9,8 +9,10 @@ import { registerPortfolioRoutes } from "./polymarket/portfolio/api.js";
 import { registerResolutionRoutes } from "./polymarket/resolution/api.js";
 import { registerOverviewRoutes } from "./polymarket/overview.js";
 import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
+import { budgetedPool, budgetForRoute, runWithBudget } from "./budgets.js";
 import type { AuthService } from "./auth/service.js";
-import type { ApiConfig } from "./config.js";
+import type { ApiConfig, StatementBudgets } from "./config.js";
+import { requireStatementBudgets } from "./config.js";
 import type { DatabasePool, ReadinessProbe } from "./database.js";
 import {
   POSTGRES_UNAVAILABLE,
@@ -22,8 +24,25 @@ import { createLoggerOptions, type LogSink } from "./logger.js";
 const CORRELATION_ID_HEADER = "x-correlation-id";
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+/**
+ * RFC-023 D1. What `onRoute` stamps on every route, and what the budget hook
+ * reads back. Declared here so the coverage test can import the key name
+ * instead of matching a string literal in two places.
+ */
+export const STATEMENT_TIMEOUT_CONFIG_KEY = "statementTimeoutMs";
+
+export interface RouteBudgetConfig {
+  readonly [STATEMENT_TIMEOUT_CONFIG_KEY]?: number;
+}
+
 export interface BuildApiOptions {
   readonly config: ApiConfig;
+  /**
+   * RFC-023 D1. Defaults to `requireStatementBudgets(config)`, which throws
+   * QUERY_TIMEOUT_UNDECLARED when the config does not declare them. Passed
+   * explicitly only by tests that build an app without a config file.
+   */
+  readonly statementBudgets?: StatementBudgets;
   readonly readinessProbe: ReadinessProbe;
   readonly authService?: AuthService;
   readonly pool?: DatabasePool;
@@ -51,6 +70,43 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
         ? incoming
         : randomUUID();
     },
+  });
+
+  // RFC-023 D1. Two halves of one guarantee.
+  //
+  // `onRoute` stamps every route with the budget it will run on, taken from
+  // `services.api.statement_timeout_ms` in config: the route's own entry, or
+  // `default`. Doing it here rather than at each `app.get` call means a route
+  // added tomorrow cannot forget, and `routeOptions.config` becomes the single
+  // place to read the answer from — including from the coverage test, which
+  // fails if a route published by the Nginx perimeter has no entry of its own.
+  //
+  // The `onRequest` hook then puts that number where the pool wrapper can find
+  // it, for GET only. A POST carries no budget, so its queries stay outside
+  // READ ONLY and keep writing.
+  const budgets =
+    options.statementBudgets ?? requireStatementBudgets(options.config);
+
+  app.addHook("onRoute", (routeOptions) => {
+    const url = routeOptions.url;
+    const existing = routeOptions.config as RouteBudgetConfig | undefined;
+    routeOptions.config = {
+      ...existing,
+      [STATEMENT_TIMEOUT_CONFIG_KEY]: budgetForRoute(budgets, url),
+    };
+  });
+
+  app.addHook("onRequest", (request, _reply, done) => {
+    if (request.method !== "GET") {
+      done();
+      return;
+    }
+    const routeConfig = request.routeOptions.config as
+      RouteBudgetConfig | undefined;
+    runWithBudget(
+      routeConfig?.[STATEMENT_TIMEOUT_CONFIG_KEY] ?? budgets.defaultMs,
+      done,
+    );
   });
 
   let readinessChecksTotal = 0;
@@ -179,28 +235,34 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
   }
 
   if (options.authService !== undefined && options.pool !== undefined) {
+    // RFC-023 D1. The read modules get the budgeted wrapper, not the raw pool:
+    // every query they run inside a GET becomes its own READ ONLY transaction
+    // with the route's `SET LOCAL statement_timeout`. The auth service and the
+    // readiness probe keep the raw pool — the first writes sessions, and the
+    // second must answer even when a budget would not apply.
+    const readPool = budgetedPool(options.pool);
     registerPolymarketReadRoutes(app, {
-      pool: options.pool,
+      pool: readPool,
       authService: options.authService,
     });
     // RFC-010 read + lifecycle surface. Read-only over the estimate tables,
     // plus the operator's manual promote/demote of a model. No route here
     // creates an order, a signal or touches a wallet.
     registerFundamentalRoutes(app, {
-      pool: options.pool,
+      pool: readPool,
       authService: options.authService,
     });
     // RFC-011 read surface: microstructure feature snapshots. Simulation
     // scope only; stamped with the mandatory banner.
     registerPaperRoutes(app, {
-      pool: options.pool,
+      pool: readPool,
       authService: options.authService,
     });
     // RFC-012 read surface: resolution-risk scores, the logical graph, its
     // violations, sanity vetoes and layer divergences, plus the curated-edge
     // POST. Analytics only — no route here creates an order or a signal.
     registerResolutionRoutes(app, {
-      pool: options.pool,
+      pool: readPool,
       authService: options.authService,
     });
     // RFC-013 read surface: the opportunity panel, exposures, limits, the
@@ -208,14 +270,14 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     // manual state controls (halt/resume) live here too and are deliberately
     // NOT published by the Nginx perimeter.
     registerPortfolioRoutes(app, {
-      pool: options.pool,
+      pool: readPool,
       authService: options.authService,
     });
     // RFC-015 operator dashboard: the overview aggregate and the event feed.
     // Read-only over the tables the surfaces above already expose; it exists so
     // the panel makes one call per cycle instead of eleven.
     registerOverviewRoutes(app, {
-      pool: options.pool,
+      pool: readPool,
       authService: options.authService,
       clock,
     });

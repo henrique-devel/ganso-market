@@ -78,6 +78,7 @@ describe("database pool client errors", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
     createDatabasePool(config(), {
       applicationName: "ganso-market-polymarket-recorder",
+      queryTimeoutMs: 30_000,
     });
     const pool = pools[0];
     expect(pool).toBeDefined();
@@ -96,6 +97,7 @@ describe("database pool client errors", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     createDatabasePool(config(), {
       applicationName: "ganso-market-polymarket-recorder",
+      queryTimeoutMs: 30_000,
     });
 
     pools[0]?.emit(
@@ -120,7 +122,7 @@ describe("database pool client errors", () => {
 
   it("names the api when no application name is given", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    createDatabasePool(config());
+    createDatabasePool(config(), { queryTimeoutMs: 30_000 });
 
     pools[0]?.emit("error", new Error("connection terminated unexpectedly"));
 
@@ -133,7 +135,7 @@ describe("database pool client errors", () => {
 
   it("handles a non-Error payload without throwing", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    createDatabasePool(config());
+    createDatabasePool(config(), { queryTimeoutMs: 30_000 });
 
     expect(() => {
       pools[0]?.emit("error", "socket hang up");
@@ -142,7 +144,7 @@ describe("database pool client errors", () => {
 
   it("registers exactly one error listener and never reconnects by hand", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    createDatabasePool(config());
+    createDatabasePool(config(), { queryTimeoutMs: 30_000 });
     const pool = pools[0];
 
     expect(pool?.listenerCount("error")).toBe(1);
@@ -151,5 +153,122 @@ describe("database pool client errors", () => {
     expect(pool?.connect).not.toHaveBeenCalled();
     expect(pool?.end).not.toHaveBeenCalled();
     expect(pool?.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("RFC-023 D1 — createDatabasePool budget", () => {
+  beforeEach(() => {
+    pools.length = 0;
+    vi.restoreAllMocks();
+  });
+
+  it("refuses to build a pool without an explicit queryTimeoutMs", () => {
+    // Fail-closed. The fallback that used to sit here silently gave every API
+    // query the 1 s *connection* timeout from config/runtime.json.
+    expect(() => createDatabasePool(config())).toThrow(
+      expect.objectContaining({
+        reasonCode: "QUERY_TIMEOUT_UNDECLARED",
+      }) as Error,
+    );
+  });
+
+  it("puts the declared budget on both pg timeouts, not the connect timeout", () => {
+    createDatabasePool(config(), { queryTimeoutMs: 4_000 });
+    const created = pools[0];
+    expect(created?.config.query_timeout).toBe(4_000);
+    expect(created?.config.statement_timeout).toBe(4_000);
+    // The connect timeout stays its own thing — which is the whole point.
+    expect(created?.config.connectionTimeoutMillis).toBe(2_000);
+  });
+});
+
+describe("RFC-023 D1 — readOnly", () => {
+  beforeEach(() => {
+    pools.length = 0;
+    vi.restoreAllMocks();
+  });
+
+  /** A client that records every statement it is asked to run. */
+  function recordingClient() {
+    const statements: string[] = [];
+    return {
+      statements,
+      client: {
+        query: vi.fn((text: string) => {
+          statements.push(text);
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }),
+        release: vi.fn(),
+      },
+    };
+  }
+
+  it("issues BEGIN, READ ONLY and the budget before the caller's query", async () => {
+    const { statements, client } = recordingClient();
+    const pool = createDatabasePool(config(), { queryTimeoutMs: 4_000 });
+    pools[0]?.connect.mockResolvedValue(client);
+
+    await pool.readOnly(1_500, (tx) => tx.query("SELECT 1"));
+
+    expect(statements).toEqual([
+      "BEGIN",
+      "SET TRANSACTION READ ONLY",
+      "SET LOCAL statement_timeout = 1500",
+      "SELECT 1",
+      "COMMIT",
+    ]);
+  });
+
+  it("never issues either SET outside a transaction", async () => {
+    // A session-level SET would leak onto whichever pooled connection ran it
+    // and silently not onto the next one.
+    const { statements, client } = recordingClient();
+    const pool = createDatabasePool(config(), { queryTimeoutMs: 4_000 });
+    pools[0]?.connect.mockResolvedValue(client);
+
+    await pool.readOnly(500, (tx) => tx.query("SELECT 1"));
+
+    const begin = statements.indexOf("BEGIN");
+    const commit = statements.indexOf("COMMIT");
+    for (const set of [
+      "SET TRANSACTION READ ONLY",
+      "SET LOCAL statement_timeout = 500",
+    ]) {
+      const at = statements.indexOf(set);
+      expect(at, set).toBeGreaterThan(begin);
+      expect(at, set).toBeLessThan(commit);
+    }
+    // And nothing reached the pool directly.
+    expect(pools[0]?.query).not.toHaveBeenCalled();
+  });
+
+  it("rolls back when the body throws, so a failed read releases the client", async () => {
+    const { statements, client } = recordingClient();
+    const pool = createDatabasePool(config(), { queryTimeoutMs: 4_000 });
+    pools[0]?.connect.mockResolvedValue(client);
+
+    await expect(
+      pool.readOnly(500, () =>
+        Promise.reject(new Error("canceling statement")),
+      ),
+    ).rejects.toThrow("canceling statement");
+
+    expect(statements).toContain("ROLLBACK");
+    expect(client.release).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a budget that is not a positive integer", async () => {
+    const pool = createDatabasePool(config(), { queryTimeoutMs: 4_000 });
+    // The value is interpolated into SQL (SET takes no bind parameter), so the
+    // guard is the type check, not the caller's good manners.
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(
+        pool.readOnly(bad, (tx) => tx.query("SELECT 1")),
+      ).rejects.toThrow(
+        expect.objectContaining({
+          reasonCode: "QUERY_TIMEOUT_INVALID",
+        }) as Error,
+      );
+    }
   });
 });

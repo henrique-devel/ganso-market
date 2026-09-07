@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { DatabasePool, QueryResult } from "../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../src/database.js";
 import { RETENTION_TABLES } from "../../src/polymarket/retention.js";
 import {
   registerPolymarketReadRoutes,
@@ -39,6 +43,13 @@ function fakePool(respond: Responder = () => []): {
     },
     transaction() {
       return Promise.reject(new Error("unused"));
+    },
+    // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+    readOnly<T>(
+      _statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      return run(this as unknown as SqlExecutor);
     },
     end() {
       return Promise.resolve();
@@ -867,6 +878,13 @@ describe("failure handling", () => {
       },
       transaction() {
         return Promise.reject(new Error("unused"));
+      },
+      // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+      readOnly<T>(
+        _statementTimeoutMs: number,
+        run: (tx: SqlExecutor) => Promise<T>,
+      ): Promise<T> {
+        return run(this as unknown as SqlExecutor);
       },
       end() {
         return Promise.resolve();

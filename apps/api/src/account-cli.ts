@@ -53,7 +53,8 @@ async function run(): Promise<void> {
   const passwordHash = await hashPassword(password);
 
   const config = await loadConfig();
-  const pool = createDatabasePool(config);
+  // RFC-023 D1: declared, not inherited — one account row plus an argon2 hash; nothing here scans a table.
+  const pool = createDatabasePool(config, { queryTimeoutMs: 10_000 });
   try {
     if (command === "create") {
       const existing = await pool.query("SELECT 1 FROM auth_accounts LIMIT 1");

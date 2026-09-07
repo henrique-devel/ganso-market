@@ -69,6 +69,13 @@ describe("postgres recorder store", () => {
       transaction() {
         return Promise.reject(new Error("unused"));
       },
+      // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+      readOnly<T>(
+        _statementTimeoutMs: number,
+        run: (tx: SqlExecutor) => Promise<T>,
+      ): Promise<T> {
+        return run(this as unknown as SqlExecutor);
+      },
       end() {
         return Promise.resolve();
       },
@@ -108,6 +115,13 @@ describe("postgres recorder store", () => {
       async transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
         transactions += 1;
         return run({ query });
+      },
+      // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+      readOnly<T>(
+        _statementTimeoutMs: number,
+        run: (tx: SqlExecutor) => Promise<T>,
+      ): Promise<T> {
+        return run(this as unknown as SqlExecutor);
       },
       end: () => Promise.resolve(),
     };

@@ -82,9 +82,63 @@ Teste que dá ao aceite um denominador: um vitest lê `infra/nginx/nginx.conf`, 
 
 A sessão executora roda `EXPLAIN (ANALYZE, BUFFERS)` em produção (psql direto, leitura) para cada consulta dos 11 endpoints, com parâmetros reais, duas vezes: quente e **a frio na janela pós-deploy** (premissa a RE-MEDIR: o `server-update` recriou o postgres em `docs/HANDOFF.md:533`, mas o README do roadmap não o garante — confirmar com `docker inspect ganso-market-postgres-1 --format '{{.State.StartedAt}}'` logo após o CD; se o postgres **não** foi recriado, o frio se produz com `docker compose restart postgres` autorizado pelo proprietário). O resultado entra nesta seção, uma linha por consulta: `rota | consulta | quente ms | frio ms | plano (1 linha) | orçamento`. Sem a tabela preenchida o PR 1 não fecha.
 
-| Rota | Consulta | Quente | Frio | Plano | Orçamento |
+**Como foi medido (2026-09-07).** `EXPLAIN (ANALYZE, BUFFERS)` em psql direto no
+`ganso-market-postgres-1`, com parâmetros reais. **Quente** = pior de 8 passadas
+consecutivas (proxy de p95). **Frio** = primeira passada depois de
+`docker compose restart postgres` às 22:59:17Z — autorizado pelo proprietário
+nesta sessão, porque a premissa "o merge recria o Postgres" **caiu**: a RFC-020
+parou a recriação e o container tinha 21 h de pé (`StartedAt`
+`2026-09-07T01:08:01Z`). Sem o restart não existe mais janela fria após o CD.
+As quatro consultas marcadas `frio*` foram medidas na primeira execução delas,
+já com o cache aquecido por ~10 min de tráfego de produção — são um piso, não o
+frio verdadeiro; um segundo restart não foi feito.
+
+Regra de orçamento (D1): `max(3 × quente, 1,5 × frio)`, arredondado para cima em
+múltiplos de 500, limitado ao teto de 4 000. O orçamento é por **rota**, e vale
+o pior caso entre as consultas dela.
+
+| Rota | Consulta | Quente | Frio | Plano (1 linha) | Orçamento |
 | --- | --- | --- | --- | --- | --- |
-| a preencher pela sessão | | | | | |
+| `= /overview` | modelo (`MAX(decision_ts)` + 3 counts) | 293,8 ms | **799,5 ms** | Parallel Index Only Scan de `fundamental_estimates_category_idx` inteiro — 1 084 410 entradas para um `MAX` | **1500** |
+| `= /overview` | coleta (gaps + universo) | 303,2 ms | 699,7 ms | Seq Scan em `polymarket_data_gaps` (5 812) + Sort/Unique de `polymarket_universe_log` (23 677) | ↑ |
+| `= /overview` | gates `DISTINCT ON` | 2,9 ms | 4,1 ms | Seq Scan + Unique sobre `portfolio_gate_measurements` (2 028) | ↑ |
+| `= /overview` | tamanhos de tabela (77) | 73,1 ms | 15,7 ms* | Nested Loop sobre `pg_class`/`pg_stats` | ↑ |
+| `= /overview` | estado, breakers, kill switch, resolução, paper | ≤ 6,5 ms | ≤ 0,5 ms | Index/Seq Scan de uma linha ou de contagens pequenas | ↑ |
+| `= /events` | 8 fontes, keyset por id | 1,3 ms | 92,9 ms | Index Scan pela PK de cada fonte, `LIMIT 200` | **500** |
+| `= /data-quality` | percentis de `ingest_lag_ms` (1 h) | **889,7 ms** | **2601,7 ms** | Bitmap Heap Scan de 244 134 linhas de `polymarket_book_deltas` + sort para `percentile_cont` | **4000** |
+| `= /data-quality` | gaps por fonte (24 h) | 3,1 ms | 91,1 ms | HashAggregate sobre `polymarket_data_gaps` | ↑ |
+| `= /paper/performance` | ledger inteiro + posições + markouts | 8,0 ms | 101,1 ms | Seq Scan de `paper_ledger_events` ordenado pela PK | **500** |
+| `^~ /opportunities` | loose index scan (RFC-015 §10) | 56,5 ms | 397,7 ms | Recursive Union + LATERAL, 343 lookups em `portfolio_panel_snapshots_latest_idx` | **1000** |
+| `^~ /portfolio` | `binding_constraint` das decisões (24 h) | 114,4 ms | 489,9 ms* | GroupAggregate sobre `portfolio_decisions` na janela de 24 h | **1000** |
+| `^~ /portfolio` | exposições, estado, eventos | ≤ 0,2 ms | ≤ 0,2 ms | Index Scan com `LIMIT` | ↑ |
+| `^~ /gates` | `DISTINCT ON (gate)` + relatórios | 2,9 ms | 4,1 ms | Seq Scan + Unique; keyset por `measurement_id` na paginação | **500** |
+| `^~ /decisions` | lista `LIMIT 500` + detalhe por id | 6,5 ms | 91,4 ms | Index Only Scan Backward pela PK (o índice do #76) | **500** |
+| `^~ /resolution-risk` | lista + pipeline + detalhe + histórico | 24,6 ms | 5,5 ms | Sort de 200 linhas de `resolution_market_state`; detalhe por `condition_id` indexado | **500** |
+| `^~ /graph` | arestas + nós + violações + vetos | 2,3 ms | 87,3 ms | Seq Scan de `graph_edges` (`revoked_at IS NULL`) e join com `polymarket_markets` | **500** |
+| `= /paper/kill-switch/rearm` | — (POST) | — | — | fora do executor `readOnly`: é a única escrita publicada | **sem orçamento** |
+
+Teto `4 000`, padrão `2 000`, 22 rotas GET declaradas em
+`config/runtime.json` — as 11 locations do Nginx cobrem 22 rotas Fastify, porque
+seis delas são prefixos `^~`.
+
+**Duas consultas ficam registradas como dívida, e nenhuma delas vira aumento de
+orçamento** (a D1 proíbe subir o teto para uma consulta caber):
+
+1. `/data-quality` fica **exatamente no teto de 4 000 ms**, sem folga. O custo é
+   o `percentile_cont` sobre 244 mil linhas por hora de `polymarket_book_deltas`:
+   o índice `polymarket_book_deltas_received_at_idx` acha a janela, mas
+   `ingest_lag_ms` não está nele, então cada linha vira acesso ao heap. Um índice
+   `(received_at) INCLUDE (ingest_lag_ms)` tornaria a leitura index-only — é
+   **migration**, e por isso fica **registrado e parado aqui**, não feito.
+2. `/overview` gasta 290 dos seus 300 ms quentes num único `MAX(decision_ts)`
+   sobre `fundamental_estimates`. Nenhum dos seis índices da tabela tem
+   `decision_ts` como primeira coluna, então o `MAX` varre 1 084 410 entradas em
+   vez de fazer um backward scan. Também é **migration**, também fica registrado
+   e parado. A tabela cresce todo dia: hoje cabe em 1 500 ms, e é a primeira que
+   estoura quando não couber.
+
+Medições completas por consulta, incluindo as passadas descartadas, ficam no
+corpo desta seção; os planos acima são a linha de topo de cada `EXPLAIN`.
 
 ### D3 — Toda falha diz o que falhou: `error_message` e `pg_code`
 

@@ -105,7 +105,8 @@ async function run(): Promise<void> {
   const hyperparamsRaw = command === "register" ? await readStdin() : "";
 
   const config = await loadConfig();
-  const pool = createDatabasePool(config);
+  // RFC-023 D1: declared, not inherited — reads the same estimate tables as the 60 s model workers.
+  const pool = createDatabasePool(config, { queryTimeoutMs: 60_000 });
   try {
     if (command === "list") {
       const categoryFilter = flagValue(argv, "--category");

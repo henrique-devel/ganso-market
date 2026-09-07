@@ -42,12 +42,36 @@ export class SecretValue {
   }
 }
 
+/**
+ * RFC-023 D1. The per-endpoint statement budget, declared in
+ * `services.api.statement_timeout_ms`.
+ *
+ * `ceiling` is what the pool itself gets, and no route may exceed it. It stays
+ * at least 1 s below the edge's `proxy_read_timeout` (`infra/nginx/nginx.conf`)
+ * so that a query which runs long is killed by PostgreSQL — which says
+ * `pg_code 57014` in the log — and not by Nginx, which says 504 and nothing
+ * else. `routes` maps a Fastify route url to its own budget; a route absent
+ * from the map runs on `default`.
+ */
+export interface StatementBudgets {
+  readonly ceilingMs: number;
+  readonly defaultMs: number;
+  readonly routes: Readonly<Record<string, number>>;
+}
+
 export interface ApiConfig {
   readonly executionMode: ExecutionMode;
   readonly server: Readonly<{
     host: string;
     port: number;
   }>;
+  /**
+   * Absent when `services.api.statement_timeout_ms` is not configured. It is
+   * deliberately NOT defaulted: an implicit query budget is the defect this
+   * RFC removes, so the absence has to be loud. `requireStatementBudgets`
+   * turns it into QUERY_TIMEOUT_UNDECLARED at boot.
+   */
+  readonly statementBudgets?: StatementBudgets;
   readonly database: Readonly<{
     host: string;
     port: number;
@@ -80,6 +104,7 @@ interface PartialNonSecretConfig {
     host?: string;
     port?: number;
   };
+  statementBudgets?: StatementBudgets;
   database?: {
     host?: string;
     port?: number;
@@ -153,6 +178,9 @@ export async function loadConfig(
       ...DEFAULTS.server,
       ...nonSecret.server,
     }),
+    ...(nonSecret.statementBudgets === undefined
+      ? {}
+      : { statementBudgets: nonSecret.statementBudgets }),
     database: Object.freeze({
       ...DEFAULTS.database,
       ...nonSecret.database,
@@ -252,7 +280,9 @@ function parseNonSecretConfig(text: string): PartialNonSecretConfig {
       );
       rejectUnknownKeys(
         service,
-        ["bind_address", "port"],
+        serviceName === "api"
+          ? ["bind_address", "port", "statement_timeout_ms"]
+          : ["bind_address", "port"],
         `services.${serviceName}`,
       );
       const parsedService: NonNullable<PartialNonSecretConfig["server"]> = {};
@@ -272,6 +302,11 @@ function parseNonSecretConfig(text: string): PartialNonSecretConfig {
       }
       if (serviceName === "api") {
         result.server = parsedService;
+        if (service.statement_timeout_ms !== undefined) {
+          result.statementBudgets = parseStatementBudgets(
+            service.statement_timeout_ms,
+          );
+        }
       }
     }
   }
@@ -290,6 +325,81 @@ function parseNonSecretConfig(text: string): PartialNonSecretConfig {
   }
 
   return result;
+}
+
+/**
+ * RFC-023 D1. `100 <= ms <= ceiling <= STATEMENT_TIMEOUT_CEILING_MAX` for the
+ * default and for every route, checked here rather than at the call site: a
+ * budget that is only enforced where it is read is a budget that a new call
+ * site forgets.
+ *
+ * The hard maximum exists because the edge gives up first otherwise. With
+ * `proxy_read_timeout 5s` in `infra/nginx/nginx.conf`, a budget above 4 s can
+ * never be the thing that fires — Nginx returns a 504 with no reason code and
+ * the query keeps running on the server, which is exactly the mute failure
+ * this RFC is about. Raising this constant without raising the edge first is
+ * therefore not a tuning decision, it is a regression.
+ */
+export const STATEMENT_TIMEOUT_CEILING_MAX = 4_000;
+const STATEMENT_TIMEOUT_MIN = 100;
+
+function parseStatementBudgets(value: unknown): StatementBudgets {
+  const field = "services.api.statement_timeout_ms";
+  const object = requireObject(value, field);
+  rejectUnknownKeys(object, ["ceiling", "default", "routes"], field);
+
+  const ceilingMs = parseInteger(
+    object.ceiling,
+    `${field}.ceiling`,
+    STATEMENT_TIMEOUT_MIN,
+    STATEMENT_TIMEOUT_CEILING_MAX,
+  );
+  const defaultMs = parseInteger(
+    object.default,
+    `${field}.default`,
+    STATEMENT_TIMEOUT_MIN,
+    ceilingMs,
+  );
+
+  const routes: Record<string, number> = {};
+  if (object.routes !== undefined) {
+    const rawRoutes = requireObject(object.routes, `${field}.routes`);
+    for (const [route, budget] of Object.entries(rawRoutes)) {
+      if (!route.startsWith("/")) {
+        throw new ConfigError(
+          "CONFIG_FIELD_INVALID",
+          `${field}.routes key must be a route path starting with "/"`,
+        );
+      }
+      routes[route] = parseInteger(
+        budget,
+        `${field}.routes.${route}`,
+        STATEMENT_TIMEOUT_MIN,
+        ceilingMs,
+      );
+    }
+  }
+
+  return Object.freeze({
+    ceilingMs,
+    defaultMs,
+    routes: Object.freeze(routes),
+  });
+}
+
+/**
+ * RFC-023 D1, fail-closed. The API and the CLIs do not start without a
+ * declared budget: an inherited one — the connect timeout, for four months —
+ * is what made every panel query share a 1 s ceiling nobody had chosen.
+ */
+export function requireStatementBudgets(config: ApiConfig): StatementBudgets {
+  if (config.statementBudgets === undefined) {
+    throw new ConfigError(
+      "QUERY_TIMEOUT_UNDECLARED",
+      "services.api.statement_timeout_ms must declare ceiling and default",
+    );
+  }
+  return config.statementBudgets;
 }
 
 function parseSecretFile(text: string): string {

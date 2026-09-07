@@ -16,7 +16,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import type { DatabasePool, QueryResult } from "../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../src/database.js";
 import { registerOverviewRoutes } from "../../src/polymarket/overview.js";
 
 type Row = Record<string, unknown>;
@@ -53,6 +57,20 @@ function pool(): DatabasePool {
     },
     transaction() {
       return Promise.reject(new Error("unused: the panel is GET-only"));
+    },
+    // RFC-023 D1. This adapter talks to a real PostgreSQL, so the guard is
+    // the production one: both statements, inside the transaction.
+    async readOnly<T>(
+      statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      return this.transaction(async (tx) => {
+        await tx.query("SET TRANSACTION READ ONLY");
+        await tx.query(
+          `SET LOCAL statement_timeout = ${String(statementTimeoutMs)}`,
+        );
+        return run(tx);
+      });
     },
     end() {
       return Promise.resolve();

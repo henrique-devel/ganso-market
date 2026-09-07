@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import type { DatabasePool, QueryResult } from "../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../src/database.js";
 import type { MarketSocket } from "../../src/polymarket/recorder.js";
 import {
   buildRtdsSubscribeFrame,
@@ -44,6 +48,13 @@ class FakeRtdsDb implements DatabasePool {
 
   public transaction<T>(): Promise<T> {
     return Promise.reject(new Error("unused"));
+  }
+
+  public readOnly<T>(
+    _statementTimeoutMs: number,
+    run: (tx: SqlExecutor) => Promise<T>,
+  ): Promise<T> {
+    return run(this);
   }
 
   public end(): Promise<void> {

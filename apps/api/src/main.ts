@@ -1,6 +1,6 @@
 import { createAuthService } from "./auth/service.js";
 import { createPostgresAuthStore } from "./auth/store.js";
-import { loadConfig, ConfigError } from "./config.js";
+import { loadConfig, requireStatementBudgets, ConfigError } from "./config.js";
 import {
   createDatabasePool,
   createPostgresReadinessProbe,
@@ -10,12 +10,20 @@ import { buildApi } from "./server.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
-  const pool = createDatabasePool(config);
+  // RFC-023 D1. The pool gets the ceiling, not a per-route budget: it is the
+  // last line, the value no route may exceed. Each route then narrows it with
+  // `SET LOCAL statement_timeout` inside its own transaction. Without the
+  // config key this throws QUERY_TIMEOUT_UNDECLARED and the API does not boot.
+  const statementBudgets = requireStatementBudgets(config);
+  const pool = createDatabasePool(config, {
+    queryTimeoutMs: statementBudgets.ceilingMs,
+  });
   const authService = createAuthService({
     store: createPostgresAuthStore(pool),
   });
   const app = buildApi({
     config,
+    statementBudgets,
     readinessProbe: createPostgresReadinessProbe(pool),
     authService,
     pool,
