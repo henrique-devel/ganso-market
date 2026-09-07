@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import type { DatabasePool } from "./database.js";
+import { errorFields } from "./errors.js";
 
 type ShutdownReason = NodeJS.Signals | "STARTUP_FAILURE";
 
@@ -82,8 +83,7 @@ export function createGracefulShutdown(
         app.log.error(
           {
             reason_code: "SHUTDOWN_FAILED",
-            error_name:
-              closeError instanceof Error ? closeError.name : "UnknownError",
+            ...errorFields(closeError),
           },
           "shutdown_failed",
         );

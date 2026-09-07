@@ -27,6 +27,7 @@ import {
   RETENTION_TABLES,
   measureTableSizes,
 } from "./retention.js";
+import { errorFields } from "../errors.js";
 
 type Row = Record<string, unknown>;
 
@@ -76,12 +77,20 @@ function logOverviewError(reasonCode: string, error: unknown): void {
       service: "api",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
-      // The error's own message, and nothing else: `error_name` alone said
-      // only "error" for the 500 that ran from 01/09 to 04/09, and the one
-      // string that named the cause — `column "occurred_at" does not exist` —
-      // was reachable only from the PostgreSQL log. Never a request payload.
-      message: error instanceof Error ? error.message : null,
+      // RFC-023 D3. The PR-0 hotfix put the error's message in `message`,
+      // which is a constant label everywhere else in this codebase; a reader
+      // grepping for one field would have found the other. It moves to
+      // `error_message`, where `paper/runner.ts` and `portfolio/runner.ts`
+      // already put it, and `message` goes back to being a label — derived
+      // from the reason code, because this function serves both
+      // OVERVIEW_API_FAILED and EVENTS_API_FAILED.
+      //
+      // The reason the field exists at all: `error_name` alone said only
+      // "error" for the 500 that ran from 01/09 to 04/09, and the one string
+      // that named the cause — `column "occurred_at" does not exist` — was
+      // reachable only from the PostgreSQL log. Never a request payload.
+      message: reasonCode.toLowerCase(),
+      ...errorFields(error),
     })}\n`,
   );
 }

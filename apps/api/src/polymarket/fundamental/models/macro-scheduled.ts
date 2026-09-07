@@ -42,6 +42,7 @@ import type {
 } from "../features.js";
 import { normalCdf } from "../stats.js";
 import type { DataRefs, ModelResult } from "../types.js";
+import { errorFields } from "../../../errors.js";
 
 export const MACRO_MODEL_FAMILY = "macro_scheduled_consensus";
 export const MACRO_MODEL_VERSION = "1.0.0";
@@ -1356,7 +1357,7 @@ export function estimateMacroScheduled(input: MacroModelInput): ModelResult {
     evaluated = evaluate(input);
   } catch (error: unknown) {
     logLine("error", "MACRO_MODEL_FAILED", "macro_model_failed", {
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       event_key: input.spec.eventKey,
       variable: input.spec.variable,
     });

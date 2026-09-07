@@ -43,6 +43,7 @@ import type {
   FundamentalCategory,
   ModelResult,
 } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 export interface CategoryModelDescriptor {
   readonly category: FundamentalCategory;
@@ -259,7 +260,7 @@ export function runCategoryModel(input: RunModelInput): ModelResult {
         timestamp: new Date().toISOString(),
         reason_code: "MODEL_THREW",
         category: plan.category,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       })}\n`,
     );
     return { ok: false, reason: "MODEL_ERROR" };

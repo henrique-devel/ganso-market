@@ -1,6 +1,7 @@
 import type { DatabasePool } from "../database.js";
 import { comparePriceStrings } from "./book.js";
 import type { MarketSocket, MarketSocketFactory } from "./recorder.js";
+import { errorFields } from "../errors.js";
 
 // RFC-007 task 8: continuous recording of Polymarket RTDS crypto feeds
 // (Chainlink TWAP 30/60 that resolves the crypto markets, plus Binance spot).
@@ -392,7 +393,7 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
       );
     } catch (error: unknown) {
       logLine("error", "RTDS_GAP_PERSIST_FAILED", "rtds_gap_persist_failed", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
         cause,
       });
     }
@@ -433,7 +434,7 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
         // Never crash on persistence failures: the batch is lost, so record
         // it as a data gap and keep the socket alive.
         logLine("error", "RTDS_PERSIST_FAILED", "rtds_persist_failed", {
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           dropped: pending.length,
         });
         const startMs = Math.min(
@@ -471,7 +472,7 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
         );
       } catch (error: unknown) {
         logLine("error", "RTDS_1M_PERSIST_FAILED", "rtds_1m_persist_failed", {
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           feed: bucket.feed,
           symbol: bucket.symbol,
         });

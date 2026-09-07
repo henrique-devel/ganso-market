@@ -14,6 +14,7 @@ import {
   mul,
   parseScaled,
 } from "../fundamental/fixed.js";
+import { errorFields } from "../../errors.js";
 
 export type QueryPool = { query: SqlExecutor["query"] };
 
@@ -254,7 +255,7 @@ export async function markoutTick(
     } catch (error: unknown) {
       log("error", "PAPER_MARKOUT_FAILED", {
         fill_key: fillKey,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -346,7 +347,7 @@ export async function fillSamplerTick(
     } catch (error: unknown) {
       log("error", "PAPER_FILL_SAMPLER_FAILED", {
         token_id: tokenId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -407,7 +408,7 @@ export async function fillLabelerTick(
     } catch (error: unknown) {
       log("error", "PAPER_FILL_LABELER_FAILED", {
         token_id: tokenId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }

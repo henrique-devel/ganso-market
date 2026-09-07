@@ -35,6 +35,7 @@ import {
 } from "./ledger.js";
 import { validateOrder, type OrderDraft } from "./validator.js";
 import type { ResolutionAction } from "../resolution/types.js";
+import { errorFields } from "../../errors.js";
 
 export type PaperPool = Pick<SqlExecutor, "query"> &
   Partial<Pick<DatabasePool, "transaction">>;
@@ -1898,7 +1899,7 @@ export async function brokerTick(
       } catch (error: unknown) {
         log("error", "PAPER_RISK_CANCEL_RETRY_FAILED", {
           order_id: snapshot.orderId,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       }
       continue;
@@ -2189,7 +2190,7 @@ export async function brokerTick(
             log("error", "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER", {
               order_id: order.orderId,
               token_id: order.tokenId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
               order_canceled: false,
             });
             throw new ResolutionRiskCheckError(
@@ -2584,12 +2585,12 @@ export async function brokerTick(
       if (error instanceof ResolutionRiskCheckError) {
         log("error", error.logReason, {
           order_id: snapshot.orderId,
-          error_name: error.name,
+          ...errorFields(error),
         });
       }
       log("error", "PAPER_ORDER_TICK_FAILED", {
         order_id: snapshot.orderId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
       try {
         if (
@@ -2608,8 +2609,7 @@ export async function brokerTick(
       } catch (cancelError: unknown) {
         log("error", "PAPER_RISK_CANCEL_RETRY_FAILED", {
           order_id: snapshot.orderId,
-          error_name:
-            cancelError instanceof Error ? cancelError.name : "UnknownError",
+          ...errorFields(cancelError),
         });
       }
     }
@@ -2797,7 +2797,7 @@ export async function settlementTick(
     } catch (error: unknown) {
       log("error", "PAPER_SETTLEMENT_FAILED", {
         condition_id: conditionId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -2865,7 +2865,7 @@ export async function markTick(
     } catch (error: unknown) {
       log("error", "PAPER_MARK_FAILED", {
         token_id: tokenId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }

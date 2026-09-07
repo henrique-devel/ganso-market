@@ -12,6 +12,7 @@ import {
   measureTableSizes,
 } from "./retention.js";
 import type { PriceLevel } from "./types.js";
+import { errorFields } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // Contracts with the replay module (./replay.js, built separately). bookAt's
@@ -160,7 +161,7 @@ function logReadApiError(reasonCode: string, error: unknown): void {
       service: "polymarket-recorder",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       message: "polymarket_read_api_failed",
     })}\n`,
   );

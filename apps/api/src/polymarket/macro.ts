@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { SqlExecutor } from "../database.js";
+import { errorFields } from "../errors.js";
 
 // RFC-007 tasks 9/12: versioned official macro calendar (BLS/BEA/FOMC, UTC)
 // and official release values captured at publication time. Source failures
@@ -251,7 +252,7 @@ export function createCalendarSync(deps: CalendarSyncDeps): CalendarSync {
       } catch (error: unknown) {
         failing = true;
         deps.log("error", "MACRO_CALENDAR_SYNC_FAILED", {
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           trigger,
         });
       }
@@ -372,7 +373,7 @@ export function createReleaseCollector(
       return extractBlsValue(body, expectedYear, expectedPeriod);
     } catch (error: unknown) {
       logLine("warn", "MACRO_BLS_FETCH_FAILED", "macro_bls_fetch_failed", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
         series_id: seriesId,
       });
       return null;
@@ -479,7 +480,7 @@ export function createReleaseCollector(
         pending = result.rows;
       } catch (error: unknown) {
         logLine("error", "MACRO_POLL_FAILED", "macro_poll_failed", {
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
         return;
       }
@@ -489,7 +490,7 @@ export function createReleaseCollector(
         } catch (error: unknown) {
           // One bad event must not stop the rest of the pass (or the process).
           logLine("error", "MACRO_RELEASE_FAILED", "macro_release_failed", {
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             event_key: row.event_key,
           });
         }

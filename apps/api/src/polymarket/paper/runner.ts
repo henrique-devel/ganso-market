@@ -29,6 +29,7 @@ import {
   type WindowKind,
 } from "./features.js";
 import { computeAndStoreWindow, type QueryPool } from "./featurestore.js";
+import { errorFields } from "../../errors.js";
 
 const SERVICE = "polymarket-paper";
 
@@ -210,8 +211,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
     } catch (error: unknown) {
       // The heartbeat reports health; it never kills the process.
       logJson("error", "PAPER_HEARTBEAT_FAILED", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
-        error_message: error instanceof Error ? error.message : null,
+        ...errorFields(error),
       });
     } finally {
       probing = false;
@@ -318,8 +318,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
     } catch (error: unknown) {
       logJson("error", "JOB_FAILED", {
         job: "bridge",
-        error_name: error instanceof Error ? error.name : "UnknownError",
-        error_message: error instanceof Error ? error.message : null,
+        ...errorFields(error),
       });
     } finally {
       bridging = false;
@@ -354,8 +353,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
             logJson("error", "FEATURES_WINDOW_FAILED", {
               token_id: token.tokenId,
               window_kind: kind,
-              error_name: error instanceof Error ? error.name : "UnknownError",
-              error_message: error instanceof Error ? error.message : null,
+              ...errorFields(error),
             });
           }
         }
@@ -370,8 +368,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       }
     } catch (error: unknown) {
       logJson("error", "FEATURES_TICK_FAILED", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
-        error_message: error instanceof Error ? error.message : null,
+        ...errorFields(error),
       });
     } finally {
       computing = false;
@@ -418,8 +415,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         void brokerTick(pool, brokerDeps)
           .catch((error: unknown) => {
             logJson("error", "PAPER_BROKER_TICK_FAILED", {
-              error_name: error instanceof Error ? error.name : "UnknownError",
-              error_message: error instanceof Error ? error.message : null,
+              ...errorFields(error),
             });
           })
           .finally(() => {

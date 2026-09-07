@@ -354,9 +354,53 @@ describe("GET /polymarket/overview", () => {
       .map((raw) => JSON.parse(raw) as Record<string, unknown>)
       .find((entry) => entry["reason_code"] === "OVERVIEW_API_FAILED");
     expect(line).toBeDefined();
-    expect(line?.["message"]).toBe('column "occurred_at" does not exist');
+    // RFC-023 D3: the PR-0 hotfix wrote the message into `message`; it now
+    // lives in `error_message`, and `message` is a constant label again.
+    expect(line?.["error_message"]).toBe('column "occurred_at" does not exist');
+    expect(line?.["message"]).toBe("overview_api_failed");
     // The request never lands in the log line.
     expect(Object.keys(line ?? {})).not.toContain("request");
+  });
+
+  // RFC-023 D3 regression. Verified failing against the previous HEAD, where
+  // `logOverviewError` wrote no `error_message` and no `pg_code` at all.
+  it("names the failure and its SQLSTATE, not just the reason code", async () => {
+    const written: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
+      const { instance } = await build((text) => {
+        if (text.includes("portfolio_state WHERE")) {
+          // What a cancelled statement looks like coming out of `pg`: the name
+          // is the useless string "error", and 57014 is the only field that
+          // says the budget of RFC-023 D1 is what fired.
+          const error = Object.assign(new Error("boom"), {
+            name: "error",
+            code: "57014",
+          });
+          throw error;
+        }
+        return [];
+      });
+      await instance.inject({
+        method: "GET",
+        url: "/polymarket/overview",
+        headers: AUTH,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const raw = written.find((entry) => entry.includes("OVERVIEW_API_FAILED"));
+    expect(raw).toBeDefined();
+    expect(raw).toContain('"error_message":"boom"');
+    expect(raw).toContain('"pg_code":"57014"');
+    const line = JSON.parse(raw as string) as Record<string, unknown>;
+    expect(line["error_name"]).toBe("error");
+    expect(line["reason_code"]).toBe("OVERVIEW_API_FAILED");
   });
 });
 

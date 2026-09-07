@@ -19,6 +19,7 @@ import {
   lexiconHash,
   loadResolutionLexicon,
 } from "./polymarket/resolution/lexicon.js";
+import { errorFields } from "./errors.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
@@ -126,7 +127,7 @@ void run().catch((error: unknown) => {
       service: PORTFOLIO_SERVICE,
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       detail: error instanceof Error ? error.message : undefined,
       message: "polymarket_portfolio_failed",
     })}\n`,

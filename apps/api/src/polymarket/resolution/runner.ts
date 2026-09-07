@@ -21,6 +21,7 @@ import { lexiconHash, type ResolutionLexicon } from "./lexicon.js";
 import { scoreConfigHash, type ResolutionConfig } from "./config.js";
 import type { CuratedEdge } from "./curated.js";
 import type { ResolutionPool } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 export const RESOLUTION_SERVICE = "polymarket-resolution";
 
@@ -1165,7 +1166,7 @@ export function createResolutionRunner(
           // and RPC/DB failure strings, never user data or secrets.
           logJson("error", "JOB_FAILED", {
             job: name,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             detail: error instanceof Error ? error.message : undefined,
           });
         })
@@ -1231,7 +1232,7 @@ export function createResolutionRunner(
       await report(clock()).catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "report_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         });
       });

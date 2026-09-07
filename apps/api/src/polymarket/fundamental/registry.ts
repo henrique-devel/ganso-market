@@ -29,6 +29,7 @@ import {
   type ModelRecord,
   type ModelStatus,
 } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 export { REGIME_V2_CUTOVER };
 
@@ -939,7 +940,7 @@ export async function enforceRevalidation(
         "fundamental_model_revalidation_failed",
         {
           model_id: model.modelId,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         },
       );
     }

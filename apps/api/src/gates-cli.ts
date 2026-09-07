@@ -31,6 +31,7 @@ import {
   loadLatestGateReport,
   recordOwnerApproval,
 } from "./polymarket/portfolio/gatestore.js";
+import { errorFields } from "./errors.js";
 
 class CliError extends Error {
   public readonly reasonCode: string;
@@ -166,7 +167,7 @@ void run().catch((error: unknown) => {
       level: "error",
       service: "gates-cli",
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       // Every refusal says WHAT it refused. A bare reason code would send the
       // operator back into the schema to find out why.
       detail: error instanceof Error ? error.message : undefined,

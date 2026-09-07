@@ -1,6 +1,7 @@
 import pg, { type PoolConfig, type QueryResultRow } from "pg";
 
 import type { ApiConfig } from "./config.js";
+import { errorFields } from "./errors.js";
 
 const { Pool } = pg;
 
@@ -94,7 +95,7 @@ function logPoolClientError(applicationName: string, error: unknown): void {
       timestamp: new Date().toISOString(),
       reason_code: "DB_POOL_CLIENT_ERROR",
       message: "database_pool_client_error",
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       // The reason code alone was a mute alarm once already (OVERVIEW_API_FAILED,
       // 2026-09-04): for the `pg` driver error.name is the string "error".
       detail: error instanceof Error ? error.message : String(error),

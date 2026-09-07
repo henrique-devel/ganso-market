@@ -26,6 +26,7 @@
 import { gammaCategoryToModelCategory, type QueryPool } from "./features.js";
 import { div, parseScaled, SCALE } from "./fixed.js";
 import type { LabelRecord } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 const DAY_MS = 24 * 3_600_000;
 
@@ -639,7 +640,7 @@ export async function syncLabels(
       "LABEL_SYNC_READ_FAILED",
       "polymarket_label_sync_read_failed",
       {
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       },
     );
     return { inserted, updated, skippedNotFinal, skippedUnparsable };
@@ -802,7 +803,7 @@ export async function syncLabels(
         log("error", "LABEL_UPSERT_FAILED", "polymarket_label_upsert_failed", {
           condition_id: conditionId,
           token_index: index,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       }
     }

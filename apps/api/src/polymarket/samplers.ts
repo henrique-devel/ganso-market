@@ -14,6 +14,7 @@ import {
   applyMarketMetadataObservation,
   parseIsoDate,
 } from "./registry.js";
+import { errorFields } from "../errors.js";
 
 export const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 export const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
@@ -218,7 +219,7 @@ async function insertGap(
   } catch (error: unknown) {
     logJson("error", "GAP_PERSIST_FAILED", "polymarket_gap_persist_failed", {
       cause,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
     });
   }
 }
@@ -258,7 +259,7 @@ export function createOiHoldersSampler(deps: SamplerDeps): OiHoldersSampler {
         {
           condition_id: conditionId,
           path,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         },
       );
       return null;
@@ -363,7 +364,7 @@ export function createOiHoldersSampler(deps: SamplerDeps): OiHoldersSampler {
             "polymarket_oi_holders_sample_failed",
             {
               condition_id: market.conditionId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             },
           );
         }
@@ -718,7 +719,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
           "polymarket_pending_metadata_backfill_failed",
           {
             condition_id: record.conditionId,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
           },
         );
       }
@@ -759,7 +760,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
             "UMA_HYDRATE_FAILED",
             "polymarket_uma_hydrate_failed",
             {
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             },
           );
           return;
@@ -775,7 +776,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
           "UMA_STATUS_POLL_FAILED",
           "polymarket_uma_status_poll_failed",
           {
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
           },
         );
         try {
@@ -797,8 +798,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
             "polymarket_gap_persist_failed",
             {
               cause: "uma_status_poll_failed",
-              error_name:
-                gapError instanceof Error ? gapError.name : "UnknownError",
+              ...errorFields(gapError),
             },
           );
         }
@@ -823,7 +823,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
           "error",
           "PENDING_RESOLUTION_QUERY_FAILED",
           "polymarket_pending_resolution_query_failed",
-          { error_name: error instanceof Error ? error.name : "UnknownError" },
+          { ...errorFields(error) },
         );
         return;
       }
@@ -855,7 +855,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
           "error",
           "PENDING_RESOLUTION_POLL_FAILED",
           "polymarket_pending_resolution_poll_failed",
-          { error_name: error instanceof Error ? error.name : "UnknownError" },
+          { ...errorFields(error) },
         );
         try {
           await deps.pool.query(
@@ -922,7 +922,7 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
           "polymarket_resolution_event_persist_failed",
           {
             condition_id: row.conditionId,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
           },
         );
       }
@@ -959,7 +959,7 @@ export async function recordMarketResolved(
       "polymarket_market_resolved_persist_failed",
       {
         condition_id: conditionId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       },
     );
   }

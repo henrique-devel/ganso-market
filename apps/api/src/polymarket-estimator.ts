@@ -6,6 +6,7 @@ import {
 } from "./polymarket/fundamental/config.js";
 import { resolveGitSha } from "./polymarket/fundamental/provenance.js";
 import { createRunner } from "./polymarket/fundamental/runner.js";
+import { errorFields } from "./errors.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
@@ -74,7 +75,7 @@ void run().catch((error: unknown) => {
       service: "polymarket-fundamental",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       ...detail,
       message: "polymarket_estimator_failed",
     })}\n`,

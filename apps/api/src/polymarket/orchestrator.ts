@@ -28,6 +28,7 @@ import {
   type MarketSocketFactory,
 } from "./recorder.js";
 import { applyTickSizeChange } from "./versioning.js";
+import { errorFields } from "../errors.js";
 
 const SERVICE = "polymarket-recorder";
 
@@ -96,7 +97,7 @@ function safeJob(name: string, job: () => Promise<void>): () => void {
         // user data or secrets.
         logJson("error", "JOB_FAILED", {
           job: name,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         });
       })
@@ -186,7 +187,7 @@ export async function waitForDatabase(
         attempt: attempts,
         delay_ms: delayMs,
         elapsed_ms: elapsedMs,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
       await sleep(delayMs);
       delayMs = Math.min(delayMs * 2, maxDelayMs);
@@ -412,7 +413,7 @@ export function createRetentionSupervisor(
       void runRetention(true).catch((error: unknown) => {
         log("error", "JOB_FAILED", {
           job: "retention_retry",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         });
       });
@@ -541,7 +542,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       resyncFromRest(tokenId).catch((error: unknown) => {
         logJson("error", "BOOK_REST_RESYNC_FAILED", {
           token_id: tokenId,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       });
     },
@@ -637,7 +638,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           new Date(),
         ).catch((error: unknown) => {
           logJson("error", "TICK_SIZE_VERSION_FAILED", {
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
           });
         });
       }
@@ -737,7 +738,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       await gammaCycle().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "gamma_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       });
       rtds.start();
