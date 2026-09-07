@@ -29,16 +29,37 @@ import { POLICY_VERSION, decideOrderType } from "./policy.js";
 import type { OrderSide, OrderDraft } from "./validator.js";
 
 /**
- * How old a decision may be and still become an order.
+ * How long a decision stays actionable after the LOG received it (RFC-022 D1).
  *
- * This is the paper module's OWN freshness bound — the same 30 s the intents
- * endpoint applies to a book before it will quote against it — and not a read of
- * the portfolio module's config. A decision older than this is not queued for
- * later and never resurrected: the book it was computed against is no longer the
- * book, and re-deriving the entry from today's data is the portfolio engine's
- * job, on its own next cycle, not the bridge's.
+ * The bound that decides whether the bridge may act is the one on when the
+ * bridge could first see the row, because that is the only clock the bridge
+ * shares with the row. `received_at` is stamped by the database as the portfolio
+ * cycle writes, and the cycle writes market by market: over the 94 accepted
+ * entries retained in production on 2026-09-07 the gap
+ * `received_at - decision_ts` ran p50 17.1 s, p90 27.3 s, max 42.4 s, and 5 of
+ * them exceeded 30 s outright. Worse, the two clocks are phase-locked (0.26 s of
+ * drift over 11 cycles): decisions were born at :30-:51 s, written at :45-:05 s,
+ * and the bridge ticks at :05/:35 s — so measuring age from `decision_ts` with a
+ * 30 s bound made a row already too old at the only tick that could have seen
+ * it. 86 of 94 accepted entries never became orders.
+ *
+ * TWO ticks, not one: `bridgeTickOnce` DROPS a tick whose predecessor is still
+ * running (`JOB_STILL_RUNNING`, `paper/runner.ts`). With a window equal to the
+ * 30 s period, one skipped tick would lose the row for good.
  */
-export const MAX_DECISION_AGE_MS = 30_000;
+export const MAX_RECEIVED_AGE_MS = 60_000;
+
+/**
+ * Absolute ceiling on how old the DECISION itself may be (RFC-022 D1).
+ *
+ * The `received_at` window alone would let a wedged portfolio cycle dump
+ * hours-old decisions onto a live book the moment it unwedges, since every row
+ * it finally writes gets a fresh `received_at`. This ceiling refuses those. It
+ * is not the economic protection: `MAX_BOOK_AGE_MS` still requires a book from
+ * the last 30 s and `decideOrderType` re-quotes against that book inside
+ * `q_lo`/`q_hi`, so a decision admitted here is still priced against the present.
+ */
+export const MAX_DECISION_TS_AGE_MS = 90_000;
 
 /** A book whose reference instant is older than this cannot be quoted against. */
 export const MAX_BOOK_AGE_MS = 30_000;
@@ -53,6 +74,14 @@ export interface BridgeDeps {
   readonly resolutionGateFn?: ResolutionGateFn;
   readonly latencyMs?: number;
   readonly maxPerTick?: number;
+  /**
+   * This process's PAPER_BOOT instant, supplied by the runner.
+   *
+   * Only `aged_out` uses it. Absent (a direct call, a test that does not care)
+   * the counter keeps its pre-RFC-022 meaning and counts the whole retained
+   * backlog, which is wrong for production but never hides a loss.
+   */
+  readonly bootAt?: Date;
 }
 
 export interface BridgeOutcome {
@@ -90,21 +119,32 @@ const PENDING_SQL =
   "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares " +
   "FROM portfolio_decisions d " +
   "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
-  "AND d.paper_order_id IS NULL AND d.decision_ts > $1 " +
+  "AND d.paper_order_id IS NULL " +
+  "AND d.received_at > $1 AND d.decision_ts > $2 " +
   "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id) " +
-  "ORDER BY d.decision_id LIMIT $2";
+  "ORDER BY d.decision_id LIMIT $3";
 
 /**
  * Accepted entries that will never become orders because they aged out.
  *
  * Counted and logged rather than silently dropped: a non-zero value means the
- * gap between deciding and bridging exceeded the freshness bound, which is an
+ * gap between deciding and bridging exceeded a freshness bound, which is an
  * operational fault (a stalled tick, a slow cycle) and not a market condition.
+ *
+ * Bounded below by this process's own boot (RFC-022 D1). Without that bound the
+ * count is the whole retained backlog and can only grow: production printed
+ * `aged_out: 86` on every tick, 30 s apart, for rows whose newest was 30 hours
+ * older than the running process — a number that says nothing about the tick
+ * that printed it, and that no fix could ever bring back to zero. Everything
+ * received before boot is somebody else's history; what this counter must report
+ * is what THIS process is losing now.
  */
 const AGED_OUT_SQL =
   "SELECT count(*) AS aged_out FROM portfolio_decisions d " +
   "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
-  "AND d.paper_order_id IS NULL AND d.decision_ts <= $1 " +
+  "AND d.paper_order_id IS NULL " +
+  "AND (d.received_at <= $1 OR d.decision_ts <= $2) " +
+  "AND d.received_at > $3 " +
   "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id)";
 
 function asString(value: unknown): string | null {
@@ -222,14 +262,19 @@ export async function bridgeTick(
   const gateFn: ResolutionGateFn =
     deps.resolutionGateFn ?? ((input) => resolutionGate(pool, input));
   const now = clock();
-  const cutoff = new Date(now.getTime() - MAX_DECISION_AGE_MS);
+  const receivedCutoff = new Date(now.getTime() - MAX_RECEIVED_AGE_MS);
+  const decisionTsCutoff = new Date(now.getTime() - MAX_DECISION_TS_AGE_MS);
+  const bootAt = deps.bootAt ?? new Date(0);
 
   const pendingRows = await pool.query<Record<string, unknown>>(PENDING_SQL, [
-    cutoff,
+    receivedCutoff,
+    decisionTsCutoff,
     deps.maxPerTick ?? MAX_PER_TICK,
   ]);
   const agedOutRows = await pool.query<Record<string, unknown>>(AGED_OUT_SQL, [
-    cutoff,
+    receivedCutoff,
+    decisionTsCutoff,
+    bootAt,
   ]);
   const agedOut = toInteger(agedOutRows.rows[0]?.["aged_out"]) ?? 0;
 
@@ -376,6 +421,7 @@ export async function bridgeTick(
       accepted,
       skipped,
       aged_out: agedOut,
+      boot_at: deps.bootAt?.toISOString() ?? null,
     });
   }
   return { considered, accepted, skipped, agedOut };

@@ -122,6 +122,35 @@ describe("paper runner boot guard", () => {
       simulation: SIMULATION_BANNER,
     });
   });
+
+  it("hands the bridge the boot instant, so aged_out can only mean 'lost now'", async () => {
+    // RFC-022 D1. `bridge.ts` cannot know when this process started, and without
+    // that instant its aged-out count is the whole retained backlog: production
+    // printed the same `aged_out: 86` on every tick for rows 30 hours older than
+    // the running process. The boot instant is the runner's to supply.
+    const { calls, pool } = createFakePool();
+    const { lines, sink } = createSink();
+    const runner = createPaperRunner({
+      pool,
+      executionMode: "paper",
+      gitSha: null,
+      logSink: sink,
+      clock: () => NOW,
+    });
+    await runner.start();
+    await runner.bridgeTickOnce();
+    await runner.stop();
+
+    const agedOut = calls.find((call) =>
+      call.text.includes("count(*) AS aged_out"),
+    );
+    expect(agedOut).toBeDefined();
+    // Third bound of AGED_OUT_SQL: received_at > boot.
+    expect(agedOut?.params[2]).toEqual(NOW);
+    expect(lines.find((l) => l.reason_code === "PAPER_BOOT")).toMatchObject({
+      boot_at: NOW.toISOString(),
+    });
+  });
 });
 
 describe("paper runner heartbeat", () => {
