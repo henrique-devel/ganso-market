@@ -33,12 +33,48 @@ export interface DatabasePoolOverrides {
   readonly applicationName?: string;
 }
 
+/**
+ * RFC-020 D3. `pg` emits 'error' on the Pool when an IDLE client dies — the
+ * database restarting, a network drop, an administrator terminating the
+ * backend. Node treats an unhandled 'error' on an EventEmitter as fatal, so
+ * until this handler existed every such event killed the process. Measured in
+ * production on 2026-09-06: each of the five profile workers logged exactly one
+ *
+ *   throw er; // Unhandled 'error' event
+ *   error: terminating connection due to administrator command
+ *
+ * per deploy, and Docker restarted them (RestartCount 13/17/46/4/8).
+ *
+ * The handler logs and stops there. `pg` already removes the failed client from
+ * the pool, and the next query() opens a fresh connection: what was missing is
+ * the handler, not reconnection logic. Boot failures stay fatal — the
+ * entrypoints' `run().catch` sets process.exitCode = 1 — so fail-closed is
+ * unchanged.
+ */
+function logPoolClientError(applicationName: string, error: unknown): void {
+  process.stderr.write(
+    `${JSON.stringify({
+      level: "error",
+      service: applicationName,
+      timestamp: new Date().toISOString(),
+      reason_code: "DB_POOL_CLIENT_ERROR",
+      message: "database_pool_client_error",
+      error_name: error instanceof Error ? error.name : "UnknownError",
+      // The reason code alone was a mute alarm once already (OVERVIEW_API_FAILED,
+      // 2026-09-04): for the `pg` driver error.name is the string "error".
+      detail: error instanceof Error ? error.message : String(error),
+      application_name: applicationName,
+    })}\n`,
+  );
+}
+
 export function createDatabasePool(
   config: ApiConfig,
   overrides: DatabasePoolOverrides = {},
 ): DatabasePool {
   const queryTimeoutMs =
     overrides.queryTimeoutMs ?? config.database.connectTimeoutMs;
+  const applicationName = overrides.applicationName ?? "ganso-market-api";
   const pool = config.database.password.use((password) => {
     const poolConfig: PoolConfig = {
       host: config.database.host,
@@ -51,12 +87,15 @@ export function createDatabasePool(
       statement_timeout: queryTimeoutMs,
       idleTimeoutMillis: 30_000,
       max: overrides.max ?? 4,
-      application_name: overrides.applicationName ?? "ganso-market-api",
+      application_name: applicationName,
     };
     if (config.database.ssl) {
       poolConfig.ssl = { rejectUnauthorized: true };
     }
     return new Pool(poolConfig);
+  });
+  pool.on("error", (error: unknown) => {
+    logPoolClientError(applicationName, error);
   });
 
   async function query<R extends QueryResultRow>(
