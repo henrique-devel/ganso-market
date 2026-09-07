@@ -4451,7 +4451,7 @@ comportamento desejado.
 | Workers não caem no deploy | `release-sha` conferido **dentro** dos cinco containers; `RestartCount` **0 → 0** e **zero** "Unhandled" nos cinco atravessando o deploy de código seguinte |
 | Classificador vivo no CD | `deploy=true: 3 de 3 arquivos fora das listas de texto: .github/workflows/ci-cd.yml, deploy/deploy_paths.py, scripts/tests/test_deploy_paths.py` |
 | Lacuna registrada quando houver perda | teste controlado abaixo |
-| Merge docs-only não gera deploy | **medido no merge deste próprio documento** — o resultado entra na subseção "D2 medida" logo abaixo, que é a única coisa desta RFC que não podia ser verificada antes de existir um merge só de texto |
+| Merge docs-only não gera deploy | **`deploy=false: deploy pulado: só texto (3 arquivos)`** no merge `2afa6ad` às 01:26:22Z, com `Deploy production` em **sucesso**; `.deploy/current-sha` inalterado e **zero** logins da chave restrita — ver "D2 medida" abaixo |
 
 **A assimetria de sempre acabou.** Antes do rebuild os cinco workers rodavam três releases
 diferentes — recorder `bf55318`, estimator e resolution `e0f227e`, paper e portfolio `b381f21`
@@ -4523,6 +4523,31 @@ exatamente essa lacuna que falta, e são RFC própria.
 2. **A vazão continua sendo o gargalo do bloco, e não é mais o kill switch** (rearmado em
    06/09 23:03:10Z): 77 % das recusas são `DATA_STALE` e `BOOK_STALE` — cobertura de modelo e
    de snapshot. Nada disso é RFC-020.
-3. **Nada pendente da RFC-020** além da subseção "D2 medida", que esta mesma sessão fecha
-   logo após o merge deste documento — um merge de texto não pode ser observado antes de
-   existir.
+3. **Nada pendente da RFC-020.** Os seis critérios de aceite estão medidos, o último deles
+   ("D2 medida", abaixo) no merge de documentação que fechou a sessão.
+
+### D2 medida — o merge de texto que não virou deploy
+
+O merge `2afa6ad` (`docs/HANDOFF.md`, `docs/rfcs/RFC-020-…`,
+`prompts/roadmap/README.md`) é o aceite de D2, e é a única coisa desta RFC que não podia ser
+verificada antes de existir um merge só de texto.
+
+| Critério | Medido em 2026-09-07 01:26Z |
+| --- | --- |
+| Linha explícita no log | **`deploy=false: deploy pulado: só texto (3 arquivos)`** |
+| `Deploy production` | **success** — não `failure`, não `skipped` mudo |
+| `verify` e `integration` | rodaram, os dois em sucesso: o gatilho `on.push` segue intocado |
+| `.deploy/current-sha` | **`2ac761b…` inalterado** (o merge anterior, de código) |
+| Novo backup em `.deploy/backups` | **nenhum** — o último é `20260907T010639Z`, do deploy de código das 01:06Z |
+| Login da chave restrita | **zero** |
+
+A prova do login é um contraste, não uma ausência. Entre 01:20 e 01:30Z o `journalctl
+_COMM=sshd` aceitou **6** conexões, todas com a **mesma** fingerprint —
+`SHA256:Pg3pm6B9…`, a chave do operador que rodou estas próprias medições. No minuto do
+último deploy de verdade (01:06Z) aparece **1** conexão com outra fingerprint,
+`SHA256:hsbHdF7l…`: a chave restrita do CD. No merge de texto ela não aparece nenhuma vez.
+
+Ausência de login poderia ser ausência de medição; **uma fingerprint diferente no minuto do
+deploy de código e nenhuma no minuto do merge de texto** não pode.
+
+Com isso os **seis** critérios de aceite da RFC-020 estão medidos em produção.
