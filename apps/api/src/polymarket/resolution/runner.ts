@@ -310,11 +310,64 @@ export function createResolutionRunner(
     }
   }
 
+  /**
+   * The generation this table carried before a rotation, and why it ended.
+   *
+   * Read BEFORE `markBooting`, which is the only chance: that statement clears
+   * `failure_reason` and rewrites `started_at` and `updated_at`. After it, the
+   * link between the job that failed and the cancellations that followed is
+   * gone from the database — which is exactly the link RFC-022 D3 asks for, and
+   * today it is only inferable by lining up timestamps by hand.
+   *
+   * `updated_at` is the failure instant when `failure_reason` is set:
+   * `markFailed` writes both together, and the heartbeat refuses to renew an
+   * unready runtime, so nothing moves the stamp afterwards.
+   */
+  async function previousRuntimeRow(): Promise<{
+    generation: string | null;
+    failureReason: string | null;
+    failedAt: Date | null;
+  }> {
+    try {
+      const result = await deps.pool.query<Record<string, unknown>>(
+        `SELECT generation, failure_reason, updated_at
+           FROM resolution_runtime_state WHERE runtime_id = 1`,
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        return { generation: null, failureReason: null, failedAt: null };
+      }
+      const failureReason =
+        typeof row["failure_reason"] === "string" &&
+        row["failure_reason"].length > 0
+          ? row["failure_reason"]
+          : null;
+      const updatedAt = row["updated_at"];
+      return {
+        generation:
+          typeof row["generation"] === "string" ? row["generation"] : null,
+        failureReason,
+        failedAt:
+          failureReason === null
+            ? null
+            : updatedAt instanceof Date
+              ? updatedAt
+              : null,
+      };
+    } catch {
+      // Diagnosis must never be able to stop a boot.
+      return { generation: null, failureReason: null, failedAt: null };
+    }
+  }
+
   async function bootGenerationUnlocked(): Promise<void> {
     assertRunning();
     const nextGeneration = deps.generationFactory?.() ?? randomUUID();
+    const previous = await previousRuntimeRow();
+    const ownedPrevious = generation;
     generation = nextGeneration;
-    await markBooting(clock(), nextGeneration);
+    const rotationStartedAt = clock();
+    await markBooting(rotationStartedAt, nextGeneration);
     assertRunning();
 
     await ensureScoreVersion(deps.pool, {
@@ -327,6 +380,7 @@ export function createResolutionRunner(
     });
     assertRunning();
 
+    let publishedAtForRotation: Date | null = null;
     const result = await deps.pool.transaction(async (tx: SqlExecutor) => {
       await lockResolutionInputJournal(tx);
       assertRunning();
@@ -374,6 +428,7 @@ export function createResolutionRunner(
       );
       assertRunning();
       const publishedAt = clock();
+      publishedAtForRotation = publishedAt;
       const graphExpiresAt = graphValidUntil(graphEvaluatedAt);
       assertGraphCurrent(graphEvaluatedAt, graphExpiresAt, publishedAt);
       const updated = await tx.query(
@@ -408,6 +463,29 @@ export function createResolutionRunner(
     });
     publishStreaks(result.nextStreaks);
     recoveryRequired = false;
+    if (previous.generation !== null) {
+      // One line per rotation that reached readiness. A rotation that fails
+      // before publishing leaves `recoveryRequired` set and the next state tick
+      // rotates again, which is the line that gets logged — so the count never
+      // silently loses a cause, and `JOB_FAILED` already carries the detail
+      // string for the failure itself.
+      const readyAt = publishedAtForRotation ?? clock();
+      logJson("warn", "RESOLUTION_GENERATION_ROTATED", {
+        previous_generation: previous.generation,
+        generation: nextGeneration,
+        failure_reason: previous.failureReason,
+        failed_at: previous.failedAt?.toISOString() ?? null,
+        ready_after_ms: Math.max(
+          readyAt.getTime() -
+            (previous.failedAt ?? rotationStartedAt).getTime(),
+          0,
+        ),
+        // True when THIS process owned the generation that ended: a job failure
+        // rotating in place, which is the RFC-022 case. False is a fresh process
+        // taking over, where `failure_reason` may legitimately be null.
+        in_process: ownedPrevious === previous.generation,
+      });
+    }
     logJson("info", "SCORES_RECOMPUTED", {
       trigger: "boot",
       ...result.summary,

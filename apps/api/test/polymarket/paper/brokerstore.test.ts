@@ -84,6 +84,16 @@ interface World {
   runtime: {
     generation: string;
     ready: boolean;
+    /**
+     * RFC-022 D2 reads these four. `ready_at` is the hard ceiling's only input;
+     * `started_at`, `updated_at` and `failure_reason` are diagnosis, and the
+     * decision explicitly forbids anchoring an age on any of them because the
+     * resolution runner rewrites all three on every rotation.
+     */
+    ready_at: Date | null;
+    started_at: Date | null;
+    updated_at: Date | null;
+    failure_reason: string | null;
     lease_expires_at: Date;
     processed_resolution_event_id: number;
     processed_rule_version_id: number;
@@ -99,6 +109,15 @@ interface World {
   runtimeCheckedAt: Date[];
   databaseTimeAfterNextAcceptanceAppend: Date | null;
   databaseTimeAfterNextFillAppend: Date | null;
+  /**
+   * A generation rotation that lands AFTER the fill events are appended.
+   *
+   * The only shape in which a fill can meet a divergent generation once the
+   * RFC-022 D2 grace exists: the risk check saw a matching stamp, and the
+   * runtime rotated inside the execution transaction. `revalidateResolutionRuntimeForFill`
+   * has to refuse it, in every one of its six call sites, grace or no grace.
+   */
+  generationAfterNextFillAppend: string | null;
   /** received_at of the oldest journal entry the runtime has not processed. */
   oldestUnprocessedAt: Date | null;
 }
@@ -142,6 +161,11 @@ function emptyWorld(): World {
     runtime: {
       generation: RUNTIME_GENERATION,
       ready: true,
+      // The schema's own CHECK ties ready = TRUE to a non-null ready_at.
+      ready_at: new Date("2026-08-24T11:59:00.000Z"),
+      started_at: new Date("2026-08-24T11:58:00.000Z"),
+      updated_at: new Date("2026-08-24T11:59:00.000Z"),
+      failure_reason: null,
       lease_expires_at: new Date("2026-08-25T12:00:00.000Z"),
       processed_resolution_event_id: 0,
       processed_rule_version_id: 0,
@@ -157,6 +181,7 @@ function emptyWorld(): World {
     runtimeCheckedAt: [],
     databaseTimeAfterNextAcceptanceAppend: null,
     databaseTimeAfterNextFillAppend: null,
+    generationAfterNextFillAppend: null,
     oldestUnprocessedAt: null,
   };
 }
@@ -287,6 +312,14 @@ function worldPool(world: World): PaperPool {
               order["resolution_risk_check_pending"] = false;
               order["resolution_risk_claim"] = null;
               order["resolution_risk_claimed_at"] = null;
+            }
+          }
+          return [];
+        }
+        if (text.includes("SET resolution_generation = $2::uuid")) {
+          for (const order of world.orders) {
+            if (order["order_id"] === params[0] && order["status"] === "open") {
+              order["resolution_generation"] = params[1];
             }
           }
           return [];
@@ -438,6 +471,14 @@ function worldPool(world: World): PaperPool {
               world.resolutionActionAfterNextFillAppend,
             );
             world.resolutionActionAfterNextFillAppend = null;
+          }
+          if (
+            params[1] === "fill" &&
+            world.generationAfterNextFillAppend !== null &&
+            world.runtime !== null
+          ) {
+            world.runtime.generation = world.generationAfterNextFillAppend;
+            world.generationAfterNextFillAppend = null;
           }
           if (
             params[1] === "fill" &&
@@ -1906,18 +1947,20 @@ describe("RFC-012 circuit breaker over resting orders", () => {
       reason: "RESOLUTION_RUNTIME_MISSING",
     },
     {
-      name: "not ready",
-      mutate(world: World): void {
-        if (world.runtime !== null) world.runtime.ready = false;
-      },
-      reason: "RESOLUTION_RUNTIME_NOT_READY",
-    },
-    {
       name: "stale",
       mutate(world: World): void {
         if (world.runtime !== null) world.runtime.lease_expires_at = at(-1);
       },
       reason: "RESOLUTION_RUNTIME_STALE",
+    },
+    {
+      // RFC-022 D2 names STOPPED alongside STALE as a runtime that is GONE, not
+      // slow: the grace must not reach either of them.
+      name: "stopped",
+      mutate(world: World): void {
+        if (world.runtime !== null) world.runtime.stopped_at = at(-1);
+      },
+      reason: "RESOLUTION_RUNTIME_STOPPED",
     },
     {
       name: "missing graph freshness",
@@ -2048,6 +2091,47 @@ describe("RFC-012 circuit breaker over resting orders", () => {
     );
   });
 
+  it("refuses the fill when the generation rotates inside the execution transaction", async () => {
+    // The invariant the RFC-022 D2 grace does NOT touch. An open order may now
+    // adopt a new generation, but a FILL is a different question: every one of
+    // the six `revalidateResolutionRuntimeForFill` call sites re-reads the
+    // runtime under FOR SHARE after the fill events are appended, and a stamp
+    // that no longer matches rolls the whole transaction back. Here the risk
+    // check saw a matching generation and the rotation lands after the append.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "FAK",
+      limitPrice: "0.60",
+      worstPrice: "0.60",
+      size: "20",
+    });
+    world.generationAfterNextFillAppend =
+      "44444444-4444-4444-8444-444444444444";
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: silentSink,
+    });
+
+    // No fill survived, and the order did not quietly adopt its way to one.
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_GENERATION_MISMATCH",
+    );
+    // Marked as the fill path, so the acceptance query can tell a deliberate
+    // strict refusal from a resting order canceled without a measured age.
+    expect(
+      (world.orders[0]?.["resolution_cancel_details_json"] as Row)[
+        "cancel_path"
+      ],
+    ).toBe("risk_check_incomplete");
+  });
+
   it("never fills while the runtime is behind, grace or no grace", async () => {
     // The unchanged invariant, asserted on its own: whatever the cancel policy
     // does with a lagging runtime, a fill against one is refused. This test
@@ -2077,20 +2161,69 @@ describe("RFC-012 circuit breaker over resting orders", () => {
     expect(fillsForOrder(world)).toHaveLength(0);
   });
 
-  it("cancels an order accepted by a previous runtime generation", async () => {
+  it("adopts a new runtime generation once the policy re-authorizes the token", async () => {
+    // RFC-022 D2. Cancelling on sight was the whole defect: a job failure
+    // rotates the generation IN PROCESS (measured again on 2026-09-07, ready
+    // 12 s later with the container up for 14 h), and every resting order died
+    // for it — 16 cancellations against 2 fills. The runtime here is ready,
+    // leased, graph-fresh and caught up: only the stamp differs, and a
+    // re-validated token has no reason to lose its place in the queue.
     const world = emptyWorld();
     seedMarket(world);
     seedBook(world, -2_000, "0.40", "0.50");
     seedBook(world, 1_100, "0.40", "0.50");
     await acceptOrder(world, {
-      orderType: "FAK",
-      limitPrice: "0.60",
-      worstPrice: "0.60",
+      orderType: "GTC",
+      limitPrice: "0.30",
+      size: "20",
+    });
+    const rotated = "22222222-2222-4222-8222-222222222222";
+    if (world.runtime !== null) {
+      world.runtime.generation = rotated;
+      // What a real rotation does to the stamps: markBooting rewrote both, then
+      // the new generation published. This is why neither can anchor an age.
+      world.runtime.started_at = at(1_000);
+      world.runtime.updated_at = at(1_500);
+      world.runtime.ready_at = at(1_500);
+    }
+    const logs: string[] = [];
+
+    await brokerTick(worldPool(world), {
+      clock: () => at(2_000),
+      latencyMs: 1_000,
+      logSink: (line) => logs.push(line),
+    });
+
+    expect(world.orders[0]?.["status"]).toBe("open");
+    expect(world.orders[0]?.["resolution_generation"]).toBe(rotated);
+    expect(world.orders[0]?.["resolution_risk_check_pending"]).toBe(false);
+    const adopted = logs
+      .map((line) => JSON.parse(line) as Row)
+      .find((line) => line["reason_code"] === "PAPER_ORDER_GENERATION_ADOPTED");
+    expect(adopted).toMatchObject({
+      order_id: "order-1",
+      previous_generation: RUNTIME_GENERATION,
+      generation: rotated,
+    });
+  });
+
+  it("cancels instead of adopting when the policy refuses the token", async () => {
+    // The other half of the decision: no re-validation, no adoption. A VETO
+    // standing over the market is a refusal, and the order dies as it would
+    // have without the grace.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, {
+      orderType: "GTC",
+      limitPrice: "0.30",
       size: "20",
     });
     if (world.runtime !== null) {
       world.runtime.generation = "22222222-2222-4222-8222-222222222222";
     }
+    world.resolutionActionReads = ["VETO", "VETO", "VETO", "VETO"];
 
     await brokerTick(worldPool(world), {
       clock: () => at(2_000),
@@ -2101,8 +2234,128 @@ describe("RFC-012 circuit breaker over resting orders", () => {
     expect(fillsForOrder(world)).toHaveLength(0);
     expect(world.orders[0]?.["status"]).toBe("canceled");
     expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
-      "RESOLUTION_RUNTIME_GENERATION_MISMATCH",
+      "RESOLUTION_VETO",
     );
+  });
+
+  it("holds an open order through a runtime that is booting, then cancels at 180 s", async () => {
+    // 60 s under `ready = false` is a rotation in progress. 200 s is a runtime
+    // that is not coming back, and the cancellation has to SAY so: production
+    // has 6 NOT_READY rows and not one carries an age, so the acceptance
+    // criterion "nothing canceled inside the grace" would pass by being empty.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, { orderType: "GTC", limitPrice: "0.30" });
+    if (world.runtime !== null) {
+      world.runtime.ready = false;
+      world.runtime.ready_at = null;
+      world.runtime.failure_reason = "STATE_TICK_FAILED";
+    }
+    const anchors = { firstSeen: new Map(), readyGap: new Map() };
+    const logs: string[] = [];
+    const tick = async (ms: number): Promise<void> => {
+      await brokerTick(worldPool(world), {
+        clock: () => at(ms),
+        latencyMs: 1_000,
+        runtimeGraceAnchors: anchors,
+        logSink: (line) => logs.push(line),
+      });
+    };
+
+    await tick(0);
+    await tick(60_000);
+    expect(world.orders[0]?.["status"]).toBe("open");
+    expect(fillsForOrder(world)).toHaveLength(0);
+    expect(
+      logs
+        .map((line) => JSON.parse(line) as Row)
+        .filter((line) => line["reason_code"] === "PAPER_ORDER_RUNTIME_GRACE"),
+    ).toMatchObject([
+      { reason: "RESOLUTION_RUNTIME_NOT_READY", age_ms: 0 },
+      { reason: "RESOLUTION_RUNTIME_NOT_READY", age_ms: 60_000 },
+    ]);
+
+    await tick(200_000);
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_NOT_READY",
+    );
+    const details = world.orders[0]?.["resolution_cancel_details_json"] as Row;
+    expect(Number(details["age_ms"])).toBeGreaterThanOrEqual(180_000);
+    expect(Number(details["grace_ms"])).toBe(180_000);
+  });
+
+  it("cancels a runtime that alternates boot and failure every 20 s for 200 s", async () => {
+    // The fail-open this decision exists to avoid, and the RFC's own stop
+    // condition. `markBooting` rewrites `started_at` AND `updated_at` on every
+    // rotation and `markFailed` rewrites `updated_at`, so an age read from
+    // either stamp is permanently under 20 s here and the order would live
+    // forever under a runtime that never publishes. The anchor is this
+    // process's own first sight, and the generation churning does not reset it.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, { orderType: "GTC", limitPrice: "0.30" });
+    const anchors = { firstSeen: new Map(), readyGap: new Map() };
+
+    for (let elapsed = 0; elapsed <= 200_000; elapsed += 20_000) {
+      if (world.runtime !== null) {
+        const booting = (elapsed / 20_000) % 2 === 0;
+        // A brand-new generation, and both stamps rewritten, every cycle.
+        world.runtime.generation = `3333333${String(
+          (elapsed / 20_000) % 10,
+        )}-3333-4333-8333-333333333333`;
+        world.runtime.ready = false;
+        world.runtime.ready_at = null;
+        world.runtime.started_at = at(elapsed);
+        world.runtime.updated_at = at(elapsed);
+        world.runtime.failure_reason = booting ? null : "STATE_TICK_FAILED";
+      }
+      await brokerTick(worldPool(world), {
+        clock: () => at(elapsed),
+        latencyMs: 1_000,
+        runtimeGraceAnchors: anchors,
+        logSink: silentSink,
+      });
+    }
+
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+      "RESOLUTION_RUNTIME_NOT_READY",
+    );
+    const details = world.orders[0]?.["resolution_cancel_details_json"] as Row;
+    expect(Number(details["age_ms"])).toBeGreaterThanOrEqual(180_000);
+    // The hard ceiling agrees: `ready_at` was null for the whole run.
+    expect(Number(details["ready_gap_ms"])).toBeGreaterThanOrEqual(180_000);
+  });
+
+  it("restarts the grace from the boot, never from a past it cannot vouch for", async () => {
+    // The anchor is in memory by design. A restarted worker knows nothing about
+    // how long the runtime has been down, and inventing an age from a database
+    // stamp is precisely the fail-open the decision forbids — so every open
+    // order re-enters the grace on the first tick after boot.
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2_000, "0.40", "0.50");
+    seedBook(world, 1_100, "0.40", "0.50");
+    await acceptOrder(world, { orderType: "GTC", limitPrice: "0.30" });
+    if (world.runtime !== null) {
+      world.runtime.ready = false;
+      world.runtime.ready_at = null;
+    }
+
+    // First process: 200 s of downtime already elapsed on the wall clock.
+    await brokerTick(worldPool(world), {
+      clock: () => at(200_000),
+      latencyMs: 1_000,
+      runtimeGraceAnchors: { firstSeen: new Map(), readyGap: new Map() },
+      logSink: silentSink,
+    });
+
+    expect(world.orders[0]?.["status"]).toBe("open");
   });
 
   it("cancels when the runtime lease expires immediately before a fill", async () => {
