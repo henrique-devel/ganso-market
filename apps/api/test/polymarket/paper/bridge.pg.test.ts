@@ -170,6 +170,7 @@ async function seed(): Promise<void> {
 async function acceptedEntry(
   side: "BUY" | "SELL" = "BUY",
   decidedAt: Date = DECIDED_AT,
+  receivedAt: Date = new Date(decidedAt.getTime() + 1_000),
 ): Promise<number> {
   const result = await pool().query<{ decision_id: string | number }>(
     `INSERT INTO portfolio_decisions
@@ -179,11 +180,12 @@ async function acceptedEntry(
         binding_constraint, limiters_json, config_version, config_hash,
         factor_map_version, rule_version, param_version, resolution_action,
         oldest_input_ts, newest_input_ts, book_json, inputs_json, outcome,
-        portfolio_state)
+        portfolio_state, received_at)
      VALUES ('ENTRY',$1,$2,$3,$4,$5,'0.800000','0.750000','0.850000',
              'MARKET_BASELINE','0.620000','0.620000','0.620000','20.000000',
              '40.000000','12.400000','CAP_ENTRADA','[]'::jsonb,'1.2.0',$6,
-             '1.0.0',1,1,'NONE',$7,$7,'{}'::jsonb,$8::jsonb,'ACCEPTED','NORMAL')
+             '1.0.0',1,1,'NONE',$7,$7,'{}'::jsonb,$8::jsonb,'ACCEPTED','NORMAL',
+             $9)
      RETURNING decision_id`,
     [
       CONDITION,
@@ -200,6 +202,7 @@ async function acceptedEntry(
         },
         replay: { rule_precision_multiplier: 0.9 },
       }),
+      receivedAt,
     ],
   );
   return Number(result.rows[0]?.decision_id ?? 0);
@@ -344,6 +347,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       const stale = await acceptedEntry(
         "BUY",
         new Date(NOW.getTime() - 600_000),
+        new Date(NOW.getTime() - 600_000),
       );
       const lines: string[] = [];
       const outcome = await bridgeTick(pool(), {
@@ -360,6 +364,80 @@ describe.skipIf(DATABASE_URL === undefined)(
         [stale],
       );
       expect(orders.rows[0]?.count).toBe("0");
+    });
+
+    it("acts on the production shape: decided 45 s ago, logged 5 s ago", async () => {
+      // RFC-022 D1 against the server, which is the only place the two new
+      // bounds are really a WHERE clause. Under the 30 s bound on `decision_ts`
+      // this row was invisible; production lost 86 of 94 accepted entries this
+      // way, with the two clocks phase-locked so that the one tick able to see
+      // the row always saw it already expired.
+      const decisionId = await acceptedEntry(
+        "BUY",
+        new Date(NOW.getTime() - 45_000),
+        new Date(NOW.getTime() - 5_000),
+      );
+      const lines: string[] = [];
+      const outcome = await bridgeTick(pool(), {
+        clock: () => NOW,
+        logSink: (line) => lines.push(line),
+      });
+      const skipped = logsOf(lines).find(
+        (line) =>
+          line.reason_code === "BRIDGE_DECISION_SKIPPED" &&
+          line.decision_id === decisionId,
+      );
+      expect(skipped).toBeUndefined();
+      const order = await pool().query<{ count: string }>(
+        `SELECT count(*) AS count FROM paper_orders WHERE decision_id = $1`,
+        [decisionId],
+      );
+      expect(order.rows[0]?.count).toBe("1");
+      expect(outcome.accepted).toBeGreaterThanOrEqual(1);
+    });
+
+    it("refuses a decision past the 90 s ceiling however fresh the log entry is", async () => {
+      // A wedged portfolio cycle unwedging must not dump old decisions on a
+      // live book: `received_at` is brand new here and the row is still refused.
+      const decisionId = await acceptedEntry(
+        "BUY",
+        new Date(NOW.getTime() - 95_000),
+        new Date(NOW.getTime() - 1_000),
+      );
+      await bridgeTick(pool(), {
+        clock: () => NOW,
+        logSink: () => undefined,
+      });
+      const order = await pool().query<{ count: string }>(
+        `SELECT count(*) AS count FROM paper_orders WHERE decision_id = $1`,
+        [decisionId],
+      );
+      expect(order.rows[0]?.count).toBe("0");
+    });
+
+    it("keeps decisions received before this process booted out of aged_out", async () => {
+      // One planted row, aged out, received 5 minutes ago. Asserted as a
+      // difference and not as an absolute zero: AGED_OUT_SQL is not scoped to a
+      // token, so a shared test database contributes rows this suite does not
+      // own.
+      const receivedAt = new Date(NOW.getTime() - 300_000);
+      await acceptedEntry("BUY", new Date(NOW.getTime() - 301_000), receivedAt);
+      const tick = async (bootAt: Date): Promise<number> =>
+        (
+          await bridgeTick(pool(), {
+            clock: () => NOW,
+            bootAt,
+            logSink: () => undefined,
+          })
+        ).agedOut;
+
+      const bootAfterTheRow = await tick(
+        new Date(receivedAt.getTime() + 1_000),
+      );
+      const bootBeforeTheRow = await tick(
+        new Date(receivedAt.getTime() - 1_000),
+      );
+      expect(bootBeforeTheRow).toBe(bootAfterTheRow + 1);
     });
   },
 );

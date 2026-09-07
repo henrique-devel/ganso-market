@@ -167,6 +167,14 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
   let calibrating = false;
   let sampling = false;
   let bridging = false;
+  /**
+   * When THIS process booted (RFC-022 D1), for the bridge's `aged_out` counter.
+   *
+   * Null until `start()`: a `bridgeTickOnce` driven directly by a test has no
+   * boot to speak of, and the bridge falls back to counting the whole backlog
+   * rather than pretending the process is older than it is.
+   */
+  let bootAt: Date | null = null;
 
   // Cursor of the last computed window start per token per kind. In-memory by
   // design: a restart resumes from "now" (bounded skip, logged), never from a
@@ -305,6 +313,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         clock,
         logSink: sink,
         ...(deps.latencyMs === undefined ? {} : { latencyMs: deps.latencyMs }),
+        ...(bootAt === null ? {} : { bootAt }),
       });
     } catch (error: unknown) {
       logJson("error", "JOB_FAILED", {
@@ -383,10 +392,12 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
           ),
         );
       }
+      bootAt = clock();
       logJson("info", "PAPER_BOOT", {
         execution_mode: deps.executionMode,
         git_sha_known: deps.gitSha !== null,
         simulation: SIMULATION_BANNER,
+        boot_at: bootAt.toISOString(),
       });
       heartbeatTimer = setInterval(() => {
         void heartbeatOnce();
@@ -484,6 +495,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       calibrationTimer = null;
       samplerTimer = null;
       bridgeTimer = null;
+      bootAt = null;
       logJson("info", "PAPER_STOPPED", {});
       return Promise.resolve();
     },

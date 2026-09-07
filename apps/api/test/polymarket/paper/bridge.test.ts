@@ -22,7 +22,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_DECISION_AGE_MS,
+  MAX_DECISION_TS_AGE_MS,
+  MAX_RECEIVED_AGE_MS,
   bridgeOrderId,
   bridgeTick,
   conservativeBound,
@@ -37,13 +38,14 @@ const TOKEN = "tok-1";
 
 interface WorldOptions {
   readonly decisions?: Row[];
-  readonly agedOut?: number;
   /** null means "no params recorded", which must stop the bridge. */
   readonly tickSize?: string | null;
   /** Book age in ms at `NOW`; the default is fresh. */
   readonly bookAgeMs?: number;
   readonly gateAllowed?: boolean;
   readonly gateReason?: string;
+  /** The paper worker's own PAPER_BOOT instant, as the runner passes it. */
+  readonly bootAt?: Date;
 }
 
 interface World {
@@ -59,6 +61,7 @@ function decision(overrides: Row = {}): Row {
     market_side: "YES",
     order_side: "BUY",
     decision_ts: new Date(NOW.getTime() - 5_000),
+    received_at: new Date(NOW.getTime() - 1_000),
     q_lo: "0.750000",
     q_hi: "0.850000",
     size_shares: "20.000000",
@@ -79,11 +82,32 @@ function world(options: WorldOptions = {}): World {
       const respond = (rows: Row[]): Promise<{ rows: R[]; rowCount: number }> =>
         Promise.resolve({ rows: rows as R[], rowCount: rows.length });
 
+      // The decision selectors are EVALUATED, not stubbed: the fake applies the
+      // very bounds the store passed as parameters. A cutoff computed from the
+      // wrong constant, or bound to the wrong placeholder, changes the rows this
+      // fake returns — which is the only way a unit test can prove a WHERE
+      // clause without a real server.
+      const rows = options.decisions ?? [];
+      const stamp = (row: Row, column: string): number =>
+        (row[column] as Date).getTime();
+      const bound = (index: number): number =>
+        (params[index] as Date).getTime();
       if (text.includes("count(*) AS aged_out")) {
-        return respond([{ aged_out: options.agedOut ?? 0 }]);
+        const aged = rows.filter(
+          (row) =>
+            (stamp(row, "received_at") <= bound(0) ||
+              stamp(row, "decision_ts") <= bound(1)) &&
+            stamp(row, "received_at") > bound(2),
+        );
+        return respond([{ aged_out: aged.length }]);
       }
       if (text.includes("FROM portfolio_decisions d")) {
-        return respond(options.decisions ?? []);
+        const fresh = rows.filter(
+          (row) =>
+            stamp(row, "received_at") > bound(0) &&
+            stamp(row, "decision_ts") > bound(1),
+        );
+        return respond(fresh.slice(0, params[2] as number));
       }
       if (text.includes("FROM polymarket_param_versions")) {
         return options.tickSize === null
@@ -128,6 +152,7 @@ async function run(options: WorldOptions = {}): Promise<{
   const logs: Row[] = [];
   const outcome = await bridgeTick(w.pool, {
     clock: () => NOW,
+    ...(options.bootAt === undefined ? {} : { bootAt: options.bootAt }),
     logSink: (line) => {
       logs.push(JSON.parse(line) as Row);
     },
@@ -150,7 +175,7 @@ async function run(options: WorldOptions = {}): Promise<{
 }
 
 describe("which decisions the bridge picks up", () => {
-  it("asks only for accepted entries with no order, inside the freshness window", async () => {
+  it("asks only for accepted entries with no order, inside both freshness windows", async () => {
     const { world: w } = await run();
     const pending = w.queries.find((query) =>
       query.text.includes("FROM portfolio_decisions d"),
@@ -159,7 +184,11 @@ describe("which decisions the bridge picks up", () => {
     const text = pending?.text ?? "";
     expect(text).toContain("d.outcome = 'ACCEPTED'");
     expect(text).toContain("d.decision_kind = 'ENTRY'");
-    expect(text).toContain("d.decision_ts > $1");
+    // RFC-022 D1: the window that decides whether the bridge may act is the one
+    // on when the bridge could first SEE the row, not on when the engine
+    // decided. `decision_ts` stays as an absolute ceiling.
+    expect(text).toContain("d.received_at > $1");
+    expect(text).toContain("d.decision_ts > $2");
     // The authority against acting twice is the order table, not the stamp:
     // the stamp lands up to a minute later, on the portfolio's own cycle.
     expect(text).toContain("NOT EXISTS");
@@ -167,15 +196,106 @@ describe("which decisions the bridge picks up", () => {
       "FROM paper_orders o WHERE o.decision_id = d.decision_id",
     );
     expect(pending?.params[0]).toEqual(
-      new Date(NOW.getTime() - MAX_DECISION_AGE_MS),
+      new Date(NOW.getTime() - MAX_RECEIVED_AGE_MS),
+    );
+    expect(pending?.params[1]).toEqual(
+      new Date(NOW.getTime() - MAX_DECISION_TS_AGE_MS),
     );
   });
 
+  it("considers a decision the engine took 45 s ago but the log received 5 s ago", async () => {
+    // The measured production shape. The portfolio cycle writes market by
+    // market, so `received_at - decision_ts` ran p50 17.1 s / p90 27.3 s / max
+    // 42.4 s over the 94 accepted entries retained on 2026-09-07, and the two
+    // clocks are phase-locked: under the old 30 s bound on `decision_ts` the
+    // row was already too old at the only tick that could have seen it.
+    const { outcome } = await run({
+      decisions: [
+        decision({
+          decision_ts: new Date(NOW.getTime() - 45_000),
+          received_at: new Date(NOW.getTime() - 5_000),
+        }),
+      ],
+    });
+    expect(outcome).toMatchObject({ considered: 1, agedOut: 0 });
+  });
+
+  it("still considers a decision seen 40 s ago, because a slow tick is SKIPPED", async () => {
+    // `bridgeTickOnce` drops a tick whose predecessor is still running
+    // (JOB_STILL_RUNNING). With a window equal to the 30 s period, one skipped
+    // tick would lose the row for good, so the window is two ticks.
+    const { outcome } = await run({
+      decisions: [
+        decision({
+          decision_ts: new Date(NOW.getTime() - 50_000),
+          received_at: new Date(NOW.getTime() - 40_000),
+        }),
+      ],
+    });
+    expect(outcome).toMatchObject({ considered: 1, agedOut: 0 });
+  });
+
+  it("refuses a decision past the absolute ceiling even if the log just saw it", async () => {
+    // A wedged portfolio cycle must not dump hours-old decisions onto a live
+    // book the moment it unwedges: fresh `received_at` is not enough.
+    const { outcome } = await run({
+      decisions: [
+        decision({
+          decision_ts: new Date(NOW.getTime() - 95_000),
+          received_at: new Date(NOW.getTime() - 1_000),
+        }),
+      ],
+    });
+    expect(outcome).toMatchObject({ considered: 0, accepted: 0, agedOut: 1 });
+  });
+
   it("counts decisions that aged out and warns, instead of executing them late", async () => {
-    const { logs, outcome } = await run({ agedOut: 3 });
+    const { logs, outcome } = await run({
+      decisions: [
+        decision({
+          decision_id: 1,
+          received_at: new Date(NOW.getTime() - 61_000),
+        }),
+        decision({
+          decision_id: 2,
+          received_at: new Date(NOW.getTime() - 70_000),
+        }),
+        decision({
+          decision_id: 3,
+          received_at: new Date(NOW.getTime() - 99_000),
+        }),
+      ],
+    });
     expect(outcome).toMatchObject({ considered: 0, accepted: 0, agedOut: 3 });
     const tick = logs.find((line) => line.reason_code === "BRIDGE_TICK");
     expect(tick).toMatchObject({ level: "warn", aged_out: 3 });
+  });
+
+  it("leaves pre-boot decisions out of aged_out, so the counter means 'lost now'", async () => {
+    // Production on 2026-09-07: `aged_out: 86` on every tick, 30 s apart, for a
+    // backlog whose newest row predated the running process by 30 hours. A
+    // counter that can only grow says nothing about the tick that printed it.
+    const bootAt = new Date(NOW.getTime() - 120_000);
+    const { logs, outcome } = await run({
+      bootAt,
+      decisions: [
+        decision({
+          decision_id: 1,
+          decision_ts: new Date(NOW.getTime() - 3_600_000),
+          received_at: new Date(NOW.getTime() - 3_600_000),
+        }),
+        decision({
+          decision_id: 2,
+          decision_ts: new Date(NOW.getTime() - 100_000),
+          received_at: new Date(NOW.getTime() - 100_000),
+        }),
+      ],
+    });
+    // Only the decision received after this process booted is counted.
+    expect(outcome.agedOut).toBe(1);
+    expect(
+      logs.find((line) => line.reason_code === "BRIDGE_TICK"),
+    ).toMatchObject({ aged_out: 1, boot_at: bootAt.toISOString() });
   });
 
   it("says nothing at all when there is no work and nothing aged out", async () => {
