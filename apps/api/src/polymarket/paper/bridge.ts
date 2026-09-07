@@ -16,6 +16,7 @@
 // closed positions, 30 markets, two categories, dispersion, and an interval that
 // survives the 50% haircut. What changes is that the counters can finally move.
 
+import { SCALE_DIGITS, formatScaled } from "../fundamental/fixed.js";
 import type { ResolutionGateFn } from "../resolution/enforcement.js";
 import { resolutionGate } from "../resolution/enforcement.js";
 import {
@@ -23,6 +24,7 @@ import {
   bookAtOrBefore,
   feeRateFromBps,
   paramsAtOrBefore,
+  positionShares,
   type PaperPool,
 } from "./brokerstore.js";
 import { POLICY_VERSION, decideOrderType } from "./policy.js";
@@ -84,15 +86,31 @@ export interface BridgeDeps {
   readonly bootAt?: Date;
 }
 
+/**
+ * The two decision kinds the bridge turns into orders.
+ *
+ * `EXIT` arrived with RFC-022 D4-A. Until then the only reader of an `EXIT` row
+ * was `exitstore.ts`'s own signature check, and production accumulated 293
+ * `EXIT ACCEPTED` decisions with `paper_order_id` null in 293 of 293 — a
+ * position could only ever close by resolution.
+ */
+export type DecisionKind = "ENTRY" | "EXIT";
+
 export interface BridgeOutcome {
   readonly considered: number;
   readonly accepted: number;
   readonly skipped: number;
-  /** Decisions that aged past the freshness bound before an order existed. */
+  /** Decisions that aged past a freshness bound before an order existed. */
   readonly agedOut: number;
+  /** The same three counts, for exits. Kept apart so neither number lies. */
+  readonly exitsConsidered: number;
+  readonly exitsAccepted: number;
+  readonly exitsSkipped: number;
+  readonly exitsAgedOut: number;
 }
 
 interface PendingDecision {
+  readonly kind: DecisionKind;
   readonly decisionId: number;
   readonly conditionId: string;
   readonly tokenId: string;
@@ -114,15 +132,38 @@ interface PendingDecision {
  * actually keeps the bridge from acting twice. The unique index on
  * `paper_orders.decision_id` is the backstop underneath both.
  */
-const PENDING_SQL =
-  "SELECT d.decision_id, d.condition_id, d.token_id, d.market_side, " +
-  "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares " +
-  "FROM portfolio_decisions d " +
-  "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
-  "AND d.paper_order_id IS NULL " +
-  "AND d.received_at > $1 AND d.decision_ts > $2 " +
-  "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id) " +
-  "ORDER BY d.decision_id LIMIT $3";
+function pendingSql(kind: DecisionKind): string {
+  return (
+    "SELECT d.decision_id, d.condition_id, d.token_id, d.market_side, " +
+    "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares " +
+    "FROM portfolio_decisions d " +
+    `WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = '${kind}' ` +
+    "AND d.paper_order_id IS NULL " +
+    "AND d.received_at > $1 AND d.decision_ts > $2 " +
+    "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id) " +
+    "ORDER BY d.decision_id LIMIT $3"
+  );
+}
+
+/**
+ * One exit order open per token at a time (RFC-022 D4-A).
+ *
+ * The exit verdict oscillates — 186 `EXIT ACCEPTED` on one BTC market in 4 h,
+ * the verdict flipping about every 77 s — and reposting a sale on every flip
+ * would destroy the position's place in the queue, which is the whole point of
+ * a passive exit. The hysteresis that decides WHETHER to exit is the RFC-013
+ * exit planner's; this is only the guard that keeps one decision from becoming
+ * many orders.
+ *
+ * Joined against the decision log rather than filtered on `side = 'SELL'`,
+ * because an ENTRY on the NO leg is also a SELL of the affirmative token: the
+ * side alone cannot tell an exit from an entry.
+ */
+const OPEN_EXIT_SQL =
+  "SELECT 1 FROM paper_orders o " +
+  "JOIN portfolio_decisions d ON d.decision_id = o.decision_id " +
+  "WHERE o.token_id = $1 AND o.status = 'open' " +
+  "AND d.decision_kind = 'EXIT' LIMIT 1";
 
 /**
  * Accepted entries that will never become orders because they aged out.
@@ -139,13 +180,16 @@ const PENDING_SQL =
  * received before boot is somebody else's history; what this counter must report
  * is what THIS process is losing now.
  */
-const AGED_OUT_SQL =
-  "SELECT count(*) AS aged_out FROM portfolio_decisions d " +
-  "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
-  "AND d.paper_order_id IS NULL " +
-  "AND (d.received_at <= $1 OR d.decision_ts <= $2) " +
-  "AND d.received_at > $3 " +
-  "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id)";
+function agedOutSql(kind: DecisionKind): string {
+  return (
+    "SELECT count(*) AS aged_out FROM portfolio_decisions d " +
+    `WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = '${kind}' ` +
+    "AND d.paper_order_id IS NULL " +
+    "AND (d.received_at <= $1 OR d.decision_ts <= $2) " +
+    "AND d.received_at > $3 " +
+    "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id)"
+  );
+}
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -172,7 +216,10 @@ function toInteger(value: unknown): number | null {
   return null;
 }
 
-function parsePending(row: Record<string, unknown>): PendingDecision | null {
+function parsePending(
+  kind: DecisionKind,
+  row: Record<string, unknown>,
+): PendingDecision | null {
   const decisionId = toInteger(row["decision_id"]);
   const conditionId = asString(row["condition_id"]);
   const tokenId = asString(row["token_id"]);
@@ -190,6 +237,7 @@ function parsePending(row: Record<string, unknown>): PendingDecision | null {
     return null;
   }
   return {
+    kind,
     decisionId,
     conditionId,
     tokenId,
@@ -265,37 +313,47 @@ export async function bridgeTick(
   const receivedCutoff = new Date(now.getTime() - MAX_RECEIVED_AGE_MS);
   const decisionTsCutoff = new Date(now.getTime() - MAX_DECISION_TS_AGE_MS);
   const bootAt = deps.bootAt ?? new Date(0);
+  const maxPerTick = deps.maxPerTick ?? MAX_PER_TICK;
 
-  const pendingRows = await pool.query<Record<string, unknown>>(PENDING_SQL, [
-    receivedCutoff,
-    decisionTsCutoff,
-    deps.maxPerTick ?? MAX_PER_TICK,
-  ]);
-  const agedOutRows = await pool.query<Record<string, unknown>>(AGED_OUT_SQL, [
-    receivedCutoff,
-    decisionTsCutoff,
-    bootAt,
-  ]);
-  const agedOut = toInteger(agedOutRows.rows[0]?.["aged_out"]) ?? 0;
-
-  let accepted = 0;
-  let skipped = 0;
-  const considered = pendingRows.rows.length;
-
-  for (const row of pendingRows.rows) {
-    const decision = parsePending(row);
-    if (decision === null) {
-      skipped += 1;
-      log("error", "BRIDGE_DECISION_UNREADABLE", {});
-      continue;
+  const pending: PendingDecision[] = [];
+  const unreadable: Record<DecisionKind, number> = { ENTRY: 0, EXIT: 0 };
+  const agedOutByKind: Record<DecisionKind, number> = { ENTRY: 0, EXIT: 0 };
+  const consideredByKind: Record<DecisionKind, number> = { ENTRY: 0, EXIT: 0 };
+  for (const kind of ["ENTRY", "EXIT"] as const) {
+    const rows = await pool.query<Record<string, unknown>>(pendingSql(kind), [
+      receivedCutoff,
+      decisionTsCutoff,
+      maxPerTick,
+    ]);
+    consideredByKind[kind] = rows.rows.length;
+    for (const row of rows.rows) {
+      const parsed = parsePending(kind, row);
+      if (parsed === null) {
+        unreadable[kind] += 1;
+        log("error", "BRIDGE_DECISION_UNREADABLE", { decision_kind: kind });
+        continue;
+      }
+      pending.push(parsed);
     }
+    const agedRows = await pool.query<Record<string, unknown>>(
+      agedOutSql(kind),
+      [receivedCutoff, decisionTsCutoff, bootAt],
+    );
+    agedOutByKind[kind] = toInteger(agedRows.rows[0]?.["aged_out"]) ?? 0;
+  }
+
+  const acceptedByKind: Record<DecisionKind, number> = { ENTRY: 0, EXIT: 0 };
+  const skippedByKind: Record<DecisionKind, number> = { ...unreadable };
+
+  for (const decision of pending) {
     const skip = (
       reason: string,
       extra: Record<string, unknown> = {},
     ): void => {
-      skipped += 1;
+      skippedByKind[decision.kind] += 1;
       log("warn", "BRIDGE_DECISION_SKIPPED", {
         decision_id: decision.decisionId,
+        decision_kind: decision.kind,
         token_id: decision.tokenId,
         reason,
         ...extra,
@@ -307,7 +365,37 @@ export async function bridgeTick(
       decision.qLo,
       decision.qHi,
     );
-    if (bound === null || decision.sizeShares === null) {
+    if (bound === null) {
+      skip("DECISION_INCOMPLETE");
+      continue;
+    }
+
+    // An EXIT row is NOT sized: `decisionrow.ts` writes `size_shares` null and
+    // `binding_constraint` NOT_SIZED, because leaving a position is not sized by
+    // the entry limiters. The size is the position, read from the ledger — the
+    // same replay `reduceOnlyCap` uses, so the sale can never exceed what the
+    // ledger says is held. The validator rounds DOWN to the tick's size digits,
+    // which is the right direction for a reduce-only sale.
+    let size = decision.sizeShares;
+    if (decision.kind === "EXIT") {
+      if (await hasOpenExitOrder(pool, decision.tokenId)) {
+        skip("EXIT_ORDER_ALREADY_OPEN");
+        continue;
+      }
+      let shares: bigint;
+      try {
+        shares = await positionShares(pool, decision.tokenId);
+      } catch {
+        skip("EXIT_POSITION_UNREADABLE");
+        continue;
+      }
+      if (shares <= 0n) {
+        skip("EXIT_NO_POSITION");
+        continue;
+      }
+      size = formatScaled(shares, SCALE_DIGITS);
+    }
+    if (size === null) {
       skip("DECISION_INCOMPLETE");
       continue;
     }
@@ -348,7 +436,7 @@ export async function bridgeTick(
     const policy = decideOrderType({
       side: decision.orderSide,
       qLo: bound,
-      size: decision.sizeShares,
+      size,
       bids: book.bids,
       asks: book.asks,
       tickSize: params.tickSize,
@@ -368,7 +456,7 @@ export async function bridgeTick(
       side: decision.orderSide,
       orderType: policy.value.orderType,
       limitPrice: policy.value.limitPrice,
-      size: decision.sizeShares,
+      size,
       postOnly: policy.value.postOnly,
       worstPrice: policy.value.worstPrice,
       ttlS: policy.value.ttlS,
@@ -386,9 +474,10 @@ export async function bridgeTick(
         intent: {
           q_lo: decision.qLo,
           q_hi: decision.qHi,
-          size_max: decision.sizeShares,
+          size_max: size,
           market_side: decision.marketSide,
           decision_id: decision.decisionId,
+          decision_kind: decision.kind,
         },
       },
       {
@@ -401,30 +490,65 @@ export async function bridgeTick(
       skip(outcome.reason, { http_status: outcome.httpStatus });
       continue;
     }
-    accepted += 1;
+    acceptedByKind[decision.kind] += 1;
     log("info", "BRIDGE_ORDER_ACCEPTED", {
       decision_id: decision.decisionId,
+      decision_kind: decision.kind,
       order_id: bridgeOrderId(decision.decisionId),
       token_id: decision.tokenId,
       market_side: decision.marketSide,
       order_side: decision.orderSide,
       order_type: policy.value.orderType,
       limit_price: policy.value.limitPrice,
-      size: decision.sizeShares,
+      size,
       policy_reason: policy.value.policyReason,
     });
   }
 
-  if (considered > 0 || agedOut > 0) {
-    log(agedOut > 0 ? "warn" : "info", "BRIDGE_TICK", {
-      considered,
-      accepted,
-      skipped,
-      aged_out: agedOut,
-      boot_at: deps.bootAt?.toISOString() ?? null,
-    });
+  const outcome: BridgeOutcome = {
+    considered: consideredByKind.ENTRY,
+    accepted: acceptedByKind.ENTRY,
+    skipped: skippedByKind.ENTRY,
+    agedOut: agedOutByKind.ENTRY,
+    exitsConsidered: consideredByKind.EXIT,
+    exitsAccepted: acceptedByKind.EXIT,
+    exitsSkipped: skippedByKind.EXIT,
+    exitsAgedOut: agedOutByKind.EXIT,
+  };
+  const anyWork =
+    outcome.considered > 0 ||
+    outcome.agedOut > 0 ||
+    outcome.exitsConsidered > 0 ||
+    outcome.exitsAgedOut > 0;
+  if (anyWork) {
+    log(
+      outcome.agedOut > 0 || outcome.exitsAgedOut > 0 ? "warn" : "info",
+      "BRIDGE_TICK",
+      {
+        considered: outcome.considered,
+        accepted: outcome.accepted,
+        skipped: outcome.skipped,
+        aged_out: outcome.agedOut,
+        exits_considered: outcome.exitsConsidered,
+        exits_accepted: outcome.exitsAccepted,
+        exits_skipped: outcome.exitsSkipped,
+        exits_aged_out: outcome.exitsAgedOut,
+        boot_at: deps.bootAt?.toISOString() ?? null,
+      },
+    );
   }
-  return { considered, accepted, skipped, agedOut };
+  return outcome;
+}
+
+/** Whether this token already has an exit order resting in the book. */
+async function hasOpenExitOrder(
+  pool: PaperPool,
+  tokenId: string,
+): Promise<boolean> {
+  const result = await pool.query<Record<string, unknown>>(OPEN_EXIT_SQL, [
+    tokenId,
+  ]);
+  return result.rows.length > 0;
 }
 
 /** Catalyst clock from the newest persisted feature window, as the API does. */

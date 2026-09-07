@@ -850,6 +850,23 @@ async function loadTokenLedger(
   return events;
 }
 
+/**
+ * The signed position in a token, replayed from the ledger.
+ *
+ * Exported for the RFC-022 D4-A exit selector, which sizes a sale by what is
+ * actually held: an `EXIT` decision carries no size. The ledger and not
+ * `paper_positions` on purpose — `paper_positions` is a projection refreshed
+ * after each fill, and `reduceOnlyCap` already treats this replay as the
+ * authority on exposure. A sale sized from the projection could exceed the
+ * ledger during the window between a fill and its refresh.
+ */
+export async function positionShares(
+  pool: PaperPool,
+  tokenId: string,
+): Promise<bigint> {
+  return loadPositionShares(pool, tokenId);
+}
+
 async function loadPositionShares(
   pool: PaperPool,
   tokenId: string,

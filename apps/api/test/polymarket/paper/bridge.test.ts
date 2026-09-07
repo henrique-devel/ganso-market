@@ -38,6 +38,8 @@ const TOKEN = "tok-1";
 
 interface WorldOptions {
   readonly decisions?: Row[];
+  /** Accepted EXIT rows, answered by the exit selector only. */
+  readonly exits?: Row[];
   /** null means "no params recorded", which must stop the bridge. */
   readonly tickSize?: string | null;
   /** Book age in ms at `NOW`; the default is fresh. */
@@ -46,6 +48,12 @@ interface WorldOptions {
   readonly gateReason?: string;
   /** The paper worker's own PAPER_BOOT instant, as the runner passes it. */
   readonly bootAt?: Date;
+  /** Ledger fill events for the token, which is what sizes an exit. */
+  readonly positionShares?: string | null;
+  /** An exit order already resting for the token. */
+  readonly openExitOrder?: boolean;
+  /** Fails the ledger read, to prove an unreadable position cannot size a sale. */
+  readonly positionReadError?: boolean;
 }
 
 interface World {
@@ -69,6 +77,16 @@ function decision(overrides: Row = {}): Row {
   };
 }
 
+function exitDecision(overrides: Row = {}): Row {
+  // The shape `decisionrow.ts` actually writes for an exit: SELL on either leg,
+  // no size, `binding_constraint` NOT_SIZED.
+  return {
+    ...decision({ order_side: "SELL", size_shares: null }),
+    decision_id: 77,
+    ...overrides,
+  };
+}
+
 function world(options: WorldOptions = {}): World {
   const queries: { text: string; params: readonly unknown[] }[] = [];
   const bookAgeMs = options.bookAgeMs ?? 2_000;
@@ -87,11 +105,42 @@ function world(options: WorldOptions = {}): World {
       // wrong constant, or bound to the wrong placeholder, changes the rows this
       // fake returns — which is the only way a unit test can prove a WHERE
       // clause without a real server.
-      const rows = options.decisions ?? [];
+      const rows = text.includes("d.decision_kind = 'EXIT'")
+        ? (options.exits ?? [])
+        : (options.decisions ?? []);
       const stamp = (row: Row, column: string): number =>
         (row[column] as Date).getTime();
       const bound = (index: number): number =>
         (params[index] as Date).getTime();
+      if (text.includes("JOIN portfolio_decisions d ON d.decision_id")) {
+        return respond(options.openExitOrder === true ? [{ "1": 1 }] : []);
+      }
+      if (text.includes("FROM paper_ledger_events WHERE token_id = $1")) {
+        if (options.positionReadError === true) {
+          return Promise.reject(new Error("ledger unavailable"));
+        }
+        const shares = options.positionShares ?? null;
+        return respond(
+          shares === null
+            ? []
+            : [
+                {
+                  idempotency_key: "seed:fill",
+                  event_type: "fill",
+                  order_id: "seed",
+                  token_id: TOKEN,
+                  condition_id: CONDITION,
+                  payload_json: {
+                    side: "BUY",
+                    price: "0.500000",
+                    size: shares,
+                    fee: "0",
+                  },
+                  event_ts: new Date(NOW.getTime() - 3_600_000),
+                },
+              ],
+        );
+      }
       if (text.includes("count(*) AS aged_out")) {
         const aged = rows.filter(
           (row) =>
@@ -150,6 +199,7 @@ async function run(options: WorldOptions = {}): Promise<{
 }> {
   const w = world(options);
   const logs: Row[] = [];
+
   const outcome = await bridgeTick(w.pool, {
     clock: () => NOW,
     ...(options.bootAt === undefined ? {} : { bootAt: options.bootAt }),
@@ -352,6 +402,131 @@ describe("what stops a decision from becoming an order", () => {
     expect(
       logs.find((line) => line.reason_code === "BRIDGE_DECISION_UNREADABLE"),
     ).toBeDefined();
+  });
+});
+
+describe("exits become passive sales (RFC-022 D4-A)", () => {
+  it("carries a held position all the way to the acceptance path", async () => {
+    // Production accumulated 293 `EXIT ACCEPTED` decisions with
+    // `paper_order_id` null in 293 of 293: the only reader of an EXIT row was
+    // `exitstore.ts`'s signature check, so a position could only ever close by
+    // resolution. `decisionrow.ts` writes `size_shares` null and
+    // `binding_constraint` NOT_SIZED, so the size has to come from what is held.
+    //
+    // This suite's pool has no `transaction`, which is where the acceptance path
+    // fails closed — so that refusal IS the assertion that every exit-specific
+    // guard was passed and the draft reached the broker. The order that comes
+    // out the other end is asserted against real PostgreSQL in `bridge.pg`.
+    const { logs, outcome } = await run({
+      exits: [exitDecision()],
+      positionShares: "8.110000",
+    });
+    expect(outcome).toMatchObject({
+      exitsConsidered: 1,
+      // The entry counters stay their own numbers.
+      considered: 0,
+      accepted: 0,
+    });
+    expect(
+      logs.find((line) => line.reason_code === "BRIDGE_DECISION_SKIPPED"),
+    ).toMatchObject({
+      decision_kind: "EXIT",
+      decision_id: 77,
+      reason: "PAPER_BROKER_TRANSACTION_UNAVAILABLE",
+    });
+  });
+
+  it("skips an exit for a token with no position instead of selling short", async () => {
+    const { logs, outcome } = await run({
+      exits: [exitDecision()],
+      positionShares: null,
+    });
+    expect(outcome).toMatchObject({ exitsAccepted: 0, exitsSkipped: 1 });
+    expect(
+      logs.find((line) => line.reason_code === "BRIDGE_DECISION_SKIPPED"),
+    ).toMatchObject({ reason: "EXIT_NO_POSITION", decision_kind: "EXIT" });
+  });
+
+  it("skips a second exit while one is already resting for the token", async () => {
+    // The exit verdict oscillates — 186 accepted exits on one BTC market in
+    // 4 h, flipping about every 77 s. Reposting on every flip would destroy the
+    // position's place in the queue, which is the whole value of a passive exit.
+    const { logs, outcome } = await run({
+      exits: [exitDecision()],
+      positionShares: "8.110000",
+      openExitOrder: true,
+    });
+    expect(outcome).toMatchObject({ exitsAccepted: 0, exitsSkipped: 1 });
+    expect(
+      logs.find((line) => line.reason_code === "BRIDGE_DECISION_SKIPPED"),
+    ).toMatchObject({
+      reason: "EXIT_ORDER_ALREADY_OPEN",
+      decision_kind: "EXIT",
+    });
+  });
+
+  it("skips rather than guesses when the position cannot be read", async () => {
+    const { logs, outcome } = await run({
+      exits: [exitDecision()],
+      positionReadError: true,
+    });
+    expect(outcome).toMatchObject({ exitsAccepted: 0, exitsSkipped: 1 });
+    expect(
+      logs.find((line) => line.reason_code === "BRIDGE_DECISION_SKIPPED"),
+    ).toMatchObject({ reason: "EXIT_POSITION_UNREADABLE" });
+  });
+
+  it("asks the exit selector for EXIT rows under the same freshness bounds", async () => {
+    const { world: w } = await run();
+    const exitQuery = w.queries.find(
+      (query) =>
+        query.text.includes("FROM portfolio_decisions d") &&
+        query.text.includes("d.decision_kind = 'EXIT'") &&
+        !query.text.includes("count(*)"),
+    );
+    expect(exitQuery).toBeDefined();
+    const text = exitQuery?.text ?? "";
+    expect(text).toContain("d.outcome = 'ACCEPTED'");
+    expect(text).toContain("d.received_at > $1");
+    expect(text).toContain("d.decision_ts > $2");
+    expect(text).toContain("NOT EXISTS");
+    expect(exitQuery?.params[0]).toEqual(
+      new Date(NOW.getTime() - MAX_RECEIVED_AGE_MS),
+    );
+  });
+
+  it("does not cancel a resting exit when the engine later says HOLD", async () => {
+    // A HOLD is a REJECTED row, which no selector asks for: the hysteresis that
+    // decides whether to leave belongs to the RFC-013 exit planner, and letting
+    // a flip-flopping verdict pull the order would be worse than leaving it.
+    const { logs, outcome } = await run({
+      exits: [],
+      positionShares: "8.110000",
+      openExitOrder: true,
+    });
+    expect(outcome.exitsConsidered).toBe(0);
+    expect(logs).toEqual([]);
+  });
+
+  it("keeps the exit counters apart from the entry counters in BRIDGE_TICK", async () => {
+    // One number per kind. Folding exits into `considered` would make the
+    // RFC-022 D1 acceptance criterion unreadable: "the bridge sees the accepted
+    // entries" cannot be measured by a counter that also counts exits.
+    const { logs } = await run({
+      decisions: [decision()],
+      exits: [exitDecision({ decision_id: 78 })],
+      positionShares: "8.110000",
+    });
+    expect(
+      logs.find((line) => line.reason_code === "BRIDGE_TICK"),
+    ).toMatchObject({
+      considered: 1,
+      skipped: 1,
+      exits_considered: 1,
+      exits_skipped: 1,
+      aged_out: 0,
+      exits_aged_out: 0,
+    });
   });
 });
 

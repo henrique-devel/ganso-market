@@ -208,6 +208,69 @@ async function acceptedEntry(
   return Number(result.rows[0]?.decision_id ?? 0);
 }
 
+/**
+ * An accepted EXIT, written the way `decisionrow.ts` writes one.
+ *
+ * `size_shares` is null and `binding_constraint` is NOT_SIZED: an exit is not
+ * sized by the entry limiters, so nothing here says how much to sell.
+ */
+async function acceptedExit(
+  decidedAt: Date = DECIDED_AT,
+  receivedAt: Date = new Date(decidedAt.getTime() + 1_000),
+): Promise<number> {
+  const result = await pool().query<{ decision_id: string | number }>(
+    `INSERT INTO portfolio_decisions
+       (decision_kind, condition_id, token_id, market_side, order_side,
+        decision_ts, q, q_lo, q_hi, estimate_source, exec_price, best_price,
+        edge_net, binding_constraint, limiters_json, config_version,
+        config_hash, factor_map_version, rule_version, param_version,
+        resolution_action, oldest_input_ts, newest_input_ts, book_json,
+        inputs_json, outcome, portfolio_state, received_at)
+     VALUES ('EXIT',$1,$2,'YES','SELL',$3,'0.800000','0.750000','0.850000',
+             'MARKET_BASELINE','0.610000','0.610000','0.010000','NOT_SIZED',
+             '[]'::jsonb,'1.2.0',$4,'1.0.0',1,1,'NONE',$5,$5,'{}'::jsonb,
+             $6::jsonb,'ACCEPTED','NORMAL',$7)
+     RETURNING decision_id`,
+    [
+      CONDITION,
+      TOKEN,
+      decidedAt,
+      "d".repeat(64),
+      new Date(decidedAt.getTime() - 1_000),
+      JSON.stringify({
+        exit: { signals: ["EDGE_GONE"] },
+        replay: { rule_precision_multiplier: 0.9 },
+      }),
+      receivedAt,
+    ],
+  );
+  return Number(result.rows[0]?.decision_id ?? 0);
+}
+
+/** A held position of `shares`, as one BUY fill in the ledger. */
+async function seedPosition(shares: string): Promise<void> {
+  const p = pool();
+  await p.query(
+    `INSERT INTO paper_ledger_events
+       (idempotency_key, event_type, order_id, token_id, condition_id,
+        payload_json, event_ts)
+     VALUES ($1, 'fill', $2, $3, $4, $5::jsonb, $6)`,
+    [
+      `seed:exit:${RUN}`,
+      `seed-exit-${RUN}`,
+      TOKEN,
+      CONDITION,
+      JSON.stringify({
+        side: "BUY",
+        price: "0.500000",
+        size: shares,
+        fee: "0",
+      }),
+      new Date(NOW.getTime() - 3_600_000),
+    ],
+  );
+}
+
 function logsOf(lines: string[]): Record<string, unknown>[] {
   return lines.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
@@ -230,6 +293,7 @@ afterAll(async () => {
     // events stay. They are harmless: no fill was ever appended, so nothing
     // reconstructs a position or a P&L from them.
     await p.query(`DELETE FROM paper_orders WHERE token_id = $1`, [TOKEN]);
+    await p.query(`DELETE FROM paper_positions WHERE token_id = $1`, [TOKEN]);
     await p.query(`DELETE FROM portfolio_decisions WHERE token_id = $1`, [
       TOKEN,
     ]);
@@ -413,6 +477,70 @@ describe.skipIf(DATABASE_URL === undefined)(
         [decisionId],
       );
       expect(order.rows[0]?.count).toBe("0");
+    });
+
+    it("turns an accepted exit into a passive sale of exactly what is held", async () => {
+      // RFC-022 D4-A. Production had 293 accepted exits and 293 nulls: nothing
+      // read an EXIT row but `exitstore.ts`'s signature check, so a position
+      // could only close by resolution — and resolution was itself broken until
+      // PR #94. The size is the position, and the sale rests: selling the
+      // affirmative token IS the NO leg, its conservative bound is q_hi = 0.85,
+      // and a bid of 0.61 does not beat 0.85, so the taker branch must not fire.
+      await seedPosition("8.110000");
+      const decisionId = await acceptedExit();
+      const lines: string[] = [];
+      const outcome = await bridgeTick(pool(), {
+        clock: () => NOW,
+        logSink: (line) => lines.push(line),
+      });
+      const skipped = logsOf(lines).find(
+        (line) =>
+          line.reason_code === "BRIDGE_DECISION_SKIPPED" &&
+          line.decision_id === decisionId,
+      );
+      expect(skipped).toBeUndefined();
+      expect(outcome.exitsAccepted).toBe(1);
+
+      const order = await pool().query<Record<string, unknown>>(
+        `SELECT order_id, source, decision_id, side, order_type, limit_price,
+                size, post_only, status, policy_reason
+           FROM paper_orders WHERE decision_id = $1`,
+        [decisionId],
+      );
+      expect(order.rows[0]).toMatchObject({
+        order_id: `portfolio:${String(decisionId)}`,
+        source: "portfolio",
+        side: "SELL",
+        status: "open",
+        // 8.11 shares, rounded DOWN to the tick's 2 size digits — the right
+        // direction for a reduce-only sale.
+        size: "8.11",
+        order_type: "GTC",
+        post_only: true,
+      });
+      expect(String(order.rows[0]?.policy_reason)).toContain("DEFAULT_PASSIVE");
+    });
+
+    it("skips a second accepted exit while the first sale is still resting", async () => {
+      // The verdict oscillates about every 77 s; the sale must keep its place
+      // in the queue instead of being reposted.
+      const second = await acceptedExit();
+      const lines: string[] = [];
+      await bridgeTick(pool(), {
+        clock: () => NOW,
+        logSink: (line) => lines.push(line),
+      });
+      expect(
+        logsOf(lines).find((line) => line.decision_id === second),
+      ).toMatchObject({
+        reason_code: "BRIDGE_DECISION_SKIPPED",
+        reason: "EXIT_ORDER_ALREADY_OPEN",
+      });
+      const orders = await pool().query<{ count: string }>(
+        `SELECT count(*) AS count FROM paper_orders WHERE decision_id = $1`,
+        [second],
+      );
+      expect(orders.rows[0]?.count).toBe("0");
     });
 
     it("keeps decisions received before this process booted out of aged_out", async () => {
