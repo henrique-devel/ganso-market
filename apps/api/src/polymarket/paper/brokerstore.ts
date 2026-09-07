@@ -65,8 +65,129 @@ export const RESOLUTION_RISK_CLAIM_STALE_MS = 5_000;
  * A DEAD runtime never waits for this grace — its lease expires and
  * RESOLUTION_RUNTIME_STALE cancels immediately. FILLS never use the grace:
  * filling still requires the runtime caught up to every head, unchanged.
+ *
+ * RFC-022 D2 extends the same window to RESOLUTION_RUNTIME_NOT_READY and
+ * RESOLUTION_RUNTIME_GENERATION_MISMATCH. The 2026-08-28 fix moved the label
+ * and not the outcome: after it, production canceled 5 NOT_READY and 2
+ * GENERATION_MISMATCH and zero LAGGING, with 1 fill in 8 orders. The mechanism
+ * is a job failure rotating the generation IN PROCESS — measured again on
+ * 2026-09-07, when `JOB_FAILED state_tick RESOLUTION_MARKET_PARAM_VERSION_MISSING`
+ * at 15:27:29.311Z produced a new generation ready at 15:27:41.801Z with the
+ * container up since 01:07 — a 12 s hiccup that used to cancel every open order.
+ * MISSING, STOPPED, STALE and GRAPH_* still cancel on sight: a runtime that is
+ * gone is not a runtime that is slow.
  */
 export const RESOLUTION_LAG_CANCEL_GRACE_MS = 180_000;
+
+/**
+ * The two runtime failures that a transient generation rotation produces.
+ *
+ * Deliberately a closed set. Everything else `resolutionRuntimeFailure` can
+ * return means the runtime is absent, stopped, unleased or graph-blind, and
+ * those cancel immediately, as before.
+ */
+const RUNTIME_GRACE_REASONS: ReadonlySet<string> = new Set([
+  "RESOLUTION_RUNTIME_NOT_READY",
+  "RESOLUTION_RUNTIME_GENERATION_MISMATCH",
+]);
+
+/**
+ * Per-order memory of when a runtime failure was FIRST seen (RFC-022 D2).
+ *
+ * The age of a runtime failure CANNOT be read from the runtime row. `markBooting`
+ * rewrites both `started_at` and `updated_at` on every rotation, and
+ * `markFailed`, the heartbeat and the state tick rewrite `updated_at`; in the
+ * boot -> fail -> boot cycle that production actually runs, any age computed
+ * from those stamps is permanently under the grace window and the order would
+ * NEVER cancel. That is fail-open, and the RFC names it as a stop condition.
+ *
+ * So the anchor is the paper worker's own observation: the first instant at
+ * which THIS process saw THIS order under a failing runtime. It is in memory by
+ * design — a restart zeroes it, every open order re-enters on the first tick
+ * after boot, and the grace restarts from the boot, never from a past this
+ * process cannot vouch for.
+ *
+ * `readyGap` is the hard ceiling underneath: the first instant at which the
+ * order was seen while the runtime had never reached readiness (`ready_at IS
+ * NULL`, which the schema's own CHECK ties to `NOT ready`). It is cleared only
+ * by a runtime that becomes ready — never by a generation change — so a runtime
+ * rotating forever without ever publishing cannot keep an order alive by
+ * churning its generation.
+ */
+export interface RuntimeGraceAnchors {
+  readonly firstSeen: Map<string, Date>;
+  readonly readyGap: Map<string, Date>;
+}
+
+/** This worker process's anchors. Tests inject their own through BrokerDeps. */
+const processRuntimeGraceAnchors: RuntimeGraceAnchors = {
+  firstSeen: new Map<string, Date>(),
+  readyGap: new Map<string, Date>(),
+};
+
+/** Age since the first sight recorded for this order, recording it if new. */
+function anchorAgeMs(
+  anchor: Map<string, Date>,
+  orderId: string,
+  now: Date,
+): number {
+  const seen = anchor.get(orderId);
+  if (seen === undefined) {
+    anchor.set(orderId, now);
+    return 0;
+  }
+  return Math.max(now.getTime() - seen.getTime(), 0);
+}
+
+/**
+ * How long this order has been waiting on a runtime that never became ready.
+ *
+ * Null once the runtime has a `ready_at`, and the anchor is dropped with it: a
+ * runtime that published is not the failure this ceiling is for.
+ */
+function readyGapMs(
+  anchors: RuntimeGraceAnchors,
+  orderId: string,
+  runtime: ResolutionRuntimeSnapshot,
+  now: Date,
+): number | null {
+  if (runtime.readyAt !== null) {
+    anchors.readyGap.delete(orderId);
+    return null;
+  }
+  return anchorAgeMs(anchors.readyGap, orderId, now);
+}
+
+function forgetRuntimeGraceAnchors(
+  anchors: RuntimeGraceAnchors,
+  orderId: string,
+): void {
+  anchors.firstSeen.delete(orderId);
+  anchors.readyGap.delete(orderId);
+}
+
+/**
+ * The order adopts the runtime's current generation, in place.
+ *
+ * A conscious contract change: RFC-012 designed the generation as an immutable
+ * stamp. There is no append-only trigger on `paper_orders` (only
+ * `paper_ledger_events` and `portfolio_position_entries` have one), and the
+ * alternative — cancelling every resting order on every rotation — is what
+ * produced 16 cancellations against 2 fills. Adoption happens only after the
+ * policy has re-authorized the token under the new generation.
+ */
+async function adoptResolutionGeneration(
+  pool: PaperPool,
+  orderId: string,
+  generation: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE paper_orders
+        SET resolution_generation = $2::uuid
+      WHERE order_id = $1 AND status = 'open'`,
+    [orderId, generation],
+  );
+}
 
 /** Default daily paper loss (USD) that engages the kill switch (D4). */
 export const DEFAULT_DAILY_LOSS_LIMIT_USD = "100";
@@ -76,6 +197,11 @@ export interface BrokerDeps {
   readonly latencyMs?: number;
   readonly dailyLossLimitUsd?: string;
   readonly logSink?: (line: string) => void;
+  /**
+   * Test seam for the RFC-022 D2 grace anchors. Production uses the process's
+   * own, which is the point: the anchor must be this worker's observation.
+   */
+  readonly runtimeGraceAnchors?: RuntimeGraceAnchors;
 }
 
 function makeLog(
@@ -1137,6 +1263,18 @@ async function cancelForResolutionRisk(
 interface ResolutionRuntimeSnapshot {
   readonly generation: string;
   readonly ready: boolean;
+  /**
+   * When the CURRENT generation published, or null if it never did.
+   *
+   * Read for the hard ceiling of the RFC-022 D2 grace and for diagnosis only.
+   * `started_at`, `updated_at` and `failure_reason` come along for the log
+   * lines; NONE of them may anchor an age, because the resolution runner
+   * rewrites all three on every rotation.
+   */
+  readonly readyAt: Date | null;
+  readonly startedAt: Date | null;
+  readonly updatedAt: Date | null;
+  readonly failureReason: string | null;
   readonly stoppedAt: Date | null;
   readonly leaseExpiresAt: Date | null;
   readonly graphEvaluatedAt: Date | null;
@@ -1393,6 +1531,7 @@ async function loadLockedResolutionRuntime(
   const result = await pool.query(
     `SELECT r.generation, r.ready, r.stopped_at, r.lease_expires_at,
             r.graph_evaluated_at, r.graph_valid_until,
+            r.ready_at, r.started_at, r.updated_at, r.failure_reason,
             clock_timestamp() AS checked_at,
             r.processed_resolution_event_id,
             r.processed_rule_version_id,
@@ -1434,6 +1573,14 @@ async function loadLockedResolutionRuntime(
   return {
     generation,
     ready: row["ready"] === true,
+    // Nullable by schema and NOT part of the required-field check above: a null
+    // `ready_at` is the very state the hard ceiling exists to measure, so
+    // refusing the snapshot over it would turn a measurable failure into an
+    // unreadable one.
+    readyAt: toDate(row["ready_at"]),
+    startedAt: toDate(row["started_at"]),
+    updatedAt: toDate(row["updated_at"]),
+    failureReason: asString(row["failure_reason"]),
     stoppedAt: toDate(row["stopped_at"]),
     leaseExpiresAt: toDate(row["lease_expires_at"]),
     graphEvaluatedAt: toDate(row["graph_evaluated_at"]),
@@ -1694,7 +1841,16 @@ async function finalizePendingRiskCancellation(
       return false;
     }
     await lockToken(tx, order.tokenId);
-    await cancelForResolutionRisk(tx, order, reason, at);
+    // `cancel_path` separates this cancellation from the resting-order one.
+    // Both can carry RESOLUTION_RUNTIME_GENERATION_MISMATCH, but they mean
+    // opposite things: this is a fill whose runtime moved INSIDE the execution
+    // transaction, refused on purpose and with no grace by design (RFC-022 D2),
+    // while the resting-order path is the one that owes an `age_ms`. Without
+    // the marker the acceptance query cannot tell "strictly refused a fill"
+    // from "canceled an order without measuring how long it waited".
+    await cancelForResolutionRisk(tx, order, reason, at, {
+      cancel_path: "risk_check_incomplete",
+    });
     return true;
   });
 }
@@ -1707,6 +1863,7 @@ export async function brokerTick(
   const clock = deps.clock ?? ((): Date => new Date());
   const latencyMs = deps.latencyMs ?? DEFAULT_LATENCY_MS;
   const log = makeLog(deps.logSink);
+  const anchors = deps.runtimeGraceAnchors ?? processRuntimeGraceAnchors;
   const orders = await loadOpenOrders(pool);
   if (!hasTransaction(pool)) {
     // Executing without a single PostgreSQL transaction would reopen the
@@ -1825,6 +1982,103 @@ export async function brokerTick(
         if (runtimeFailure !== null) {
           let cancelDetails = runtimeFailure.details;
           if (
+            runtime !== null &&
+            RUNTIME_GRACE_REASONS.has(runtimeFailure.reason)
+          ) {
+            // RFC-022 D2. A generation rotation is a 12-second event in
+            // production and it used to cancel every resting order; the order
+            // survives it, bounded by an age this process measured itself.
+            const ageMs = anchorAgeMs(anchors.firstSeen, order.orderId, now);
+            const gapMs = readyGapMs(anchors, order.orderId, runtime, now);
+
+            if (
+              runtimeFailure.reason ===
+                "RESOLUTION_RUNTIME_GENERATION_MISMATCH" &&
+              order.resolutionGeneration !== null
+            ) {
+              // Reachable only under a runtime that is ready, leased,
+              // graph-fresh and caught up on every head: the generation
+              // comparison is the LAST test in resolutionRuntimeFailure. So the
+              // question left is not whether the runtime is alive but whether
+              // the new generation still authorizes this token — and without
+              // that re-validation there is no adoption.
+              const adoptionPolicy = await loadResolutionOrderPolicy(tx, order);
+              if (!adoptionPolicy.ok) {
+                await cancelForResolutionRisk(
+                  tx,
+                  order,
+                  adoptionPolicy.failure.reason,
+                  now,
+                  { ...adoptionPolicy.failure.details, age_ms: ageMs },
+                );
+                forgetRuntimeGraceAnchors(anchors, order.orderId);
+                ordersCanceled += 1;
+                return;
+              }
+              const adoptionDenial = resolutionOrderPolicyDenial(
+                order,
+                adoptionPolicy.policy,
+              );
+              if (adoptionDenial !== null) {
+                await cancelForResolutionRisk(
+                  tx,
+                  order,
+                  adoptionDenial.reason,
+                  now,
+                  { ...adoptionDenial.details, age_ms: ageMs },
+                );
+                forgetRuntimeGraceAnchors(anchors, order.orderId);
+                ordersCanceled += 1;
+                return;
+              }
+              await adoptResolutionGeneration(
+                tx,
+                order.orderId,
+                runtime.generation,
+              );
+              await clearResolutionRiskCheck(tx, order.orderId);
+              forgetRuntimeGraceAnchors(anchors, order.orderId);
+              log("warn", "PAPER_ORDER_GENERATION_ADOPTED", {
+                order_id: order.orderId,
+                previous_generation: order.resolutionGeneration,
+                generation: runtime.generation,
+                age_ms: ageMs,
+                failure_reason: runtime.failureReason,
+              });
+              // The fill paths in this tick still hold the OLD generation in
+              // memory, and every one of them is strict. The next tick, 2 s
+              // away, sees a matching stamp: adoption never doubles as a fill
+              // authorization.
+              return;
+            }
+
+            if (
+              ageMs < RESOLUTION_LAG_CANCEL_GRACE_MS &&
+              (gapMs === null || gapMs <= RESOLUTION_LAG_CANCEL_GRACE_MS)
+            ) {
+              await clearResolutionRiskCheck(tx, order.orderId);
+              log("warn", "PAPER_ORDER_RUNTIME_GRACE", {
+                order_id: order.orderId,
+                reason: runtimeFailure.reason,
+                age_ms: ageMs,
+                ready_gap_ms: gapMs,
+                grace_ms: RESOLUTION_LAG_CANCEL_GRACE_MS,
+                failure_reason: runtime.failureReason,
+                ...runtimeFailure.details,
+              });
+              return;
+            }
+            // Written into the cancellation, not only the log. Without these
+            // keys the acceptance query reads NULL and the criterion "no
+            // cancellation inside the grace" passes by being empty: production
+            // has 6 NOT_READY and 3 MISMATCH rows and not one carries an age.
+            cancelDetails = {
+              ...runtimeFailure.details,
+              age_ms: ageMs,
+              ready_gap_ms: gapMs,
+              grace_ms: RESOLUTION_LAG_CANCEL_GRACE_MS,
+            };
+          } else if (
             runtimeFailure.reason === "RESOLUTION_RUNTIME_LAGGING" &&
             runtime !== null
           ) {
@@ -1871,9 +2125,13 @@ export async function brokerTick(
             now,
             cancelDetails,
           );
+          forgetRuntimeGraceAnchors(anchors, order.orderId);
           ordersCanceled += 1;
           return;
         }
+        // The runtime is healthy and this order's stamp matches it: whatever
+        // this process remembered about the order being in trouble is over.
+        forgetRuntimeGraceAnchors(anchors, order.orderId);
 
         const policyResult = await loadResolutionOrderPolicy(tx, order);
         if (!policyResult.ok) {
@@ -2353,6 +2611,17 @@ export async function brokerTick(
           error_name:
             cancelError instanceof Error ? cancelError.name : "UnknownError",
         });
+      }
+    }
+  }
+  // Anchors belong to orders that are still open. An order that filled, expired
+  // or was canceled elsewhere never returns to this loop, so without this sweep
+  // the two maps grow for the life of the process.
+  const stillOpen = new Set(orders.map((snapshot) => snapshot.orderId));
+  for (const anchor of [anchors.firstSeen, anchors.readyGap]) {
+    for (const orderId of [...anchor.keys()]) {
+      if (!stillOpen.has(orderId)) {
+        anchor.delete(orderId);
       }
     }
   }

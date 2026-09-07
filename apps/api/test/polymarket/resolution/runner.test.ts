@@ -59,6 +59,14 @@ interface RuntimeRow {
   graph_valid_until: Date | null;
   failure_reason: string | null;
   stopped_at: Date | null;
+  /**
+   * Rewritten by markBooting, markFailed, the heartbeat and the state tick.
+   *
+   * Carried here because RFC-022 D3 reads it as the failure instant — the only
+   * moment it can, since markBooting clears `failure_reason` and it is only
+   * paired with a reason by markFailed. It is emphatically NOT an age anchor.
+   */
+  updated_at: Date;
 }
 
 interface RunnerWorld {
@@ -104,8 +112,21 @@ function runnerPool(world: RunnerWorld): DatabasePool {
         graph_valid_until: null,
         failure_reason: null,
         stopped_at: null,
+        updated_at: at,
       };
       return respond([], 1);
+    }
+    if (text.includes("SELECT generation, failure_reason, updated_at")) {
+      const runtime = world.runtime;
+      return runtime === null
+        ? respond([])
+        : respond([
+            {
+              generation: runtime.generation,
+              failure_reason: runtime.failure_reason,
+              updated_at: runtime.updated_at,
+            },
+          ]);
     }
     if (
       text.includes("SELECT generation FROM resolution_runtime_state") &&
@@ -232,6 +253,7 @@ function runnerPool(world: RunnerWorld): DatabasePool {
       world.runtime.graph_evaluated_at = params[6] as Date;
       world.runtime.graph_valid_until = params[7] as Date;
       world.runtime.failure_reason = null;
+      world.runtime.updated_at = asOf;
       return respond([], 1);
     }
     if (
@@ -244,6 +266,7 @@ function runnerPool(world: RunnerWorld): DatabasePool {
         runtime.ready = false;
         runtime.failure_reason = params[1] as string;
         runtime.lease_expires_at = params[2] as Date;
+        runtime.updated_at = params[2] as Date;
         return respond([], 1);
       }
       return respond([]);
@@ -608,6 +631,97 @@ describe("resolution runtime durability", () => {
     expect(
       mocked.recompute.mock.calls.filter((call) => call[1] === "boot"),
     ).toHaveLength(2);
+    await runner.stop();
+  });
+
+  it("names the failure that rotated the generation, and how long it took to publish", async () => {
+    // RFC-022 D3. `markBooting` clears `failure_reason` and rewrites both
+    // `started_at` and `updated_at`, so the moment the new generation exists the
+    // database no longer knows what ended the old one. Production on 2026-09-07
+    // rotated at 15:27 with the container up since 01:07, and linking that
+    // rotation to the 9 paper orders it could have canceled meant lining up
+    // timestamps by hand.
+    const world = emptyWorld();
+    let now = NOW;
+    const generations = [GENERATION_A, GENERATION_B];
+    const runner = createResolutionRunner({
+      pool: runnerPool(world),
+      config: DEFAULT_RESOLUTION_CONFIG,
+      lexicon: DEFAULT_RESOLUTION_LEXICON,
+      curatedEdges: [],
+      executionMode: "paper",
+      clock: () => now,
+      generationFactory: () => generations.shift() ?? GENERATION_B,
+    });
+    await runner.start();
+    // A state tick that fails the way production's does: an input change to
+    // consume, a recompute that throws the market-param error seen at
+    // 15:27:29.311Z on 2026-09-07, and markFailed writing its reason.
+    world.changes.push({
+      input_change_id: 1,
+      source: "event_membership",
+      source_key: '["event","0xmember"]',
+      condition_id: "0xmember",
+    });
+    mocked.recompute.mockRejectedValueOnce(
+      new Error("RESOLUTION_MARKET_PARAM_VERSION_MISSING:0xde7c"),
+    );
+    now = new Date(NOW.getTime() + 30_000);
+    await expect(runner.tickOnce("state_tick")).rejects.toThrow(/MISSING/);
+    expect(world.runtime).toMatchObject({
+      ready: false,
+      failure_reason: "STATE_TICK_FAILED",
+    });
+
+    now = new Date(NOW.getTime() + 42_000);
+    await runner.tickOnce("state_tick");
+
+    expect(world.runtime).toMatchObject({
+      generation: GENERATION_B,
+      ready: true,
+    });
+    const rotated = (
+      process.stderr.write as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes("RESOLUTION_GENERATION_ROTATED"));
+    expect(rotated).toHaveLength(1);
+    expect(JSON.parse(rotated[0] ?? "{}")).toMatchObject({
+      reason_code: "RESOLUTION_GENERATION_ROTATED",
+      previous_generation: GENERATION_A,
+      generation: GENERATION_B,
+      failure_reason: "STATE_TICK_FAILED",
+      failed_at: new Date(NOW.getTime() + 30_000).toISOString(),
+      // 30 s of failure, published at 42 s: the window in which every resting
+      // order used to be canceled for a runtime that was already coming back.
+      ready_after_ms: 12_000,
+      in_process: true,
+    });
+    await runner.stop();
+  });
+
+  it("does not call the first generation a rotation", async () => {
+    // The acceptance criterion counts rotations by cause, and a first boot has
+    // no cause to name: logging it would put a null `failure_reason` in a count
+    // that is supposed to be all causes.
+    const world = emptyWorld();
+    const runner = createResolutionRunner({
+      pool: runnerPool(world),
+      config: DEFAULT_RESOLUTION_CONFIG,
+      lexicon: DEFAULT_RESOLUTION_LEXICON,
+      curatedEdges: [],
+      executionMode: "paper",
+      clock: () => NOW,
+      generationFactory: () => GENERATION_A,
+    });
+
+    await runner.start();
+
+    expect(
+      (process.stderr.write as unknown as ReturnType<typeof vi.fn>).mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("RESOLUTION_GENERATION_ROTATED")),
+    ).toEqual([]);
     await runner.stop();
   });
 
