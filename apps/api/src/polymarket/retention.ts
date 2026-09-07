@@ -618,6 +618,14 @@ export interface RetentionRunReport {
   readonly actions: RetentionAction[];
   readonly skipped: RetentionSkip[];
   readonly globalAlarm: boolean;
+  /**
+   * RFC-020 D4.4: how many steps of this run logged RETENTION_STEP_FAILED.
+   * The run used to report success no matter what failed inside it, so a boot
+   * that lost the race with postgres — 100 RETENTION_STEP_FAILED on
+   * 2026-09-02 — looked exactly like a clean run to the caller, and the next
+   * attempt was 24 h away. A caller cannot reschedule what it cannot see.
+   */
+  readonly failedSteps: number;
   /** Physical bytes across the retention tables; never shrinks on DELETE. */
   readonly totalBytes: number;
   /** Retained bytes across the retention tables: what a prune can move. */
@@ -800,6 +808,15 @@ function toDate(value: unknown): Date | null {
 }
 
 export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
+  // Incremented at every site that logs RETENTION_STEP_FAILED; reset per run.
+  let failedSteps = 0;
+  const stepFailed = (
+    message: string,
+    extra: Record<string, unknown>,
+  ): void => {
+    failedSteps += 1;
+    log("error", "RETENTION_STEP_FAILED", message, extra);
+  };
   const pool = deps.pool;
   const budgetBytes = deps.budgetBytes ?? DEFAULT_BUDGET_BYTES;
   const tables = deps.tables ?? RETENTION_TABLES;
@@ -1018,18 +1035,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           reason: "coverage_query_failed",
           tokenId,
         });
-        log(
-          "error",
-          "RETENTION_STEP_FAILED",
-          "polymarket_retention_coverage_failed",
-          {
-            table: config.table,
-            token_id: tokenId,
-            slice_end: sliceEnd.toISOString(),
-            error_name: error instanceof Error ? error.name : "UnknownError",
-            detail: error instanceof Error ? error.message : undefined,
-          },
-        );
+        stepFailed("polymarket_retention_coverage_failed", {
+          table: config.table,
+          token_id: tokenId,
+          slice_end: sliceEnd.toISOString(),
+          error_name: error instanceof Error ? error.name : "UnknownError",
+          detail: error instanceof Error ? error.message : undefined,
+        });
         return total;
       }
       if (sliceCutoff === null || sliceCutoff.getTime() <= 0) {
@@ -1087,18 +1099,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           reason: "delete_failed",
           tokenId,
         });
-        log(
-          "error",
-          "RETENTION_STEP_FAILED",
-          "polymarket_retention_delete_failed",
-          {
-            table: config.table,
-            token_id: tokenId,
-            cutoff: sliceCutoff.toISOString(),
-            error_name: error instanceof Error ? error.name : "UnknownError",
-            detail: error instanceof Error ? error.message : undefined,
-          },
-        );
+        stepFailed("polymarket_retention_delete_failed", {
+          table: config.table,
+          token_id: tokenId,
+          cutoff: sliceCutoff.toISOString(),
+          error_name: error instanceof Error ? error.name : "UnknownError",
+          detail: error instanceof Error ? error.message : undefined,
+        });
         return total;
       }
       if (crossedBoundary) {
@@ -1645,10 +1652,12 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
   return {
     async runOnce(): Promise<RetentionRunReport> {
       const now = deps.clock();
+      failedSteps = 0;
       const report: RetentionRunReport = {
         actions: [],
         skipped: [],
         globalAlarm: false,
+        failedSteps: 0,
         totalBytes: 0,
         totalLiveBytes: 0,
       };
@@ -1681,16 +1690,11 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           totalBytes += size?.bytes ?? 0;
           totalLiveBytes += size?.liveBytes ?? 0;
         } catch (error: unknown) {
-          log(
-            "error",
-            "RETENTION_STEP_FAILED",
-            "polymarket_retention_size_failed",
-            {
-              table: config.table,
-              error_name: error instanceof Error ? error.name : "UnknownError",
-              detail: error instanceof Error ? error.message : undefined,
-            },
-          );
+          stepFailed("polymarket_retention_size_failed", {
+            table: config.table,
+            error_name: error instanceof Error ? error.name : "UnknownError",
+            detail: error instanceof Error ? error.message : undefined,
+          });
         }
       }
       const globalTrigger = budgetBytes * QUOTA_TRIGGER_RATIO;
@@ -1749,33 +1753,22 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           try {
             tableDeleted += await pruneBefore(config, cutoff, "ttl", report);
           } catch (error: unknown) {
-            log(
-              "error",
-              "RETENTION_STEP_FAILED",
-              "polymarket_retention_ttl_failed",
-              {
-                table: config.table,
-                error_name:
-                  error instanceof Error ? error.name : "UnknownError",
-                detail: error instanceof Error ? error.message : undefined,
-              },
-            );
+            stepFailed("polymarket_retention_ttl_failed", {
+              table: config.table,
+              error_name: error instanceof Error ? error.name : "UnknownError",
+              detail: error instanceof Error ? error.message : undefined,
+            });
           }
         }
         // (b) Quota prune (quota beats TTL — applies to no-TTL tables too).
         try {
           tableDeleted += await pruneQuota(config, report);
         } catch (error: unknown) {
-          log(
-            "error",
-            "RETENTION_STEP_FAILED",
-            "polymarket_retention_quota_failed",
-            {
-              table: config.table,
-              error_name: error instanceof Error ? error.name : "UnknownError",
-              detail: error instanceof Error ? error.message : undefined,
-            },
-          );
+          stepFailed("polymarket_retention_quota_failed", {
+            table: config.table,
+            error_name: error instanceof Error ? error.name : "UnknownError",
+            detail: error instanceof Error ? error.message : undefined,
+          });
         }
         // (c) A prune rewrote the row-fraction map the next cutoff reads.
         if (tableDeleted > 0) {
@@ -1783,7 +1776,13 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         }
       }
 
-      return { ...report, globalAlarm, totalBytes, totalLiveBytes };
+      return {
+        ...report,
+        globalAlarm,
+        failedSteps,
+        totalBytes,
+        totalLiveBytes,
+      };
     },
   };
 }

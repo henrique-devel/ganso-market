@@ -290,6 +290,182 @@ describe("book pipeline: delta batching", () => {
       "0.47",
     ]);
   });
+
+  // RFC-020 D4.2. A deploy dropped the database for 1.5-12.7 s, and every
+  // delta batch that hit that window was lost on the first failure: ~4.4k and
+  // ~5.6k deltas across the two worst deploys of 2026-09-02, 32 failed batches
+  // per window, no retry anywhere.
+  it("returns a failed batch to the head of the queue and writes it on the retry", async () => {
+    let failNext = true;
+    const captured: CapturedQuery[] = [];
+    const pool: SqlExecutor = {
+      query<R extends Record<string, unknown>>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<QueryResult<R>> {
+        if (text.includes("polymarket_book_deltas") && failNext) {
+          failNext = false;
+          return Promise.reject(new Error("terminating connection"));
+        }
+        captured.push({ text, params: [...(params ?? [])] });
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      },
+    };
+    const persistFailures: { count: number }[] = [];
+    const pipeline = createBookPipeline({
+      pool,
+      clock: () => 0,
+      deltaBatchSize: 100,
+      deltaFlushMs: 60_000,
+      onPersistFailure: (info) => {
+        persistFailures.push({ count: info.count });
+      },
+    });
+    await pipeline.handleMessage(bookMessage);
+    await pipeline.handleMessage({
+      event_type: "price_change",
+      market: bookMessage.market,
+      timestamp: "1787098645123",
+      price_changes: [
+        { asset_id: TOKEN, price: "0.41", size: "1", side: "BUY" as const },
+        { asset_id: TOKEN, price: "0.42", size: "2", side: "BUY" as const },
+      ],
+    });
+
+    // First flush: the INSERT fails and nothing is counted or given up on.
+    await pipeline.flushDeltas();
+    expect(persistFailures).toEqual([]);
+    expect(pipeline.stats().deltasFlushed).toBe(0);
+    expect(deltaRows(captured)).toHaveLength(0);
+
+    // Second flush: the pool answers and the SAME two deltas are written.
+    await pipeline.flushDeltas();
+    expect(persistFailures).toEqual([]);
+    expect(pipeline.stats().deltasFlushed).toBe(2);
+    expect(deltaRows(captured).map((row) => row.price)).toEqual([
+      "0.41",
+      "0.42",
+    ]);
+  });
+
+  it("gives up on the SECOND failure and hands over the exact window", async () => {
+    const { pool } = makePool({ failing: true });
+    const persistFailures: {
+      count: number;
+      firstReceivedAt: Date;
+      lastReceivedAt: Date;
+    }[] = [];
+    const pipeline = createBookPipeline({
+      pool,
+      clock: () => 1_787_098_645_000,
+      deltaBatchSize: 100,
+      deltaFlushMs: 60_000,
+      onPersistFailure: (info) => {
+        persistFailures.push(info);
+      },
+    });
+    await pipeline.handleMessage({
+      event_type: "price_change",
+      market: bookMessage.market,
+      timestamp: "1787098645123",
+      price_changes: [
+        { asset_id: TOKEN, price: "0.41", size: "1", side: "BUY" as const },
+        { asset_id: TOKEN, price: "0.42", size: "2", side: "BUY" as const },
+      ],
+    });
+
+    await pipeline.flushDeltas();
+    expect(persistFailures).toHaveLength(0);
+    await pipeline.flushDeltas();
+
+    expect(persistFailures).toHaveLength(1);
+    expect(persistFailures[0]?.count).toBe(2);
+    expect(persistFailures[0]?.firstReceivedAt).toEqual(
+      new Date(1_787_098_645_000),
+    );
+    expect(persistFailures[0]?.lastReceivedAt).toEqual(
+      new Date(1_787_098_645_000),
+    );
+    // One retry, not a loop: the queue is empty afterwards.
+    await pipeline.flushDeltas();
+    expect(persistFailures).toHaveLength(1);
+  });
+
+  it("counts the rows at stake in BOOKPIPE_PERSIST_FAILED", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const { pool } = makePool({ failing: true });
+    const pipeline = createBookPipeline({
+      pool,
+      clock: () => 0,
+      deltaBatchSize: 100,
+      deltaFlushMs: 60_000,
+      onPersistFailure: () => {},
+    });
+    await pipeline.handleMessage({
+      event_type: "price_change",
+      market: bookMessage.market,
+      timestamp: "1787098645123",
+      price_changes: [
+        { asset_id: TOKEN, price: "0.41", size: "1", side: "BUY" as const },
+        { asset_id: TOKEN, price: "0.42", size: "2", side: "BUY" as const },
+        { asset_id: TOKEN, price: "0.43", size: "3", side: "BUY" as const },
+      ],
+    });
+    await pipeline.flushDeltas();
+
+    const line = stderr.mock.calls
+      .map((call) => String(call[0]))
+      .find(
+        (entry) =>
+          entry.includes("BOOKPIPE_PERSIST_FAILED") &&
+          entry.includes("polymarket_book_deltas"),
+      );
+    expect(line).toBeDefined();
+    const logged = JSON.parse(line as string) as Record<string, unknown>;
+    expect(logged.count).toBe(3);
+  });
+
+  it("sheds a returned batch like any other backlog when the queue is full", async () => {
+    // The returned batch sits at the head, so a queue that fills during the
+    // outage sheds it first — and the loss is still reported as an overflow
+    // gap rather than vanishing.
+    const { pool } = makePool({ failing: true });
+    let dropped = 0;
+    const pipeline = createBookPipeline({
+      pool,
+      clock: () => 0,
+      deltaBatchSize: 100,
+      deltaFlushMs: 60_000,
+      deltaQueueMax: 2,
+      onOverflow: (count) => {
+        dropped += count;
+      },
+      onPersistFailure: () => {},
+    });
+    await pipeline.handleMessage({
+      event_type: "price_change",
+      market: bookMessage.market,
+      timestamp: "1787098645123",
+      price_changes: [
+        { asset_id: TOKEN, price: "0.41", size: "1", side: "BUY" as const },
+        { asset_id: TOKEN, price: "0.42", size: "2", side: "BUY" as const },
+      ],
+    });
+    await pipeline.flushDeltas();
+    await pipeline.handleMessage({
+      event_type: "price_change",
+      market: bookMessage.market,
+      timestamp: "1787098645123",
+      price_changes: [
+        { asset_id: TOKEN, price: "0.43", size: "3", side: "BUY" as const },
+        { asset_id: TOKEN, price: "0.44", size: "4", side: "BUY" as const },
+      ],
+    });
+
+    // Both returned deltas are shed to make room for the two newer ones.
+    expect(dropped).toBe(2);
+    expect(pipeline.stats().overflowDropped).toBe(2);
+  });
 });
 
 describe("book pipeline: anchors, resync and divergence", () => {
