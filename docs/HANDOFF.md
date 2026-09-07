@@ -1,6 +1,22 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-06 — **O proprietário rearmou o kill switch às 23:03:10.474Z, e a
+- Última atualização: 2026-09-07 — **RFC-020 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** O merge
+  em `main` parou de recriar o Postgres e de matar os workers. Às **00:26:23Z** um deploy de
+  código passou por cima da produção e o `Created` do `ganso-market-postgres-1` **não se
+  moveu** (`2026-09-07T00:11:02.045Z`, `pg_postmaster_start_time()` `00:11:03.171Z`) — o
+  primeiro deploy da história do projeto que não derrubou o banco. Cinco PRs (#101, #102,
+  #103, #104, #105), cada um com o teste de regressão verificado falhando no código anterior.
+  **A re-medição confirmou as quatro premissas decisivas e ainda endureceu a segunda:** os
+  **três** deploys mais recentes antes do PR 1 eram merges de **texto**, e cada um recriou o
+  banco e derrubou os cinco workers. **O teste controlado (postgres fora por 5,2 s com o
+  recorder vivo) exercitou D1–D4 de uma vez:** o recorder **não reiniciou**
+  (`RestartCount` 0, mesmo processo), `DB_POOL_CLIENT_ERROR` gravou
+  `terminating connection due to administrator command` em vez de matar o processo,
+  **1.350 deltas perdidos foram registrados em 2 linhas** de `polymarket_data_gaps` com
+  `dropped` e janela, e a retenção que falhou em 38 passos **reagendou-se para 10 min** em vez
+  de esperar 24 h — e a tentativa reagendada **rodou às 01:18:28Z e passou limpa**. Ver a
+  seção "SESSÃO 2026-09-07" ao final.
+- 2026-09-06 — **O proprietário rearmou o kill switch às 23:03:10.474Z, e a
   vazão NÃO voltou.** Em 16 min: **211 decisões, 0 aceites, 0 ordens, 0 fills**. O gargalo nunca
   foi só o switch — 77 % das recusas são `DATA_STALE` (76) e `BOOK_STALE` (64), e nenhuma delas
   é o feed morrendo: o feed está vivo (8–13 mil deltas/min, último a 0,15 s, 130 tokens, **zero
@@ -4380,3 +4396,133 @@ sendo o que impede o universo rápido de existir.
 Zero erros em `polymarket-portfolio`, `-paper`, `-estimator`, `-resolution`, `-recorder` e
 `market-engine`. Os 12 da `api` são os 500 do `/overview` acima. O switch **seguia desarmado**
 ao fim da janela.
+
+
+## SESSÃO 2026-09-07 — RFC-020: o deploy parou de derrubar o banco
+
+Prompt 12 do roadmap. **Cinco PRs mergeados** (#101, #102, #103, #104, #105 — o 4 foi dividido
+em 4a/4b como a própria RFC autoriza), cada um com o teste de regressão **verificado falhando
+no código anterior**, e verificação em produção a cada passo.
+
+### Re-medição antes de codar — as quatro premissas decisivas
+
+| Premissa | Medido em 2026-09-06/07 | Veredito |
+| --- | --- | --- |
+| Postgres recriado a cada deploy | `Created=2026-09-06T19:50:21.908Z`, 2 s depois do backup `.deploy/backups/20260906T195019Z`; `pg_postmaster_start_time()` `19:50:23.045Z` | **de pé** |
+| Deploys de texto | os **três** deploys mais recentes eram merges de texto; **10 de 19** commits de primeiro pai casam o critério de D2 — o mesmo 10 da RFC | **de pé, e mais forte** |
+| Pool sem `on("error")` | `grep -rn '\.on("error"' apps/api/src` → **1**, o WebSocket (`recorder.ts:175`). Sem o ponto, casa 39 (`logJson("error"`) | **de pé** |
+| Workers morrem com o banco | **2** "Unhandled" por worker em 24 h = **um por deploy**, nos cinco; `RestartCount` 13/17/46/4/8 | **de pé** |
+
+A causa literal, no log do recorder, fecha a cadeia inteira em uma linha:
+
+```
+2026-09-06T19:50:21.944Z       throw er; // Unhandled 'error' event
+2026-09-06T19:50:21.944Z error: terminating connection due to administrator command
+```
+
+`--force-recreate` sem lista → postgres derrubado → `terminating connection` → `'error'` sem
+handler → processo morto → Docker reinicia. **Nenhuma premissa caiu**, e a condição de parada
+"o `Created` já não muda" **não** se aplicava: mudava, e mudou de novo às 00:11Z enquanto esta
+sessão trabalhava, num merge de `docs/HANDOFF.md` + `prompts/roadmap/README.md` (`52cec62`).
+
+### A prova local de D1, com controle positivo
+
+A RFC exige "o `docker compose` observado, não uma teoria". Projeto Compose isolado, `make
+server-update` de verdade:
+
+| Rodada | postgres `Created` | container id | `pg_postmaster_start_time()` | Compose diz |
+| --- | --- | --- | --- | --- |
+| Makefile novo, 1ª | 00:13:47.553Z | `82bb22de9203` | 00:13:48.777Z | `Started` |
+| Makefile novo, 2ª | **00:13:47.553Z** | **`82bb22de9203`** | **00:13:48.777Z** | **`Running`** |
+| Makefile ANTIGO | 00:14:54.215Z | `c7313bb111ce` | 00:15:05.346Z | `Recreated` |
+
+A janela sem banco no controle é de **~11 s**, dentro da faixa de 1,55–12,67 s medida em
+produção em 02/09. api, web, nginx e market-engine ganham id novo nas três rodadas — que é o
+comportamento desejado.
+
+### Aceite em produção, critério a critério
+
+| Critério da RFC | Evidência |
+| --- | --- |
+| Merge de código não recria o Postgres | `Created` **`2026-09-07T00:11:02.045Z`** e `pg_postmaster_start_time()` **`00:11:03.171Z`** idênticos antes e depois dos deploys de 00:26Z, 00:36Z, 00:52Z, 01:02Z e 01:07Z — **cinco deploys seguidos**. api/web/nginx/market-engine com `Created` novo em cada um |
+| O log do servidor diz o mesmo | `Container ganso-market-postgres-1  Running` (não `Recreated`), e a linha literal `docker compose --env-file deploy/server.env run --rm migrate` antes dos serviços de código |
+| Migration continua aplicada pelo CD | `migrate` no log do deploy; `SELECT max(version) … 'foundation'` = **18** = `0018_resolution_proposal_active.sql`, a última do repositório |
+| Zero erro no minuto do deploy | recorder: `RETENTION_STEP_FAILED` 0, `BOOKPIPE_PERSIST_FAILED` 0, `GAP_PERSIST_FAILED` 0; zero linhas de shutdown no `postgres` |
+| Workers não caem no deploy | `release-sha` conferido **dentro** dos cinco containers; `RestartCount` **0 → 0** e **zero** "Unhandled" nos cinco atravessando o deploy de código seguinte |
+| Classificador vivo no CD | `deploy=true: 3 de 3 arquivos fora das listas de texto: .github/workflows/ci-cd.yml, deploy/deploy_paths.py, scripts/tests/test_deploy_paths.py` |
+| Lacuna registrada quando houver perda | teste controlado abaixo |
+| Merge docs-only não gera deploy | **medido no merge deste próprio documento** — o resultado entra na subseção "D2 medida" logo abaixo, que é a única coisa desta RFC que não podia ser verificada antes de existir um merge só de texto |
+
+**A assimetria de sempre acabou.** Antes do rebuild os cinco workers rodavam três releases
+diferentes — recorder `bf55318`, estimator e resolution `e0f227e`, paper e portfolio `b381f21`
+—, todos atrás da `api`. Depois do rebuild de perfil os **seis** carregam o mesmo
+`/etc/ganso/release-sha`. `compose ps` mente; o arquivo dentro do container não.
+
+### O teste controlado — 5,2 s sem banco, com o recorder vivo
+
+`docker stop` às **01:07:56.0Z**, `docker start` às **01:08:01.6Z**. O recorder estava
+escrevendo ~311 deltas/s (18.662 em 60 s). **Exercitou D1, D3 e os quatro itens de D4 de uma
+vez:**
+
+| Evidência | Número |
+| --- | --- |
+| `RestartCount` do recorder | **0 → 0**; `StartedAt` `01:07:19.873Z` **inalterado** — o mesmo processo atravessou a queda |
+| "Unhandled 'error' event" nos cinco workers | **0** |
+| `DB_POOL_CLIENT_ERROR` | 2, com `detail: "terminating connection due to administrator command"` — a MESMA string que antes vinha ao lado de `throw er;` |
+| `BOOKPIPE_PERSIST_FAILED` | 186, agora com `count` (14, 76, …) |
+| Lacunas gravadas | **2 linhas**, `dropped` **1.308** + **42** = **1.350** deltas, janela `01:07:55.804Z → 01:08:01.152Z` |
+| `GAP_PERSIST_FAILED` do caminho de deltas | **0** (os 6 do log são `RTDS_GAP_PERSIST_FAILED`, caminho que a RFC deixa fora de escopo) |
+| Retenção — reagendamento | `RETENTION_RETRY_SCHEDULED` às **01:07:58.754Z**, `failed_steps: 38`, `retry_in_ms: 600000` |
+| Retenção — a tentativa reagendada **rodou e passou** | `RETENTION_RETRY_OK` às **01:18:28.315Z**, com **0** `RETENTION_STEP_FAILED` na janela. Dez minutos, não 24 h |
+| Recuperação | 22.760 deltas nos 60 s seguintes |
+
+Antes desta sessão, essa mesma queda de 5 s teria matado os cinco workers e deixado ~1.600
+deltas perdidos **sem registro do número**. A comparação mais honesta é a linha do `dropped`:
+antes eram **63 `GAP_PERSIST_FAILED` contra 1 linha sobrevivente**, e o log não carregava
+`dropped`; agora é **0 falhas e 2 linhas com o número dentro**.
+
+**Uma coisa que a medição mostrou e a RFC não previa:** o item 4 (retenção reagendada) foi
+exercitado **de verdade** neste teste, e não por sorte. A rodada de retenção do boot ainda
+estava em curso (é um job longo sobre tabelas enormes) quando o banco saiu, então os 38 passos
+falharam com a rodada viva — exatamente o caso que o `failedSteps` existe para enxergar. Vale
+registrar que, com D4.1 no lugar, a falha de retenção **no boot** ficou difícil de alcançar: o
+recorder agora espera o banco antes de agendar qualquer coisa. O reagendamento continua sendo
+a guarda de uma rodada que falha **no meio**, que é o que aconteceu aqui.
+
+### O que cada PR entregou
+
+| PR | Decisão | Teste que falha no código anterior |
+| --- | --- | --- |
+| [#101](https://github.com/henrique-devel/ganso-market/pull/101) | D1 — `server-update` em três passos, `postgres` sem `--force-recreate`, `run --rm migrate` literal, `--no-deps` nos serviços de código | `test_server_update_target.py`: **4 de 6** falham; o assert que carrega a regressão devolve `[]` para a lista de serviços do `--force-recreate` |
+| [#102](https://github.com/henrique-devel/ganso-market/pull/102) | D2 — passo `paths` no job `deploy`, `fetch-depth: 0`, `deploy/deploy_paths.py` | sem o módulo, `FileNotFoundError` no import; com o módulo e o workflow antigo, **6 falhas + 1 erro** |
+| [#103](https://github.com/henrique-devel/ganso-market/pull/103) | D3 — `pool.on("error")` com `DB_POOL_CLIENT_ERROR` | `database.test.ts`: **5 de 6** falham, com `ERR_UNHANDLED_ERROR` e o `Error: terminating connection…` sendo lançado |
+| [#104](https://github.com/henrique-devel/ganso-market/pull/104) | D4.1 e D4.3 — espera do banco no boot; fila de retry das lacunas | `orchestrator.test.ts`: **10** falham (`waitForDatabase is not a function`, `createGapRetryQueue is not a function`) |
+| [#105](https://github.com/henrique-devel/ganso-market/pull/105) | D4.2 e D4.4 — lote com 1 retry; `failedSteps` e reagendamento em 10 min | **11** falham: 4 em `bookpipe.test.ts`, 7 em `retention.test.ts` |
+
+`make verify` verde antes de cada PR (**1.598 testes** ao final, 71 skipped).
+
+### O que esta sessão NÃO fez
+
+Nenhum gate, disjuntor, policy, quota ou limiar foi tocado. Nenhum endpoint nasceu. Nenhuma
+migration nova, nenhuma migration aplicada alterada. Nenhuma reconexão manual no `database.ts`
+e nenhum `catch` novo engolindo erro de query — só o handler de cliente ocioso. O kill switch
+não foi tocado, nenhum modelo foi promovido, e `frozen_markets_json` não foi limpo.
+
+**DP3 (pôr os workers de perfil no CD) segue fora**, por escopo: exige tirar o `release-sha` da
+imagem, senão todo merge recria os cinco. O terceiro passo manual continua sendo o caminho, e
+esta sessão o rodou duas vezes com o comando literal do prompt.
+
+**Fora de escopo e registrado:** snapshots, `universe_log`, registry e RTDS perdidos na mesma
+janela seguem sem gerar lacuna — os 6 `RTDS_GAP_PERSIST_FAILED` do teste controlado são
+exatamente essa lacuna que falta, e são RFC própria.
+
+### O que fica para a próxima sessão
+
+1. **A RFC-021 está destravada.** A sua P3 pedia "esperar a RFC-020 em produção antes do PR 1",
+   e a RFC-020 está em produção desde 2026-09-07 00:26Z.
+2. **A vazão continua sendo o gargalo do bloco, e não é mais o kill switch** (rearmado em
+   06/09 23:03:10Z): 77 % das recusas são `DATA_STALE` e `BOOK_STALE` — cobertura de modelo e
+   de snapshot. Nada disso é RFC-020.
+3. **Nada pendente da RFC-020** além da subseção "D2 medida", que esta mesma sessão fecha
+   logo após o merge deste documento — um merge de texto não pode ser observado antes de
+   existir.
