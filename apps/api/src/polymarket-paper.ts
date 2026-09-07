@@ -5,6 +5,7 @@ import {
   createPaperRunner,
   PaperScopeError,
 } from "./polymarket/paper/runner.js";
+import { errorFields } from "./errors.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
@@ -74,7 +75,7 @@ void run().catch((error: unknown) => {
       service: "polymarket-paper",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       ...detail,
       message: "polymarket_paper_failed",
     })}\n`,

@@ -10,6 +10,7 @@
 import type { SqlExecutor } from "../database.js";
 import { sourceTsToDate } from "./recorder.js";
 import type { LastTradePriceMessage } from "./types.js";
+import { errorFields } from "../errors.js";
 
 export const DATA_API_BASE_URL = "https://data-api.polymarket.com";
 
@@ -87,7 +88,7 @@ export async function handleLastTrade(
       "WS_TRADE_PERSIST_FAILED",
       "polymarket_ws_trade_persist_failed",
       {
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
         token_id: msg.asset_id,
       },
     );
@@ -258,7 +259,7 @@ export function createTradesBackfill(deps: TradesBackfillDeps): TradesBackfill {
           "polymarket_trades_fetch_network_error",
           {
             condition_id: conditionId,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             attempt,
           },
         );
@@ -310,7 +311,7 @@ export function createTradesBackfill(deps: TradesBackfillDeps): TradesBackfill {
     } catch (error: unknown) {
       logJson("error", "GAP_PERSIST_FAILED", "polymarket_gap_persist_failed", {
         condition_id: conditionId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -337,7 +338,7 @@ export function createTradesBackfill(deps: TradesBackfillDeps): TradesBackfill {
       logJson("error", "GAP_PERSIST_FAILED", "polymarket_gap_persist_failed", {
         condition_id: conditionId,
         cause: "trades_window_overflow",
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -398,7 +399,7 @@ export function createTradesBackfill(deps: TradesBackfillDeps): TradesBackfill {
             "polymarket_trades_backfill_fetch_failed",
             {
               condition_id: conditionId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             },
           );
           if (nowMs - coveredUntil > BEHIND_GAP_THRESHOLD_MS) {
@@ -426,8 +427,7 @@ export function createTradesBackfill(deps: TradesBackfillDeps): TradesBackfill {
               {
                 condition_id: conditionId,
                 external_id: trade.externalId,
-                error_name:
-                  error instanceof Error ? error.name : "UnknownError",
+                ...errorFields(error),
               },
             );
           }
@@ -454,7 +454,7 @@ export function createTradesBackfill(deps: TradesBackfillDeps): TradesBackfill {
             "polymarket_trades_backfill_market_failed",
             {
               condition_id: conditionId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             },
           );
         }

@@ -44,6 +44,7 @@ import type {
   ModelRecord,
   ModelResult,
 } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 const SERVICE = "polymarket-fundamental";
 
@@ -641,7 +642,7 @@ export function createEstimator(deps: EstimatorDeps): Estimator {
             logJson("error", "TOKEN_CYCLE_FAILED", {
               token_id: tokenId,
               market_id: market.conditionId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             });
           }
         }

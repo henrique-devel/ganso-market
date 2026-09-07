@@ -4,6 +4,7 @@ import type { SqlExecutor } from "../database.js";
 import { OrderBook } from "./book.js";
 import { SnapshotThrottle, sourceTsToDate } from "./recorder.js";
 import type { MarketMessage, PriceLevel } from "./types.js";
+import { errorFields } from "../errors.js";
 
 // RFC-007 tasks 4 + 6: full L2 book pipeline. Persists full-depth snapshots
 // (replay anchors), every price_change delta (append-only, batched), the
@@ -231,7 +232,7 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
         "BOOKPIPE_CHAIN_FAILED",
         "polymarket_bookpipe_chain_failed",
         {
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         },
       );
     });
@@ -275,7 +276,7 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
           // The number of rows the failed statement carried: without it the
           // log says a write failed and nothing about how much was at stake.
           count,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         },
       );
       return false;
@@ -712,7 +713,7 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
         "polymarket_bookpipe_handle_failed",
         {
           event_type: msg.event_type,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         },
       );
     }
@@ -763,7 +764,7 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
             "polymarket_bookpipe_seed_failed",
             {
               token_id: tokenId,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             },
           );
         }

@@ -5,6 +5,7 @@ import {
   subscribeMessage,
   type MarketSocketFactory,
 } from "./recorder.js";
+import { errorFields } from "../errors.js";
 
 // RFC-007 task 4: two independent connections to the market WSS with
 // content-based dedupe. The feed drops frames; a frame lost on one connection
@@ -172,7 +173,7 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
       slot.socket?.send(data);
     } catch (error) {
       logJson("warn", "WS_SEND_FAILED", "polymarket_dualws_send_failed", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }

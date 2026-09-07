@@ -21,6 +21,7 @@ import {
 import { GATE_IDS, SIMULATION_BANNER } from "./types.js";
 import type { PortfolioStateSnapshot } from "./state.js";
 import { money } from "./ev.js";
+import { errorFields } from "../../errors.js";
 
 export interface AuthSessionService {
   session(token: string): Promise<{ readonly status: string }>;
@@ -72,7 +73,7 @@ function logApiError(reasonCode: string, error: unknown): void {
       service: "polymarket-portfolio",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       message: "polymarket_portfolio_api_failed",
     })}\n`,
   );

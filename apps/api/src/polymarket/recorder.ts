@@ -10,6 +10,7 @@ import type {
   MarketRegistryEntry,
   PriceLevel,
 } from "./types.js";
+import { errorFields } from "../errors.js";
 
 export const DEFAULT_SNAPSHOT_INTERVAL_MS = 3_000;
 export const GAMMA_BASE_URL = "https://gamma-api.polymarket.com";
@@ -179,7 +180,7 @@ export function nodeMarketSocketFactory(url: string): MarketSocket {
         service: "polymarket-recorder",
         timestamp: new Date().toISOString(),
         reason_code: "WS_SOCKET_ERROR",
-        error_name: error.name,
+        ...errorFields(error),
         message: "polymarket_ws_socket_error",
       })}\n`,
     );
@@ -358,7 +359,7 @@ export async function runRecorder(config: RecorderConfig): Promise<void> {
               service: "polymarket-recorder",
               timestamp: new Date().toISOString(),
               reason_code: "SNAPSHOT_PERSIST_FAILED",
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
               message: "polymarket_recorder_persist_failed",
             })}\n`,
           );

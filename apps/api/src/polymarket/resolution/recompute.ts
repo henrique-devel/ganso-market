@@ -35,6 +35,7 @@ import {
   type ScoreTrigger,
 } from "./types.js";
 import type { ResolutionConfig } from "./config.js";
+import { errorFields } from "../../errors.js";
 
 function logJson(
   level: "info" | "warn" | "error",
@@ -207,7 +208,7 @@ async function sampleAdjudicationPremium(
   } catch (error: unknown) {
     logJson("error", "ADJUDICATION_SAMPLE_FAILED", {
       condition_id: market.conditionId,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
     });
   }
   return { premium };
@@ -326,7 +327,7 @@ export async function recomputeMarkets(
       failed += 1;
       logJson("error", "SCORE_RECOMPUTE_FAILED", {
         condition_id: market.conditionId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -339,7 +340,7 @@ export async function recomputeMarkets(
     );
   } catch (error: unknown) {
     logJson("error", "GROUP_COUPLING_FAILED", {
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
     });
     // Coupling updates effective_action, which is the broker-facing safety
     // state. A partially applied pass must invalidate and roll back the whole

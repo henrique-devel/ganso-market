@@ -125,6 +125,7 @@ import {
   type PortfolioStateSnapshot,
 } from "./state.js";
 import { SIMULATION_BANNER, type PortfolioPool } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 export const PORTFOLIO_SERVICE = "polymarket-portfolio";
 
@@ -688,8 +689,7 @@ export function createPortfolioRunner(
       // stamp is idempotent and retries on the next minute. It is logged with
       // the message, not only the name.
       logJson("error", "PORTFOLIO_BRIDGE_STAMP_FAILED", {
-        error_name: error instanceof Error ? error.name : "UnknownError",
-        error_message: error instanceof Error ? error.message : null,
+        ...errorFields(error),
       });
     }
 
@@ -1495,7 +1495,7 @@ export function createPortfolioRunner(
           // `error_name: "Error"` cost this project two manual boots.
           logJson("error", "PORTFOLIO_JOB_FAILED", {
             job: name,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             detail: error instanceof Error ? error.message : undefined,
           });
         })
@@ -1554,7 +1554,7 @@ export function createPortfolioRunner(
       await gateCycle().catch((error: unknown) => {
         logJson("error", "PORTFOLIO_JOB_FAILED", {
           job: "gates_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         });
       });

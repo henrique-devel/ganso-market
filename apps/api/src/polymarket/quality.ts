@@ -11,6 +11,7 @@ import {
   measureTableSizes,
 } from "./retention.js";
 import type { PriceLevel } from "./types.js";
+import { errorFields } from "../errors.js";
 
 /** Minimal query surface so tests can inject a fake pool. */
 export type QueryPool = { query: SqlExecutor["query"] };
@@ -357,7 +358,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
             "RECONCILE_FETCH_FAILED",
             "polymarket_reconcile_fetch_failed",
             {
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
             },
           );
           enterBackoff(null);
@@ -408,7 +409,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
         } catch (error: unknown) {
           // A persistence failure must never take the reconciler down.
           log("error", "GAP_PERSIST_FAILED", "polymarket_gap_persist_failed", {
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             token_id: tokenId,
           });
         }

@@ -1,6 +1,7 @@
 import { assertPasswordPolicy, hashPassword } from "./auth/passwords.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { createDatabasePool } from "./database.js";
+import { errorFields } from "./errors.js";
 
 const USERNAME_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
 
@@ -107,13 +108,12 @@ void run().catch((error: unknown) => {
       : error instanceof ConfigError
         ? error.reasonCode
         : "ACCOUNT_CLI_FAILED";
-  const errorName = error instanceof Error ? error.name : "UnknownError";
   process.stderr.write(
     `${JSON.stringify({
       level: "error",
       service: "account-cli",
       reason_code: reasonCode,
-      error_name: errorName,
+      ...errorFields(error),
       message: "account_cli_failed",
     })}\n`,
   );

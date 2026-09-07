@@ -19,6 +19,7 @@ import type {
   ScoredObservation,
 } from "./types.js";
 import { computeCalibrationMetrics } from "./walkforward.js";
+import { errorFields } from "../../errors.js";
 
 const SERVICE = "polymarket-fundamental";
 
@@ -524,7 +525,7 @@ export async function runCalibrationJob(
       // the next model is evaluated.
       logJson("error", "CALIBRATION_REPORT_FAILED", {
         model_id: model.modelId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }

@@ -30,6 +30,7 @@ import { buildPerformanceReport } from "./performance.js";
 import { decideOrderType, POLICY_VERSION } from "./policy.js";
 import { SIMULATION_BANNER } from "./runner.js";
 import type { OrderDraft, OrderSide, OrderType } from "./validator.js";
+import { errorFields } from "../../errors.js";
 
 export interface PaperRoutesDeps {
   readonly pool: Pick<DatabasePool, "query" | "transaction">;
@@ -87,7 +88,7 @@ function logPaperApiError(reasonCode: string, error: unknown): void {
       service: "polymarket-paper",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
     })}\n`,
   );
 }

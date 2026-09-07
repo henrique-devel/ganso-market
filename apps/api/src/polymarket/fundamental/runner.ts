@@ -21,6 +21,7 @@ import {
   listModels,
   registerModel,
 } from "./registry.js";
+import { errorFields } from "../../errors.js";
 
 const SERVICE = "polymarket-fundamental";
 
@@ -81,7 +82,7 @@ function safeJob(name: string, job: () => Promise<void>): () => void {
       .catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: name,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       })
       .finally(() => {
@@ -153,7 +154,7 @@ export async function ensureCatalogModels(
       // registry is strictly better than an empty one.
       logJson("error", "MODEL_REGISTRATION_FAILED", {
         model_id: modelId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
@@ -317,25 +318,25 @@ export function createRunner(deps: RunnerDeps): Runner {
       await jobs.revalidation().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "revalidation_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       });
       await jobs.labels().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "labels_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       });
       await jobs.calibration().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "calibration_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       });
       await jobs.estimate().catch((error: unknown) => {
         logJson("error", "JOB_FAILED", {
           job: "estimate_boot",
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         });
       });
 

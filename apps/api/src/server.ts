@@ -20,6 +20,7 @@ import {
   type ServiceHealth,
 } from "./health.js";
 import { createLoggerOptions, type LogSink } from "./logger.js";
+import { errorFields } from "./errors.js";
 
 const CORRELATION_ID_HEADER = "x-correlation-id";
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -182,7 +183,7 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
             correlation_id: request.id,
             reason_code: POSTGRES_UNAVAILABLE,
             dependency: "postgres",
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
           },
           "readiness_check_failed",
         );
@@ -295,7 +296,7 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
       {
         correlation_id: request.id,
         reason_code: "INTERNAL_ERROR",
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       },
       "request_failed",
     );

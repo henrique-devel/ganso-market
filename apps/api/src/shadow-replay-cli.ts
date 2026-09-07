@@ -64,6 +64,7 @@ import {
   type DecisionWindow,
 } from "./polymarket/portfolio/sweepstore.js";
 import { replayDecision } from "./polymarket/portfolio/replay.js";
+import { errorFields } from "./errors.js";
 
 /** One tick per taker share: the base column of the RFC-011 performance report. */
 const BASE_DEGRADATION_PER_SHARE = 0.01;
@@ -819,7 +820,7 @@ void run().catch((error: unknown) => {
       level: "error",
       service: "shadow-replay-cli",
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       detail: error instanceof Error ? error.message : undefined,
       message: "shadow_replay_failed",
     })}\n`,

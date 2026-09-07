@@ -11,6 +11,7 @@ import type { DatabasePool, SqlExecutor } from "../../database.js";
 import { edgeKeyOf } from "./graph.js";
 import { parseCuratedEdges } from "./curated.js";
 import type { GraphEdgeKind } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 export interface AuthSessionService {
   session(token: string): Promise<{ readonly status: string }>;
@@ -42,7 +43,7 @@ function logResolutionApiError(reasonCode: string, error: unknown): void {
       service: "polymarket-resolution",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       message: "polymarket_resolution_api_failed",
     })}\n`,
   );

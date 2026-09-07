@@ -7,6 +7,7 @@ import {
 } from "./database.js";
 import { createGracefulShutdown } from "./runtime.js";
 import { buildApi } from "./server.js";
+import { errorFields } from "./errors.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
@@ -51,14 +52,13 @@ async function run(): Promise<void> {
 void run().catch((error: unknown) => {
   const reasonCode =
     error instanceof ConfigError ? error.reasonCode : "BOOT_FAILED";
-  const errorName = error instanceof Error ? error.name : "UnknownError";
   process.stderr.write(
     `${JSON.stringify({
       level: "fatal",
       service: "api",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: errorName,
+      ...errorFields(error),
       message: "api_boot_failed",
     })}\n`,
   );

@@ -5,6 +5,7 @@
 // A persistence failure never crashes the process: log and continue.
 
 import type { SqlExecutor } from "../database.js";
+import { errorFields } from "../errors.js";
 
 export type RetentionQueryPool = { query: SqlExecutor["query"] };
 
@@ -1039,7 +1040,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           table: config.table,
           token_id: tokenId,
           slice_end: sliceEnd.toISOString(),
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         });
         return total;
@@ -1103,7 +1104,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           table: config.table,
           token_id: tokenId,
           cutoff: sliceCutoff.toISOString(),
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         });
         return total;
@@ -1536,7 +1537,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           "polymarket_retention_floor_unavailable",
           {
             table: config.table,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             detail: error instanceof Error ? error.message : undefined,
           },
         );
@@ -1642,7 +1643,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         "polymarket_retention_analyze_failed",
         {
           table: config.table,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
           detail: error instanceof Error ? error.message : undefined,
         },
       );
@@ -1692,7 +1693,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         } catch (error: unknown) {
           stepFailed("polymarket_retention_size_failed", {
             table: config.table,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             detail: error instanceof Error ? error.message : undefined,
           });
         }
@@ -1755,7 +1756,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
           } catch (error: unknown) {
             stepFailed("polymarket_retention_ttl_failed", {
               table: config.table,
-              error_name: error instanceof Error ? error.name : "UnknownError",
+              ...errorFields(error),
               detail: error instanceof Error ? error.message : undefined,
             });
           }
@@ -1766,7 +1767,7 @@ export function createRetentionJob(deps: RetentionJobDeps): RetentionJob {
         } catch (error: unknown) {
           stepFailed("polymarket_retention_quota_failed", {
             table: config.table,
-            error_name: error instanceof Error ? error.name : "UnknownError",
+            ...errorFields(error),
             detail: error instanceof Error ? error.message : undefined,
           });
         }

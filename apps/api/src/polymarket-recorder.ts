@@ -4,6 +4,7 @@ import {
   createOrchestrator,
   waitForDatabase,
 } from "./polymarket/orchestrator.js";
+import { errorFields } from "./errors.js";
 
 async function run(): Promise<void> {
   const config = await loadConfig();
@@ -77,14 +78,13 @@ function reasonCodeOf(error: unknown): string {
 
 void run().catch((error: unknown) => {
   const reasonCode = reasonCodeOf(error);
-  const errorName = error instanceof Error ? error.name : "UnknownError";
   process.stderr.write(
     `${JSON.stringify({
       level: "fatal",
       service: "polymarket-recorder",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: errorName,
+      ...errorFields(error),
       message: "polymarket_recorder_failed",
     })}\n`,
   );

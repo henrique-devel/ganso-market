@@ -13,6 +13,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { DatabasePool } from "../../database.js";
 import { FUNDAMENTAL_CATEGORIES } from "./types.js";
 import type { FundamentalCategory, GateVerdict, ModelRecord } from "./types.js";
+import { errorFields } from "../../errors.js";
 
 // ---------------------------------------------------------------------------
 // Contract with the model registry (./registry.js), which is written in
@@ -179,7 +180,7 @@ function logFundamentalApiError(reasonCode: string, error: unknown): void {
       service: "polymarket-fundamental",
       timestamp: new Date().toISOString(),
       reason_code: reasonCode,
-      error_name: error instanceof Error ? error.name : "UnknownError",
+      ...errorFields(error),
       message: "polymarket_fundamental_api_failed",
     })}\n`,
   );

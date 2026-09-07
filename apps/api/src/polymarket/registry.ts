@@ -5,6 +5,7 @@ import {
   applyRuleObservation,
   type RuleObservation,
 } from "./versioning.js";
+import { errorFields } from "../errors.js";
 
 // RFC-007 task 1: Gamma registry poll, universe selection with hard
 // exclusions/caps/priority, membership diff logged to
@@ -986,7 +987,7 @@ export async function runGammaCycle(
         "polymarket_registry_persist_failed",
         {
           condition_id: record.conditionId,
-          error_name: error instanceof Error ? error.name : "UnknownError",
+          ...errorFields(error),
         },
       );
     }
@@ -1140,7 +1141,7 @@ export async function refreshParams(
     } catch (error: unknown) {
       log("error", "PARAM_PERSIST_FAILED", "polymarket_param_persist_failed", {
         condition_id: member.conditionId,
-        error_name: error instanceof Error ? error.name : "UnknownError",
+        ...errorFields(error),
       });
     }
   }
