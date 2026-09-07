@@ -174,7 +174,17 @@ server-logs:
 server-update: server-config
 	$(SERVER_COMPOSE) pull --ignore-buildable
 	$(SERVER_COMPOSE) build --pull
-	$(SERVER_COMPOSE) up --detach --force-recreate --remove-orphans --wait --wait-timeout 180
+# RFC-020 D1: the database is not part of the release. A bare --force-recreate
+# recreated every default service, postgres included, costing 1,5-12,7 s without
+# a database per merge and one crash per profile worker (the pg pool had no
+# error handler). Three steps instead: bring postgres up WITHOUT
+# --force-recreate (image is pinned by digest and the config hash does not
+# move, so Compose leaves it alone), apply migrations, then recreate only the
+# code services. --no-deps keeps that last step from dragging migrate — and
+# through it postgres — back in via depends_on.
+	$(SERVER_COMPOSE) up --detach --wait --wait-timeout 180 postgres
+	$(SERVER_COMPOSE) run --rm migrate
+	$(SERVER_COMPOSE) up --detach --force-recreate --no-deps --remove-orphans --wait --wait-timeout 180 api web nginx market-engine
 	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
 
 server-down:
