@@ -66,6 +66,13 @@ function recordingPool(): DatabasePool & { readonly statements: string[] } {
     transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
       return run({ query });
     },
+    // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+    readOnly<T>(
+      _statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      return run({ query });
+    },
     end(): Promise<void> {
       return Promise.resolve();
     },
@@ -171,6 +178,13 @@ describe("createRunner boot path", () => {
       transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
         return run({ query: this.query });
       },
+      // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+      readOnly<T>(
+        _statementTimeoutMs: number,
+        run: (tx: SqlExecutor) => Promise<T>,
+      ): Promise<T> {
+        return run(this as unknown as SqlExecutor);
+      },
       end(): Promise<void> {
         return Promise.resolve();
       },
@@ -239,6 +253,13 @@ describe("daily calibration survives restarts", () => {
       query,
       transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
         return run({ query });
+      },
+      // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+      readOnly<T>(
+        _statementTimeoutMs: number,
+        run: (tx: SqlExecutor) => Promise<T>,
+      ): Promise<T> {
+        return run(this as unknown as SqlExecutor);
       },
       end(): Promise<void> {
         return Promise.resolve();

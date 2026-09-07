@@ -57,6 +57,14 @@ export class FakeDb implements DatabasePool {
     return run(this);
   }
 
+  /** RFC-023 D1; see `test/fixtures/read-only.ts` for why it is a pass-through. */
+  public readOnly<T>(
+    _statementTimeoutMs: number,
+    run: (tx: SqlExecutor) => Promise<T>,
+  ): Promise<T> {
+    return run(this);
+  }
+
   public end(): Promise<void> {
     return Promise.resolve();
   }

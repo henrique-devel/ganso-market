@@ -111,6 +111,20 @@ function poolAdapter(
         client.release();
       }
     },
+    // RFC-023 D1. This adapter talks to a real PostgreSQL, so the guard is
+    // the production one: both statements, inside the transaction.
+    async readOnly<T>(
+      statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      return this.transaction(async (tx) => {
+        await tx.query("SET TRANSACTION READ ONLY");
+        await tx.query(
+          `SET LOCAL statement_timeout = ${String(statementTimeoutMs)}`,
+        );
+        return run(tx);
+      });
+    },
     end(): Promise<void> {
       return Promise.resolve();
     },

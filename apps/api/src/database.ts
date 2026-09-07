@@ -18,6 +18,20 @@ export interface SqlExecutor {
 
 export interface DatabasePool extends SqlExecutor {
   transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T>;
+  /**
+   * RFC-023 D1. One budgeted read: its own transaction, `SET TRANSACTION READ
+   * ONLY` and `SET LOCAL statement_timeout` before anything else runs.
+   *
+   * Per-statement rather than per-session, for the reason spelled out in
+   * `polymarket/portfolio/sweepstore.ts:15`: `pool.query` checks out whichever
+   * client is free, so a session-level `SET` would guard one connection of the
+   * pool and silently not the next. A transaction is bound to one client for
+   * its whole life, so the budget travels with the statement it guards.
+   */
+  readOnly<T>(
+    statementTimeoutMs: number,
+    run: (tx: SqlExecutor) => Promise<T>,
+  ): Promise<T>;
   end(): Promise<void>;
 }
 
@@ -28,9 +42,30 @@ export interface ReadinessProbe {
 export interface DatabasePoolOverrides {
   /** Pool size; the API default (4) is too small for burst writers. */
   readonly max?: number;
-  /** Query/statement timeout; the API default (connect timeout) is 2s. */
+  /**
+   * RFC-023 D1. Query/statement timeout, in milliseconds. REQUIRED: there is
+   * no default, and omitting it throws QUERY_TIMEOUT_UNDECLARED at boot.
+   *
+   * Until 2026-09-07 this fell back to `config.database.connectTimeoutMs`, so
+   * every API query inherited the 1 s connection budget that
+   * `config/runtime.json` had set for something else entirely. Nobody chose
+   * it, nobody knew it, and two of the panel's own subqueries were already at
+   * 700 and 800 ms cold when it was measured. A budget nobody declared is a
+   * budget nobody can defend.
+   */
   readonly queryTimeoutMs?: number;
   readonly applicationName?: string;
+}
+
+/** Boot-time refusal; carries a reason code like ConfigError does. */
+export class DatabaseConfigError extends Error {
+  public readonly reasonCode: string;
+
+  public constructor(reasonCode: string, message: string) {
+    super(message);
+    this.name = "DatabaseConfigError";
+    this.reasonCode = reasonCode;
+  }
 }
 
 /**
@@ -72,8 +107,13 @@ export function createDatabasePool(
   config: ApiConfig,
   overrides: DatabasePoolOverrides = {},
 ): DatabasePool {
-  const queryTimeoutMs =
-    overrides.queryTimeoutMs ?? config.database.connectTimeoutMs;
+  const queryTimeoutMs = overrides.queryTimeoutMs;
+  if (queryTimeoutMs === undefined) {
+    throw new DatabaseConfigError(
+      "QUERY_TIMEOUT_UNDECLARED",
+      "createDatabasePool requires an explicit queryTimeoutMs",
+    );
+  }
   const applicationName = overrides.applicationName ?? "ganso-market-api";
   const pool = config.database.password.use((password) => {
     const poolConfig: PoolConfig = {
@@ -109,37 +149,67 @@ export function createDatabasePool(
     return { rows: result.rows, rowCount: result.rowCount ?? 0 };
   }
 
+  async function transaction<T>(
+    run: (tx: SqlExecutor) => Promise<T>,
+  ): Promise<T> {
+    const client = await pool.connect();
+    const tx: SqlExecutor = {
+      async query<R extends QueryResultRow>(
+        text: string,
+        params?: readonly unknown[],
+      ): Promise<QueryResult<R>> {
+        const result = await client.query<R>(
+          text,
+          params === undefined ? undefined : [...params],
+        );
+        return { rows: result.rows, rowCount: result.rowCount ?? 0 };
+      },
+    };
+    try {
+      await client.query("BEGIN");
+      const value = await run(tx);
+      await client.query("COMMIT");
+      return value;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // A failed rollback must not mask the original error.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   return {
     query,
-    async transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
-      const client = await pool.connect();
-      const tx: SqlExecutor = {
-        async query<R extends QueryResultRow>(
-          text: string,
-          params?: readonly unknown[],
-        ): Promise<QueryResult<R>> {
-          const result = await client.query<R>(
-            text,
-            params === undefined ? undefined : [...params],
-          );
-          return { rows: result.rows, rowCount: result.rowCount ?? 0 };
-        },
-      };
-      try {
-        await client.query("BEGIN");
-        const value = await run(tx);
-        await client.query("COMMIT");
-        return value;
-      } catch (error) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {
-          // A failed rollback must not mask the original error.
-        }
-        throw error;
-      } finally {
-        client.release();
+    transaction,
+    async readOnly<T>(
+      statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      // `SET LOCAL statement_timeout` takes no bind parameter, so the value is
+      // interpolated — and therefore has to be proved to be an integer here
+      // rather than trusted from the caller.
+      if (
+        !Number.isSafeInteger(statementTimeoutMs) ||
+        statementTimeoutMs <= 0
+      ) {
+        throw new DatabaseConfigError(
+          "QUERY_TIMEOUT_INVALID",
+          "readOnly requires a positive integer statementTimeoutMs",
+        );
       }
+      return transaction(async (tx) => {
+        // Order matters: `SET TRANSACTION` is only legal before the first
+        // query of the transaction, so it goes first and the budget second.
+        await tx.query("SET TRANSACTION READ ONLY");
+        await tx.query(
+          `SET LOCAL statement_timeout = ${String(statementTimeoutMs)}`,
+        );
+        return run(tx);
+      });
     },
     async end(): Promise<void> {
       await pool.end();

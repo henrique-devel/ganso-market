@@ -74,7 +74,8 @@ async function run(): Promise<void> {
   const note = command === "approve" ? await readStdin() : "";
 
   const config = await loadConfig();
-  const pool = createDatabasePool(config);
+  // RFC-023 D1: declared, not inherited — reads the same gate and decision tables as the 60 s portfolio workers.
+  const pool = createDatabasePool(config, { queryTimeoutMs: 60_000 });
   try {
     if (command === "show") {
       const report = await loadLatestGateReport(pool);

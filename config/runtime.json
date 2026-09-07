@@ -11,7 +11,35 @@
   "services": {
     "api": {
       "bind_address": "0.0.0.0",
-      "port": 3000
+      "port": 3000,
+      "statement_timeout_ms": {
+        "ceiling": 4000,
+        "default": 2000,
+        "routes": {
+          "/polymarket/overview": 1500,
+          "/polymarket/events": 500,
+          "/polymarket/data-quality": 4000,
+          "/polymarket/paper/performance": 500,
+          "/polymarket/opportunities": 1000,
+          "/polymarket/opportunities/:tokenId": 1000,
+          "/polymarket/portfolio/exposure": 500,
+          "/polymarket/portfolio/limits": 1000,
+          "/polymarket/portfolio/state": 500,
+          "/polymarket/gates": 500,
+          "/polymarket/gates/measurements": 500,
+          "/polymarket/decisions": 500,
+          "/polymarket/decisions/:decisionId": 500,
+          "/polymarket/resolution-risk": 500,
+          "/polymarket/resolution-risk/divergences": 500,
+          "/polymarket/resolution-risk/reports": 500,
+          "/polymarket/resolution-risk/pipeline": 500,
+          "/polymarket/resolution-risk/:marketId": 500,
+          "/polymarket/resolution-risk/:marketId/history": 500,
+          "/polymarket/graph": 500,
+          "/polymarket/graph/violations": 500,
+          "/polymarket/graph/vetoes": 500
+        }
+      }
     },
     "market_engine": {
       "bind_address": "0.0.0.0",

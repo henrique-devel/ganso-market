@@ -1,7 +1,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { DatabasePool, QueryResult } from "../../../src/database.js";
+import type {
+  DatabasePool,
+  QueryResult,
+  SqlExecutor,
+} from "../../../src/database.js";
 import {
   registerFundamentalRoutes,
   type FundamentalRoutesDeps,
@@ -35,6 +39,12 @@ function fakePool(respond: Responder = () => []): {
     },
     transaction() {
       return Promise.reject(new Error("unused"));
+    },
+    readOnly<T>(
+      _statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      return run(this as unknown as SqlExecutor);
     },
     end() {
       return Promise.resolve();
@@ -869,6 +879,12 @@ describe("failure handling", () => {
       },
       transaction() {
         return Promise.reject(new Error("unused"));
+      },
+      readOnly<T>(
+        _statementTimeoutMs: number,
+        run: (tx: SqlExecutor) => Promise<T>,
+      ): Promise<T> {
+        return run(this as unknown as SqlExecutor);
       },
       end() {
         return Promise.resolve();

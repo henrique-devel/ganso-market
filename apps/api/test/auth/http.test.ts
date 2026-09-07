@@ -29,6 +29,9 @@ function testConfig(): ApiConfig {
       connectTimeoutMs: 1_000,
     },
     log: { level: "info" },
+    // RFC-023 D1: the API refuses to build without a declared budget, so a
+    // test config has to declare one too.
+    statementBudgets: { ceilingMs: 4_000, defaultMs: 2_000, routes: {} },
   };
 }
 

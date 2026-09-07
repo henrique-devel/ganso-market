@@ -166,6 +166,13 @@ function worldPool(
     async transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
       return run(executor);
     },
+    // RFC-023 D1 pass-through; see `test/fixtures/read-only.ts`.
+    readOnly<T>(
+      _statementTimeoutMs: number,
+      run: (tx: SqlExecutor) => Promise<T>,
+    ): Promise<T> {
+      return run(this as unknown as SqlExecutor);
+    },
     end(): Promise<void> {
       return Promise.resolve();
     },
