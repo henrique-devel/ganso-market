@@ -14,7 +14,8 @@
   `terminating connection due to administrator command` em vez de matar o processo,
   **1.350 deltas perdidos foram registrados em 2 linhas** de `polymarket_data_gaps` com
   `dropped` e janela, e a retenção que falhou em 38 passos **reagendou-se para 10 min** em vez
-  de esperar 24 h. Ver a seção "SESSÃO 2026-09-07" ao final.
+  de esperar 24 h — e a tentativa reagendada **rodou às 01:18:28Z e passou limpa**. Ver a
+  seção "SESSÃO 2026-09-07" ao final.
 - 2026-09-06 — **O proprietário rearmou o kill switch às 23:03:10.474Z, e a
   vazão NÃO voltou.** Em 16 min: **211 decisões, 0 aceites, 0 ordens, 0 fills**. O gargalo nunca
   foi só o switch — 77 % das recusas são `DATA_STALE` (76) e `BOOK_STALE` (64), e nenhuma delas
@@ -4471,7 +4472,8 @@ vez:**
 | `BOOKPIPE_PERSIST_FAILED` | 186, agora com `count` (14, 76, …) |
 | Lacunas gravadas | **2 linhas**, `dropped` **1.308** + **42** = **1.350** deltas, janela `01:07:55.804Z → 01:08:01.152Z` |
 | `GAP_PERSIST_FAILED` do caminho de deltas | **0** (os 6 do log são `RTDS_GAP_PERSIST_FAILED`, caminho que a RFC deixa fora de escopo) |
-| Retenção | `RETENTION_RETRY_SCHEDULED`, `failed_steps: 38`, `retry_in_ms: 600000` |
+| Retenção — reagendamento | `RETENTION_RETRY_SCHEDULED` às **01:07:58.754Z**, `failed_steps: 38`, `retry_in_ms: 600000` |
+| Retenção — a tentativa reagendada **rodou e passou** | `RETENTION_RETRY_OK` às **01:18:28.315Z**, com **0** `RETENTION_STEP_FAILED` na janela. Dez minutos, não 24 h |
 | Recuperação | 22.760 deltas nos 60 s seguintes |
 
 Antes desta sessão, essa mesma queda de 5 s teria matado os cinco workers e deixado ~1.600
