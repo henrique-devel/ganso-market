@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { QueryResultRow } from "pg";
 
@@ -97,6 +97,34 @@ describe("computeConcentration (bigint shares)", () => {
 describe("oi/holders sampler", () => {
   const universe = [{ conditionId: "0xcond", tokenIds: ["111", "222"] }];
 
+  /**
+   * RFC-023 D4. The registry row that maps the market to its Gamma event —
+   * `/live-volume` is addressed by event, not by market.
+   */
+  function eventMapping(
+    rows: Record<string, unknown>[] = [
+      { condition_id: "0xcond", event_id: "978462" },
+    ],
+  ): Responder {
+    return (text) =>
+      text.includes("FROM polymarket_event_markets") ? { rows } : undefined;
+  }
+
+  /**
+   * The real `/live-volume` body, measured against the endpoint on 2026-09-07:
+   * a per-market breakdown for the whole event, where `total` is the event's
+   * SUM and only the matching `market` entry belongs to this market.
+   */
+  const LIVE_VOLUME_BODY = [
+    {
+      total: 1999,
+      markets: [
+        { market: "0xcond", value: 999 },
+        { market: "0xoutro", value: 1000 },
+      ],
+    },
+  ];
+
   function makeFetcher(
     overrides?: Partial<Record<"oi" | "volume" | "holders", unknown>>,
   ): (url: string) => Promise<ReturnType<typeof jsonResponse>> {
@@ -108,7 +136,7 @@ describe("oi/holders sampler", () => {
       }
       if (url.includes("/live-volume?")) {
         return Promise.resolve(
-          jsonResponse(overrides?.volume ?? { total: "999" }),
+          jsonResponse(overrides?.volume ?? LIVE_VOLUME_BODY),
         );
       }
       return Promise.resolve(
@@ -132,7 +160,7 @@ describe("oi/holders sampler", () => {
   }
 
   it("persists one row per holder group with derived concentration", async () => {
-    const { calls, executor } = createFakeExecutor();
+    const { calls, executor } = createFakeExecutor(eventMapping());
     const sampler = createOiHoldersSampler({
       pool: executor,
       fetcher: makeFetcher(),
@@ -167,7 +195,12 @@ describe("oi/holders sampler", () => {
       }
       return makeFetcher()(url);
     };
-    const { calls, executor } = createFakeExecutor();
+    const { calls, executor } = createFakeExecutor(
+      eventMapping([
+        { condition_id: "0xbad", event_id: "1" },
+        { condition_id: "0xgood", event_id: "2" },
+      ]),
+    );
     const sampler = createOiHoldersSampler({
       pool: executor,
       fetcher,
@@ -185,9 +218,135 @@ describe("oi/holders sampler", () => {
     ).toBe(false);
   });
 
+  // RFC-023 D4. What was actually wrong: the sampler asked
+  // `/live-volume?market=<conditionId>` and the endpoint answered
+  //   400 {"error":"required query param 'id' not provided"}
+  // on every call, for over 30 hours — 17 800 of 17 800 rows with a NULL
+  // live_volume, while open_interest and holders_count filled in normally.
+  // Measured against the live endpoint on 2026-09-07.
+  it("asks /live-volume by event id, which is what the endpoint takes", async () => {
+    const urls: string[] = [];
+    const { executor } = createFakeExecutor(eventMapping());
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher: (url: string) => {
+        urls.push(url);
+        return makeFetcher()(url);
+      },
+      clock: () => 0,
+    });
+    await sampler.sampleOnce(universe);
+
+    const liveVolume = urls.filter((url) => url.includes("/live-volume"));
+    expect(liveVolume).toHaveLength(1);
+    expect(liveVolume[0]).toContain("/live-volume?id=978462");
+    // The parameter that returned 400 on every call for 30 hours.
+    expect(liveVolume[0]).not.toContain("market=");
+    // /oi and /holders were always right and stay addressed by market.
+    expect(urls.some((url) => url.includes("/oi?market=0xcond"))).toBe(true);
+    expect(urls.some((url) => url.includes("/holders?market=0xcond"))).toBe(
+      true,
+    );
+  });
+
+  it("takes this market's value, never the event total", async () => {
+    // `total` is the sum over the event's markets. Reading it would have given
+    // every leg of a negRisk group the whole group's volume — for the largest
+    // event measured, 285 M instead of 83 M.
+    const { calls, executor } = createFakeExecutor(eventMapping());
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher: makeFetcher(),
+      clock: () => 0,
+    });
+    await sampler.sampleOnce(universe);
+
+    const insert = calls.find((call) =>
+      call.text.includes("INSERT INTO polymarket_oi_holders"),
+    );
+    expect(insert?.params[3]).toBe("999");
+    expect(insert?.params[3]).not.toBe("1999");
+  });
+
+  it("calls once per event, not once per market", async () => {
+    const urls: string[] = [];
+    const { executor } = createFakeExecutor(
+      eventMapping([
+        { condition_id: "0xa", event_id: "42" },
+        { condition_id: "0xb", event_id: "42" },
+      ]),
+    );
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher: (url: string) => {
+        urls.push(url);
+        return makeFetcher()(url);
+      },
+      clock: () => 0,
+    });
+    await sampler.sampleOnce([
+      { conditionId: "0xa", tokenIds: ["1"] },
+      { conditionId: "0xb", tokenIds: ["2"] },
+    ]);
+
+    expect(urls.filter((url) => url.includes("/live-volume"))).toHaveLength(1);
+  });
+
+  it("leaves live_volume NULL when the market has no event row yet", async () => {
+    const { calls, executor } = createFakeExecutor(eventMapping([]));
+    const sampler = createOiHoldersSampler({
+      pool: executor,
+      fetcher: makeFetcher(),
+      clock: () => 0,
+    });
+    await sampler.sampleOnce(universe);
+
+    const insert = calls.find((call) =>
+      call.text.includes("INSERT INTO polymarket_oi_holders"),
+    );
+    // Still sampled — open interest and holders do not depend on the event.
+    expect(insert).toBeDefined();
+    expect(insert?.params[3]).toBeNull();
+  });
+
+  it("logs the HTTP status when /live-volume fails", async () => {
+    // RFC-023 D3: the status is inside error.message, which the sampler used
+    // to discard. 549 of 551 warnings on 2026-09-02 said only
+    // `error_name: "Error"` about a 400 nobody could see.
+    const written: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
+      const { executor } = createFakeExecutor(eventMapping());
+      const sampler = createOiHoldersSampler({
+        pool: executor,
+        fetcher: (url: string) =>
+          url.includes("/live-volume")
+            ? Promise.resolve(jsonResponse({ error: "bad" }, false, 400))
+            : makeFetcher()(url),
+        clock: () => 0,
+      });
+      await sampler.sampleOnce(universe);
+    } finally {
+      spy.mockRestore();
+    }
+    const line = written.find((entry) =>
+      entry.includes("SAMPLER_FETCH_FAILED"),
+    );
+    expect(line).toBeDefined();
+    expect(line).toContain("/live-volume");
+    expect(line).toContain(
+      '"error_message":"data api /live-volume?id=978462 returned 400"',
+    );
+  });
+
   it("records a data_api gap covering the cycle when every market fails", async () => {
     let now = 500;
-    const { calls, executor } = createFakeExecutor();
+    const { calls, executor } = createFakeExecutor(eventMapping());
     const sampler = createOiHoldersSampler({
       pool: executor,
       fetcher: () => Promise.reject(new Error("network down")),

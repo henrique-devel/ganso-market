@@ -160,7 +160,45 @@ Antes de qualquer código: `curl -sS -o /tmp/lv.json -w '%{http_code}\n' 'https:
 | 4xx por parâmetro (ex.: exige outro identificador) | corrigir a query string em `samplers.ts:300` | nada muda |
 | 404/410/endpoint extinto | **parar de chamar**: `liveVolume = null` sem fetch, uma linha `LIVE_VOLUME_UNAVAILABLE` (info) por boot, `SAMPLER_FETCH_FAILED` com esse path cai a 0; a coluna fica; `series?metric=oi` segue devolvendo `live_volume: null` **documentado** como indisponível | remover o campo da API é decisão do proprietário (é contrato); o padrão é manter `null` explícito |
 
-Registro da chamada: `status … | corpo … | data …` — a preencher pela sessão.
+### Registro da chamada (2026-09-07, de dentro do servidor)
+
+| # | Chamada | Status | Corpo (primeiros bytes) |
+| - | --- | --- | --- |
+| 1 | `/live-volume?market=<conditionId>` — **o que o código fazia** | **400** | `{"error":"required query param 'id' not provided"}` |
+| 2 | `/live-volume?id=<conditionId>` | 400 | `{"error":"strconv.Atoi: parsing \"0xcc57…\": invalid syntax"}` |
+| 3 | `/live-volume?id=978462` — **event id, mercado vivo** | **200** | `[{"total":10900.501488,"markets":[{"market":"0xcc57134f…","value":10900.501488}]}]` |
+| 4 | `/live-volume?id=939690` — event id, mercado já encerrado | **200** | `[{"total":619137.31,"markets":[{"market":"0x50a3b9cc…","value":136615.598325}, …]}]` |
+| 5 | `/live-volume?id=1` — id inexistente (controle) | 200 | `[{"total":0,"markets":[]}]` |
+
+**A saída é a linha 2 da tabela D4 combinada com a linha 1**, e o endpoint **não
+está extinto**: ele mudou de identificador e de forma de corpo.
+
+1. **Parâmetro** (linha 2 da D4): não é `market=<conditionId>`, é `id=<event id>`
+   — o id numérico do evento no Gamma. A linha 2 do registro prova que o
+   `conditionId` hexadecimal não serve nem sob o nome certo: o servidor tenta
+   `strconv.Atoi` nele.
+2. **Corpo** (linha 1 da D4): não é `{total: …}` do mercado, é
+   `[{total: <soma do evento>, markets: [{market, value}]}]`. O `extractMetric`
+   atual pegaria o `total`, que é a soma do evento inteiro — para o maior evento
+   medido isso daria **285 817 188** a cada uma das suas pernas, em vez dos
+   **83 454 379** que pertencem à primeira. Corrigir só a query string teria
+   trocado um NULL por um número errado.
+
+**O identificador já estava no banco.** `polymarket_event_markets (event_id,
+condition_id)` existe desde a migration `0005` e o `event_id` guardado é
+exatamente o id numérico que o endpoint quer (`978462` para
+`0xcc57134f…`). Cobertura medida: **69 de 69** mercados amostrados nas últimas
+2 h têm event_id, e uma prova end-to-end contra o endpoint real deu **75 de 75
+pares (100 %)** com valor devolvido — em **31 chamadas**, porque uma chamada por
+evento cobre todos os seus mercados.
+
+`LIVE_VOLUME_UNAVAILABLE` **não** entra: ele era da saída "endpoint extinto", que
+não se realizou. A coluna `live_volume` não muda, e nenhum endpoint é removido.
+
+**As linhas antigas continuam NULL.** O endpoint só reporta volume corrente, então
+as 17 800 linhas de 30 h com `live_volume IS NULL` não são preenchíveis. Está
+documentado em `readapi.ts` na rota que expõe o campo: para essas linhas, NULL
+significa "não coletado", nunca "zero".
 
 ---
 

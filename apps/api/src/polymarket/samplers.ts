@@ -112,6 +112,42 @@ export function computeConcentration(amounts: readonly string[]): {
 // Data API response shapes drift; extract a decimal metric tolerantly from a
 // bare number/string, an object with one of the candidate keys, or the first
 // element of an array of such objects.
+/**
+ * RFC-023 D4. The per-market values inside a `/live-volume` event response,
+ * keyed by conditionId.
+ *
+ * Measured against the live endpoint on 2026-09-07: the body is
+ * `[{"total": <soma do evento>, "markets": [{"market": <conditionId>, "value": <number>}]}]`.
+ * Anything that is not that shape yields an empty map, and every market of the
+ * event keeps a NULL `live_volume` — the same value it had while the call was
+ * failing, never a number invented from a shape we do not recognise.
+ */
+export function extractEventVolumes(body: unknown): Map<string, string> {
+  const values = new Map<string, string>();
+  const entries = Array.isArray(body) ? body : [body];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const markets = (entry as { markets?: unknown }).markets;
+    if (!Array.isArray(markets)) {
+      continue;
+    }
+    for (const item of markets) {
+      if (typeof item !== "object" || item === null) {
+        continue;
+      }
+      const record = item as { market?: unknown; value?: unknown };
+      const conditionId = asString(record.market);
+      const value = asDecimalString(record.value);
+      if (conditionId !== null && value !== null) {
+        values.set(conditionId, value);
+      }
+    }
+  }
+  return values;
+}
+
 function extractMetric(body: unknown, keys: readonly string[]): string | null {
   if (typeof body === "number" || typeof body === "string") {
     return asDecimalString(body);
@@ -295,15 +331,100 @@ export function createOiHoldersSampler(deps: SamplerDeps): OiHoldersSampler {
     );
   }
 
-  async function sampleMarket(market: UniverseMarket): Promise<void> {
+  /**
+   * RFC-023 D4. conditionId -> event_id, from the registry we already keep.
+   *
+   * `/live-volume` is the only Data API endpoint of the three that is not
+   * addressed by market. It takes the Gamma EVENT id, which
+   * `polymarket_event_markets` has had all along (migration 0005) — measured
+   * 2026-09-07: 69 of 69 sampled markets had one.
+   */
+  async function loadEventIds(
+    conditionIds: readonly string[],
+  ): Promise<Map<string, string>> {
+    const byCondition = new Map<string, string>();
+    if (conditionIds.length === 0) {
+      return byCondition;
+    }
+    const result = await deps.pool.query<{
+      condition_id: string;
+      event_id: string;
+    }>(
+      `SELECT condition_id, event_id
+         FROM polymarket_event_markets
+        WHERE condition_id = ANY($1::text[])`,
+      [[...conditionIds]],
+    );
+    for (const row of result.rows) {
+      byCondition.set(row.condition_id, row.event_id);
+    }
+    return byCondition;
+  }
+
+  /**
+   * One `/live-volume` call per EVENT, not per market, and the answer indexed
+   * by conditionId.
+   *
+   * The response is a per-market breakdown for the whole event:
+   *
+   *   [{"total": 285817188.4, "markets": [{"market": "0x7d0a…", "value": 83454379.8}, …]}]
+   *
+   * `total` is the event's sum across its markets, so reading it as this
+   * market's volume would silently attribute an entire negRisk group to each of
+   * its legs — for the largest event measured, 285 M instead of 83 M. The value
+   * that belongs to a market is the entry whose `market` equals its
+   * conditionId, and nothing else in the body does.
+   */
+  async function loadLiveVolumes(
+    universe: readonly UniverseMarket[],
+  ): Promise<Map<string, string | null>> {
+    const byCondition = new Map<string, string | null>();
+    const eventIds = await loadEventIds(
+      universe.map((market) => market.conditionId),
+    );
+    const conditionsByEvent = new Map<string, string[]>();
+    for (const market of universe) {
+      const eventId = eventIds.get(market.conditionId);
+      if (eventId === undefined) {
+        // Not an error: a market can be sampled before its event row is
+        // observed. It gets a NULL live_volume, like before, but now the log
+        // says which market and why.
+        logJson(
+          "warn",
+          "LIVE_VOLUME_EVENT_UNKNOWN",
+          "polymarket_live_volume_event_unknown",
+          { condition_id: market.conditionId },
+        );
+        continue;
+      }
+      const members = conditionsByEvent.get(eventId);
+      if (members === undefined) {
+        conditionsByEvent.set(eventId, [market.conditionId]);
+      } else {
+        members.push(market.conditionId);
+      }
+    }
+    for (const [eventId, conditionIds] of conditionsByEvent) {
+      const body = await tryFetch(
+        `/live-volume?id=${encodeURIComponent(eventId)}`,
+        conditionIds[0] ?? eventId,
+      );
+      const values = extractEventVolumes(body);
+      for (const conditionId of conditionIds) {
+        byCondition.set(conditionId, values.get(conditionId) ?? null);
+      }
+    }
+    return byCondition;
+  }
+
+  async function sampleMarket(
+    market: UniverseMarket,
+    liveVolume: string | null,
+  ): Promise<void> {
     const query = `?market=${encodeURIComponent(market.conditionId)}`;
     const oiBody = await tryFetch(`/oi${query}`, market.conditionId);
-    const volumeBody = await tryFetch(
-      `/live-volume${query}`,
-      market.conditionId,
-    );
     const holdersBody = await tryFetch(`/holders${query}`, market.conditionId);
-    if (oiBody === null && volumeBody === null && holdersBody === null) {
+    if (oiBody === null && holdersBody === null && liveVolume === null) {
       throw new Error(
         `all data api endpoints failed for ${market.conditionId}`,
       );
@@ -312,12 +433,6 @@ export function createOiHoldersSampler(deps: SamplerDeps): OiHoldersSampler {
       "value",
       "oi",
       "openInterest",
-      "amount",
-    ]);
-    const liveVolume = extractMetric(volumeBody, [
-      "total",
-      "value",
-      "volume",
       "amount",
     ]);
     const groups = parseHolderGroups(holdersBody);
@@ -353,9 +468,15 @@ export function createOiHoldersSampler(deps: SamplerDeps): OiHoldersSampler {
     async sampleOnce(universe: readonly UniverseMarket[]): Promise<void> {
       const startedAtMs = deps.clock();
       let succeeded = 0;
+      // One call per event covers every market in it: 75 markets were 31 calls
+      // when measured on 2026-09-07.
+      const liveVolumes = await loadLiveVolumes(universe);
       for (const market of universe) {
         try {
-          await sampleMarket(market);
+          await sampleMarket(
+            market,
+            liveVolumes.get(market.conditionId) ?? null,
+          );
           succeeded += 1;
         } catch (error: unknown) {
           logJson(
