@@ -95,8 +95,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # RFC-020 D2: the classifier below diffs github.event.before against
+          # github.sha. A shallow checkout only has github.sha, so the diff
+          # fails — and a failed diff deploys, which would make the whole step
+          # a no-op. Full history is what lets it ever answer "skip".
+          fetch-depth: 0
+
+      - name: Decide whether this revision needs a deploy
+        id: paths
+        env:
+          DEPLOY_PATHS_BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          # Prints "deploy=<bool>: <reason>" and writes deploy=<bool> to
+          # $GITHUB_OUTPUT. It never fails and never raises: anything it cannot
+          # classify with certainty answers deploy=true.
+          python3 deploy/deploy_paths.py
 
       - name: Configure the restricted deploy identity
+        if: steps.paths.outputs.deploy == 'true'
         env:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -115,6 +132,7 @@ jobs:
             -f "$RUNNER_TEMP/ganso-market-ssh/known_hosts" >/dev/null
 
       - name: Build the immutable release archive
+        if: steps.paths.outputs.deploy == 'true'
         run: |
           set -eu
           git archive \
@@ -125,6 +143,7 @@ jobs:
           test "$release_bytes" -le 52428800
 
       - name: Deploy through the forced server command
+        if: steps.paths.outputs.deploy == 'true'
         run: |
           set -eu
           ssh \
@@ -140,6 +159,7 @@ jobs:
             < "$RUNNER_TEMP/ganso-market-release.tar.gz"
 
       - name: Note on health verification
+        if: steps.paths.outputs.deploy == 'true'
         run: |
           set -eu
           # Health is gated on the server: remote-deploy.sh runs
