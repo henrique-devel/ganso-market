@@ -406,22 +406,48 @@ describe("RFC-024 D3 — resubscribe reconecta um slot por vez", () => {
     expect(harness.dual.stats().openConnections).toBe(1);
   });
 
-  it("prefere o slot já fechado: cicla sem custar redundância", () => {
+  it("slot em handshake NÃO é fechado: ele já vai assinar a lista nova", () => {
     const harness = makeHarness({ tokenIds: ["a"] });
     const [first, second] = bothUp(harness);
-    // Slot 0 is already down and waiting for its backoff.
+    // Slot 0 dropped and its reconnect already created a socket that has not
+    // opened yet.
     first.emitClose();
-    // Its reconnect lands and is still connecting (socket created, not open).
     vi.advanceTimersByTime(1_000);
     const reconnecting = harness.sockets[2] as FakeSocket;
     expect(reconnecting).toBeDefined();
 
     harness.dual.resubscribe(["a", "novo"]);
 
-    // The open twin was left alone; the slot that was already down is the one
-    // cycled, so redundancy never dropped below what it already was.
+    // Nothing is closed. The open twin is left alone, AND the connecting
+    // socket is left alone: `connect`'s `onOpen` reads the CURRENT list, so it
+    // subscribes with the new token by itself. Closing it would buy a wasted
+    // handshake — and reporting "deferred" would tell the soak reader the
+    // tokens are stuck when they are not.
     expect(second.closedByClient).toBe(false);
-    expect(harness.dual.stats().openConnections).toBe(1);
+    expect(reconnecting.closedByClient).toBe(false);
+    expect(harness.dual.stats().rollingResubscribes).toBe(1);
+
+    reconnecting.emitOpen();
+    expect(reconnecting.sent[0]).toBe(subscribeMessage(["a", "novo"]));
+    expect(harness.dual.stats().openConnections).toBe(2);
+  });
+
+  it("slot esperando o backoff também não é rolado", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    const [first, second] = bothUp(harness);
+    // Slot 0 is down with `socket === null`, waiting on its backoff timer.
+    first.emitClose();
+
+    harness.dual.resubscribe(["a", "novo"]);
+
+    expect(second.closedByClient).toBe(false);
+    expect(harness.dual.stats().rollingResubscribes).toBe(1);
+
+    // Its reconnect carries the new list when it lands.
+    vi.advanceTimersByTime(1_000);
+    const replacement = harness.sockets[2] as FakeSocket;
+    replacement.emitOpen();
+    expect(replacement.sent[0]).toBe(subscribeMessage(["a", "novo"]));
   });
 
   it("o rolo NUNCA dispara onBothDown, nem com os dois slots ciclados em sequência", () => {
