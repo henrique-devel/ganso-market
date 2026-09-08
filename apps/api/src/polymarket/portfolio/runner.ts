@@ -604,6 +604,10 @@ export function createPortfolioRunner(
             ),
             jumpWindowMs: deps.config.breakers.jumpWindowMs,
             bookMaxAgeMs: deps.config.staleness.bookMaxAgeMs,
+            // RFC-025 D3: the band the entry gate already enforces
+            // (`engine.ts:496-499`), no new config key.
+            bandMinBuyScaled: fractionScaled(deps.config.priceBand.minBuy),
+            bandMaxBuyScaled: fractionScaled(deps.config.priceBand.maxBuy),
           },
           now,
         }),
