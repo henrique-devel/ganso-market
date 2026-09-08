@@ -317,12 +317,12 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
    */
   function rollSlot(index: number): boolean {
     const slot = slots[index];
-    if (slot === undefined || slot.socket === null) {
+    if (slot === undefined || slot.socket === null || !slot.open) {
       return false;
     }
     // Never take the last open connection down for a resubscribe. Losing
     // redundancy is acceptable; losing the feed is a gap.
-    if (openConnections() <= 1 && slot.open) {
+    if (openConnections() <= 1) {
       return false;
     }
     rollingSlot = index;
@@ -370,9 +370,28 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
         );
         return;
       }
-      // Prefer an already-closed slot: cycling it costs no redundancy at all.
-      const closedIndex = slots.findIndex((slot) => !slot.open);
-      const target = closedIndex === -1 ? 0 : closedIndex;
+      // A slot that is NOT open needs no roll at all: whether it is waiting on
+      // its backoff or mid-handshake, `connect`'s `onOpen` reads the CURRENT
+      // token list, so it will subscribe with these tokens on its own. Closing
+      // it would buy a wasted handshake, and reporting it as "deferred" would
+      // tell the soak reader that the tokens are stuck when they are not.
+      const reconnectingIndex = slots.findIndex((slot) => !slot.open);
+      if (reconnectingIndex !== -1) {
+        rollingResubscribes += 1;
+        logJson(
+          "info",
+          "WS_ROLLING_RESUBSCRIBE_NOT_NEEDED",
+          "polymarket_dualws_rolling_resubscribe_not_needed",
+          {
+            slot: reconnectingIndex,
+            entering: entering.length,
+            tokens: tokenIds.length,
+            open_connections: openConnections(),
+          },
+        );
+        return;
+      }
+      const target = 0;
       if (rollSlot(target)) {
         rollingResubscribes += 1;
         logJson(
