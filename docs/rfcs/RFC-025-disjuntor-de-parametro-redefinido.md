@@ -1,6 +1,6 @@
 # RFC-025 — Disjuntor de mudança de parâmetro redefinido: `PARAM_CHANGE` abre em mudança real, não em nascimento
 
-**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela e registradas na coluna de decisão (2026-09-05)
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela e registradas na coluna de decisão (2026-09-05). **PARADO na re-medição de 2026-09-08: a premissa numérica caiu (atribuição 29,7 %, gatilho em 50 %) e o defeito não — ver "Re-medição" abaixo. Aguarda decisão do proprietário; nenhum PR aberto.**
 **Dependências:** nenhuma de código. RFC-013 (item 4 (iv): "mudança de fee schedule/tick/status", `docs/rfcs/RFC-013-polymarket-portfolio-engine.md:154–158`) é a especificação que esta RFC interpreta; RFC-018 (o G3 já viu `PARAM_CHANGE` disparar 939 vezes — nada aqui o devolve a zero). **Decisão registrada e APROVADA na recomendação (tabela P1–P3, 2026-09-05).**
 **Habilita:** o universo rápido da RFC-016/RFC-019 (mercados "Up or Down" horários) deixa de nascer congelado; a vazão de que o G2 depende passa a ser possível de medir; o `PARAM_CHANGE` volta a significar o que a RFC-013 escreveu
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (funil, seções 1 e 2)
@@ -65,6 +65,44 @@
 Num token a US$ 0,045, 15 % é 0,7 centavo — um tick. Não trava o funil (p50 de 2 min), mas enche `portfolio_circuit_breakers` e distorce a leitura do G3.
 
 ---
+
+## Re-medição (2026-09-08 ~09:50Z) — a régua caiu, o defeito não
+
+Rodada com as A1–A3 do Apêndice A **sem reescrever** (`scripts/rfc025/measure_before.sql`) contra
+o Postgres de produção, container `polymarket-portfolio` em `release-sha` `da6d5603`.
+
+| Fato | Na RFC (02/09) | Re-medido (08/09) | Veredito |
+| --- | --- | --- | --- |
+| `ENTRY` em 24 h | 52 983 | **17 484** | — |
+| Fatia em `PORTFOLIO_CIRCUIT_BREAKER` | 55,9 % | **1,81 % (317)** | caiu |
+| Atribuída ao `PARAM_CHANGE` | 98,6 % (29 173/29 600) | **29,7 % (94/317)** | **caiu — abaixo do gatilho de 50 %** |
+| A2: artefato de coleta (v1 + `NULL → valor`) | 92 % (617 + 247 de 939) | **92,4 % (1 102 + 434 de 1 661)**; **96 % nas últimas 24 h** (94 + 26 de 125) | **de pé, pior** |
+| A2: mudança real de `taker_fee` / `fee_curve` | 0 | **0** em 1 661 aberturas | **de pé** |
+| A3: universo rápido sob disjuntor | 100 % (1 519/1 519, 40 mercados) | **100 % (50/50, 50 mercados)** | **de pé** |
+| Aceite 2, linha-base: "Up or Down" **descobertos** em 24 h cuja **primeira** decisão é disjuntor | — | **50 de 50**, e **50 de 50 atribuídos ao `PARAM_CHANGE`** | **de pé** |
+| `PARAM_CHANGE` aberto agora | 54 mercados, p50 324 min | **35 mercados, p50 411 min (6,9 h)**, universo de 169 | **de pé** |
+
+**Por que a atribuição caiu sem o defeito melhorar.** Não é o feed roubando o denominador: o
+disjuntor é o degrau 1 (`engine.ts:334`), antes da camada RFC-012 e dos gates de frescor, então um
+mercado com disjuntor aberto morre em `PORTFOLIO_CIRCUIT_BREAKER` e nunca pode ser contado como
+`DATA_STALE`/`BOOK_STALE` — as categorias são exclusivas e o disjuntor vem primeiro. O que mudou é
+a contagem de linhas: uma decisão só é gravada quando o **veredito muda** (`runner.ts:971–977`;
+`entrySignature` = `kind|outcome|reasonCode|bindingConstraint`, `decisionrow.ts:75–87`), e um
+mercado congelado sem interrupção grava **uma** linha. Daí `PARAM_CHANGE` com **94 n sobre 94
+mercados** e o universo rápido com **50 sobre 50** — um para um.
+
+**O número desta RFC não reproduz.** O dia 02/09 inteiro dá **4 574 de 21 583 = 21,19 %**, não
+55,9 %; o valor casa com **01/09** (24 283 de 36 907 = 65,8 %). O recorte original era janela móvel
+de 24 h pegando a cauda de 01/09, quando o veredito batia a cada ciclo. A série: 24 283 (01/09) →
+4 574 → 683 → 619 → 743 → 620 → 319 → 178 (08/09 parcial).
+
+**Consequência para o aceite 3:** a linha-base "antes: 55,9 %" não existe mais. Se a
+implementação seguir, o aceite 3 vale contra **1,81 %**, e o critério imune à dedup é o do aceite
+2 (primeira decisão dos recém-descobertos), hoje **50 de 50**.
+
+D1–D5 seguem válidas sem mudança: a causa (versão 1 e preenchimento `NULL → valor`) e a correção
+são as mesmas. O que a re-medição desmentiu foi a régua, não o diagnóstico. Registro completo em
+`docs/HANDOFF.md`, seção "SESSÃO 2026-09-08 (3)".
 
 ## Decisões que esta RFC exige do proprietário
 
