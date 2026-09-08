@@ -186,27 +186,44 @@ async function main(): Promise<number> {
     );
   }
 
-  // Baseline: the hourly closest to its end is the one the top-500 has
-  // actually discovered, so its tokens are the ones already flowing.
+  // Baseline: the hourly closest to its end is the one actually trading, so
+  // its tokens are the ones already flowing on the wire.
   const baselineEntry = live[0];
-  const newEntry =
-    live.find(
-      (entry) => entry.minutesToEnd >= 30 && entry.minutesToEnd <= 75,
-    ) ?? live[1];
   const baselineTokenIds =
     flag(argv, "--baseline-token") !== null
       ? [flag(argv, "--baseline-token") as string]
       : (baselineEntry?.tokenIds.slice(0, 2) ?? []);
+  const baselineTokens = new Set(baselineTokenIds);
+
+  // The new token has to come from a DIFFERENT market. Measured on
+  // 2026-09-08: picking "the first entry between 30 and 75 min" selected the
+  // baseline market itself, so the probe subscribed a token it already had,
+  // saw its book from the baseline phase, and reported BOOK_ON_A with
+  // msToBookOnA = -59999 ms — a tautology dressed as a refutation of H1.
+  const newEntry =
+    flag(argv, "--new-token") !== null
+      ? undefined
+      : live.find(
+          (entry) =>
+            entry.conditionId !== baselineEntry?.conditionId &&
+            !entry.tokenIds.some((id) => baselineTokens.has(id)),
+        );
   const newTokenId = flag(argv, "--new-token") ?? newEntry?.tokenIds[0] ?? null;
 
-  if (baselineTokenIds.length === 0 || newTokenId === null) {
+  if (
+    baselineTokenIds.length === 0 ||
+    newTokenId === null ||
+    baselineTokens.has(newTokenId)
+  ) {
     process.stdout.write(
-      "\nINVALID: a serie nao ofereceu linha-base e token novo distintos\n",
+      "\nINVALID: a serie nao ofereceu linha-base e token novo de mercados " +
+        "DISTINTOS\n",
     );
     return 3;
   }
   process.stdout.write(
     `\nlinha-base: ${baselineEntry?.slug ?? "(argumento)"} ` +
+      `fim em ${String(Math.round(baselineEntry?.minutesToEnd ?? 0))} min ` +
       `(${String(baselineTokenIds.length)} tokens)\n` +
       `token novo: ${newEntry?.slug ?? "(argumento)"} ` +
       `fim em ${String(Math.round(newEntry?.minutesToEnd ?? 0))} min\n\n`,

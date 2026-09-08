@@ -628,3 +628,162 @@ describe("RFC-024 — utilitarios da prova", () => {
     expect(out.gbPerDay).toBeCloseTo(2.35, 2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC-024 D1 — os tres defeitos que a primeira rodada ao vivo revelou
+// ---------------------------------------------------------------------------
+
+/**
+ * The first live round, 2026-09-08T02:19:43Z, came back:
+ *
+ *   | 1 | only_new | ... | BOOK_ON_A | -59999 ms | sim (537 frames) | 22 ms | 0 |
+ *
+ * Three things wrong in one line, and the RFC's stop condition reads
+ * `BOOK_ON_A` as "H1 refuted, do not write PR 3". Each defect gets a test.
+ */
+describe("RFC-024 D1 — defeitos vistos na primeira rodada ao vivo", () => {
+  it("o token novo dentro da linha-base sai INVALID, nao BOOK_ON_A", async () => {
+    // Defect 1: the CLI picked the baseline market as the "new" market too.
+    const timers = fakeTimers();
+    const result = await runProbeRound(
+      {
+        baselineTokenIds: ["base1", "base2"],
+        // The same token as the baseline: nothing to measure.
+        newTokenId: "base1",
+        variant: "only_new",
+      },
+      {
+        socketFactory: () => new FakeProbeSocket(),
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    expect(result.verdict).toBe("INVALID");
+    expect(result.invalidReason).toBe("new_token_is_in_baseline");
+  });
+
+  it("book visto ANTES do frame extra sai INVALID: tempo negativo e impossivel", async () => {
+    // Defect 2: the book arrived during the baseline phase, 60 s before the
+    // extra frame, and was reported as if the frame had delivered it.
+    const sockets: FakeProbeSocket[] = [];
+    const timers = fakeTimers();
+    const promise = runProbeRound(
+      {
+        baselineTokenIds: ["base1"],
+        newTokenId: "novo",
+        variant: "only_new",
+      },
+      {
+        socketFactory: () => {
+          const socket = new FakeProbeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    await Promise.resolve();
+    const a = sockets[0] as FakeProbeSocket;
+    a.fireOpen();
+    a.deliver(bookFrame("base1"));
+    // The venue volunteers the new token's book while A is still on the
+    // baseline subscription — the token was already flowing.
+    a.deliver(bookFrame("novo"));
+    await timers.advance(60_000);
+    const b = sockets[1] as FakeProbeSocket;
+    b.fireOpen();
+    b.deliver(bookFrame("novo"));
+    await timers.advance(130_000);
+    const result = await promise;
+    expect(result.verdict).toBe("INVALID");
+    expect(result.invalidReason).toBe("book_on_a_before_extra_frame");
+    // And never a negative measurement.
+    expect(result.msToBookOnA).toBeNull();
+  });
+
+  it("price_change conta pelo asset_id ANINHADO em price_changes[]", () => {
+    // Defect 3: the live feed nests the token id one level down, so reading
+    // only the top-level `asset_id` counted zero price_change for a token
+    // that was trading — and the volumetry P2 needs came out 0.
+    const frame = JSON.stringify([
+      {
+        event_type: "price_change",
+        market: "0xm",
+        timestamp: "1787098645123",
+        price_changes: [
+          { asset_id: "tokA", price: "0.50", size: "0", side: "BUY" },
+          { asset_id: "tokB", price: "0.51", size: "3", side: "SELL" },
+        ],
+      },
+    ]);
+    // Two entries, one per token whose price moved.
+    expect(parseProbeFrame(frame)).toEqual([
+      { eventType: "price_change", assetId: "tokA" },
+      { eventType: "price_change", assetId: "tokB" },
+    ]);
+    // The old reading produced exactly one entry with assetId null, which
+    // matched no token and counted nothing.
+    expect(
+      parseProbeFrame(frame).filter((entry) => entry.assetId === null),
+    ).toEqual([]);
+  });
+
+  it("book segue lendo o asset_id de topo (nao ha price_changes nele)", () => {
+    expect(parseProbeFrame(bookFrame("tok"))).toEqual([
+      { eventType: "book", assetId: "tok" },
+    ]);
+  });
+
+  it("price_changes vazio cai de volta no asset_id de topo", () => {
+    const frame = JSON.stringify([
+      { event_type: "price_change", asset_id: "tok", price_changes: [] },
+    ]);
+    expect(parseProbeFrame(frame)).toEqual([
+      { eventType: "price_change", assetId: "tok" },
+    ]);
+  });
+
+  it("a volumetria conta os price_change aninhados, e nao sai 0", async () => {
+    const sockets: FakeProbeSocket[] = [];
+    const timers = fakeTimers();
+    const promise = runProbeRound(
+      { baselineTokenIds: ["base1"], newTokenId: "novo", variant: "only_new" },
+      {
+        socketFactory: () => {
+          const socket = new FakeProbeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    await Promise.resolve();
+    const a = sockets[0] as FakeProbeSocket;
+    a.fireOpen();
+    a.deliver(bookFrame("base1"));
+    await timers.advance(60_000);
+    const b = sockets[1] as FakeProbeSocket;
+    b.fireOpen();
+    b.deliver(bookFrame("novo"));
+    await timers.advance(5_000);
+    const nested = JSON.stringify([
+      {
+        event_type: "price_change",
+        market: "0xm",
+        price_changes: [
+          { asset_id: "novo", price: "0.5", size: "1", side: "BUY" },
+        ],
+      },
+    ]);
+    for (let i = 0; i < 30; i += 1) {
+      b.deliver(nested);
+    }
+    await timers.advance(700_000);
+    const result = await promise;
+    expect(result.verdict).toBe("NEVER_ON_A");
+    expect(result.priceChangeFramesOnB).toBe(30);
+    expect(result.priceChangePerMinuteOnB).toBeGreaterThan(0);
+  });
+});

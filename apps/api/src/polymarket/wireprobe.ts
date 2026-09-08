@@ -117,8 +117,15 @@ interface FrameInfo {
 
 /**
  * The one frame parser the probe needs: event type and asset id. Kept local
- * and forgiving — a frame we cannot parse is counted as unparsed rather than
- * throwing inside a socket handler.
+ * and forgiving — a frame we cannot parse is dropped rather than throwing
+ * inside a socket handler.
+ *
+ * `book` and `tick_size_change` carry `asset_id` at the top level.
+ * `price_change` does NOT: its token ids live in `price_changes[].asset_id`,
+ * and one frame can carry several. Measured against the live feed on
+ * 2026-09-08: reading only the top-level field counted **zero**
+ * `price_change` for a token that was trading, which silently produced a
+ * volumetry of 0 — the exact number P2 depends on.
  */
 export function parseProbeFrame(raw: string): FrameInfo[] {
   const trimmed = raw.trim();
@@ -141,6 +148,24 @@ export function parseProbeFrame(raw: string): FrameInfo[] {
     const eventType =
       typeof record["event_type"] === "string" ? record["event_type"] : "";
     if (eventType === "") {
+      continue;
+    }
+    const nested = record["price_changes"];
+    if (Array.isArray(nested) && nested.length > 0) {
+      // One frame, one entry per token whose price moved.
+      for (const change of nested) {
+        if (typeof change !== "object" || change === null) {
+          continue;
+        }
+        const changeRecord = change as Record<string, unknown>;
+        out.push({
+          eventType,
+          assetId:
+            typeof changeRecord["asset_id"] === "string"
+              ? changeRecord["asset_id"]
+              : null,
+        });
+      }
       continue;
     }
     const assetId =
@@ -285,6 +310,23 @@ export async function runProbeRound(
   const rateWindowMs = input.rateWindowMs ?? DEFAULTS.rateWindowMs;
   const startedAt = new Date(deps.clock()).toISOString();
   const baseline = new Set(input.baselineTokenIds);
+  if (baseline.has(input.newTokenId)) {
+    // The caller handed the same token as baseline and as the new one. There
+    // is nothing to measure, and the round would answer itself.
+    return {
+      variant: input.variant,
+      startedAt,
+      verdict: "INVALID",
+      invalidReason: "new_token_is_in_baseline",
+      msToBookOnA: null,
+      msToBookOnB: null,
+      baselineStillFlowingOnA: false,
+      baselineFramesAfterExtra: 0,
+      priceChangePerMinuteOnB: null,
+      priceChangeFramesOnB: 0,
+      rateWindowMs: input.rateWindowMs ?? DEFAULTS.rateWindowMs,
+    };
+  }
 
   let baselineBookOnA = false;
   let extraFrameSentAtMs: number | null = null;
@@ -424,7 +466,21 @@ export async function runProbeRound(
   }
 
   // 4. The measurement: does A ever deliver the new token's book?
+  //
+  // A book seen BEFORE the extra frame is not an answer to the question — it
+  // means the token was already flowing on A, so the frame proved nothing.
+  // Measured on 2026-09-08: the first live round reported `BOOK_ON_A` with
+  // `msToBookOnA` of **-59999 ms**, because the baseline and the "new" market
+  // were the same one. A negative time is structurally impossible in a valid
+  // round, and reporting it as BOOK_ON_A would have said "H1 refuted, do not
+  // write PR 3" on the strength of a tautology.
+  if (bookOnAAtMs !== null && bookOnAAtMs < extraFrameSentAtMs) {
+    return invalid("book_on_a_before_extra_frame");
+  }
   await raceTimer(waitBookOnA.promise, newBookTimeoutMs, deps);
+  if (bookOnAAtMs !== null && bookOnAAtMs < extraFrameSentAtMs) {
+    return invalid("book_on_a_before_extra_frame");
+  }
   const verdict = bookOnAAtMs === null ? "NEVER_ON_A" : "BOOK_ON_A";
 
   // 5. Volumetry for P2: price_change per minute on B, over the rate window.
