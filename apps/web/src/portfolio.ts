@@ -384,6 +384,118 @@ export function fetchOpportunities(
   );
 }
 
+// ---------------------------------------------------------------------------
+// RFC-026 D10 (PR 3) — séries de preço
+// ---------------------------------------------------------------------------
+
+/**
+ * Um bucket de 1 minuto de `polymarket_series_1m`.
+ *
+ * Os quatro mids ficam em TEXTO decimal, como o resto do dinheiro nesta tela:
+ * quem desenha converte para número na hora de calcular a geometria, e a
+ * conversão morre ali. `null` é "não coletado" — a coluna aceita nulo e ~6 %
+ * dos buckets da última hora estão assim —, e nunca zero.
+ */
+export interface SeriesPoint {
+  readonly bucket_start: string;
+  readonly mid_open: string | null;
+  readonly mid_high: string | null;
+  readonly mid_low: string | null;
+  readonly mid_close: string | null;
+  readonly updates_count: number | null;
+}
+
+/** Teto do lote, igual ao da API (RFC-026 D10). */
+export const SERIES_BATCH_MAX_TOKENS = 25;
+/** Janela do sparkline: 60 buckets de 1 min. */
+export const SPARKLINE_WINDOW_MS = 60 * 60 * 1000;
+/**
+ * Janela do gráfico do detalhe.
+ *
+ * A D10 pedia 24 h; medido em produção em 08/09, um token denso a 24 h dá p95
+ * 700 ms (4 de 24 amostras acima do teto de 500 ms) e a 12 h dá p95 77,5 ms. A
+ * API recusa janela maior com 400, então este número e o de lá são o mesmo
+ * número — mudar um sem o outro produz uma tela que só sabe pedir 400.
+ */
+export const CHART_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+function parseSeriesPoint(row: unknown): SeriesPoint | null {
+  if (!isRecord(row)) {
+    return null;
+  }
+  const bucket = asKey(row.bucket_start);
+  if (bucket === null) {
+    return null;
+  }
+  return {
+    bucket_start: bucket,
+    mid_open: asString(row.mid_open),
+    mid_high: asString(row.mid_high),
+    mid_low: asString(row.mid_low),
+    mid_close: asString(row.mid_close),
+    updates_count: asNumeric(row.updates_count),
+  };
+}
+
+/**
+ * As séries da página visível da Mesa, em UMA requisição.
+ *
+ * `tokens` já vem cortado em `SERIES_BATCH_MAX_TOKENS` pelo chamador; passar
+ * mais que isso é 400 na API, e não uma resposta truncada.
+ */
+export function fetchSeriesBatch(
+  accessToken: string,
+  tokens: readonly string[],
+  from: Date,
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionGetResult<ReadonlyMap<string, readonly SeriesPoint[]>>> {
+  const query = new URLSearchParams({
+    tokens: tokens.join(","),
+    metric: "ohlc",
+    from: from.toISOString(),
+  });
+  return authorizedGet(
+    `/api/polymarket/series?${query.toString()}`,
+    accessToken,
+    (body) => {
+      if (!isRecord(body) || !isRecord(body.series)) {
+        return null;
+      }
+      const series = body.series;
+      return new Map(
+        Object.keys(series).map((token) => [
+          token,
+          mapRows(series[token], parseSeriesPoint) as readonly SeriesPoint[],
+        ]),
+      );
+    },
+    fetcher,
+    signal,
+  );
+}
+
+/** A série de um mercado, para o gráfico do detalhe. */
+export function fetchSeries(
+  accessToken: string,
+  tokenId: string,
+  from: Date,
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionGetResult<readonly SeriesPoint[]>> {
+  const query = new URLSearchParams({
+    metric: "ohlc",
+    from: from.toISOString(),
+  });
+  return authorizedGet(
+    `/api/polymarket/series/${encodeURIComponent(tokenId)}?${query.toString()}`,
+    accessToken,
+    (body) => (isRecord(body) ? mapRows(body.points, parseSeriesPoint) : null),
+    fetcher,
+    signal,
+  );
+}
+
 function parseExposure(row: unknown): Exposure | null {
   if (!isRecord(row)) {
     return null;

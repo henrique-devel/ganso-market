@@ -28,6 +28,8 @@
           "/polymarket/portfolio/limits": 1000,
           "/polymarket/portfolio/state": 500,
           "/polymarket/gates": 500,
+          "/polymarket/series": 500,
+          "/polymarket/series/:tokenId": 500,
           "/polymarket/gates/measurements": 500,
           "/polymarket/decisions": 500,
           "/polymarket/decisions/:decisionId": 500,

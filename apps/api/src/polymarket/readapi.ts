@@ -137,6 +137,35 @@ export interface PolymarketReadRoutesDeps {
 const STORAGE_BUDGET_BYTES = DEFAULT_BUDGET_BYTES;
 const MARKETS_LIMIT = 500;
 const SERIES_LIMIT = 10_000;
+
+// RFC-026 D10 (PR 3), amended by the measurement below.
+//
+// D10 made `from` mandatory for `metric=ohlc` and for the batch, on the
+// reasoning that without it `LIMIT 10 000` becomes a scan over days. Measured
+// in production on 2026-09-08, that remedy bounds nothing: the client simply
+// passes a far-back `from` and gets the same scan. One token with
+// `from = now - 7 days` cost 3 811 ms; with `from = now - 20 days`, where the
+// row cap finally bites, 14 699 ms. The batch with `from = now - 24 h` over 25
+// tokens cost 612 ms. All three are past the 500 ms budget this route declares,
+// and the last two are past any statement timeout the API would survive.
+//
+// The cost is random I/O, not rows returned: `shared_buffers` is 128 MB against
+// a 1 735 MB `polymarket_series_1m`, and consecutive buckets of one token land
+// on different pages because ~200 tokens are written interleaved. A 24 h read
+// of one token touches ~1 400 scattered pages.
+//
+// So the ceiling is the WINDOW, and each variant gets the one its own screen
+// needs: 60 buckets for the sparkline, and the detail chart's span. Measured
+// with those caps in place: batch 25 x 60 = 108,9 ms (worst of 12 runs, 0,6 ms
+// warm); one token x 720 buckets = 77,5 ms p95. A wider window is a 400, not a
+// slower answer, because a slow answer here is a statement timeout (A7).
+const SERIES_BATCH_MAX_TOKENS = 25;
+const SERIES_BATCH_MAX_WINDOW_MS = 60 * 60 * 1_000;
+// 12 h and not the 24 h of D10: over 24 samples on the densest tokens (1 438
+// buckets each) the 24 h read measured p50 305 ms and p95 700 ms, with 4 of 24
+// past 500 ms. Halving the window halves the pages, and 12 h measured p95
+// 77,5 ms. Registered as a fallen premise in the RFC.
+const SERIES_OHLC_MAX_WINDOW_MS = 12 * 60 * 60 * 1_000;
 const RESOLUTION_EVENTS_LIMIT = 1_000;
 const UNIVERSE_LIMIT = 5_000;
 const TRADES_DEFAULT_LIMIT = 1_000;
@@ -219,6 +248,49 @@ function parseOptionalAt(
   }
   const parsed = parseIsoTimestamp(raw);
   return parsed === null ? { ok: false } : { ok: true, value: parsed };
+}
+
+interface BoundedWindow {
+  readonly from: Date;
+  /** `null` means "no upper bound in the query"; the ceiling still applies. */
+  readonly to: Date | null;
+}
+
+type WindowError = "INVALID_TIMESTAMP" | "FROM_REQUIRED" | "WINDOW_TOO_WIDE";
+
+/**
+ * RFC-026 D10 (PR 3). Parses a bounded `[from, to)` window.
+ *
+ * `from` is required — an absent one is the "scan over days" D10 set out to
+ * close — and the span may not be wider than `maxMs`, which is what actually
+ * bounds the cost (see the constants above). `to` defaults to now, so the
+ * common call passes only `from`.
+ */
+function parseBoundedWindow(
+  source: Record<string, unknown>,
+  maxMs: number,
+  now: Date,
+):
+  | { readonly ok: true; readonly value: BoundedWindow }
+  | {
+      readonly ok: false;
+      readonly reason: WindowError;
+    } {
+  const from = parseOptionalAt(source, "from");
+  const to = parseOptionalAt(source, "to");
+  if (!from.ok || !to.ok) {
+    return { ok: false, reason: "INVALID_TIMESTAMP" };
+  }
+  if (from.value === null) {
+    return { ok: false, reason: "FROM_REQUIRED" };
+  }
+  // An explicit `to` is honoured as the end of the window; without one the
+  // window ends now, which is what both screens ask for.
+  const end = to.value ?? now;
+  if (end.getTime() - from.value.getTime() > maxMs) {
+    return { ok: false, reason: "WINDOW_TOO_WIDE" };
+  }
+  return { ok: true, value: { from: from.value, to: to.value } };
 }
 
 /** Optional positive-integer query param, clamped into [min, max]. */
@@ -912,8 +984,98 @@ export function registerPolymarketReadRoutes(
     }),
   );
 
-  // GET /polymarket/series/:tokenId?metric=spread|depth|oi|holders&from=&to=
-  // spread/depth read polymarket_series_1m by token_id. oi/holders read
+  // GET /polymarket/series?tokens=a,b,c&metric=ohlc&from=&to=
+  //
+  // RFC-026 D10 (PR 3). The batch behind the Mesa's sparklines: the visible
+  // page's tokens in ONE request instead of one per row. Read-only, same guard,
+  // grouped by token in the response. Its two ceilings — 25 tokens and a 60
+  // minute window — are what keep it inside the route's budget; see the
+  // constants at the top of this file for the measurement that set them.
+  app.get(
+    "/polymarket/series",
+    { preHandler: guard },
+    wrap(async (request, reply) => {
+      const query = queryParams(request);
+      const metric = stringParam(query, "metric");
+      if (metric !== "ohlc") {
+        return jsonError(reply, 400, "INVALID_METRIC");
+      }
+      const raw = stringParam(query, "tokens");
+      if (raw === null) {
+        return jsonError(reply, 400, "TOKENS_REQUIRED");
+      }
+      // Split before de-duplicating so that `a,a,a` is one token and not three
+      // against the ceiling, and drop empties so a trailing comma is not a
+      // token. Order is the caller's, which is the order the Mesa renders.
+      const tokens = [
+        ...new Set(
+          raw
+            .split(",")
+            .map((t) => t.trim())
+            .filter((t) => t !== ""),
+        ),
+      ];
+      if (tokens.length === 0) {
+        return jsonError(reply, 400, "TOKENS_REQUIRED");
+      }
+      if (tokens.length > SERIES_BATCH_MAX_TOKENS) {
+        return jsonError(reply, 400, "TOO_MANY_TOKENS");
+      }
+      const window = parseBoundedWindow(
+        query,
+        SERIES_BATCH_MAX_WINDOW_MS,
+        clock(),
+      );
+      if (!window.ok) {
+        return jsonError(reply, 400, window.reason);
+      }
+
+      const params: unknown[] = [tokens, window.value.from];
+      let where = "token_id = ANY($1::text[]) AND bucket_start >= $2";
+      if (window.value.to !== null) {
+        params.push(window.value.to);
+        where += ` AND bucket_start < $${params.length}`;
+      }
+      // ORDER BY token_id first so the grouping below is a single pass, and
+      // so SERIES_LIMIT truncates whole trailing tokens rather than shaving a
+      // bucket off every one of them.
+      const result = await pool.query<Row>(
+        `SELECT token_id, bucket_start, mid_open, mid_high, mid_low,
+                mid_close, updates_count
+           FROM polymarket_series_1m
+          WHERE ${where}
+          ORDER BY token_id, bucket_start LIMIT ${SERIES_LIMIT}`,
+        params,
+      );
+
+      // Every requested token gets an entry, empty included: "no series" is an
+      // answer the panel has to render as "sem serie", and a missing key would
+      // read as a request that never happened.
+      const series: Record<string, Row[]> = {};
+      for (const token of tokens) {
+        series[token] = [];
+      }
+      for (const row of result.rows) {
+        const token = row["token_id"];
+        const points = typeof token === "string" ? series[token] : undefined;
+        if (points === undefined) {
+          continue;
+        }
+        const { token_id: _ignored, ...rest } = row;
+        points.push({ ...rest, bucket_start: toIso(row["bucket_start"]) });
+      }
+      return reply.code(200).send({
+        metric,
+        tokens,
+        limit: SERIES_LIMIT,
+        truncated: result.rows.length >= SERIES_LIMIT,
+        series,
+      });
+    }),
+  );
+
+  // GET /polymarket/series/:tokenId?metric=ohlc|spread|depth|oi|holders&from=&to=
+  // ohlc/spread/depth read polymarket_series_1m by token_id. oi/holders read
   // polymarket_oi_holders and accept EITHER a token_id or a condition_id in
   // the path segment (samples are keyed by condition; token ids are resolved
   // through polymarket_markets.clob_token_ids).
@@ -925,6 +1087,7 @@ export function registerPolymarketReadRoutes(
       const query = queryParams(request);
       const metric = stringParam(query, "metric");
       if (
+        metric !== "ohlc" &&
         metric !== "spread" &&
         metric !== "depth" &&
         metric !== "oi" &&
@@ -932,6 +1095,44 @@ export function registerPolymarketReadRoutes(
       ) {
         return jsonError(reply, 400, "INVALID_METRIC");
       }
+
+      // RFC-026 D10 (PR 3). `ohlc` is the detail chart's series, and unlike the
+      // metrics below it carries a mandatory, bounded window: the four older
+      // metrics keep their optional `from`/`to` because narrowing them now
+      // would break callers this RFC is not allowed to touch.
+      if (metric === "ohlc") {
+        const window = parseBoundedWindow(
+          query,
+          SERIES_OHLC_MAX_WINDOW_MS,
+          clock(),
+        );
+        if (!window.ok) {
+          return jsonError(reply, 400, window.reason);
+        }
+        const params: unknown[] = [tokenId, window.value.from];
+        let where = "token_id = $1 AND bucket_start >= $2";
+        if (window.value.to !== null) {
+          params.push(window.value.to);
+          where += ` AND bucket_start < $${params.length}`;
+        }
+        const result = await pool.query<Row>(
+          `SELECT bucket_start, mid_open, mid_high, mid_low, mid_close,
+                  updates_count
+             FROM polymarket_series_1m
+            WHERE ${where}
+            ORDER BY bucket_start LIMIT ${SERIES_LIMIT}`,
+          params,
+        );
+        return reply.code(200).send({
+          token_id: tokenId,
+          metric,
+          points: result.rows.map((row) => ({
+            ...row,
+            bucket_start: toIso(row["bucket_start"]),
+          })),
+        });
+      }
+
       const from = parseOptionalAt(query, "from");
       const to = parseOptionalAt(query, "to");
       if (!from.ok || !to.ok) {

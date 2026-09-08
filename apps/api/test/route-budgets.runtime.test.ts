@@ -142,13 +142,32 @@ const SAMPLE_PARAMS: Readonly<Record<string, string>> = {
   ":modelId": "m@1.0.0",
 };
 
+/**
+ * Query strings for routes that refuse to run without one.
+ *
+ * A route that answers 400 before touching the database runs no budgeted
+ * query, and this test would read that as "the budget never applied" — which
+ * is true, and useless. RFC-026 D10's two series routes are the first of the
+ * kind: both require `metric` and a bounded `from`. Giving them a valid call
+ * is what lets the assertion below actually check them.
+ */
+const SAMPLE_QUERY: Readonly<Record<string, () => string>> = {
+  // `from` is relative to the real clock because the window ceiling is, and a
+  // fixed date here would age into a 400 the day after it was written.
+  "/polymarket/series": () =>
+    `?tokens=12345&metric=ohlc&from=${new Date(Date.now() - 60_000).toISOString()}`,
+  "/polymarket/series/:tokenId": () =>
+    `?metric=ohlc&from=${new Date(Date.now() - 60_000).toISOString()}`,
+};
+
 function concretePath(pattern: string): string {
-  return pattern
+  const path = pattern
     .split("/")
     .map((segment) =>
       segment.startsWith(":") ? (SAMPLE_PARAMS[segment] ?? "1") : segment,
     )
     .join("/");
+  return `${path}${SAMPLE_QUERY[pattern]?.() ?? ""}`;
 }
 
 describe("RFC-023 A4 — the declared budget is the one that runs", () => {

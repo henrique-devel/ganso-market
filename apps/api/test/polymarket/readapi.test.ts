@@ -661,6 +661,84 @@ describe("GET /polymarket/series/:tokenId", () => {
     expect(body.points[0].bucket_start).toBe("2026-08-19T11:00:00.000Z");
   });
 
+  // RFC-026 D10 (PR 3).
+  it("returns the six OHLC columns for metric=ohlc", async () => {
+    const { pool, calls } = fakePool(() => [
+      {
+        bucket_start: new Date("2026-08-19T11:00:00.000Z"),
+        mid_open: "0.51",
+        mid_high: "0.55",
+        mid_low: "0.50",
+        mid_close: "0.52",
+        updates_count: 7,
+      },
+    ]);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series/111?metric=ohlc&from=2026-08-19T11:00:00Z",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(calls[0]?.text).toContain("FROM polymarket_series_1m");
+    const point = response.json().points[0];
+    expect(Object.keys(point).sort()).toEqual([
+      "bucket_start",
+      "mid_close",
+      "mid_high",
+      "mid_low",
+      "mid_open",
+      "updates_count",
+    ]);
+    // Money stays the decimal text Postgres returned; only the timestamp is
+    // rewritten.
+    expect(point.mid_open).toBe("0.51");
+    expect(point.mid_close).toBe("0.52");
+    expect(point.bucket_start).toBe("2026-08-19T11:00:00.000Z");
+  });
+
+  it("refuses metric=ohlc without `from` with 400", async () => {
+    const { pool, calls } = fakePool();
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series/111?metric=ohlc",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().reason_code).toBe("FROM_REQUIRED");
+    // The point of the 400 is that the scan never starts.
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses an ohlc window wider than the measured ceiling with 400", async () => {
+    const { pool, calls } = fakePool();
+    const server = await buildApp({ pool });
+    // 24 h back from the fixed clock: the window D10 asked for, and the one
+    // that measured p95 700 ms in production. A wider window is a 400 and not
+    // a slow answer, because a slow answer here is a statement timeout.
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series/111?metric=ohlc&from=2026-08-18T12:00:00Z",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().reason_code).toBe("WINDOW_TOO_WIDE");
+    expect(calls).toEqual([]);
+  });
+
+  it("accepts an ohlc window exactly at the ceiling", async () => {
+    const { pool, calls } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series/111?metric=ohlc&from=2026-08-19T00:00:00Z",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
   it("accepts a token_id or condition_id for oi/holders metrics", async () => {
     const { pool, calls } = fakePool(() => []);
     const server = await buildApp({ pool });
@@ -676,6 +754,168 @@ describe("GET /polymarket/series/:tokenId", () => {
     expect(call?.text).toContain("clob_token_ids @> $2::jsonb");
     expect(call?.params[0]).toBe("0xcond");
     expect(call?.params[1]).toBe(JSON.stringify(["0xcond"]));
+  });
+});
+
+// RFC-026 D10 (PR 3). The batch behind the Mesa's sparklines.
+describe("GET /polymarket/series?tokens=", () => {
+  const withTokens = (count: number): string =>
+    Array.from({ length: count }, (_, i) => `t${i}`).join(",");
+
+  it("groups points by token and answers for every token asked", async () => {
+    const { pool, calls } = fakePool(() => [
+      {
+        token_id: "a",
+        bucket_start: new Date("2026-08-19T11:58:00.000Z"),
+        mid_open: "0.41",
+        mid_high: "0.42",
+        mid_low: "0.40",
+        mid_close: "0.41",
+        updates_count: 3,
+      },
+      {
+        token_id: "a",
+        bucket_start: new Date("2026-08-19T11:59:00.000Z"),
+        mid_open: "0.41",
+        mid_high: "0.43",
+        mid_low: "0.41",
+        mid_close: "0.43",
+        updates_count: 5,
+      },
+    ]);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?tokens=a,b&metric=ohlc&from=2026-08-19T11:30:00Z",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.tokens).toEqual(["a", "b"]);
+    expect(body.series.a).toHaveLength(2);
+    // `b` has no series. It still gets a key, because "sem serie" is an answer
+    // the Mesa renders and a missing key reads as a request never made.
+    expect(body.series.b).toEqual([]);
+    // The grouping key does not survive into each point.
+    expect(body.series.a[0]).not.toHaveProperty("token_id");
+    expect(body.series.a[0].mid_close).toBe("0.41");
+    expect(body.series.a[0].bucket_start).toBe("2026-08-19T11:58:00.000Z");
+    // One request, one query.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params[0]).toEqual(["a", "b"]);
+  });
+
+  it("refuses 26 tokens with 400 and accepts 25", async () => {
+    const { pool, calls } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const tooMany = await server.inject({
+      method: "GET",
+      url: `/polymarket/series?tokens=${withTokens(26)}&metric=ohlc&from=2026-08-19T11:30:00Z`,
+      headers: AUTH,
+    });
+    expect(tooMany.statusCode).toBe(400);
+    expect(tooMany.json().reason_code).toBe("TOO_MANY_TOKENS");
+    expect(calls).toEqual([]);
+
+    const atCeiling = await server.inject({
+      method: "GET",
+      url: `/polymarket/series?tokens=${withTokens(25)}&metric=ohlc&from=2026-08-19T11:30:00Z`,
+      headers: AUTH,
+    });
+    expect(atCeiling.statusCode).toBe(200);
+    expect(atCeiling.json().tokens).toHaveLength(25);
+  });
+
+  it("counts a repeated token once against the ceiling", async () => {
+    const { pool } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: `/polymarket/series?tokens=${Array(30).fill("a").join(",")}&metric=ohlc&from=2026-08-19T11:30:00Z`,
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tokens).toEqual(["a"]);
+  });
+
+  it("caps the batch at SERIES_LIMIT rows and says when it truncated", async () => {
+    const rows = Array.from({ length: 10_000 }, (_, i) => ({
+      token_id: "a",
+      bucket_start: new Date(1_755_000_000_000 + i * 60_000),
+      mid_open: "0.5",
+      mid_high: "0.5",
+      mid_low: "0.5",
+      mid_close: "0.5",
+      updates_count: 1,
+    }));
+    const { pool, calls } = fakePool(() => rows);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?tokens=a&metric=ohlc&from=2026-08-19T11:30:00Z",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(calls[0]?.text).toContain("LIMIT 10000");
+    // Ordered by token first, so the cap drops whole trailing tokens instead of
+    // shaving a bucket off every one of them.
+    expect(calls[0]?.text).toContain("ORDER BY token_id, bucket_start");
+    expect(response.json().truncated).toBe(true);
+  });
+
+  it("refuses the batch without `from`, and refuses a window past 60 minutes", async () => {
+    const { pool, calls } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const noFrom = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?tokens=a&metric=ohlc",
+      headers: AUTH,
+    });
+    expect(noFrom.statusCode).toBe(400);
+    expect(noFrom.json().reason_code).toBe("FROM_REQUIRED");
+
+    // 24 h over 25 tokens is the call that measured 612 ms in production, past
+    // both the route's budget and the API's statement timeout.
+    const tooWide = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?tokens=a&metric=ohlc&from=2026-08-18T12:00:00Z",
+      headers: AUTH,
+    });
+    expect(tooWide.statusCode).toBe(400);
+    expect(tooWide.json().reason_code).toBe("WINDOW_TOO_WIDE");
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses a metric other than ohlc, and a missing tokens list", async () => {
+    const { pool } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const wrongMetric = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?tokens=a&metric=spread&from=2026-08-19T11:30:00Z",
+      headers: AUTH,
+    });
+    expect(wrongMetric.statusCode).toBe(400);
+    expect(wrongMetric.json().reason_code).toBe("INVALID_METRIC");
+
+    const noTokens = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?metric=ohlc&from=2026-08-19T11:30:00Z",
+      headers: AUTH,
+    });
+    expect(noTokens.statusCode).toBe(400);
+    expect(noTokens.json().reason_code).toBe("TOKENS_REQUIRED");
+  });
+
+  it("stays behind the session guard", async () => {
+    const { pool, calls } = fakePool(() => []);
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/series?tokens=a&metric=ohlc&from=2026-08-19T11:30:00Z",
+      headers: { authorization: "Bearer nope" },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(calls).toEqual([]);
   });
 });
 

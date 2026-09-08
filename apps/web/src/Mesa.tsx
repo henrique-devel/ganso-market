@@ -37,16 +37,22 @@ import {
 import { Badge, idade } from "./Overview.tsx";
 import { horizonLabel, horizonMs, roundTripCost } from "./Portfolio.tsx";
 import { useModoEngenheiro } from "./modo.tsx";
+import { GraficoSerie, Sparkline, marcas } from "./Serie.tsx";
 import {
   fetchPaperPositions,
   rearmKillSwitch,
   type PaperPosition,
 } from "./paper.js";
 import {
+  CHART_WINDOW_MS,
+  SERIES_BATCH_MAX_TOKENS,
+  SPARKLINE_WINDOW_MS,
   fetchDecisions,
   fetchExposures,
   fetchLimits,
   fetchOpportunities,
+  fetchSeries,
+  fetchSeriesBatch,
   folgaParaAceitar,
   type BookLevel,
   type Decision,
@@ -54,6 +60,7 @@ import {
   type LimitsConfig,
   type Opportunity,
   type OpportunityPanel,
+  type SeriesPoint,
 } from "./portfolio";
 import type { Overview } from "./overview";
 
@@ -424,6 +431,7 @@ export function MesaLista({
   ordem,
   onOrdenar,
   config,
+  series,
 }: Readonly<{
   linhas: readonly Linha[];
   total: number;
@@ -432,6 +440,11 @@ export function MesaLista({
   ordem: Ordenacao;
   onOrdenar: (campo: Campo) => void;
   config: LimitsConfig | null;
+  /**
+   * RFC-026 D10: as séries da página visível, de UMA requisição em lote.
+   * Token ausente do mapa é "ainda não voltou"; presente e vazio é "sem série".
+   */
+  series: ReadonlyMap<string, readonly SeriesPoint[]>;
 }>) {
   const engenheiro = useModoEngenheiro();
   const cabecalho: readonly (readonly [Campo, string])[] = [
@@ -447,7 +460,9 @@ export function MesaLista({
       <caption>
         {String(linhas.length)} de {String(total)} mercados do painel. Um
         mercado vetado aparece aqui com o motivo — nunca escondido. Clique no
-        nome, ou use <kbd>↑</kbd> <kbd>↓</kbd> e <kbd>Enter</kbd>.
+        nome, ou use <kbd>↑</kbd> <kbd>↓</kbd> e <kbd>Enter</kbd>. “Última hora”
+        são 60 buckets de 1 min do mid; verde é alta e vermelho é baixa, e a
+        direção também vai escrita.
       </caption>
       <thead>
         <tr>
@@ -465,6 +480,9 @@ export function MesaLista({
               </button>
             </th>
           ))}
+          {/* Não é ordenável: a série é uma forma, não um número, e uma
+              ordenação por ela seria uma ordem que ninguém sabe ler. */}
+          <th scope="col">Última hora</th>
           <th scope="col">Situação</th>
         </tr>
       </thead>
@@ -524,6 +542,12 @@ export function MesaLista({
                 </span>
               </td>
               <td>{horizonLabel(horizonteMs)}</td>
+              <td className="mesa-spark">
+                <Sparkline
+                  serie={series.get(opportunity.token_id)}
+                  nome={nomeDe(opportunity)}
+                />
+              </td>
               <td>
                 {opportunity.vetoed ? (
                   <span className="badge badge--alerta">
@@ -585,10 +609,20 @@ export function MesaDetalhe({
   opportunity,
   config,
   decisoes,
+  posicoes = [],
+  serie = null,
+  serieCarregando = false,
+  killSwitchEm = null,
 }: Readonly<{
   opportunity: Opportunity | null;
   config: LimitsConfig | null;
   decisoes: readonly Decision[];
+  /** Só para a marca ● do gráfico: o instante em que a posição abriu. */
+  posicoes?: readonly PaperPosition[];
+  /** `null` enquanto a leitura deliberada do mercado escolhido não voltou. */
+  serie?: readonly SeriesPoint[] | null;
+  serieCarregando?: boolean;
+  killSwitchEm?: string | null;
 }>) {
   const engenheiro = useModoEngenheiro();
   if (opportunity === null) {
@@ -632,6 +666,13 @@ export function MesaDetalhe({
         ) : null}
       </p>
 
+      <GraficoSerie
+        serie={serie}
+        carregando={serieCarregando}
+        nome={nomeDe(opportunity)}
+        marcasDoMercado={marcas(opportunity.token_id, decisoes, posicoes)}
+        killSwitchEm={killSwitchEm}
+      />
       <Escada degraus={degraus} folga={folga} config={config} ultima={ultima} />
       <CartaoPrd panel={panel} folga={folga} />
       <LivroL2 panel={panel} ultima={ultima} />
@@ -1117,10 +1158,14 @@ export function MesaView({
   onRearmar,
   rearmando,
   erroRearme,
+  series = new Map(),
+  serieEscolhida = null,
+  serieCarregando = false,
+  onVisiveis,
 }: Readonly<{
   opportunities: readonly Opportunity[];
   decisoes: readonly Decision[];
-  /** Só para a terceira frase da D7; a Mesa não lista posições. */
+  /** Só para a terceira frase da D7 e para a marca ● do gráfico. */
   posicoes?: readonly PaperPosition[];
   config: LimitsConfig | null;
   comPosicao: ReadonlySet<string>;
@@ -1130,6 +1175,17 @@ export function MesaView({
   onRearmar: (() => void) | null;
   rearmando: boolean;
   erroRearme: string | null;
+  /** RFC-026 D10: séries da página visível, do lote. */
+  series?: ReadonlyMap<string, readonly SeriesPoint[]>;
+  serieEscolhida?: readonly SeriesPoint[] | null;
+  serieCarregando?: boolean;
+  /**
+   * Quem pagina, filtra e ordena é esta view; quem faz requisição é o
+   * contêiner. Este retorno de chamada é a ponte: diz quais tokens estão na
+   * tela (no máximo `SERIES_BATCH_MAX_TOKENS`, que é a própria página) e qual
+   * mercado está aberto no detalhe.
+   */
+  onVisiveis?: (tokens: readonly string[], escolhido: string | null) => void;
 }>) {
   const [chip, setChip] = useState<Chip>("todos");
   const [texto, setTexto] = useState("");
@@ -1211,6 +1267,22 @@ export function MesaView({
       ?.opportunity ??
     visiveis[0]?.opportunity ??
     null;
+
+  const tokensVisiveis = visiveis
+    .slice(0, SERIES_BATCH_MAX_TOKENS)
+    .map((linha) => linha.opportunity.token_id);
+  const escolhidoId = escolhida?.token_id ?? null;
+  // A chave é o texto da lista de propósito: o array é recriado a cada
+  // renderização e prendê-lo como dependência refaria o lote 30 vezes por
+  // minuto em vez de uma — que é exatamente o que o A5 proíbe.
+  const chaveVisiveis = tokensVisiveis.join(",");
+  useEffect(() => {
+    onVisiveis?.(
+      chaveVisiveis === "" ? [] : chaveVisiveis.split(","),
+      escolhidoId,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chaveVisiveis, escolhidoId, onVisiveis]);
 
   const mover = useCallback(
     (passo: number) => {
@@ -1344,6 +1416,7 @@ export function MesaView({
               setPagina(0);
             }}
             config={config}
+            series={series}
           />
 
           <nav className="pager" aria-label="Paginação da Mesa">
@@ -1385,6 +1458,14 @@ export function MesaView({
           opportunity={escolhida}
           config={config}
           decisoes={decisoes}
+          posicoes={posicoes}
+          serie={serieEscolhida}
+          serieCarregando={serieCarregando}
+          killSwitchEm={
+            overview?.kill_switch?.engaged === true
+              ? overview.kill_switch.engaged_at
+              : null
+          }
         />
       </div>
     </section>
@@ -1427,7 +1508,34 @@ export function Mesa({
   const [atualizadoEm, setAtualizadoEm] = useState<number | null>(null);
   const [rearmando, setRearmando] = useState(false);
   const [erroRearme, setErroRearme] = useState<string | null>(null);
+  // RFC-026 D10. `visiveis` é a página que a view está mostrando; o lote e o
+  // gráfico do detalhe são recarregados a partir dela.
+  const [series, setSeries] = useState<
+    ReadonlyMap<string, readonly SeriesPoint[]>
+  >(new Map());
+  const [serieEscolhida, setSerieEscolhida] = useState<
+    readonly SeriesPoint[] | null
+  >(null);
+  const [serieCarregando, setSerieCarregando] = useState(false);
+  const [visiveis, setVisiveis] = useState<readonly string[]>([]);
+  const [escolhido, setEscolhido] = useState<string | null>(null);
   const mounted = useRef(true);
+  const visiveisRef = useRef<readonly string[]>([]);
+  visiveisRef.current = visiveis;
+
+  const loteDe = useCallback(
+    (tokens: readonly string[], signal?: AbortSignal) =>
+      tokens.length === 0
+        ? Promise.resolve(null)
+        : fetchSeriesBatch(
+            accessToken,
+            tokens,
+            new Date(Date.now() - SPARKLINE_WINDOW_MS),
+            fetch,
+            signal,
+          ),
+    [accessToken],
+  );
 
   const recarregar = useCallback(async (): Promise<void> => {
     const controller = new AbortController();
@@ -1435,26 +1543,41 @@ export function Mesa({
       () => controller.abort(),
       REQUEST_TIMEOUT_MS,
     );
-    // Quatro requisições por tique de 30 s = 8/min, mais a faixa fixa
-    // (`/overview` + `/paper/performance` a 15 s = 8/min): 16 req/min, sob o
+    // Cinco requisições por tique de 30 s = 10/min, mais a faixa fixa
+    // (`/overview` + `/paper/performance` a 15 s = 8/min): 18 req/min, sob o
     // teto de 20 da D5/A5. `/paper/positions` entrou aqui porque a terceira
     // frase da D7 depende dela e o bloco "O que eu faço agora?" é da Mesa.
-    const [painel, log, exposicoes, carteira] = await Promise.all([
+    //
+    // RFC-026 D10: o lote das séries é a quinta, e é UMA para a página inteira
+    // — 25 sparklines numa requisição. Uma por linha seriam 50 req/min só
+    // aqui, e o A5 morreria na primeira página aberta. Ele viaja no mesmo
+    // `Promise.all` para não abrir um segundo relógio.
+    const [painel, log, exposicoes, carteira, lote] = await Promise.all([
       fetchOpportunities(accessToken, fetch, controller.signal),
       fetchDecisions(accessToken, fetch, controller.signal),
       fetchExposures(accessToken, fetch, controller.signal),
       fetchPaperPositions(accessToken, fetch, controller.signal),
+      loteDe(visiveisRef.current, controller.signal),
     ]);
     window.clearTimeout(timeout);
     if (!mounted.current) {
       return;
     }
     const resultados = [painel, log, exposicoes, carteira];
-    if (resultados.some((resultado) => resultado.kind === "unauthorized")) {
+    if (
+      resultados.some((resultado) => resultado.kind === "unauthorized") ||
+      lote?.kind === "unauthorized"
+    ) {
       onUnauthorized();
       return;
     }
+    // A série fica FORA do "falhou": o painel sem sparkline continua um painel,
+    // e marcar a Mesa inteira como caída porque o gráfico não veio seria mentir
+    // sobre o que se sabe.
     setFalhou(resultados.every((resultado) => resultado.kind === "error"));
+    if (lote?.kind === "ok") {
+      setSeries(lote.value);
+    }
     if (painel.kind === "ok") {
       setOpportunities(painel.value);
     }
@@ -1478,7 +1601,9 @@ export function Mesa({
       setPosicoes(carteira.value);
     }
     setAtualizadoEm(Date.now());
-  }, [accessToken, onUnauthorized]);
+    // `visiveisRef` fora das dependências de propósito: prendê-lo aqui
+    // reiniciaria o relógio de 30 s a cada troca de página.
+  }, [accessToken, onUnauthorized, loteDe]);
 
   const recarregarLimites = useCallback(async (): Promise<void> => {
     const controller = new AbortController();
@@ -1527,6 +1652,85 @@ export function Mesa({
     }
   }, [versaoNoPainel, config, recarregarLimites]);
 
+  // A página visível mudou (paginação, filtro, ordenação): as séries em memória
+  // são de outros tokens. Esperar o tique de 30 s deixaria a página nova sem
+  // sparkline por até meio minuto.
+  //
+  // A espera de 400 ms existe porque o filtro de texto muda a lista a cada
+  // tecla: sem ela, digitar "eleic" seriam cinco lotes. Com ela, é um.
+  const chaveVisiveis = visiveis.join(",");
+  useEffect(() => {
+    if (chaveVisiveis === "") {
+      return;
+    }
+    const tokens = chaveVisiveis.split(",");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const lote = await loteDe(tokens, controller.signal);
+        if (!mounted.current || lote === null || controller.signal.aborted) {
+          return;
+        }
+        if (lote.kind === "unauthorized") {
+          onUnauthorized();
+          return;
+        }
+        if (lote.kind === "ok") {
+          setSeries(lote.value);
+        }
+      })();
+    }, 400);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [chaveVisiveis, loteDe, onUnauthorized]);
+
+  // RFC-026 D10. O gráfico do detalhe é uma leitura DELIBERADA, fora do tique:
+  // abre quando se escolhe o mercado e não volta a cada 30 s. É o mesmo padrão
+  // que o detalhe da decisão já usa, e é o que mantém a Mesa em 18 req/min
+  // mesmo com o gráfico aberto.
+  useEffect(() => {
+    if (escolhido === null) {
+      setSerieEscolhida(null);
+      return;
+    }
+    const controller = new AbortController();
+    setSerieCarregando(true);
+    setSerieEscolhida(null);
+    void (async () => {
+      const resultado = await fetchSeries(
+        accessToken,
+        escolhido,
+        new Date(Date.now() - CHART_WINDOW_MS),
+        fetch,
+        controller.signal,
+      );
+      if (!mounted.current || controller.signal.aborted) {
+        return;
+      }
+      setSerieCarregando(false);
+      if (resultado.kind === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      // Erro vira "sem série" com a série vazia, e não um estado de carga
+      // eterno: a tela diz o que sabe.
+      setSerieEscolhida(resultado.kind === "ok" ? resultado.value : []);
+    })();
+    return () => {
+      controller.abort();
+    };
+  }, [accessToken, escolhido, onUnauthorized]);
+
+  const aoMudarVisiveis = useCallback(
+    (tokens: readonly string[], aberto: string | null): void => {
+      setVisiveis(tokens);
+      setEscolhido(aberto);
+    },
+    [],
+  );
+
   const rearmar = useCallback((): void => {
     setRearmando(true);
     setErroRearme(null);
@@ -1564,6 +1768,10 @@ export function Mesa({
       onRearmar={rearmar}
       rearmando={rearmando}
       erroRearme={erroRearme}
+      series={series}
+      serieEscolhida={serieEscolhida}
+      serieCarregando={serieCarregando}
+      onVisiveis={aoMudarVisiveis}
     />
   );
 }
