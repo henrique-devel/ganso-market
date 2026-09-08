@@ -584,6 +584,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     onSubscribeBookArrived: (tokenId: string) => {
       subscribeGaps.close(tokenId, new Date());
     },
+    // The market left still bookless: the episode ended, so the gap closes at
+    // the exit instant rather than staying open forever. The `never` vs `late`
+    // distinction lives in SUBSCRIBE_BOOK_MISSING_UNRESOLVED, not in a row
+    // that would keep growing its own duration.
+    onSubscribeBookNeverArrived: (tokenId: string) => {
+      subscribeGaps.close(tokenId, new Date());
+    },
   });
 
   const tradesBackfill = createTradesBackfill({ pool, clock: Date.now });
