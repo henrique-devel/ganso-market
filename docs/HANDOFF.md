@@ -16,10 +16,11 @@
   inteiro dá 21,19 %, não 55,9 % — o recorte original era janela móvel pegando a cauda de 01/09,
   quando o veredito batia a cada ciclo (24 283 decisões em disjuntor num dia, contra 178 hoje).
   P1–P3 seguem aprovadas, a SQL de `paramChangedAt` segue `max(valid_from)` intocada e nenhuma
-  outra sessão tocou `breakers.ts`/`exitstore.ts` — **ninguém chegou antes**. **Decisão do
-  proprietário:** seguir relendo a premissa em base por mercado (recomendado) ou devolver a
-  RFC-025 para `pendente`. Instrumento em `scripts/rfc025/measure_before.sql`. Ver a seção
-  "SESSÃO 2026-09-08 (3)" ao final.
+  outra sessão tocou `breakers.ts`/`exitstore.ts` — **ninguém chegou antes**. **O proprietário
+  decidiu SEGUIR** (08/09), com a premissa relida por mercado e o gatilho de 50 % da atribuição
+  trocado pelo recorte do aceite 2, que é imune à dedup. A implementação seguiu na mesma sessão —
+  ver "SESSÃO 2026-09-08 (4)". Instrumento em `scripts/rfc025/measure_before.sql`; a parada e a
+  medição do "antes" ficam na seção "SESSÃO 2026-09-08 (3)".
 - 2026-09-08 — **RFC-023 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** Três PRs
   ([#113](https://github.com/henrique-devel/ganso-market/pull/113) orçamento,
   [#114](https://github.com/henrique-devel/ganso-market/pull/114) mensagens,
@@ -5618,3 +5619,8 @@ Recomendação: **(1)**. O defeito é o mesmo, a correção é a mesma, e a úni
 re-medição desmentiu foi a régua. Se seguir, os "antes" a colar em "Medido depois" são os desta
 seção, e o aceite 3 (A1, antes 55,9 %) precisa ser reescrito para a linha-base real de **1,81 %**
 antes de valer como critério.
+
+**RESOLVIDO — o proprietário decidiu (1) em 2026-09-08**, na recomendação: seguir com a premissa
+relida em base por mercado, gatilho trocado pelo recorte do aceite 2, aceite 3 contra 1,81 %.
+Registro na RFC-025, seção "Re-medição" → "Decisão do proprietário". A implementação está na
+seção **"SESSÃO 2026-09-08 (4)"**.

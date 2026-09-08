@@ -1,6 +1,6 @@
 # RFC-025 — Disjuntor de mudança de parâmetro redefinido: `PARAM_CHANGE` abre em mudança real, não em nascimento
 
-**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela e registradas na coluna de decisão (2026-09-05). **PARADO na re-medição de 2026-09-08: a premissa numérica caiu (atribuição 29,7 %, gatilho em 50 %) e o defeito não — ver "Re-medição" abaixo. Aguarda decisão do proprietário; nenhum PR aberto.**
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela e registradas na coluna de decisão (2026-09-05). **Re-medição de 2026-09-08: a premissa numérica caiu (atribuição 29,7 %, gatilho em 50 %) e o defeito não — ver "Re-medição" abaixo. O proprietário decidiu SEGUIR (2026-09-08), com a premissa relida em base por mercado e o gatilho trocado pelo recorte do aceite 2.**
 **Dependências:** nenhuma de código. RFC-013 (item 4 (iv): "mudança de fee schedule/tick/status", `docs/rfcs/RFC-013-polymarket-portfolio-engine.md:154–158`) é a especificação que esta RFC interpreta; RFC-018 (o G3 já viu `PARAM_CHANGE` disparar 939 vezes — nada aqui o devolve a zero). **Decisão registrada e APROVADA na recomendação (tabela P1–P3, 2026-09-05).**
 **Habilita:** o universo rápido da RFC-016/RFC-019 (mercados "Up or Down" horários) deixa de nascer congelado; a vazão de que o G2 depende passa a ser possível de medir; o `PARAM_CHANGE` volta a significar o que a RFC-013 escreveu
 **Origem:** diagnóstico operacional de 02–03/09/2026 — https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 (funil, seções 1 e 2)
@@ -104,6 +104,22 @@ D1–D5 seguem válidas sem mudança: a causa (versão 1 e preenchimento `NULL �
 são as mesmas. O que a re-medição desmentiu foi a régua, não o diagnóstico. Registro completo em
 `docs/HANDOFF.md`, seção "SESSÃO 2026-09-08 (3)".
 
+### Decisão do proprietário (2026-09-08): SEGUIR
+
+Levada a parada, o proprietário decidiu **seguir** com a premissa relida em base **por mercado**.
+Em consequência, e só isto muda nesta RFC:
+
+- **O gatilho de parada por atribuição sai** e entra o recorte do **aceite 2**, imune à dedup de
+  veredito: a parada passa a valer se a fração dos "Up or Down" **descobertos** em 24 h cuja
+  **primeira** decisão é `PORTFOLIO_CIRCUIT_BREAKER` cair abaixo de 50 % **antes** do deploy.
+  Medida em 08/09: **100 % (50 de 50)**.
+- **A linha-base do aceite 3 passa a ser 1,81 %** (317 de 17 484), não 55,9 %.
+- **A linha-base do aceite 4** (contagem por kind aberto nas 24 h antes) fica registrada aqui:
+  `PRICE_JUMP_NO_CATALYST` **921**, `PARAM_CHANGE` **125**, `DATA_STALENESS` **1**,
+  `RULE_CLARIFICATION` **0**.
+
+Nenhuma decisão D1–D5 foi reaberta; nenhum limiar de gate mudou.
+
 ## Decisões que esta RFC exige do proprietário
 
 > **APROVADAS — 2026-09-05.** O proprietário aprovou **todas** as decisões desta seção,
@@ -172,13 +188,13 @@ As consultas A1, A2 e A3 do Apêndice A, **sem reescrever**, antes do deploy e 2
 
 1. `PARAM_CHANGE` abertos depois do deploy, pela consulta **A2** com `started_at > <rebuild>`: **0** por versão 1, **0** por `NULL → valor`; todo `detail_json` tem `changed_fields` não vazio.
 2. Todo "Up or Down" **descoberto depois do deploy** (`polymarket_markets.received_at` > timestamp do rebuild, registrado no HANDOFF; `migrations/0004_polymarket.sql:24`) tem a **primeira** linha em `portfolio_decisions` com `reason_code <> 'PORTFOLIO_CIRCUIT_BREAKER'`, salvo outro disjuntor aberto com causa registrada. Fração sob disjuntor pela **A3**: publicada (antes: 100 %).
-3. Distribuição de `reason_code` pela **A1** publicada (antes: 55,9 % em disjuntor). Restos de `BOOK_STALE`/`DATA_STALE` (`engine.ts:372–389`) são sintoma do feed (ver RFC-021/RFC-024) — registrar, não consertar aqui.
+3. Distribuição de `reason_code` pela **A1** publicada (antes: **1,81 % em disjuntor**, re-medido em 08/09; o 55,9 % da medição original não reproduz — ver "Re-medição"). Restos de `BOOK_STALE`/`DATA_STALE` (`engine.ts:372–389`) são sintoma do feed (ver RFC-021/RFC-024) — registrar, não consertar aqui.
 4. Contagem por `kind` em `portfolio_circuit_breakers` (`started_at`, 24 h antes vs 24 h depois): `DATA_STALENESS` e `UMA_PROPOSED_OR_DISPUTED` com razão depois/antes entre 0,5 e 2, ou desvio explicado; `RULE_CLARIFICATION` segue 0.
 5. `/etc/ganso/release-sha` do container `polymarket-portfolio` = SHA do merge; zero erros novos no log do serviço.
 
 ## Condições de parada
 
-- A re-medição (A1) mostrar atribuição ao `PARAM_CHANGE` abaixo de 50 %, ou a SQL em `exitstore.ts:401–402` já não ser `max(valid_from)`: outra sessão chegou antes — parar.
+- ~~A re-medição (A1) mostrar atribuição ao `PARAM_CHANGE` abaixo de 50 %~~ — **substituída em 2026-09-08 por decisão do proprietário**: o gatilho por decisão gravada mede churn de veredito, não congelamento (ver "Re-medição"). Vale agora o recorte do **aceite 2** — parar se a fração dos "Up or Down" descobertos em 24 h cuja primeira decisão é `PORTFOLIO_CIRCUIT_BREAKER` cair abaixo de 50 % antes do deploy (medida em 08/09: **100 %, 50 de 50**). A outra metade continua valendo: a SQL em `exitstore.ts:401–402` já não ser `max(valid_from)` — outra sessão chegou antes — parar.
 - P1 `pendente` na tabela acima. **Satisfeita em 2026-09-05** (aprovada na recomendação: versão 1 e preenchimento `NULL → valor` **não** contam como mudança). A parada só volta a valer se o proprietário reverter a decisão — leia a tabela, não esta linha.
 - Qualquer necessidade de migration ou de chave nova em `config/portfolio.json`.
 - Qualquer alteração em `BREAKER_EVENT_WINDOW_MS` sem P2 = D2-B aprovado.
