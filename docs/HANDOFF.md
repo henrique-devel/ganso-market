@@ -1,6 +1,28 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-08 (3) — **RFC-025 PARADA NA RE-MEDIÇÃO, zero código escrito.** O
+- Última atualização: 2026-09-08 (4) — **RFC-025 IMPLEMENTADA E DEPLOYADA; a medição de 24 h fecha
+  em 09/09 14:19:53Z.** Dois PRs de código mesclados
+  ([#129](https://github.com/henrique-devel/ganso-market/pull/129) D1,
+  [#131](https://github.com/henrique-devel/ganso-market/pull/131) D3), CD verde, **rebuild do
+  `polymarket-portfolio` às 2026-09-08T14:19:53Z** e `release-sha`
+  **`60486008c3b7aa83208addf4d9851ef452e5cfbd`** conferido no container. **No primeiro ciclo de
+  painel, 46 s depois do boot, 36 `PARAM_CHANGE` e 5 `PRICE_JUMP_NO_CATALYST` foram FECHADOS** —
+  `PARAM_CHANGE` aberto caiu de **35 para 4**, e os 4 sobreviventes são todos `tick_size`
+  0,01 → 0,001 **real**, conferidos versão por versão. Aberturas de `PARAM_CHANGE` por hora: **5,63
+  → 0,00**; das 82 decisões `ENTRY` pós-rebuild, **0 morreram em disjuntor**. `paramChangedAt`
+  passou de `max(valid_from)` para o `valid_from` da versão mais nova cujo diff moveu de **não nulo
+  para não nulo diferente** um de `taker_fee_bps`/`fee_curve_json`/`tick_size`/`fee_base_bps`; o
+  `detail_json` agora diz `changed_fields`, `version`, `from` e `to`. **`BREAKER_EVENT_WINDOW_MS`
+  intocado, ramos (i)/(iii)/(v) intocados, sem migration, sem chave nova de config.** Regressão
+  vista falhando no código anterior nos três casos (6 + 2 falhas no PR 1, 1 no PR 2), `make verify`
+  verde e a suíte pg **rodada de verdade**: `33 passed`. **Duas armadilhas registradas:** o GitHub
+  fecha o PR filho quando a branch base do pai é apagada no merge (o #130 virou #131 — retargete
+  para `main` ANTES de mesclar o pai), e um disjuntor pré-deploy que continua verdadeiro **mantém o
+  `detail_json` antigo**, sem `changed_fields`, porque `reconcileBreakers` não reescreve o detail de
+  quem segue aberto — uma consulta que classifique a causa por ele rotula "v1" o que é tick real.
+  **`BOOK_STALE`/`DATA_STALE` seguem o gargalo real (12 520 de 17 484, 71,6 %) e são RFC-021/RFC-024,
+  não esta.** Ver "SESSÃO 2026-09-08 (4)" ao final.
+- 2026-09-08 (3) — **RFC-025 PARADA NA RE-MEDIÇÃO, zero código escrito.** O
   prompt 17 manda parar se a atribuição do `PARAM_CHANGE` cair abaixo de 50 %: caiu para
   **29,7 % (94 de 317)** contra 98,6 % na RFC, e a fatia do funil em disjuntor foi de 55,9 % para
   **1,81 % (317 de 17 484)**. **Mas o defeito não melhorou — a régua mudou.** O disjuntor é o
@@ -5624,3 +5646,121 @@ antes de valer como critério.
 relida em base por mercado, gatilho trocado pelo recorte do aceite 2, aceite 3 contra 1,81 %.
 Registro na RFC-025, seção "Re-medição" → "Decisão do proprietário". A implementação está na
 seção **"SESSÃO 2026-09-08 (4)"**.
+
+## SESSÃO 2026-09-08 (4) — RFC-025: o disjuntor deixou de abrir no nascimento, e 36 congelamentos caíram no primeiro ciclo
+
+Continuação direta da seção (3), depois de o proprietário decidir **seguir**. **PR 1 e PR 2
+mesclados, CD verde, rebuild feito, `release-sha` conferido.** A medição de 24 h está **pendente** e
+tem data e comando marcados no fim desta seção.
+
+### O que foi entregue
+
+| PR | O quê | Estado |
+| --- | --- | --- |
+| [#128](https://github.com/henrique-devel/ganso-market/pull/128) | Registro da parada, re-medição, decisão do proprietário | **mesclado** 12:11Z |
+| [#129](https://github.com/henrique-devel/ganso-market/pull/129) | **D1** — `paramChangedAt` só em mudança real, `detail_json` com `changed_fields` | **mesclado** |
+| [#131](https://github.com/henrique-devel/ganso-market/pull/131) | **D3** — `PRICE_JUMP` com os dois mids fora da banda e sem posição não abre | **mesclado** |
+
+O [#130](https://github.com/henrique-devel/ganso-market/pull/130) era o PR 2 empilhado sobre o PR 1;
+o GitHub **fechou-o automaticamente** quando a branch base foi apagada no merge do PR 1, e não deixa
+retargetar PR fechado. Reaberto como #131, rebaseado em `main`, mesmo conteúdo. **Lição para quem
+empilhar PR neste repo: retargete o filho para `main` ANTES de mesclar o pai.**
+
+### D1, o que mudou de fato
+
+`loadMarketChangeStates` lia `max(valid_from)` — a versão mais nova, seja ela qual for. Agora usa
+`lag()` por `condition_id` ordenado por `version` e devolve o `valid_from` da versão mais nova cujo
+diff moveu **de não nulo para não nulo diferente** um de `taker_fee_bps`, `fee_curve_json`,
+`tick_size` ou `fee_base_bps`. Versão 1 nunca conta (não tem predecessora), `NULL → valor` nunca
+conta (é o coletor preenchendo lacuna nossa), `valor → NULL` nunca conta (é achado de qualidade).
+`fee_base_bps` está na lista porque `store.ts:85` o lê **como** taker fee no `COALESCE`.
+
+`MarketChangeState` e `BreakerObservation` ganharam `paramChangedFields`, `paramChangedVersion`,
+`paramChangedFrom` e `paramChangedTo`; o `detail` do sinal ganhou `changed_fields`, `version`,
+`from` e `to`. O ramo (iv) exige `paramChangedFields` **não vazio** — falha fechada. `openBreaker`
+já serializava o `detail` inteiro, então nada a ligar. `BREAKER_EVENT_WINDOW_MS` intocado em 24 h
+(P2 = D2-A). Ramos (i), (iii) e (v) intocados. Sem migration, sem chave nova em
+`config/portfolio.json` (`config_version` segue `1.2.0`, hash inalterado no boot).
+
+### D3, e o afrouxamento que NÃO passou
+
+O ramo (ii) abre se `holdsPosition`, **ou** `midBefore` na banda, **ou** `midNow` na banda. Só com
+os dois fora e sem posição omite. **0,96 → 0,80 sem posição continua abrindo** e tem teste próprio:
+é o padrão RFC-013 4(ii), e com a condição ingênua (só `mid_before`) a entrada a 0,80 passaria por
+`PRICE_OUT_OF_BAND`, que testa o preço **atual**, e chegaria à aritmética.
+
+**Achado nos testes:** o par **0,02 → 0,023** que a RFC nomeia é **exatamente 0,15**, e a
+comparação é estritamente `>`. Esse movimento **nunca abriu o disjuntor, em nenhuma versão do
+código** — passar com ele não provaria nada sobre D3. Ficou no arquivo como guarda de fronteira, e
+os casos que exercitam D3 usam **0,02 → 0,024** (20 %), que abria antes e não abre agora.
+
+### Deploy e aceite 5
+
+- Rebuild do `polymarket-portfolio` às **2026-09-08T14:19:53Z**; container no ar desde
+  `14:19:52.953Z`, `RestartCount` 0, **zero erros** no log.
+- `release-sha` do container: **`60486008c3b7aa83208addf4d9851ef452e5cfbd`** = `main` do merge.
+- **Confirmado de novo que o CD não troca a imagem do profile:** antes do rebuild o container ainda
+  marcava `da6d5603` enquanto o `ganso-market-api-1`, reconstruído pelo CD, já marcava `6048600`.
+  O rebuild do profile é passo obrigatório e separado.
+- Guarda antes de reconstruir: `grep paramChangedFields exitstore.ts && grep bandMinBuyScaled
+  breakers.ts` no checkout do servidor, para não reconstruir imagem sem o código novo.
+
+### O primeiro ciclo de painel (14:20:39Z, 46 s depois do boot)
+
+| Medida | Antes | Depois do 1º ciclo |
+| --- | --- | --- |
+| `PARAM_CHANGE` abertos | **35** | **4** |
+| `PRICE_JUMP_NO_CATALYST` abertos | 9 | 4 |
+| Fechados no ciclo | — | **36 `PARAM_CHANGE` + 5 `PRICE_JUMP_NO_CATALYST`** |
+| Aberturas de `PARAM_CHANGE` por hora | 5,63 | **0,00** |
+| `ENTRY` em `PORTFOLIO_CIRCUIT_BREAKER` | 1,81 % | **0 de 82** |
+
+**Os 4 `PARAM_CHANGE` sobreviventes são todos `tick_size` 0,01 → 0,001 real**, conferido versão por
+versão (`0x150db9…` v3, `0x358088…` v5, `0xd02586…` v3, `0xfc2124…` v3). Nenhum artefato aberto.
+
+**Armadilha de auditoria, registrada:** três desses quatro carregam `detail_json` do código antigo
+— aponta para o `valid_from` da v1 e não tem `changed_fields`. **Não é defeito**, e não viola o
+aceite 1, que é recortado por `started_at > <rebuild>`: `reconcileBreakers` de propósito **não**
+reescreve o `detail` de um disjuntor que continua verdadeiro, porque reabri-lo fragmentaria a
+janela. Uma consulta que classifique a causa pelo `detail_json` original vai rotulá-los "v1" — foi
+exatamente o que aconteceu na primeira passada desta sessão, e a causa real só apareceu ao ler a
+série de versões.
+
+### Verificação de código
+
+- `make verify` verde nos dois PRs: **1 727 passed | 79 skipped** (PR 1), **1 733 passed** (PR 2).
+- Suíte pg **rodada de verdade** contra Postgres 18.4 local com as 18 migrations aplicadas pelo
+  protocolo do `infra/migrations/apply.sh`: **`33 passed`** (28 antes). Baseline antes de codar
+  também rodada: 28 passed.
+- **Regressão vista falhando no código anterior**, que é o que o prompt exige:
+  - PR 1, `integration.pg.test.ts`: **6 falhas**, entre elas
+    `expected 2026-08-01T00:00:00.000Z to be null` (a v1 devolvendo o instante do **nascimento** —
+    o defeito literal), `expected 2026-08-01T00:40:00.000Z to be null` (o fill de `fee_base`) e
+    `expected '2026-08-22T12:00:00.000Z' to be '2026-08-20T10:00:00.000Z'` (a v3 de
+    `min_order_size` mascarando a mudança real de tick da v2).
+  - PR 1, `breakers.test.ts`: **2 falhas** — `detail` sem `changed_fields`, e instante sem campo
+    abrindo o disjuntor.
+  - PR 2, `breakers.test.ts`: **1 falha** —
+    `expected [ 'PRICE_JUMP_NO_CATALYST' ] to not include 'PRICE_JUMP_NO_CATALYST'`. Os quatro
+    casos "DEVE abrir" passam nos dois lados, que é a prova de que nada que abria e importa deixou
+    de abrir.
+- Contagem de casos por kind **inalterada**: `UMA_*` 4, `RULE_CLARIFICATION` 2, `DATA_STALENESS` 1.
+  Só `PARAM_CHANGE` (1 → 4) e `PRICE_JUMP_NO_CATALYST` (3 → 8) cresceram. Guarda "fixture para todo
+  kind" verde.
+
+### PENDENTE: a medição de 24 h — 2026-09-09T14:19:53Z
+
+Um comando, com o `:rebuild` já fixado no arquivo:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 root@178.105.65.251 'docker exec -i ganso-market-postgres-1 psql -U ganso_market -d ganso_market -f /dev/stdin' < scripts/rfc025/measure_after.sql
+```
+
+`measure_after.sql` são as **mesmas** A1–A3 do Apêndice A com os recortes que o próprio apêndice
+marca em comentário ativados, mais a régua exata do aceite 2 e a contagem do aceite 4. O "antes" a
+comparar está na tabela de "Medido depois" da RFC-025. Colar os números datados lá, e fechar os
+aceites 1–4.
+
+**Restos de `BOOK_STALE`/`DATA_STALE` são sintoma do feed (RFC-021/RFC-024) — registrar, não
+consertar.** No recorte de 08/09 eram **12 520 das 17 484** entradas (71,6 %), e seguem sendo o
+gargalo real do funil depois desta RFC. Esta RFC nunca prometeu mexer nisso.

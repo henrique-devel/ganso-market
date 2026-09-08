@@ -245,4 +245,69 @@ WHERE d.decision_kind = 'ENTRY' AND d.decision_ts >= :t0 AND d.decision_ts < :t1
 
 ## Medido depois
 
-_(a preencher pela sessão que executar o prompt 17 — D5)_
+**Deploy:** PR 1 [#129](https://github.com/henrique-devel/ganso-market/pull/129) (D1) e PR 2
+[#131](https://github.com/henrique-devel/ganso-market/pull/131) (D3) mesclados em 2026-09-08; CD
+verde; **rebuild do serviço `polymarket-portfolio` do profile `polymarket` às
+2026-09-08T14:19:53Z** (`docker compose --env-file deploy/server.env --profile polymarket up
+--build --detach polymarket-portfolio`). Container no ar desde `14:19:52.953Z`, `RestartCount` 0.
+
+**Aceite 5 — `release-sha`:** `60486008c3b7aa83208addf4d9851ef452e5cfbd`, igual ao `main` do merge
+de PR 2. Confirmado que o CD **não** troca a imagem do profile: antes do rebuild o container ainda
+marcava `da6d56037604ade22182e40d2dd78256078be2b3` enquanto o `ganso-market-api-1`, esse sim
+reconstruído pelo CD, já marcava `6048600`. **Zero erros** no log do serviço desde o rebuild.
+
+### O efeito imediato, no primeiro ciclo de painel (14:20:39Z, 46 s após o boot)
+
+| Medida | Antes do rebuild | Depois do primeiro ciclo |
+| --- | --- | --- |
+| `PARAM_CHANGE` abertos | **35** | **4** |
+| `PRICE_JUMP_NO_CATALYST` abertos | 9 | 4 |
+| `DATA_STALENESS` abertos | 1 | 1 |
+| Fechados nesse ciclo | — | **36 `PARAM_CHANGE`, 5 `PRICE_JUMP_NO_CATALYST`** |
+
+Os 36 fechamentos são a reconciliação fazendo o que devia: o sinal deixou de ser detectado, então
+`ended_at` passou a significar "a condição cessou".
+
+**Os 4 `PARAM_CHANGE` que sobreviveram são todos mudança REAL de `tick_size` (0,01 → 0,001)**,
+verificado versão por versão: `0x150db9…` v3, `0x358088…` v5 (06:46Z), `0xd02586…` v3 (13:40Z),
+`0xfc2124…` v3 (13:56Z). Nenhum artefato de coleta ficou aberto.
+
+> **Nota de leitura, para quem for auditar:** três desses quatro carregam um `detail_json` do
+> código antigo — aponta para o `valid_from` da versão 1 e não tem `changed_fields`. Não é defeito
+> e não viola o aceite 1, que é recortado por `started_at > <rebuild>`: `reconcileBreakers`
+> deliberadamente **não** reescreve o `detail` de um disjuntor que continua verdadeiro, porque
+> reabri-lo fragmentaria a janela e perderia o fato de a condição nunca ter cessado. Uma consulta
+> que classifique a causa pelo `detail_json` original vai rotulá-los "v1" — foi o que aconteceu na
+> primeira passada desta sessão. A causa real está na série de versões.
+
+### Sinal precoce (janela de ~3 min, NÃO é o aceite)
+
+| Medida | Antes (24 h) | Depois |
+| --- | --- | --- |
+| Aberturas de `PARAM_CHANGE` por hora | **5,63** | **0,00** |
+| Aberturas de `PRICE_JUMP_NO_CATALYST` por hora | 43,08 | 32,26 |
+| Decisões `ENTRY` em `PORTFOLIO_CIRCUIT_BREAKER` | 1,81 % | **0 de 82 (0,00 %)** |
+
+### PENDENTE — a medição de 24 h (aceites 1, 2, 3 e 4)
+
+A janela de 24 h fecha em **2026-09-09T14:19:53Z**. Um comando:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 root@178.105.65.251 'docker exec -i ganso-market-postgres-1 psql -U ganso_market -d ganso_market -f /dev/stdin' < scripts/rfc025/measure_after.sql
+```
+
+`scripts/rfc025/measure_after.sql` são as **mesmas** A1–A3 do Apêndice A com os dois recortes que o
+próprio apêndice marca em comentário ativados (`started_at > :rebuild`, `received_at > :rebuild`),
+mais a régua exata do aceite 2 e a contagem do aceite 4. O `:rebuild` já está fixado no arquivo.
+O "antes" contra o qual comparar:
+
+| Aceite | Régua | ANTES (08/09 09:50Z) | Alvo |
+| --- | --- | --- | --- |
+| 1 | A2 com `started_at > rebuild` | 92,4 % de artefato (1 102 v1 + 434 `NULL→valor` de 1 661) | **0** por v1, **0** por `NULL→valor`; todo `detail_json` com `changed_fields` |
+| 2 | primeira decisão dos "Up or Down" descobertos | **50 de 50 em disjuntor (100 %)** | primeira decisão `<> PORTFOLIO_CIRCUIT_BREAKER`, salvo outro disjuntor com causa registrada |
+| 3 | A1 | **1,81 % em disjuntor** (317 de 17 484) | publicada |
+| 4 | contagem por kind, 24 h antes vs depois | `PRICE_JUMP_NO_CATALYST` 921, `PARAM_CHANGE` 125, `DATA_STALENESS` 1, `RULE_CLARIFICATION` 0 | razão 0,5–2 em `DATA_STALENESS` e `UMA_*`; `RULE_CLARIFICATION` segue 0 |
+
+Restos de `BOOK_STALE`/`DATA_STALE` na A1 são sintoma do feed (RFC-021/RFC-024) — **registrar, não
+consertar aqui**. No recorte de 08/09 eles somavam 12 520 das 17 484 entradas (71,6 %), e seguem
+sendo o gargalo real do funil depois desta RFC.
