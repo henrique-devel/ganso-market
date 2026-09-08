@@ -580,6 +580,33 @@ export function registerPortfolioRoutes(
   // the RFC sets as the point where the JOIN would move to the client. The
   // planner memoizes the lookup — 500 rows resolved with 54 index searches,
   // 446 cache hits — because a 500-row page repeats the same markets.
+  //
+  // RFC-026 D9 asked for `?outcome=` and `?condition_id=` HERE, and the
+  // measurement sent them to the client instead. Measured in production
+  // 2026-09-08, EXPLAIN (ANALYZE, BUFFERS) against 184 370 rows:
+  //
+  //   WHERE outcome = 'ACCEPTED'   2595 ms cold, 1992 ms warm
+  //   WHERE outcome = 'REJECTED'      2,3 ms
+  //   WHERE condition_id = $1      p95 1104,7 ms cold over 9 markets
+  //                                (1104,7 498,5 390,4 99,2 97,6 89,3 57,9
+  //                                 42,0 26,2), 8,9 ms warm
+  //
+  // ACCEPTED is the pathological one and it is also the screen's DEFAULT
+  // filter. There is no index on `outcome` (six exist; none leads with it),
+  // so the planner takes a parallel seq scan and reads 43 248 blocks from
+  // disk — and reads them again on the second run, because the table does
+  // not fit in shared_buffers, which is why "warm" barely helps. That is
+  // over the RFC's 500 ms budget and over this pool's 1000 ms
+  // statement_timeout: publishing it would not be a slow endpoint, it would
+  // be a 57014 on every load of the default screen, which is exactly the
+  // error count A7 requires to stay at zero.
+  //
+  // An index on `outcome` is a migration and the RFC puts it out of scope.
+  // So the fallback D9 names is the one in force: this query keeps its shape,
+  // returns the last 500 whole, and Decisões filters them in the client under
+  // the notice "das últimas 500". No parameter is accepted here, because an
+  // endpoint that takes `?outcome=` and answers with everything is worse than
+  // one that never offered it.
   app.get(
     "/polymarket/decisions",
     { preHandler: guard },

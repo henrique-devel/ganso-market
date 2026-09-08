@@ -29,11 +29,24 @@ CONF = Path(__file__).resolve().parents[2] / "infra" / "nginx" / "nginx.conf"
 
 REARM = "/api/polymarket/paper/kill-switch/rearm"
 PERFORMANCE = "/api/polymarket/paper/performance"
+POSITIONS = "/api/polymarket/paper/positions"
+ORDERS = "/api/polymarket/paper/orders"
 
 # Every path under /api/polymarket/paper the perimeter is allowed to name, and
-# the ONE method each may carry. Anything else under that prefix — intents,
-# orders, the kill-switch engage — stays unreachable from outside.
-PAPER_ALLOWLIST = {REARM: "POST", PERFORMANCE: "GET"}
+# the ONE method each may carry. Anything else under that prefix — intents, the
+# order cancel, the kill-switch engage — stays unreachable from outside.
+#
+# RFC-026 D8 (owner decision P1, 2026-09-05) took this list from two to four.
+# The two additions are reads that were already written and already closed;
+# what changed is that the Carteira screen can now reach them. They are GET and
+# only GET: the same module answers POST /paper/intents, and that one stays
+# unnamed here, which is the whole reason this is an allowlist and not a rule.
+PAPER_ALLOWLIST = {
+    REARM: "POST",
+    PERFORMANCE: "GET",
+    POSITIONS: "GET",
+    ORDERS: "GET",
+}
 
 
 def conf_text() -> str:
@@ -100,6 +113,10 @@ class NginxPerimeterTests(unittest.TestCase):
             "/api/polymarket/events",
             "/api/polymarket/data-quality",
             PERFORMANCE,
+            # RFC-026 D8. Published as reads, so they answer to the same rule
+            # the RFC-015 surfaces do: exact path, GET, 404 for anything else.
+            POSITIONS,
+            ORDERS,
         ):
             self.assertIn(path, specs, f"{path} is not published")
             self.assertTrue(
@@ -111,16 +128,36 @@ class NginxPerimeterTests(unittest.TestCase):
             self.assertIn("return 404", body)
 
     def test_the_order_creating_surfaces_stay_closed(self) -> None:
+        # RFC-026 D8 moved `paper/orders` and `paper/positions` OUT of this
+        # list and into PAPER_ALLOWLIST, because the panel now reads them. What
+        # is left here is the part that must never be published at all: the
+        # intent that creates an order, the kill-switch engage, and the two
+        # portfolio state controls whose absence is the reason HALTED cannot be
+        # left from a browser. Read this list as "no location may name these",
+        # and the allowlist above as "these may be named, with this one method".
         published = {spec.split()[-1] for spec, _ in locations()}
         for closed in (
             "/api/polymarket/paper/intents",
-            "/api/polymarket/paper/orders",
-            "/api/polymarket/paper/positions",
             "/api/polymarket/paper/kill-switch",
             "/api/polymarket/portfolio/halt",
             "/api/polymarket/portfolio/resume",
         ):
             self.assertNotIn(closed, published)
+
+    def test_the_published_paper_reads_never_carry_a_write_method(self) -> None:
+        # The allowlist pins a method per path, and `test_no_prefix_location_
+        # can_reach_the_paper_module` checks the guard is there. This checks the
+        # other half: that the guard is the ONLY method the block lets through,
+        # so a second `if ($request_method != POST)` added later — which would
+        # make the block accept both — fails here instead of shipping.
+        for path in (POSITIONS, ORDERS):
+            body = next(body for spec, body in locations() if spec == f"= {path}")
+            guards = re.findall(r"\$request_method\s*!=\s*(\w+)", body)
+            self.assertEqual(
+                guards,
+                ["GET"],
+                f"{path} must refuse every method but GET, and say so once",
+            )
 
     def test_every_other_api_path_still_falls_through_to_404(self) -> None:
         specs = [spec for spec, _ in locations()]

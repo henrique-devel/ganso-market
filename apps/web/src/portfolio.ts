@@ -837,3 +837,27 @@ export function fetchGateMeasurements(
     signal,
   );
 }
+
+/**
+ * Uma decisão inteira, com toda entrada que ela usou (`/decisions/:id`).
+ *
+ * Devolve o registro CRU: a rota faz `SELECT *` e as colunas mudam com as
+ * migrations, então fixar um tipo aqui daria uma lista que envelhece em
+ * silêncio. A tela imprime par a par, o que também é o que o modo engenheiro
+ * quer ver.
+ */
+export function fetchDecision(
+  accessToken: string,
+  decisionId: number,
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionGetResult<Readonly<Record<string, unknown>>>> {
+  return authorizedGet(
+    `/api/polymarket/decisions/${String(decisionId)}`,
+    accessToken,
+    (body) =>
+      isRecord(body) && isRecord(body.decision) ? body.decision : null,
+    fetcher,
+    signal,
+  );
+}
