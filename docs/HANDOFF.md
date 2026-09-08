@@ -1,6 +1,37 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-08 (6) — **RFC-026 PR 2 MESCLADO E EM PRODUÇÃO**
+- Última atualização: 2026-09-08 (7) — **RFC-026 PR 3 MESCLADO E EM PRODUÇÃO**
+  ([#137](https://github.com/henrique-devel/ganso-market/pull/137)), CD verde, `release-sha`
+  **`93679126a9eadda80964c4fe27468b9a619eac30`** conferido no container da `api`. **A RFC-026
+  está completa: os três PRs em produção.** A Mesa ganhou sparkline de 60 buckets por linha,
+  carregado em UMA requisição em lote, e o detalhe ganhou o gráfico de preço com banda
+  `mid_low/high` e marcas ▲ aceite, □ ordem, ● posição aberta. `^~ /api/polymarket/series`
+  publicado GET-only (P2). **A1 conferido de dentro do servidor: 401 no GET das duas rotas,
+  404 em POST/PUT/DELETE nas duas, e `/paper/intents` 404 nos três métodos.** A7 em **0**
+  pelo método A3 da RFC-023 (os 7 cancelamentos do log do postgres em 24 h são os mesmos do
+  PR 2: 6 do `exitstore.ts` no worker `polymarket-portfolio` e 1 `pg_sleep(2)`, todos
+  anteriores a este deploy). Refazer em 09/09 ~22:35Z.
+  **A premissa central da D10 caiu, e a correção é o assunto deste PR.** A D10 fechava a
+  "varredura de dias" tornando `from` obrigatório. Medido em produção em 08/09, **`from`
+  obrigatório não limita nada**: basta o cliente passar um `from` distante. Um token com
+  `from` de 7 dias custou **3 811 ms**; com 20 dias, onde o `SERIES_LIMIT` finalmente morde,
+  **14 699 ms**; o lote de 25 tokens com `from` de 24 h, **612 ms**. Todos acima do teto de
+  500 ms do A6, e os dois primeiros acima de qualquer `statement_timeout` que a API
+  sobreviva. **O custo é I/O aleatório e não linhas devolvidas:** `shared_buffers` são
+  **128 MB** contra **1 735 MB** de `polymarket_series_1m`, e buckets consecutivos de um
+  token caem em páginas diferentes porque ~200 tokens são gravados intercalados — uma leitura
+  de 24 h de um token toca ~1 400 páginas espalhadas. Então **o teto passou a ser a JANELA**,
+  cada variante com a que a sua própria tela pede: **60 min** no lote e **12 h** no `ohlc`.
+  Janela maior é **400**, não uma resposta lenta — resposta lenta aqui é 57014, contra o A7.
+  **Consequência de produto:** as **24 h** que a D10 pedia para o gráfico do detalhe **não
+  cabem** (24 amostras nos tokens mais densos: p50 305 ms, **p95 700 ms**, 4 acima do teto);
+  ficou em **12 h**, que mediu p95 **77,5 ms**.
+  **O A5 continua pendente do proprietário, pelo mesmo motivo do PR 1** — re-conferido hoje:
+  o `log_format ganso_json` não registra URI nem IP, só instante, método, status e tempo.
+  Por construção a Mesa vai de 16 para **18 req/min** (5 requisições por tique de 30 s mais a
+  faixa a 15 s), sob o teto de 20; o lote é **uma** requisição por tique independentemente do
+  tamanho da página, e há teste que prende isso.
+- Atualização anterior: 2026-09-08 (6) — **RFC-026 PR 2 MESCLADO E EM PRODUÇÃO**
   ([#135](https://github.com/henrique-devel/ganso-market/pull/135)), CD verde, `release-sha`
   **`12d4edcd0d9ea4a20f10addcf365575193d28820`** conferido no container da `api`. A Carteira
   (tecla `2`) mostra cartões de posição, ordens com fila e barras de uso dos caps; Decisões
@@ -13,7 +44,7 @@
   1 s da API —, então os filtros ficaram **no cliente**, sobre as últimas 500, com o aviso na
   tela. Sem índice novo, sem migration, sem orçamento maior. A7 em **0** pelo método A3 da
   RFC-023; refazer em 09/09.
-- Atualização anterior: 2026-09-08 (5) — **RFC-026 PR 1 MESCLADO E EM PRODUÇÃO**
+- Atualização de 2026-09-08 (5) — **RFC-026 PR 1 MESCLADO E EM PRODUÇÃO**
   ([#133](https://github.com/henrique-devel/ganso-market/pull/133)), CD verde, `release-sha`
   **`061f1ba16697dcfa65853f5dad1fca6f9c6ec23a`** conferido **no container da `api` e dentro do
   bundle do `web`**. A Mesa (tecla `1`) é a tela padrão: nome do mercado em toda célula, escada dos
@@ -5800,6 +5831,131 @@ aceites 1–4.
 **Restos de `BOOK_STALE`/`DATA_STALE` são sintoma do feed (RFC-021/RFC-024) — registrar, não
 consertar.** No recorte de 08/09 eram **12 520 das 17 484** entradas (71,6 %), e seguem sendo o
 gargalo real do funil depois desta RFC. Esta RFC nunca prometeu mexer nisso.
+
+---
+
+## SESSÃO 2026-09-08 (7) — RFC-026 PR 3: o gráfico abriu, e o `from` obrigatório não segurava nada
+
+**Entregue e em produção:** [#137](https://github.com/henrique-devel/ganso-market/pull/137),
+squash em `main`, `93679126a9eadda80964c4fe27468b9a619eac30`, CD verde, `release-sha`
+conferido no container da `api`. Com isto a **RFC-026 fecha**: Mesa, Carteira e séries.
+
+### O que passou a existir
+
+- `metric=ohlc` em `GET /polymarket/series/:tokenId`: `bucket_start`, os quatro mids e
+  `updates_count`, em texto decimal como todo dinheiro desta tela.
+- **Rota de leitura nova:** `GET /polymarket/series?tokens=a,b,c&metric=ohlc&from=` — a
+  página visível da Mesa em UMA requisição. Teto de 25 tokens (26 → 400), `SERIES_LIMIT`
+  total, resposta agrupada por token, e **todo token pedido volta com chave** (vazia quando
+  não há série, porque "sem série" é uma resposta e chave ausente não é).
+- `location ^~ /api/polymarket/series` GET-only, no padrão de `/gates`. Publica também
+  `spread/depth/oi/holders`, que já existiam e são leitura — registrado na P2.
+- Sparkline de 60 buckets por linha da Mesa e gráfico de 12 h no detalhe, com banda
+  `mid_low/high`, marcas ▲ aceite, □ ordem, ● posição aberta e linha vermelha no engate do
+  kill switch. SVG próprio, **nenhuma dependência nova** (P4).
+
+### A premissa que caiu, e por quê
+
+A D10 fechava a "varredura de dias" tornando **`from` obrigatório**. Isso não fecha nada: o
+`from` é do cliente, e um `from` distante devolve a varredura inteira.
+
+| caso | linhas | a frio |
+| --- | --- | --- |
+| 1 token, `from` de 7 dias | 9 254 | **3 811,6 ms** |
+| 1 token, `from` de 20 dias (bate `SERIES_LIMIT`) | 10 000 | **14 699,1 ms** |
+| lote 25 tokens, `from` de 24 h | 19 729 varridas | **612,4 ms** |
+
+**A causa é I/O aleatório, não volume de resposta.** `shared_buffers` = **128 MB** contra
+**1 735 MB** de `polymarket_series_1m` (4 045 353 linhas desde 20/08). Como ~200 tokens são
+gravados intercalados, buckets consecutivos de um mesmo token caem em páginas diferentes: a
+leitura de 24 h de um token lê ~1 400 páginas espalhadas, a ~0,2–0,5 ms cada quando frias.
+O `LIMIT` não ajuda, porque o `ORDER BY` obriga a varrer antes de cortar.
+
+**Correção: o teto é a janela**, e cada variante recebe a que a sua tela pede — 60 min no
+lote (os 60 buckets do sparkline) e 12 h no `ohlc`. Janela maior é **400** (`WINDOW_TOO_WIDE`)
+e não uma resposta lenta, porque resposta lenta aqui vira 57014 e derruba o A7.
+
+**Custo de produto, declarado:** as **24 h** que a D10 e a D5 pedem para o gráfico do detalhe
+**não cabem** no teto de 500 ms do A6. Em 24 amostras a frio nos tokens mais densos (1 438
+buckets), a leitura de 24 h mediu p50 **305,2 ms**, p95 **700,1 ms**, com **4 de 24 acima de
+500 ms**. A 12 h, p95 **77,5 ms**. O gráfico é de 12 h.
+
+### A6 — EXPLAIN a frio, com os tetos em pé
+
+| caso | linhas | a frio | a quente |
+| --- | --- | --- | --- |
+| Lote 25 × 60, `from = now − 1 h` (o caso real da Mesa) | 1 181 | **108,9 ms** (pior de 12 execuções) | **0,6 ms** |
+| Lote 25 × 60, 9 janelas frias distintas (24–72 h atrás) | 60–378 | p95 **305,1 ms** | — |
+| Lote 25 × 60, janela fria de 24 h atrás | 274 | 25,9 ms (223 blocos do disco) | — |
+| 1 token × 1 440 (24 h), primeira medição | 1 439 | 125,9 ms (307 blocos) | 2,9 ms |
+| 1 token × 720 (12 h) — **o que ficou** | ~720 | p95 **77,5 ms** | — |
+
+Medições feitas com o host ocioso (load 0,09). Nota metodológica que vale para a próxima
+sessão: **medir aquece o cache**, e não dá para largar o cache de um Postgres em produção.
+As leituras mais confiáveis são as PRIMEIRAS de cada forma de consulta; as tardias caem uma
+ou duas ordens de grandeza porque a própria campanha de medição carregou as páginas. Onde as
+duas leituras discordavam, o teto foi escolhido pela pessimista.
+
+### Aceites
+
+- **A1 ✔** de dentro do servidor: GET `401` em `/api/polymarket/series/x?metric=ohlc&from=…`
+  e em `/api/polymarket/series?tokens=…`; **POST, PUT e DELETE `404` nas duas**;
+  `/api/polymarket/paper/intents` segue `404` nos três métodos. O `401` (e não `404`) no GET
+  é a prova de que as duas rotas estão registradas e o edge as entrega.
+- **A2 ✔** `release-sha` do container da `api` = `93679126…`, igual ao SHA do merge.
+- **A6 ✔** tabela acima, colada antes do merge.
+- **A7 = 0** pelo método A3 da RFC-023 (`docker logs ganso-market-api-1 --since 24h |
+  grep -c '"pg_code":"57014"'`), e **0** `polymarket_read_api_failed` em 24 h. Os 7
+  `canceling statement` do log do postgres são **os mesmos 7 do PR 2**, todos anteriores a
+  este deploy (o último às 15:20Z, o deploy às ~22:30Z) e todos de outro serviço: 6 do
+  `SELECT DISTINCT ON (token_id) … bids_json` de `portfolio/exitstore.ts` no worker
+  `polymarket-portfolio`, 1 `pg_sleep(2)`. Refazer em 09/09 ~22:35Z.
+- **A5 PENDENTE DO PROPRIETÁRIO**, pelo motivo já registrado no PR 1 e **re-conferido hoje**:
+  o `log_format ganso_json` (`infra/nginx/nginx.conf:11-15`) não registra URI nem IP — só
+  instante, método, status e tempo —, então "requisições `/api/` do IP do operador" não é
+  mensurável. O substituto (contar tudo no edge por 60 s com a Mesa aberta) exige uma sessão
+  do painel, que nenhum agente tem. Linha de base medida hoje sem painel: **0 req/min**.
+  Por construção a Mesa passa de 16 para **18 req/min** — 5 requisições por tique de 30 s
+  (10/min) mais a faixa fixa a 15 s (8/min) —, sob o teto de 20 da D5. O lote é **uma**
+  requisição por tique **independentemente do tamanho da página**, e há teste que prende isso
+  (`expect(calls).toHaveLength(1)`).
+
+### Decisões de implementação que valem registro
+
+- **A troca de página não espera o tique.** Trocar de página, filtrar ou ordenar muda os
+  tokens visíveis, e esperar 30 s deixaria a página nova sem sparkline. O lote também dispara
+  na mudança, com **espera de 400 ms** — sem ela, digitar no filtro dispararia um lote por
+  tecla.
+- **Ausência nunca virou zero.** Bucket sem mid parte a linha em vez de puxá-la ao zero;
+  série vazia escreve "sem série" em cinza; token que o lote ainda não respondeu **não
+  afirma nada**; e o gráfico do detalhe distingue "ainda não perguntei" de "perguntei e não
+  há". Livro congelado desenha a reta e a legenda diz que a reta é preço.
+- **As quatro métricas antigas não mudaram.** `spread/depth/oi/holders` continuam com
+  `from`/`to` opcionais: estreitá-las agora quebraria chamadores fora desta RFC. Só `ohlc` e
+  o lote têm janela obrigatória. Há teste pg que prende isso.
+- **Orçamento no mesmo commit.** `config/runtime.json` ganhou `/polymarket/series` e
+  `/polymarket/series/:tokenId` a 500 ms, porque `route-budgets.test.ts` (RFC-023 D1) lê o
+  `nginx.conf` e reprova todo location publicado sem orçamento declarado.
+- **O `route-budgets.runtime.test.ts` precisou de query string por rota.** As duas séries
+  recusam com 400 antes de tocar o banco, e o teste lia isso como "nenhuma consulta
+  orçada" — que é verdade e é inútil. Agora ele chama as duas com um `from` válido relativo
+  ao relógio real, e volta a verificar de fato que o orçamento declarado é o que roda.
+
+### Testes
+
+`make verify` verde. Suíte pg contra Postgres descartável migrado: **55 passed**, mais
+**4 passed** do arquivo novo `apps/api/test/polymarket/series.pg.test.ts` — que existe porque
+todas as suas afirmações são sobre SQL, e um pool falso aprovaria alegremente um nome de
+coluna errado. Perímetro: **11 testes OK** (eram 9). Regressões **vistas falhando no código
+anterior**: 11 na API, 3 no pg, 3 no `MesaView`, 1 no perímetro.
+
+### Defeito de teste encontrado e NÃO corrigido (fora do escopo)
+
+`apps/api/test/polymarket/fundamental/config.test.ts` → "parses the file shipped in the
+repository" **falha** quando rodado com `--no-file-parallelism` e **passa** no `make verify`.
+Confirmado **pré-existente no HEAD** (`git stash` e re-execução). É vazamento de variável de
+ambiente entre arquivos de teste, não defeito de produção. Não foi tocado aqui para não
+misturar com o PR; fica anotado para uma sessão própria.
 
 ---
 
