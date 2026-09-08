@@ -32,6 +32,10 @@ const CONFIG = {
   jumpThresholdScaled: s("0.15"),
   jumpWindowMs: 300_000,
   bookMaxAgeMs: 30_000,
+  // The production band (`config/portfolio.json:16-18`), which is also what the
+  // entry gate enforces at `engine.ts:496-499`.
+  bandMinBuyScaled: s("0.10"),
+  bandMaxBuyScaled: s("0.95"),
 };
 
 /** A quiet market with an open position and nothing wrong with it. */
@@ -141,6 +145,90 @@ describe("circuit breaker detection", () => {
         holdsPosition: false,
         midBeforeScaled: s("0.20"),
         midNowScaled: s("0.90"),
+      }),
+    ).toContain("PRICE_JUMP_NO_CATALYST");
+  });
+
+  it("PRICE_JUMP_NO_CATALYST: 0.02 -> 0.023 is silent, but on the THRESHOLD not on D3", () => {
+    // The RFC names this pair, and it is worth pinning for what it actually is:
+    // 0.003/0.02 is exactly 0.15, and the comparison is strictly `>`, so this
+    // move never opened the breaker under any version of this code. Keeping it
+    // green proves the boundary did not move; the D3 cases below use a move that
+    // genuinely clears the threshold.
+    expect(
+      detect({
+        holdsPosition: false,
+        midBeforeScaled: s("0.02"),
+        midNowScaled: s("0.023"),
+      }),
+    ).not.toContain("PRICE_JUMP_NO_CATALYST");
+  });
+
+  it("PRICE_JUMP_NO_CATALYST: both ends outside the band and no position is silent", () => {
+    // RFC-025 D3, and this is the case that exercises it: 0.02 -> 0.024 is a 20%
+    // move, well past the threshold, and it used to open. The threshold is
+    // RELATIVE and the median `mid_before` of the 9 570 historical firings was
+    // $0.019 — at that price 20% is 0.4 of a cent, well under one tick of the
+    // 0.01 grid. 80% of the firings were outside the band. With nothing held,
+    // `PRICE_OUT_OF_BAND` refuses the entry on the current price in the same
+    // cycle (`engine.ts:496-499`): the verdict is identical, only the label
+    // changes.
+    expect(
+      detect({
+        holdsPosition: false,
+        midBeforeScaled: s("0.02"),
+        midNowScaled: s("0.024"),
+      }),
+    ).not.toContain("PRICE_JUMP_NO_CATALYST");
+  });
+
+  it("PRICE_JUMP_NO_CATALYST: the same move WITH a position still opens", () => {
+    // Nothing about a held position changes at any price: the breaker is what
+    // forces the exit re-evaluation on a position we own.
+    expect(
+      detect({
+        holdsPosition: true,
+        midBeforeScaled: s("0.02"),
+        midNowScaled: s("0.024"),
+      }),
+    ).toContain("PRICE_JUMP_NO_CATALYST");
+  });
+
+  it("PRICE_JUMP_NO_CATALYST: inside the band and no position still opens", () => {
+    expect(
+      detect({
+        holdsPosition: false,
+        midBeforeScaled: s("0.50"),
+        midNowScaled: s("0.70"),
+      }),
+    ).toContain("PRICE_JUMP_NO_CATALYST");
+  });
+
+  it("PRICE_JUMP_NO_CATALYST: 0.96 -> 0.80 with no position MUST still open", () => {
+    // The anti-loosening case, and the reason D3 requires BOTH ends outside.
+    // This is the RFC-013 4(ii) pattern: `mid_before` outside the band,
+    // `mid_now` INSIDE it. Looking at `mid_before` alone would omit the breaker
+    // and let an entry at 0.80 sail past `PRICE_OUT_OF_BAND` — which tests the
+    // CURRENT price (`engine.ts:496-499`) — and reach the arithmetic. That is a
+    // gate getting weaker, which this RFC forbids outright.
+    expect(
+      detect({
+        holdsPosition: false,
+        midBeforeScaled: s("0.96"),
+        midNowScaled: s("0.80"),
+      }),
+    ).toContain("PRICE_JUMP_NO_CATALYST");
+  });
+
+  it("PRICE_JUMP_NO_CATALYST: 0.02 -> 0.30 with no position opens too", () => {
+    // The mirror of the case above: `mid_before` outside, `mid_now` inside. A
+    // token that ran from under the floor up into the band is tradeable at the
+    // new price, so the breaker is exactly what should stop the entry.
+    expect(
+      detect({
+        holdsPosition: false,
+        midBeforeScaled: s("0.02"),
+        midNowScaled: s("0.30"),
       }),
     ).toContain("PRICE_JUMP_NO_CATALYST");
   });
