@@ -115,6 +115,12 @@ export interface BookPipelineDeps {
   readonly onSubscribeBookMissing?: (tokenId: string) => void;
   /** The book finally arrived: the caller closes the gap it opened. */
   readonly onSubscribeBookArrived?: (tokenId: string) => void;
+  /**
+   * The market left the universe with the token still bookless. The caller
+   * closes the gap here too — the episode ended — and this is the callback
+   * that says it was a "never", not a "late".
+   */
+  readonly onSubscribeBookNeverArrived?: (tokenId: string) => void;
   /** Grace before a subscribed token counts as bookless. RFC-024: 60 s. */
   readonly subscribeBookTimeoutMs?: number;
   readonly setTimer?: (run: () => void, delayMs: number) => unknown;
@@ -162,8 +168,9 @@ export interface BookPipeline {
    */
   armSubscribeWatch(tokenIds: readonly string[]): void;
   /**
-   * The tokens left the universe. Their pending watches are cancelled, so a
-   * market leaving on the same cycle it entered cannot open a spurious gap.
+   * The tokens left the universe. Pending watches are cancelled, so a market
+   * leaving on the same cycle it entered cannot open a spurious gap; a gap
+   * already open is settled, because the bookless episode ended with the exit.
    */
   cancelSubscribeWatch(tokenIds: readonly string[]): void;
   getCachedBook(tokenId: string): OrderBook | null;
@@ -687,12 +694,23 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
   }
 
   /**
-   * RFC-024 D3: stop watching `tokenId`, and close its gap if one is open.
+   * RFC-024 D3: stop watching `tokenId` and settle its gap, if one is open.
    *
-   * `reason` is "arrived" when a book landed and "exit" when the market left
-   * the universe. Only "arrived" closes the gap: a market that leaves without
-   * ever getting a book has a REAL gap, and closing it on the way out would
-   * erase the very measurement the gap exists for.
+   * BOTH outcomes close the gap, for different reasons, and the distinction is
+   * the measurement:
+   *
+   * - `arrived`: a book landed. The gap's window is the time-to-book, and the
+   *   token recovered.
+   * - `exit`: the market left the universe still bookless. The episode ENDED
+   *   at that instant, so the gap closes there too — leaving it open would
+   *   claim "still no book" about a token nobody is subscribed to any more,
+   *   and `COALESCE(gap_end, now())` would grow its duration forever. What
+   *   makes it a "never" rather than a "late" is the log line, not an open
+   *   row: SUBSCRIBE_BOOK_MISSING_UNRESOLVED.
+   *
+   * Settling on exit is also what lets a token that re-enters later record a
+   * SECOND bookless episode: the tracker keys open gaps by token, so an entry
+   * that is never released would swallow every future episode for it.
    */
   function clearSubscribeWatch(
     tokenId: string,
@@ -703,9 +721,20 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
       clearTimer(handle);
       subscribeWatch.delete(tokenId);
     }
-    if (reason === "arrived" && subscribeGapOpen.delete(tokenId)) {
-      deps.onSubscribeBookArrived?.(tokenId);
+    if (!subscribeGapOpen.delete(tokenId)) {
+      return;
     }
+    if (reason === "arrived") {
+      deps.onSubscribeBookArrived?.(tokenId);
+      return;
+    }
+    logJson(
+      "warn",
+      "SUBSCRIBE_BOOK_MISSING_UNRESOLVED",
+      "polymarket_bookpipe_subscribe_book_never_arrived",
+      { token_id: tokenId },
+    );
+    deps.onSubscribeBookNeverArrived?.(tokenId);
   }
 
   async function anchorIfDue(tokenId: string): Promise<void> {

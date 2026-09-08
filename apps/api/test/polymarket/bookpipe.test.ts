@@ -654,16 +654,18 @@ describe("RFC-024 D3 — subscribe_book_missing", () => {
     const { pool, captured } = makePool();
     const missing: string[] = [];
     const arrived: string[] = [];
+    const neverArrived: string[] = [];
     const pipeline = createBookPipeline({
       pool,
       clock: () => Date.now(),
       onSubscribeBookMissing: (tokenId) => missing.push(tokenId),
       onSubscribeBookArrived: (tokenId) => arrived.push(tokenId),
+      onSubscribeBookNeverArrived: (tokenId) => neverArrived.push(tokenId),
       ...(options?.timeoutMs === undefined
         ? {}
         : { subscribeBookTimeoutMs: options.timeoutMs }),
     });
-    return { pipeline, missing, arrived, captured };
+    return { pipeline, missing, arrived, neverArrived, captured };
   }
 
   it("token assinado sem book em 60 s abre a lacuna", async () => {
@@ -706,15 +708,44 @@ describe("RFC-024 D3 — subscribe_book_missing", () => {
     expect(missing).toEqual([]);
   });
 
-  it("o exit NÃO fecha uma lacuna já aberta — ela é a medição", async () => {
-    const { pipeline, missing, arrived } = watchPipeline();
+  it("o exit LIQUIDA a lacuna aberta, como 'never' e não como 'arrived'", async () => {
+    const { pipeline, missing, arrived, neverArrived } = watchPipeline();
     pipeline.armSubscribeWatch([TOKEN]);
     await vi.advanceTimersByTimeAsync(61_000);
     expect(missing).toEqual([TOKEN]);
     pipeline.cancelSubscribeWatch([TOKEN]);
-    // A market that left without ever getting a book has a REAL gap; closing
-    // it on the way out would erase exactly what the gap exists to record.
+    // The bookless episode ENDED with the exit, so the gap closes there. What
+    // makes it a "never" and not a "late" is which callback fires — leaving
+    // the row open would claim "still no book" about a token nobody is
+    // subscribed to, and grow its own duration forever.
+    expect(neverArrived).toEqual([TOKEN]);
     expect(arrived).toEqual([]);
+  });
+
+  it("um token que reentra registra um SEGUNDO episódio", async () => {
+    // The reason the exit has to release the token: the gap tracker keys open
+    // gaps by token, so an entry never released would swallow every future
+    // bookless episode for it.
+    const { pipeline, missing, neverArrived } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(61_000);
+    pipeline.cancelSubscribeWatch([TOKEN]);
+    expect(neverArrived).toEqual([TOKEN]);
+    // Same token enters again, still bookless.
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(missing).toEqual([TOKEN, TOKEN]);
+  });
+
+  it("exit sem lacuna aberta não dispara nenhum callback", async () => {
+    const { pipeline, missing, arrived, neverArrived } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    pipeline.cancelSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(missing).toEqual([]);
+    expect(arrived).toEqual([]);
+    expect(neverArrived).toEqual([]);
   });
 
   it("só tokens que ENTRAM são armados: um token com book não re-arma", async () => {
