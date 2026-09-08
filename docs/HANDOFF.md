@@ -1,6 +1,19 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-08 (5) — **RFC-026 PR 1 MESCLADO E EM PRODUÇÃO**
+- Última atualização: 2026-09-08 (6) — **RFC-026 PR 2 MESCLADO E EM PRODUÇÃO**
+  ([#135](https://github.com/henrique-devel/ganso-market/pull/135)), CD verde, `release-sha`
+  **`12d4edcd0d9ea4a20f10addcf365575193d28820`** conferido no container da `api`. A Carteira
+  (tecla `2`) mostra cartões de posição, ordens com fila e barras de uso dos caps; Decisões
+  (tecla `3`) ganhou filtros de Resultado (padrão **Aceitas**) e Mercado, e o detalhe por
+  decisão. **`GET /paper/positions` e `GET /paper/orders` estão publicados** como dois
+  `location =` GET-only; **A1 conferido de dentro do servidor: 401 no GET dos dois, 404 em
+  POST e DELETE, e `/paper/intents` 404 nos três métodos.** `PAPER_ALLOWLIST` foi de 2 a 4
+  entradas. **A premissa da D9 caiu:** filtrar `/decisions` no servidor custa 2 595 ms a frio
+  para `outcome = 'ACCEPTED'` — acima do teto de 500 ms da RFC **e** do `statement_timeout` de
+  1 s da API —, então os filtros ficaram **no cliente**, sobre as últimas 500, com o aviso na
+  tela. Sem índice novo, sem migration, sem orçamento maior. A7 em **0** pelo método A3 da
+  RFC-023; refazer em 09/09.
+- Atualização anterior: 2026-09-08 (5) — **RFC-026 PR 1 MESCLADO E EM PRODUÇÃO**
   ([#133](https://github.com/henrique-devel/ganso-market/pull/133)), CD verde, `release-sha`
   **`061f1ba16697dcfa65853f5dad1fca6f9c6ec23a`** conferido **no container da `api` e dentro do
   bundle do `web`**. A Mesa (tecla `1`) é a tela padrão: nome do mercado em toda célula, escada dos
@@ -5787,6 +5800,119 @@ aceites 1–4.
 **Restos de `BOOK_STALE`/`DATA_STALE` são sintoma do feed (RFC-021/RFC-024) — registrar, não
 consertar.** No recorte de 08/09 eram **12 520 das 17 484** entradas (71,6 %), e seguem sendo o
 gargalo real do funil depois desta RFC. Esta RFC nunca prometeu mexer nisso.
+
+---
+
+## SESSÃO 2026-09-08 (6) — RFC-026 PR 2: a Carteira abriu, e a medição fechou os filtros
+
+Executado `prompts/roadmap/18b-rfc-026-pr2-carteira.md` até o fim: re-medição → código → testes →
+merge → CD → verificação em produção. PR
+[#135](https://github.com/henrique-devel/ganso-market/pull/135), squash em `main` como
+`12d4edc`. Zero migration, zero índice, zero endpoint de escrita, zero gate tocado.
+
+### Re-medição: seis premissas de pé, uma número novo, e a D9 caiu
+
+| Premissa (02–03/09) | Medido em 08/09 | |
+| --- | --- | --- |
+| PR 1 mergeado | `m.question` em 2 rotas; `release-sha` = `061f1ba` | de pé |
+| `positions`/`orders` fechados | 404 em GET/POST/DELETE, de dentro do servidor | de pé |
+| `PAPER_ALLOWLIST` com 2 entradas | `REARM` POST, `PERFORMANCE` GET | de pé |
+| `queue_ahead` em 18/18 ordens | **63 de 63** (100 %) | de pé |
+| `outcome` sem índice | 6 índices, nenhum em `outcome` | de pé |
+| `is_final` existe | 2 942 rótulos | de pé |
+| 94 `ACCEPTED` × 52 868 `REJECTED` | **143 × 18 931** em 24 h; 184 370 decisões no total | número mudou |
+| **Filtros da D9 sob 500 ms** | **não** — ver abaixo | **caiu** |
+
+### A D9 caiu: o filtro padrão da tela custaria um 57014 por carga
+
+`EXPLAIN (ANALYZE, BUFFERS)` em produção, sobre 184 370 linhas:
+
+| Filtro | A frio | A quente |
+| --- | --- | --- |
+| `outcome = 'ACCEPTED'` | **2 595 ms** | **1 992 ms** |
+| `outcome = 'REJECTED'` | — | 2,3 ms |
+| `condition_id = $1` | **p95 1 104,7 ms** (9 mercados) | 8,9 ms |
+
+Sem índice em `outcome`, o planejador faz *parallel seq scan* e lê **43 248 blocos do disco nas
+DUAS execuções**: a tabela não cabe no `shared_buffers`, e é por isso que "a quente" quase não
+ajuda. `REJECTED` é rápido só porque é ~99 % das linhas e a varredura para logo.
+
+O caso patológico é justamente o **filtro padrão da tela** (Aceitas, decisão P5). Publicar
+`?outcome=` não daria um endpoint lento: daria **57014 em toda carga da tela padrão**, contra o
+A7. Índice novo exige migration e está fora do escopo da RFC.
+
+Vale então o fallback que a própria D9 nomeia: **`/decisions` não ganha parâmetro nenhum** e o
+filtro fica no cliente, sobre as últimas 500, com o aviso na tela. Um endpoint que aceita
+`?outcome=` e responde com tudo é pior do que um que nunca o ofereceu — por isso o parâmetro não
+existe, e o teste obrigatório "`?outcome=X` → 400" ficou **sem objeto**.
+
+**O que isso custa e a tela precisa dizer:** no ritmo de 08/09, as últimas 500 decisões contêm
+**~4 aceites** e cobrem ~26 min. Sem o aviso, "3 aceites" se lê como "os aceites que existem".
+
+### O selo de "resolvido na venue" está armado e silencioso
+
+As 2 942 linhas de `fundamental_labels` têm **todas** `is_final = true`, então
+`pending_settlement = is_final AND shares > 0` vale, na prática, "tem rótulo E tem saldo". Em
+produção hoje ele **não acende em nenhuma** das 6 posições: as 3 rotuladas estão com
+`shares = 0` e as 3 com saldo não têm rótulo. Ou seja, a liquidação parece estar funcionando — o
+selo existe para o dia em que não estiver. Quem prova que ele dispara é o teste pg, não a
+produção.
+
+Nenhuma heurística de `mark_stale`/`end_ts` foi usada, como a D8 exige: marca velha é gravador
+parado e vencimento é calendário, nenhum dos dois é um resultado.
+
+### O join que teria dobrado a carteira
+
+`fundamental_labels` entra por `token_id` (PK) e **nunca** por `condition_id`: aquele índice não é
+único e um mercado tem dois tokens. O teste pg monta uma fixture com dois tokens do mesmo
+`condition_id`, ambos rotulados, e mede a contagem de linhas — com o join proibido, **5 posições
+viram 10**, e cada número da carteira dobraria em silêncio. Em produção a invariante foi conferida
+depois do deploy: 6 linhas com e sem os JOINs.
+
+### Aceites em produção
+
+- **A1 ✔** de dentro do servidor: GET `positions` e `orders` **401**, POST e DELETE nos dois
+  **404**, `/paper/intents` **404** nos três métodos.
+- **A2 ✔** `release-sha` = `12d4edcd0d9ea4a20f10addcf365575193d28820`, o SHA do merge.
+- **A6 ✔** com fallback registrado. Rotas novas medidas em produção: `/paper/positions` **1,5 ms**,
+  `/paper/orders` **1,5 ms**; orçamento declarado de 500 ms para cada.
+- **A7 0** por `docker logs ganso-market-api-1 --since 24h | grep -c '"pg_code":"57014"'`
+  (método A3 da RFC-023). **Refazer em 09/09 ~19:45Z.**
+- **A3/A4/A5** não se aplicam a este PR.
+
+### Achado fora do escopo: 6 timeouts do worker de saídas em 24 h
+
+O log do postgres tem 7 `canceling statement` em 24 h — **todos anteriores a este deploy**: 1
+`SELECT pg_sleep(2)` e **6 do `SELECT DISTINCT ON (token_id) … bids_json` de
+`apps/api/src/polymarket/portfolio/exitstore.ts:673`**, que roda no container
+`polymarket-portfolio`, não na `api`. É exatamente a mistura que o método A3 da RFC-023 existe
+para desfazer, e é o motivo de o log da API marcar 0 enquanto o do postgres marca 7. **Não foi
+tocado aqui** (é o caminho de saída do motor, fora do escopo de uma RFC de tela), e fica
+registrado para quem for mexer no `exitstore`.
+
+### Guarda que o prompt não previa
+
+`apps/api/test/route-budgets.test.ts` (RFC-023 D1) lê o `nginx.conf` e reprova **toda rota
+publicada sem orçamento de statement declarado**. Publicar os dois `location` deixou o `main`
+vermelho até `config/runtime.json` ganhar as duas entradas. Vale para o PR 3: **publicar um
+location exige declarar o orçamento junto**, no mesmo commit.
+
+### Testes
+
+`make verify` verde: API **1 738** passed / 8 skipped, web **142**, contracts **70**, rust 16.
+Suíte pg com Postgres descartável migrado: **6 arquivos, 55 passed**.
+`test_nginx_perimeter.py`: **9 OK**.
+
+Cada regressão foi vista **falhando no HEAD anterior**: o perímetro contra o `nginx.conf` antigo
+(1 failure + 1 error), `reads.pg.test.ts` contra o `src` antigo (**4 de 6**), o teste de contagem
+contra o join proibido (**5 viram 10**) e os testes da D7 contra o `Mesa.tsx` antigo (2).
+
+### Invariante de dinheiro
+
+Nada do que este PR acrescentou converte dinheiro para `number`. `usdTexto` soma e arredonda em
+`BigInt` sobre o texto do banco, com teste em um valor além da precisão de um `double`. Ausência
+nunca vira zero: marca envelhecida fica **fora** da soma e a tela escreve
+"— (N marcas envelhecidas)"; fila desconhecida é "não medido", não 0.
 
 ---
 
