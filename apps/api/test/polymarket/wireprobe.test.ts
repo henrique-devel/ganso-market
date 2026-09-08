@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -272,24 +271,85 @@ describe("RFC-024 D1 — o CLI da prova no fio nao tem banco", () => {
     }
   });
 
-  it("roda igual com as variaveis do recorder presentes ou ausentes", () => {
-    const cli = resolve(SRC, "../dist/wire-probe-cli.js");
-    const run = (env: NodeJS.ProcessEnv): string =>
-      execFileSync(process.execPath, [cli, "--help"], {
-        env,
-        encoding: "utf8",
-        timeout: 20_000,
+  it("roda igual com as variaveis do recorder presentes ou ausentes", async () => {
+    // The claim: the probe behaves identically whether or not
+    // GANSO_CONFIG_FILE and GANSO_POSTGRES_PASSWORD_FILE are set — both are
+    // set on the `polymarket-recorder` service the probe runs inside.
+    //
+    // Checked IN PROCESS, against the module vitest already loaded, and not by
+    // executing `dist/wire-probe-cli.js`: `make verify` runs `test` BEFORE
+    // `build`, so a test that shells out to the compiled artifact passes
+    // locally after a build and fails in CI on a clean tree. Measured: that is
+    // exactly how it failed on the PR #117 merge.
+    const fetcher: ProbeFetcher = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve([
+            {
+              slug: "bitcoin-up-or-down-september-8-2026-3pm-et",
+              endDate: "2026-09-08T20:00:00Z",
+              markets: [
+                {
+                  conditionId: "0xabc",
+                  endDate: "2026-09-08T20:00:00Z",
+                  clobTokenIds: '["u1","d1"]',
+                },
+              ],
+            },
+          ]),
       });
-    const base = { PATH: process.env["PATH"] ?? "" };
-    const withVars = {
-      ...base,
-      GANSO_CONFIG_FILE: "/nonexistent/runtime.json",
-      GANSO_POSTGRES_PASSWORD_FILE: "/nonexistent/password",
+    const now = Date.parse("2026-09-08T19:00:00Z");
+
+    const observe = async (): Promise<string> =>
+      JSON.stringify({
+        frame: probeSubscribeFrame(["a", "b"]),
+        series: await listHourlySeries(fetcher, now),
+      });
+
+    const saved = {
+      config: process.env["GANSO_CONFIG_FILE"],
+      password: process.env["GANSO_POSTGRES_PASSWORD_FILE"],
     };
-    const without = run(base);
-    const present = run(withVars);
-    expect(present).toBe(without);
-    expect(without).toContain("RFC-024 D1");
+    try {
+      delete process.env["GANSO_CONFIG_FILE"];
+      delete process.env["GANSO_POSTGRES_PASSWORD_FILE"];
+      const without = await observe();
+
+      process.env["GANSO_CONFIG_FILE"] = "/nonexistent/runtime.json";
+      process.env["GANSO_POSTGRES_PASSWORD_FILE"] = "/nonexistent/password";
+      const present = await observe();
+
+      expect(present).toBe(without);
+      expect(JSON.parse(present).series).toHaveLength(1);
+    } finally {
+      // Restore, or the next test file inherits whatever this one left.
+      if (saved.config === undefined) {
+        delete process.env["GANSO_CONFIG_FILE"];
+      } else {
+        process.env["GANSO_CONFIG_FILE"] = saved.config;
+      }
+      if (saved.password === undefined) {
+        delete process.env["GANSO_POSTGRES_PASSWORD_FILE"];
+      } else {
+        process.env["GANSO_POSTGRES_PASSWORD_FILE"] = saved.password;
+      }
+    }
+  });
+
+  it("o CLI nao le nenhuma variavel de ambiente alem de process.argv", () => {
+    // The static half of the same claim, and the stricter one: the CLI cannot
+    // be sensitive to an env var it never reads. `process.argv` is the only
+    // input it takes from the process.
+    const graph = transitiveGraph(resolve(SRC, "wire-probe-cli.ts"));
+    for (const [file, module] of graph) {
+      const short = file.replace(`${SRC}/`, "");
+      expect(
+        /process\.env/.test(module.source),
+        `${short} le process.env`,
+      ).toBe(false);
+    }
   });
 });
 
