@@ -53,13 +53,46 @@ export interface DualSocketStats {
   readonly reconnects: readonly number[];
   /** Connections currently open. */
   readonly openConnections: number;
+  /**
+   * RFC-024 D3: rolling reconnects driven by tokens ENTERING the universe.
+   * Separate from `reconnects`, which counts recovery from a drop — these are
+   * deliberate, and the two must not be read as one number.
+   */
+  readonly rollingResubscribes: number;
+  /** Resubscribes that only removed tokens, so no reconnect was needed. */
+  readonly resubscribesWithoutEntry: number;
 }
 
 export interface DualMarketSocket {
-  /** Swap the subscribed universe without tearing the connections down: a
-   * fresh subscribe frame is sent on each live socket, and reconnects use the
-   * new list. (If the venue ever requires a fresh socket per subscription,
-   * close/reopen here instead — the contract to callers stays the same.) */
+  /**
+   * Swap the subscribed universe.
+   *
+   * RFC-024 D3, and the branch this file predicted: "If the venue ever
+   * requires a fresh socket per subscription, close/reopen here instead". It
+   * does. Measured 2026-09-08 in two independent ways:
+   *
+   * - **On the wire** (`wire-probe-cli`, 02:42:28Z): a second `subscribe`
+   *   frame on a LIVE connection carrying a token that was not in the first
+   *   frame produced `NEVER_ON_A` — no `book` in 120 s — while a connection
+   *   opened at the same instant with only that token got its `book` in
+   *   **21 ms**. The token was live and the venue was willing to serve it;
+   *   the frame was simply ignored. The old tokens kept flowing (4 497
+   *   frames), so the frame does not REPLACE the subscription either — the
+   *   RTDS pattern the hypothesis was built on. It is ignored, not swapped.
+   * - **In production** (02:51:45Z): the six tokens the gamma cycle added via
+   *   `resubscribe` all opened a `subscribe_book_missing` gap at 02:52:45,
+   *   including both tokens of the market the series source had just
+   *   discovered 68,3 min before its end. In the same process, at boot, 162
+   *   tokens subscribed on FRESH connections produced **zero** gaps.
+   *
+   * So a token added to a live socket never gets a book, and only a new
+   * connection does. `resubscribe` therefore RECONNECTS when tokens enter,
+   * one slot at a time, and the twin keeps delivering throughout — the caller
+   * never sees `onBothDown` because of a resubscribe.
+   *
+   * Exits alone do not reconnect: a shrinking list needs no new book, and
+   * churning the socket for it would pay the re-book cost for nothing.
+   */
   resubscribe(tokenIds: readonly string[]): void;
   close(): void;
   stats(): DualSocketStats;
@@ -151,6 +184,13 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
   let duplicatesDropped = 0;
   let singleConnectionDrops = 0;
   let bothDownEvents = 0;
+  let rollingResubscribes = 0;
+  let resubscribesWithoutEntry = 0;
+  // RFC-024 D3: the rolling reconnect is at most one per resubscribe, and one
+  // slot at a time. This holds the slot index still being cycled, so a second
+  // resubscribe arriving before the first slot is back up does not take the
+  // twin down with it.
+  let rollingSlot: number | null = null;
 
   const slots: ConnectionSlot[] = Array.from(
     { length: CONNECTION_COUNT },
@@ -194,6 +234,11 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
       slot.open = true;
       slot.backoffMs = reconnectBaseMs;
       bothDownSince = null;
+      if (rollingSlot === index) {
+        // The rolled slot is back with the new list in its opening frame; the
+        // next resubscribe may roll again.
+        rollingSlot = null;
+      }
       safeSend(slot, subscribeMessage(tokenIds));
       slot.heartbeat = setInterval(() => {
         safeSend(slot, "PING");
@@ -262,17 +307,100 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
     connect(index);
   }
 
+  /**
+   * Cycle ONE slot: close it and let `onClose` reconnect it with the new
+   * token list. The twin stays up throughout, so `openConnections()` never
+   * reaches zero and `onBothDown` never fires because of a resubscribe.
+   *
+   * Closing is what does the work — `connect()` subscribes on `open`, and the
+   * venue only serves books for tokens named in that first frame.
+   */
+  function rollSlot(index: number): boolean {
+    const slot = slots[index];
+    if (slot === undefined || slot.socket === null) {
+      return false;
+    }
+    // Never take the last open connection down for a resubscribe. Losing
+    // redundancy is acceptable; losing the feed is a gap.
+    if (openConnections() <= 1 && slot.open) {
+      return false;
+    }
+    rollingSlot = index;
+    // Reset the backoff: this close is deliberate, not a failure, so the
+    // reconnect must not inherit a penalty from an earlier outage.
+    slot.backoffMs = reconnectBaseMs;
+    try {
+      slot.socket.close();
+    } catch {
+      // A socket the venue already closed cannot be closed again; `onClose`
+      // has either run or will, and either way the slot reconnects.
+    }
+    return true;
+  }
+
   return {
     resubscribe(nextTokenIds: readonly string[]): void {
+      const previous = new Set(tokenIds);
+      const entering = nextTokenIds.filter((id) => !previous.has(id));
       tokenIds = [...nextTokenIds];
+
+      // Every live socket still gets the frame. It costs nothing, it keeps the
+      // subscription list honest on the venue's side for tokens that were
+      // already there, and — measured — it is simply ignored for new ones.
       for (const slot of slots) {
         if (slot.open) {
           safeSend(slot, subscribeMessage(tokenIds));
         }
       }
+
+      if (entering.length === 0) {
+        // Only removals: no new book is needed, so no socket is churned.
+        resubscribesWithoutEntry += 1;
+        return;
+      }
+      if (rollingSlot !== null) {
+        // A roll is already in flight. Its reconnect will subscribe with the
+        // list as it stands then, which already includes these tokens, so a
+        // second roll would only pay another re-book for nothing.
+        logJson(
+          "info",
+          "WS_ROLLING_RESUBSCRIBE_SKIPPED",
+          "polymarket_dualws_rolling_resubscribe_in_flight",
+          { entering: entering.length, slot: rollingSlot },
+        );
+        return;
+      }
+      // Prefer an already-closed slot: cycling it costs no redundancy at all.
+      const closedIndex = slots.findIndex((slot) => !slot.open);
+      const target = closedIndex === -1 ? 0 : closedIndex;
+      if (rollSlot(target)) {
+        rollingResubscribes += 1;
+        logJson(
+          "info",
+          "WS_ROLLING_RESUBSCRIBE",
+          "polymarket_dualws_rolling_resubscribe",
+          {
+            slot: target,
+            entering: entering.length,
+            tokens: tokenIds.length,
+            open_connections: openConnections(),
+          },
+        );
+      } else {
+        // Only one connection is up: rolling it would blind the recorder.
+        // The tokens stay bookless until the next cycle, and the
+        // `subscribe_book_missing` gap records exactly that.
+        logJson(
+          "warn",
+          "WS_ROLLING_RESUBSCRIBE_DEFERRED",
+          "polymarket_dualws_rolling_resubscribe_deferred",
+          { entering: entering.length, open_connections: openConnections() },
+        );
+      }
     },
     close(): void {
       closed = true;
+      rollingSlot = null;
       for (const slot of slots) {
         if (slot.heartbeat !== null) {
           clearInterval(slot.heartbeat);
@@ -299,6 +427,8 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
         bothDownEvents,
         reconnects: slots.map((slot) => slot.reconnects),
         openConnections: openConnections(),
+        rollingResubscribes,
+        resubscribesWithoutEntry,
       };
     },
   };
