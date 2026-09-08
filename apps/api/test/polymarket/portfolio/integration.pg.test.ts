@@ -28,6 +28,7 @@ import {
   loadPaperPnl,
   macroCatalystInWindow,
   openBreaker,
+  type MarketChangeState,
 } from "../../../src/polymarket/portfolio/exitstore.js";
 import {
   applyClockReset,
@@ -67,6 +68,13 @@ import type { PortfolioPool } from "../../../src/polymarket/portfolio/types.js";
 const DATABASE_URL = process.env.GANSO_TEST_DATABASE_URL;
 const RUN = `${String(process.pid)}-${String(Date.now())}`;
 const CONDITION = `0xpg-${RUN}`;
+// RFC-025 D1 fixtures. Separate markets because each one is a different version
+// series, and `loadMarketChangeStates` reads `polymarket_param_versions` alone —
+// no other table has to know these exist.
+const CONDITION_FILL = `0xpg-fill-${RUN}`;
+const CONDITION_TICK = `0xpg-tick-${RUN}`;
+const CONDITION_LOST = `0xpg-lost-${RUN}`;
+const CONDITION_FEE = `0xpg-fee-${RUN}`;
 const TOKEN = `tok-pg-${RUN}`;
 const NOW = new Date("2026-08-26T12:00:00.000Z");
 const CONFIG = DEFAULT_PORTFOLIO_CONFIG;
@@ -90,6 +98,18 @@ function pool(): PortfolioPool {
       return { rows: result.rows, rowCount: result.rowCount ?? 0 };
     },
   };
+}
+
+/** One market's change state, or a failure that names the market. */
+function states_of(
+  states: ReadonlyMap<string, MarketChangeState>,
+  conditionId: string,
+): MarketChangeState {
+  const state = states.get(conditionId);
+  if (state === undefined) {
+    throw new Error(`no market change state for ${conditionId}`);
+  }
+  return state;
 }
 
 async function seed(): Promise<void> {
@@ -131,6 +151,79 @@ async function seed(): Promise<void> {
         taker_fee_bps, tick_size, min_order_size, neg_risk, valid_from)
      VALUES ($1, 1, $2, '700', '0', '700', '0.01', '5', FALSE, $3)`,
     [CONDITION, "c".repeat(64), new Date("2026-08-01T00:00:00.000Z")],
+  );
+  // RFC-025 D1, the four rules, one market each.
+  //
+  //   FILL: `fee_base_bps` NULL -> '1000', everything else identical. This is
+  //         26.1% of every PARAM_CHANGE ever opened (434 of 1 661) and it is the
+  //         collector filling a gap ~40 min after version 1, not the venue.
+  //   TICK: `tick_size` '0.01' -> '0.001', a real change (7.5%, 125 of 1 661);
+  //         then a v3 that moves only `min_order_size`, which is not in the EV,
+  //         so the answer must stay at v2.
+  //   LOST: '0.01' -> NULL. Losing a datum is a data-quality finding, not a
+  //         reason to freeze a market.
+  //   FEE:  `fee_base_bps` '700' -> '1000'. Never observed in production but in
+  //         scope by D1, because `store.ts:85` reads `fee_base_bps` AS the taker
+  //         fee whenever `taker_fee_bps` is NULL.
+  const paramSeries: readonly (readonly [
+    string,
+    number,
+    string | null,
+    string | null,
+    string,
+    string,
+  ])[] = [
+    [CONDITION_FILL, 1, null, "700", "0.01", "2026-08-01T00:00:00.000Z"],
+    [CONDITION_FILL, 2, "1000", "700", "0.01", "2026-08-01T00:40:00.000Z"],
+    [CONDITION_TICK, 1, "700", "700", "0.01", "2026-08-01T00:00:00.000Z"],
+    [CONDITION_TICK, 2, "700", "700", "0.001", "2026-08-20T10:00:00.000Z"],
+    [CONDITION_LOST, 1, "700", "700", "0.01", "2026-08-01T00:00:00.000Z"],
+    [CONDITION_LOST, 2, "700", "700", "0.01", "2026-08-20T10:00:00.000Z"],
+    [CONDITION_FEE, 1, "700", null, "0.01", "2026-08-01T00:00:00.000Z"],
+    [CONDITION_FEE, 2, "1000", null, "0.01", "2026-08-21T11:00:00.000Z"],
+  ];
+  for (const [
+    conditionId,
+    version,
+    feeBase,
+    takerFee,
+    tickSize,
+    validFrom,
+  ] of paramSeries) {
+    await p.query(
+      `INSERT INTO polymarket_param_versions
+         (condition_id, version, content_hash, fee_base_bps, maker_fee_bps,
+          taker_fee_bps, tick_size, min_order_size, neg_risk, valid_from)
+       VALUES ($1, $2, $3, $4, '0', $5, $6, '5', FALSE, $7)`,
+      [
+        conditionId,
+        version,
+        `${conditionId}-v${String(version)}`.padEnd(64, "0").slice(0, 64),
+        feeBase,
+        takerFee,
+        tickSize,
+        new Date(validFrom),
+      ],
+    );
+  }
+  // LOST's v2 is the `value -> NULL` case: written as NULL after the insert so
+  // the shared shape above stays one row per line.
+  await p.query(
+    `UPDATE polymarket_param_versions SET tick_size = NULL
+      WHERE condition_id = $1 AND version = 2`,
+    [CONDITION_LOST],
+  );
+  // TICK's v3 moves only min_order_size, which never enters the EV.
+  await p.query(
+    `INSERT INTO polymarket_param_versions
+       (condition_id, version, content_hash, fee_base_bps, maker_fee_bps,
+        taker_fee_bps, tick_size, min_order_size, neg_risk, valid_from)
+     VALUES ($1, 3, $2, '700', '0', '700', '0.001', '10', FALSE, $3)`,
+    [
+      CONDITION_TICK,
+      `${CONDITION_TICK}-v3`.padEnd(64, "0").slice(0, 64),
+      new Date("2026-08-22T12:00:00.000Z"),
+    ],
   );
   await p.query(
     `INSERT INTO polymarket_events (event_id, title) VALUES ($1, 'evt')
@@ -292,10 +385,73 @@ describe.skipIf(DATABASE_URL === undefined)(
         `${CONDITION}-absent`,
       ]);
       expect(states.size).toBe(2);
-      expect(states.get(CONDITION)?.paramChangedAt).toBeInstanceOf(Date);
+      // RFC-025 D1, and this inversion IS the regression proof: this market's
+      // series is version 1 alone. It used to answer `max(valid_from)` — the
+      // birth instant — and freeze the market for 24 h on it. A market that
+      // just entered the recorder has had NO parameter change.
+      expect(states.get(CONDITION)?.paramChangedAt).toBeNull();
+      expect(states.get(CONDITION)?.paramChangedFields).toEqual([]);
+      expect(states.get(CONDITION)?.paramChangedVersion).toBeNull();
       // No clarification and no RFC-012 score for this market yet.
       expect(states.get(CONDITION)?.clarifiedAt).toBeNull();
       expect(states.get(CONDITION)?.rulePrecisionScaled).toBeNull();
+    });
+
+    it("D1: a late fee_base_bps fill (NULL -> value) is not a parameter change", async () => {
+      // 434 of the 1 661 breakers ever opened were this, ~40 min after version 1
+      // with every other field identical. It is our own recording catching up.
+      const states = await loadMarketChangeStates(pool(), [CONDITION_FILL]);
+      expect(states.get(CONDITION_FILL)?.paramChangedAt).toBeNull();
+      expect(states.get(CONDITION_FILL)?.paramChangedFields).toEqual([]);
+    });
+
+    it("D1: a real tick_size change is the instant, the field and both values", async () => {
+      const state = states_of(
+        await loadMarketChangeStates(pool(), [CONDITION_TICK]),
+        CONDITION_TICK,
+      );
+      expect(state.paramChangedAt?.toISOString()).toBe(
+        "2026-08-20T10:00:00.000Z",
+      );
+      expect(state.paramChangedFields).toEqual(["tick_size"]);
+      expect(state.paramChangedVersion).toBe(2);
+      expect(state.paramChangedFrom).toEqual({ tick_size: "0.01" });
+      expect(state.paramChangedTo).toEqual({ tick_size: "0.001" });
+    });
+
+    it("D1: a later version that moves only min_order_size does not move the answer", async () => {
+      // v3 changed min_order_size '5' -> '10' at 2026-08-22, and min_order_size
+      // is not in the EV (`store.ts:83-85`). The answer stays at v2.
+      const state = states_of(
+        await loadMarketChangeStates(pool(), [CONDITION_TICK]),
+        CONDITION_TICK,
+      );
+      expect(state.paramChangedAt?.toISOString()).toBe(
+        "2026-08-20T10:00:00.000Z",
+      );
+      expect(state.paramChangedVersion).toBe(2);
+    });
+
+    it("D1: losing a value (value -> NULL) is a finding, not a breaker", async () => {
+      const states = await loadMarketChangeStates(pool(), [CONDITION_LOST]);
+      expect(states.get(CONDITION_LOST)?.paramChangedAt).toBeNull();
+      expect(states.get(CONDITION_LOST)?.paramChangedFields).toEqual([]);
+    });
+
+    it("D1: fee_base_bps counts, because the EV reads it as the taker fee", async () => {
+      // `COALESCE(p.taker_fee_bps, p.fee_base_bps)` (`store.ts:85`): with
+      // taker_fee_bps NULL, fee_base_bps IS the fee the engine priced against,
+      // so '700' -> '1000' is a real change even though production never saw one.
+      const state = states_of(
+        await loadMarketChangeStates(pool(), [CONDITION_FEE]),
+        CONDITION_FEE,
+      );
+      expect(state.paramChangedAt?.toISOString()).toBe(
+        "2026-08-21T11:00:00.000Z",
+      );
+      expect(state.paramChangedFields).toEqual(["fee_base_bps"]);
+      expect(state.paramChangedFrom).toEqual({ fee_base_bps: "700" });
+      expect(state.paramChangedTo).toEqual({ fee_base_bps: "1000" });
     });
 
     it("finds correlated markets through the logical graph", async () => {
