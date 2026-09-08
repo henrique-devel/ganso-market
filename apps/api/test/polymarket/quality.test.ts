@@ -6,6 +6,7 @@ import {
   createFeedHealth,
   createGapWriter,
   createReconciler,
+  createTokenGapTracker,
   metricsSnapshot,
   type CachedBook,
 } from "../../src/polymarket/quality.js";
@@ -406,5 +407,181 @@ describe("metrics snapshot", () => {
       q.text.includes("FROM polymarket_data_gaps"),
     );
     expect(gapQuery?.params?.[0]).toEqual(new Date(now.getTime() - 86_400_000));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RFC-024 D3 — o rastreador de lacuna por token
+// ---------------------------------------------------------------------------
+
+describe("createTokenGapTracker (RFC-024 D3)", () => {
+  /** A gap writer whose open resolves only when the test says so. */
+  function controllableGaps() {
+    const opened: Array<{
+      source: string;
+      tokenId: string | null | undefined;
+      cause: string;
+      start: Date;
+    }> = [];
+    const closed: Array<{ gapId: number; end: Date }> = [];
+    let releaseOpen: ((gapId: number) => void) | null = null;
+    let nextId = 100;
+    const gaps = {
+      openGap: (input: {
+        source: string;
+        tokenId?: string | null;
+        cause: string;
+        start: Date;
+      }): Promise<number> => {
+        opened.push({
+          source: input.source,
+          tokenId: input.tokenId,
+          cause: input.cause,
+          start: input.start,
+        });
+        return new Promise<number>((resolve) => {
+          releaseOpen = resolve;
+        });
+      },
+      closeGap: (gapId: number, end: Date): Promise<void> => {
+        closed.push({ gapId, end });
+        return Promise.resolve();
+      },
+    };
+    return {
+      gaps,
+      opened,
+      closed,
+      release: (): void => {
+        releaseOpen?.(nextId);
+        nextId += 1;
+      },
+    };
+  }
+
+  const AT = new Date("2026-09-08T02:00:00.000Z");
+  const LATER = new Date("2026-09-08T02:01:00.000Z");
+
+  it("abre a lacuna com fonte, causa e token", () => {
+    const { gaps, opened } = controllableGaps();
+    const tracker = createTokenGapTracker({ gaps, log: () => {} });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: AT,
+    });
+    expect(opened).toEqual([
+      {
+        source: "clob_ws",
+        tokenId: "tok",
+        cause: "subscribe_book_missing",
+        start: AT,
+      },
+    ]);
+    expect(tracker.openTokens()).toEqual(["tok"]);
+  });
+
+  it("uma lacuna por episódio: reabrir com uma aberta não abre a segunda", () => {
+    const { gaps, opened } = controllableGaps();
+    const tracker = createTokenGapTracker({ gaps, log: () => {} });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: AT,
+    });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: LATER,
+    });
+    expect(opened).toHaveLength(1);
+  });
+
+  it("o book chegando ANTES do id voltar: a lacuna fecha, não vaza aberta", async () => {
+    // This is the reason the tracker holds a promise rather than a number.
+    const { gaps, closed, release } = controllableGaps();
+    const tracker = createTokenGapTracker({ gaps, log: () => {} });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: AT,
+    });
+    // The book arrives while the INSERT is still in flight.
+    tracker.close("tok", LATER);
+    expect(closed).toEqual([]);
+    expect(tracker.openTokens()).toEqual([]);
+    // Now the INSERT returns its id, and the close finally lands on it.
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toEqual([{ gapId: 100, end: LATER }]);
+  });
+
+  it("fechar sem lacuna aberta não faz nada", () => {
+    const { gaps, closed } = controllableGaps();
+    const tracker = createTokenGapTracker({ gaps, log: () => {} });
+    tracker.close("tok", LATER);
+    expect(closed).toEqual([]);
+  });
+
+  it("fechar duas vezes fecha uma vez", async () => {
+    const { gaps, closed, release } = controllableGaps();
+    const tracker = createTokenGapTracker({ gaps, log: () => {} });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: AT,
+    });
+    release();
+    tracker.close("tok", LATER);
+    tracker.close("tok", LATER);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toHaveLength(1);
+  });
+
+  it("abandon esquece a lacuna SEM fechá-la — ela é a medição", async () => {
+    const { gaps, closed, release } = controllableGaps();
+    const tracker = createTokenGapTracker({ gaps, log: () => {} });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: AT,
+    });
+    release();
+    tracker.abandon("tok");
+    await Promise.resolve();
+    expect(closed).toEqual([]);
+    expect(tracker.openTokens()).toEqual([]);
+  });
+
+  it("o open falhando é logado e não deixa o token travado", async () => {
+    const logged: string[] = [];
+    const tracker = createTokenGapTracker({
+      gaps: {
+        openGap: () => Promise.reject(new Error("db down")),
+        closeGap: () => Promise.resolve(),
+      },
+      log: (_level, reasonCode) => logged.push(reasonCode),
+    });
+    tracker.open({
+      tokenId: "tok",
+      source: "clob_ws",
+      cause: "subscribe_book_missing",
+      at: AT,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(logged).toEqual(["GAP_PERSIST_FAILED"]);
+    // The close of a gap that never got an id is a no-op, not a crash.
+    tracker.close("tok", LATER);
+    await Promise.resolve();
+    expect(tracker.openTokens()).toEqual([]);
   });
 });

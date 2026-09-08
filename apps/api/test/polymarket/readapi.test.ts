@@ -818,6 +818,207 @@ describe("GET /polymarket/data-quality", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// RFC-024 D4 — a métrica de cobertura do universo rápido
+// ---------------------------------------------------------------------------
+
+describe("GET /polymarket/data-quality — fast_coverage (RFC-024 D4)", () => {
+  /** One `fast_coverage` day row, as the aggregation SQL returns it. */
+  function coberturaRow(
+    dia: string,
+    emitidos: string,
+    comLivro: string,
+    catalogados: string,
+    porSerie: string,
+    leadMin: number | null,
+  ): Record<string, unknown> {
+    return {
+      dia: new Date(`${dia}T00:00:00.000Z`),
+      emitidos,
+      com_livro_t15: comLivro,
+      catalogados_60min: catalogados,
+      entradas_por_serie: porSerie,
+      lead_mediano_min: leadMin,
+    };
+  }
+
+  function coveragePool(
+    rows: Array<Record<string, unknown>>,
+    missing?: {
+      total: string;
+      abertas: string;
+    },
+  ) {
+    return fakePool((text) => {
+      if (text.includes("com_livro_t15")) {
+        return rows;
+      }
+      if (text.includes("subscribe_book_missing")) {
+        return [missing ?? { total: "0", abertas: "0" }];
+      }
+      return [];
+    });
+  }
+
+  it("publica dia, cobertura, lead e a origem da descoberta", async () => {
+    const { pool } = coveragePool(
+      [
+        coberturaRow("2026-08-18", "24", "22", "23", "24", 68.4),
+        coberturaRow("2026-08-17", "24", "20", "21", "24", 64.1),
+      ],
+      { total: "7", abertas: "2" },
+    );
+    const server = await buildApp({ pool });
+    const response = await server.inject({
+      method: "GET",
+      url: "/polymarket/data-quality",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const coverage = response.json().fast_coverage;
+    expect(coverage.serie).toBe("btc-up-or-down-hourly");
+    // The RFC's target: >= 90 %, i.e. >= 22 of 24.
+    expect(coverage.dias[0]).toEqual({
+      dia: "2026-08-18",
+      emitidos: 24,
+      com_livro_t15: 22,
+      com_livro_t15_pct: 91.7,
+      catalogados_60min: 23,
+      catalogados_60min_pct: 95.8,
+      entradas_por_serie: 24,
+      lead_mediano_min: 68.4,
+    });
+    expect(coverage.dias[1].com_livro_t15_pct).toBe(83.3);
+    expect(coverage.subscribe_book_missing_24h).toEqual({
+      total: 7,
+      abertas: 2,
+    });
+  });
+
+  it("24/22 dá 91,7 % e 24/20 dá 83,3 %", async () => {
+    const { pool } = coveragePool([
+      coberturaRow("2026-08-18", "24", "22", "24", "24", 70),
+      coberturaRow("2026-08-17", "24", "20", "24", "24", 70),
+    ]);
+    const server = await buildApp({ pool });
+    const body = (
+      await server.inject({
+        method: "GET",
+        url: "/polymarket/data-quality",
+        headers: AUTH,
+      })
+    ).json();
+    expect(
+      body.fast_coverage.dias.map(
+        (day: { com_livro_t15_pct: number }) => day.com_livro_t15_pct,
+      ),
+    ).toEqual([91.7, 83.3]);
+  });
+
+  it("emitidos = 0 ⇒ campos null, NUNCA 100 %", async () => {
+    // The degeneration lens: a day the series did not answer has no markets,
+    // and 0/0 published as 100 % would declare victory over an empty set.
+    const { pool } = coveragePool([
+      coberturaRow("2026-08-18", "0", "0", "0", "0", null),
+    ]);
+    const server = await buildApp({ pool });
+    const body = (
+      await server.inject({
+        method: "GET",
+        url: "/polymarket/data-quality",
+        headers: AUTH,
+      })
+    ).json();
+    expect(body.fast_coverage.dias[0]).toEqual({
+      dia: "2026-08-18",
+      emitidos: 0,
+      com_livro_t15: null,
+      com_livro_t15_pct: null,
+      catalogados_60min: null,
+      catalogados_60min_pct: null,
+      entradas_por_serie: null,
+      lead_mediano_min: null,
+    });
+  });
+
+  it("dia sem nenhum enter: lead null em vez de 0", async () => {
+    // 0 would read as "discovered at the buzzer" — the opposite of "not
+    // discovered at all", and the two must never look alike.
+    const { pool } = coveragePool([
+      coberturaRow("2026-08-18", "24", "0", "0", "0", null),
+    ]);
+    const server = await buildApp({ pool });
+    const day = (
+      await server.inject({
+        method: "GET",
+        url: "/polymarket/data-quality",
+        headers: AUTH,
+      })
+    ).json().fast_coverage.dias[0];
+    expect(day.lead_mediano_min).toBeNull();
+    expect(day.com_livro_t15).toBe(0);
+    expect(day.com_livro_t15_pct).toBe(0);
+  });
+
+  it("série sem resposta nenhuma: dias vazio, não um 100 % inventado", async () => {
+    const { pool } = coveragePool([]);
+    const server = await buildApp({ pool });
+    const coverage = (
+      await server.inject({
+        method: "GET",
+        url: "/polymarket/data-quality",
+        headers: AUTH,
+      })
+    ).json().fast_coverage;
+    expect(coverage.dias).toEqual([]);
+    expect(coverage.subscribe_book_missing_24h).toEqual({
+      total: 0,
+      abertas: 0,
+    });
+  });
+
+  it("a consulta cobre 3 dias UTC e usa a régua exata da RFC", async () => {
+    const { pool, calls } = coveragePool([]);
+    const server = await buildApp({ pool });
+    await server.inject({
+      method: "GET",
+      url: "/polymarket/data-quality",
+      headers: AUTH,
+    });
+    const coverageCall = calls.find((call) =>
+      call.text.includes("com_livro_t15"),
+    );
+    expect(coverageCall).toBeDefined();
+    expect(coverageCall?.params[0]).toEqual(FIXED_NOW);
+    // Three UTC days: the soak's window.
+    expect(coverageCall?.params[1]).toBe(3);
+    // The ruler, spelled out: the 1-minute bucket at T-15 with a real update.
+    expect(coverageCall?.text).toContain("INTERVAL '15 minutes'");
+    expect(coverageCall?.text).toContain("INTERVAL '14 minutes'");
+    expect(coverageCall?.text).toContain("updates_count >= 1");
+    // The hourly slug, not the 5min/15min/4h pattern.
+    expect(coverageCall?.text).toContain("bitcoin-up-or-down-");
+    expect(coverageCall?.text).toContain("(am|pm)-et");
+    // The `_series` suffix is what separates the two discovery sources.
+    expect(coverageCall?.text).toContain("'%_series'");
+  });
+
+  it("continua GET-only: todo outro método é 404 no perímetro", async () => {
+    // The route is `location =` in nginx and GET-only; the new field does not
+    // add a verb, a location, or a write.
+    const { pool } = coveragePool([]);
+    const server = await buildApp({ pool });
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) {
+      const response = await server.inject({
+        method,
+        url: "/polymarket/data-quality",
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(404);
+    }
+  });
+});
+
 describe("GET /polymarket/universe", () => {
   it("reconstructs membership from the latest enter/exit at the timestamp", async () => {
     const { pool, calls } = fakePool((text) =>

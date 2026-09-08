@@ -637,3 +637,119 @@ describe("book pipeline: persistence failures never propagate", () => {
     expect(pipeline.getCachedBook(TOKEN)).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC-024 D3 — a lacuna do livro ausente
+// ---------------------------------------------------------------------------
+
+/**
+ * The measurement H1 was missing. `resubscribe` sends a frame on a live
+ * socket; measured 02-03/09/2026, 19 of 27 tokens that entered the universe
+ * never got a `book` afterwards — and nothing in the recorder said so. No
+ * log, no gap, no metric. These tests pin the timer that turns silence into
+ * a `subscribe_book_missing` gap.
+ */
+describe("RFC-024 D3 — subscribe_book_missing", () => {
+  function watchPipeline(options?: { timeoutMs?: number }) {
+    const { pool, captured } = makePool();
+    const missing: string[] = [];
+    const arrived: string[] = [];
+    const pipeline = createBookPipeline({
+      pool,
+      clock: () => Date.now(),
+      onSubscribeBookMissing: (tokenId) => missing.push(tokenId),
+      onSubscribeBookArrived: (tokenId) => arrived.push(tokenId),
+      ...(options?.timeoutMs === undefined
+        ? {}
+        : { subscribeBookTimeoutMs: options.timeoutMs }),
+    });
+    return { pipeline, missing, arrived, captured };
+  }
+
+  it("token assinado sem book em 60 s abre a lacuna", async () => {
+    const { pipeline, missing } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(59_999);
+    // Not yet: 60 s is the grace, not a hint.
+    expect(missing).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(missing).toEqual([TOKEN]);
+  });
+
+  it("book chegando fecha a lacuna", async () => {
+    const { pipeline, missing, arrived } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(missing).toEqual([TOKEN]);
+    expect(arrived).toEqual([]);
+    await pipeline.handleMessage(bookMessage);
+    expect(arrived).toEqual([TOKEN]);
+  });
+
+  it("book em 10 s não abre nada", async () => {
+    const { pipeline, missing, arrived } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pipeline.handleMessage(bookMessage);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(missing).toEqual([]);
+    // Nothing was open, so nothing is closed: no phantom close either.
+    expect(arrived).toEqual([]);
+  });
+
+  it("o exit cancela o timer: sair do universo não abre lacuna espúria", async () => {
+    const { pipeline, missing } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    pipeline.cancelSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(missing).toEqual([]);
+  });
+
+  it("o exit NÃO fecha uma lacuna já aberta — ela é a medição", async () => {
+    const { pipeline, missing, arrived } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(missing).toEqual([TOKEN]);
+    pipeline.cancelSubscribeWatch([TOKEN]);
+    // A market that left without ever getting a book has a REAL gap; closing
+    // it on the way out would erase exactly what the gap exists to record.
+    expect(arrived).toEqual([]);
+  });
+
+  it("só tokens que ENTRAM são armados: um token com book não re-arma", async () => {
+    const { pipeline, missing } = watchPipeline();
+    await pipeline.handleMessage(bookMessage);
+    // A routine resubscribe of the whole universe passes every token here.
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(missing).toEqual([]);
+  });
+
+  it("re-armar não empurra o prazo: a lacuna abre no prazo original", async () => {
+    const { pipeline, missing } = watchPipeline();
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(50_000);
+    // The next gamma cycle passes the same still-bookless token again.
+    pipeline.armSubscribeWatch([TOKEN]);
+    await vi.advanceTimersByTimeAsync(11_000);
+    // 61 s after the FIRST arming, not 61 s after the second.
+    expect(missing).toEqual([TOKEN]);
+  });
+
+  it("um book que chega entre o disparo e o timer não abre lacuna", async () => {
+    const { pipeline, missing } = watchPipeline({ timeoutMs: 1_000 });
+    pipeline.armSubscribeWatch([TOKEN]);
+    await pipeline.handleMessage(bookMessage);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(missing).toEqual([]);
+  });
+
+  it("arma vários tokens de uma vez, um timer por token", async () => {
+    const { pipeline, missing } = watchPipeline();
+    pipeline.armSubscribeWatch(["a", "b", "c"]);
+    pipeline.cancelSubscribeWatch(["b"]);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(missing.sort()).toEqual(["a", "c"]);
+  });
+});
