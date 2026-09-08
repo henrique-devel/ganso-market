@@ -207,8 +207,11 @@ h1 {
 
 /* --- Painel autenticado largo (RFC-012) ------------------------------- */
 
+/* RFC-026 D5/P4: 100 rem em duas colunas. É a tela do proprietário, e a
+   decisão está registrada — 72 rem couberam quando cada tela era uma tabela
+   só; lista e detalhe lado a lado precisam do dobro. */
 .shell--wide {
-  width: min(72rem, calc(100% - 2rem));
+  width: min(100rem, calc(100% - 2rem));
 }
 
 /* --- Abas -------------------------------------------------------------- */
@@ -1034,4 +1037,346 @@ h1 {
 
 .cards .grid--compacta .celula-motivo {
   overflow-wrap: anywhere;
+}
+
+/* --- RFC-026: Mesa, escada, livro e o bloco de ação ---------------------- */
+
+/* Duas colunas: lista à esquerda, mercado escolhido à direita.
+
+   O colapso é em 1 100 px porque abaixo disso a coluna do detalhe fica mais
+   estreita que a tabela do livro e as barras deixam de ser comparáveis — que é
+   a única coisa que elas servem para fazer. */
+.mesa-colunas,
+.tela-duas-colunas {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .mesa-colunas,
+  .tela-duas-colunas {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mesa-lista {
+  min-width: 0;
+}
+
+.mesa-detalhe,
+.tela-nota {
+  min-width: 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid #28372e;
+  border-radius: 1rem;
+  background: #17231c;
+}
+
+.mesa-detalhe h3,
+.tela-nota h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+}
+
+.mesa-detalhe h4 {
+  margin: 1.1rem 0 0.4rem;
+  color: #8eaa98;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* O nome do mercado é um botão porque selecionar é uma ação — e assim quem
+   navega por teclado alcança cada linha sem um handler global. */
+.mesa-nome {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #f6faf7;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mesa-nome:hover .mesa-nome-texto,
+.mesa-nome:focus-visible .mesa-nome-texto {
+  text-decoration: underline;
+}
+
+/* Ausência de nome nunca é célula vazia: é a palavra, em cinza. */
+.sem-nome {
+  color: #6f8778;
+  font-style: italic;
+}
+
+.mesa-hash {
+  display: block;
+  color: #6f8778;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.linha--escolhida > th,
+.linha--escolhida > td {
+  background: rgb(87 214 141 / 7%);
+}
+
+.mesa-tabela th[scope="row"] {
+  max-width: 24rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.ordenar {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #8eaa98;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ordenar:hover,
+.ordenar:focus-visible {
+  color: #dfe8e2;
+}
+
+.chips {
+  display: flex;
+  gap: 0.4rem;
+  align-self: end;
+}
+
+.chip {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #28372e;
+  border-radius: 999px;
+  background: transparent;
+  color: #8eaa98;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.chip--ativo {
+  border-color: rgb(87 214 141 / 45%);
+  background: rgb(87 214 141 / 10%);
+  color: #dfe8e2;
+}
+
+/* --- Folga e idade: a semântica de cor da D3 ----------------------------- */
+
+/* Verde é folga positiva; CINZA é a folga negativa, porque é recusa por regra
+   de negócio e é o normal do motor — vermelho aqui gritaria 52 mil vezes por
+   dia. "Não medido" também é cinza, e diz a palavra. */
+.folga--positiva {
+  color: #7fc79a;
+}
+
+.folga--negativa {
+  color: #a9bcb0;
+}
+
+.folga--nao-medida {
+  color: #6f8778;
+  font-style: italic;
+}
+
+.idade--ok {
+  color: #7fc79a;
+}
+
+.idade--atencao {
+  color: #e6c86e;
+}
+
+/* Vermelho: dado velho é defeito, não regra. */
+.idade--alerta {
+  color: #eb8a90;
+}
+
+.idade--neutro {
+  color: #6f8778;
+}
+
+/* --- Escada do motor ----------------------------------------------------- */
+
+.escada ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.escada li {
+  display: grid;
+  grid-template-columns: 1.2rem 8rem minmax(0, 1fr);
+  gap: 0.1rem 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+  border-top: 1px solid #1f2c25;
+}
+
+.escada-marca {
+  font-weight: 700;
+}
+
+.escada-nome {
+  color: #8eaa98;
+  font-size: 0.8rem;
+}
+
+.escada-valor {
+  color: #f6faf7;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.escada-nota {
+  grid-column: 2 / -1;
+  color: #6f8778;
+  font-size: 0.72rem;
+}
+
+.escada li[data-tom="ok"] .escada-marca {
+  color: #7fc79a;
+}
+
+.escada li[data-tom="regra"] .escada-marca {
+  color: #a9bcb0;
+}
+
+.escada li[data-tom="dado"] .escada-marca {
+  color: #eb8a90;
+}
+
+.escada li[data-tom="aberto"] .escada-marca {
+  color: #e6c86e;
+}
+
+.escada li[data-tom="nao_medido"] .escada-marca,
+.escada li[data-tom="nao_medido"] .escada-valor {
+  color: #6f8778;
+}
+
+.folga-barra {
+  display: grid;
+  gap: 0.1rem;
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #28372e;
+  border-radius: 0.6rem;
+  background: #0f1813;
+}
+
+/* --- Livro L2 ------------------------------------------------------------ */
+
+.livro-lados {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+
+.livro-tabela {
+  margin: 0;
+}
+
+.livro-barra-caixa {
+  display: block;
+  position: relative;
+  min-width: 4rem;
+}
+
+/* Azul compra, laranja vende (D3). A barra é fundo, não valor: o número fica
+   escrito por cima justamente para ninguém ler comprimento como quantidade. */
+.livro-barra {
+  display: block;
+  height: 0.85rem;
+  border-radius: 0.2rem;
+  opacity: 0.45;
+}
+
+.livro-barra--bid {
+  background: #4a7fb5;
+}
+
+.livro-barra--ask {
+  background: #c9803f;
+}
+
+.livro-cotas {
+  position: absolute;
+  top: 0;
+  left: 0.25rem;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- "O que eu faço agora?" (D7) ---------------------------------------- */
+
+.agora {
+  margin: 0 0 1.25rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid #35483c;
+  border-radius: 1rem;
+  background: #0f1813;
+}
+
+.agora h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.agora-lista {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Uma frase é um parágrafo curto, não um rótulo: ela quebra em várias linhas
+   em vez de estourar a caixa. */
+.agora-lista .badge {
+  white-space: normal;
+  font-weight: 400;
+  letter-spacing: 0;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.agora-acao {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+}
+
+.agora-acao button {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #35483c;
+  border-radius: 0.5rem;
+  background: #17231c;
+  color: #dfe8e2;
+  cursor: pointer;
+}
+
+.mesa-cru pre {
+  max-height: 20rem;
+  overflow: auto;
+  padding: 0.5rem;
+  border-radius: 0.4rem;
+  background: #0f1813;
+  font-size: 0.7rem;
+}
+
+/* As teclas da tira de abas. */
+.tabs kbd {
+  padding: 0 0.25rem;
+  border: 1px solid #35483c;
+  border-radius: 0.25rem;
+  font-size: 0.72rem;
+}
+
+.tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

@@ -1,7 +1,19 @@
-// RFC-013 dashboard tab. Read-only: nothing here places an order, and the two
-// manual state controls (halt/resume) are deliberately absent from the UI as
-// well as from the Nginx perimeter — leaving HALTED should take a deliberate
+// RFC-013 dashboard sections. Read-only: nothing here places an order, and the
+// two manual state controls (halt/resume) are deliberately absent from the UI
+// as well as from the Nginx perimeter — leaving HALTED should take a deliberate
 // operator action from inside, not a button on a page.
+//
+// RFC-026 D5 turned this one tab into the body of three screens. The panel now
+// takes the list of sections to render, and App.tsx composes them: Carteira
+// (tela 2) = exposição + estado, Decisões (tela 3) = decisões + consulta,
+// Sistema (tela 6) = gates. "Oportunidades" and "Rápidos" left for the Mesa
+// (tela 1, `Mesa.tsx`), which is where the opportunity panel lives now — the
+// horizon helpers and the round-trip cost stay exported here because that is
+// where they were measured and tested.
+//
+// Only the sections asked for are fetched. A screen that shows exposure does
+// not spend a request on the decision log it is not going to render, and the
+// 20 req/min the RFC budgets stay for the screens that need them.
 //
 // One control DOES exist in the dashboard, and it is not here: the paper kill
 // switch's rearm, on the Resolução tab, next to the state it acts on (owner
@@ -16,7 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  ACAO_RESOLUCAO,
+  CATEGORIA,
   ESTADO_PORTFOLIO,
   GATILHO_TRANSICAO,
   GATE,
@@ -37,13 +49,11 @@ import {
   fetchExposures,
   fetchGateMeasurements,
   fetchGates,
-  fetchOpportunities,
   fetchPortfolioState,
   type Decision,
   type Exposure,
   type GateMeasurementPage,
   type GateSnapshot,
-  type Opportunity,
   type PortfolioStateSnapshot,
 } from "./portfolio";
 
@@ -54,14 +64,24 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // Client-side paging over the 200/500-row lists the endpoints return whole.
 const ROWS_PER_PAGE = 25;
 
-type Section =
-  | "oportunidades"
-  | "rapidos"
-  | "exposicao"
-  | "estado"
-  | "gates"
-  | "consulta"
-  | "decisoes";
+export type Section =
+  "exposicao" | "estado" | "gates" | "consulta" | "decisoes";
+
+const TODAS_AS_SECOES: readonly Section[] = [
+  "exposicao",
+  "estado",
+  "gates",
+  "consulta",
+  "decisoes",
+];
+
+const ROTULO_DA_SECAO: Readonly<Record<Section, string>> = {
+  exposicao: "Exposição",
+  estado: "Estado",
+  gates: "Gates",
+  consulta: "Consulta",
+  decisoes: "Decisões",
+};
 
 const GATE_OPTIONS = ["G1", "G2", "G3", "G4", "G5", "G6"] as const;
 const STATUS_OPTIONS = ["PASS", "FAIL", "INSUFFICIENT_DATA"] as const;
@@ -105,7 +125,6 @@ function metricSummary(metrics: Readonly<Record<string, unknown>>): string {
 }
 
 interface Loaded {
-  readonly opportunities: readonly Opportunity[];
   readonly exposures: readonly Exposure[];
   readonly state: PortfolioStateSnapshot | null;
   readonly gates: GateSnapshot | null;
@@ -113,7 +132,6 @@ interface Loaded {
 }
 
 const EMPTY: Loaded = {
-  opportunities: [],
   exposures: [],
   state: null,
   gates: null,
@@ -128,26 +146,13 @@ function usd(value: number | null): string {
   return value === null ? "—" : `$${value.toFixed(2)}`;
 }
 
-function age(ms: number | null): string {
-  if (ms === null) {
-    return "—";
-  }
-  if (ms < 1_000) {
-    return `${String(Math.round(ms))} ms`;
-  }
-  if (ms < 60_000) {
-    return `${(ms / 1_000).toFixed(1)} s`;
-  }
-  return `${(ms / 60_000).toFixed(1)} min`;
-}
-
 /**
  * Time from now until an instant, or null when there is no instant at all.
  *
  * A market with no recorded end is NOT a market with a distant end: it is one
  * whose deadline we do not know, and the Rápidos tab keeps the two apart.
  */
-function horizonMs(endTs: string | null, now: number): number | null {
+export function horizonMs(endTs: string | null, now: number): number | null {
   if (endTs === null) {
     return null;
   }
@@ -155,7 +160,7 @@ function horizonMs(endTs: string | null, now: number): number | null {
   return Number.isNaN(parsed) ? null : parsed - now;
 }
 
-function horizonLabel(ms: number | null): string {
+export function horizonLabel(ms: number | null): string {
   if (ms === null) {
     return "sem instante";
   }
@@ -271,137 +276,20 @@ function Pager({
   );
 }
 
-/**
- * One opportunity, with the risk fields the client already parsed and the page
- * never showed.
- *
- * `invalidation_condition`, `scenarios.worst`, the limiter list and the three
- * data ages have been coming down the wire and being dropped on the floor since
- * RFC-013 shipped (RFC-015 §1). They go in the expandable block rather than the
- * row so the table still reads as a table.
- */
-function OportunidadeLinha({
-  opportunity,
-}: Readonly<{ opportunity: Opportunity }>) {
-  const panel = opportunity.panel;
-  return (
-    <>
-      <tr>
-        <td>
-          <code title={opportunity.condition_id}>
-            {opportunity.condition_id.slice(0, 12)}…
-          </code>
-        </td>
-        <td title={panel.suggested_side ?? undefined}>
-          {rotulo(panel.suggested_side, LADO)}
-        </td>
-        <td>
-          {panel.market_bid ?? "—"} / {panel.market_ask ?? "—"}
-        </td>
-        <td>
-          {panel.q ?? "—"} [{panel.q_lo ?? "—"}, {panel.q_hi ?? "—"}]
-        </td>
-        <td>{panel.edge_net ?? "—"}</td>
-        <td>{panel.max_size_shares ?? "—"}</td>
-        <td title={consequencia(panel.binding_constraint, LIMITADOR)}>
-          {rotulo(panel.binding_constraint, LIMITADOR)}
-        </td>
-        <td>
-          <Badge codigo={panel.resolution_action} dicionario={ACAO_RESOLUCAO} />
-        </td>
-        <td>{age(panel.book_age_ms)}</td>
-        <td>
-          {opportunity.vetoed ? (
-            <span className="badge badge--alerta">
-              Vetado: {opportunity.veto_reason ?? "sem motivo"}
-            </span>
-          ) : opportunity.entrable ? (
-            <span className="badge badge--ok">entrável</span>
-          ) : (
-            <span className="badge badge--neutro">
-              {panel.entry_reason ?? "não entrável"}
-            </span>
-          )}
-        </td>
-      </tr>
-      <tr className="linha-detalhe">
-        <td colSpan={10}>
-          <details>
-            <summary>risco, custos e atualidade</summary>
-            <div className="detalhe-grid">
-              <p>
-                <span className="card-rot">Invalidação</span>
-                <span className="card-val">
-                  {panel.invalidation_condition ??
-                    "nenhuma condição registrada"}
-                </span>
-              </p>
-              <p>
-                <span className="card-rot">Pior caso</span>
-                <span className="card-val">{panel.worst_case ?? "—"}</span>
-              </p>
-              <p>
-                <span className="card-rot">p(50/50)</span>
-                <span className="card-val">{panel.p_5050 ?? "—"}</span>
-              </p>
-              <p>
-                <span className="card-rot">Lockup esperado</span>
-                <span className="card-val">
-                  {panel.expected_lockup_s === null
-                    ? "—"
-                    : `${(panel.expected_lockup_s / 3600).toFixed(1)} h`}
-                </span>
-              </p>
-              <p>
-                <span className="card-rot">Custos</span>
-                <span className="card-val">
-                  fee {panel.fee ?? "—"} · slippage {panel.slippage ?? "—"} ·
-                  capital {panel.capital ?? "—"} · colchão{" "}
-                  {panel.resolution_buffer ?? "—"} · margem{" "}
-                  {panel.safety_margin ?? "—"}
-                </span>
-              </p>
-              <p>
-                <span className="card-rot">Idade dos dados</span>
-                <span className="card-val">
-                  livro {age(panel.book_age_ms)} · estimativa{" "}
-                  {age(panel.estimate_age_ms)} · resolução{" "}
-                  {age(panel.resolution_age_ms)}
-                </span>
-              </p>
-              <p>
-                <span className="card-rot">Limitadores</span>
-                <span className="card-val">
-                  {panel.limiters.length === 0
-                    ? "nenhum — a decisão parou antes do dimensionamento"
-                    : panel.limiters
-                        .map(
-                          (limiter) =>
-                            `${rotulo(limiter.constraint, LIMITADOR)}: ${limiter.max_shares ?? "—"}`,
-                        )
-                        .join(" · ")}
-                </span>
-              </p>
-              <p>
-                <span className="card-rot">Estimativa</span>
-                <span className="card-val">
-                  <Badge codigo={panel.estimate_source} /> · spread{" "}
-                  {panel.spread ?? "—"} · microprice {panel.microprice ?? "—"}
-                </span>
-              </p>
-            </div>
-          </details>
-        </td>
-      </tr>
-    </>
-  );
-}
-
 export function PortfolioPanel({
   accessToken,
   onUnauthorized,
-}: Readonly<{ accessToken: string; onUnauthorized: () => void }>) {
-  const [section, setSection] = useState<Section>("oportunidades");
+  sections = TODAS_AS_SECOES,
+  rotulo: rotuloDaTela,
+}: Readonly<{
+  accessToken: string;
+  onUnauthorized: () => void;
+  /** Quais seções esta tela mostra — e, por consequência, o que ela busca. */
+  sections?: readonly Section[];
+  rotulo?: string;
+}>) {
+  const primeira: Section = sections[0] ?? "exposicao";
+  const [section, setSection] = useState<Section>(primeira);
   const [data, setData] = useState<Loaded>(EMPTY);
   const [failed, setFailed] = useState(false);
   const mounted = useRef(true);
@@ -416,7 +304,6 @@ export function PortfolioPanel({
   );
   const [measurementsFailed, setMeasurementsFailed] = useState(false);
 
-  const oportunidades = usePage(data.opportunities);
   const decisoes = usePage(data.decisions);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -426,33 +313,36 @@ export function PortfolioPanel({
       REQUEST_TIMEOUT_MS,
     );
     const signal = controller.signal;
-    const [opportunities, exposures, state, gates, decisions] =
-      await Promise.all([
-        fetchOpportunities(accessToken, fetch, signal),
-        fetchExposures(accessToken, fetch, signal),
-        fetchPortfolioState(accessToken, fetch, signal),
-        fetchGates(accessToken, fetch, signal),
-        fetchDecisions(accessToken, fetch, signal),
-      ]);
+    // Só o que a tela mostra. `estado` também carrega a exposição porque o
+    // cabeçalho do estado mostra a banca contra os caps; o resto é um por um.
+    const quer = (secao: Section): boolean => sections.includes(secao);
+    const [exposures, state, gates, decisions] = await Promise.all([
+      quer("exposicao") ? fetchExposures(accessToken, fetch, signal) : null,
+      quer("estado") ? fetchPortfolioState(accessToken, fetch, signal) : null,
+      quer("gates") ? fetchGates(accessToken, fetch, signal) : null,
+      quer("decisoes") ? fetchDecisions(accessToken, fetch, signal) : null,
+    ]);
     window.clearTimeout(timeout);
     if (!mounted.current) {
       return;
     }
-    const results = [opportunities, exposures, state, gates, decisions];
+    const results = [exposures, state, gates, decisions].filter(
+      (result) => result !== null,
+    );
     if (results.some((result) => result.kind === "unauthorized")) {
       onUnauthorized();
       return;
     }
-    setFailed(results.every((result) => result.kind === "error"));
-    setData({
-      opportunities:
-        opportunities.kind === "ok" ? opportunities.value : EMPTY.opportunities,
-      exposures: exposures.kind === "ok" ? exposures.value : EMPTY.exposures,
-      state: state.kind === "ok" ? state.value : null,
-      gates: gates.kind === "ok" ? gates.value : null,
-      decisions: decisions.kind === "ok" ? decisions.value : EMPTY.decisions,
-    });
-  }, [accessToken, onUnauthorized]);
+    setFailed(
+      results.length > 0 && results.every((result) => result.kind === "error"),
+    );
+    setData((atual) => ({
+      exposures: exposures?.kind === "ok" ? exposures.value : atual.exposures,
+      state: state?.kind === "ok" ? state.value : atual.state,
+      gates: gates?.kind === "ok" ? gates.value : atual.gates,
+      decisions: decisions?.kind === "ok" ? decisions.value : atual.decisions,
+    }));
+  }, [accessToken, onUnauthorized, sections]);
 
   const loadMeasurements = useCallback(async (): Promise<void> => {
     const cursor = cursors[cursors.length - 1];
@@ -508,7 +398,10 @@ export function PortfolioPanel({
   const stateRow = data.state?.state ?? null;
 
   return (
-    <section className="panel" aria-label="Motor de portfólio">
+    <section
+      className="panel"
+      aria-label={rotuloDaTela ?? "Motor de portfólio"}
+    >
       <p className="scope">
         <strong>SIMULAÇÃO — SEM EXECUÇÃO REAL.</strong> Nenhuma ordem real é
         criada. Não existe stop-loss: um livro binário pode saltar de preço alto
@@ -527,82 +420,28 @@ export function PortfolioPanel({
         </p>
       )}
 
-      <nav className="tabs" aria-label="Seções do portfólio">
-        {(
-          [
-            ["oportunidades", "Oportunidades"],
-            ["rapidos", "Rápidos"],
-            ["exposicao", "Exposição"],
-            ["estado", "Estado"],
-            ["gates", "Gates"],
-            ["consulta", "Consulta"],
-            ["decisoes", "Decisões"],
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            className={section === key ? "tab tab--active" : "tab"}
-            onClick={() => {
-              setSection(key);
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      {sections.length < 2 ? null : (
+        <nav className="tabs" aria-label="Seções desta tela">
+          {sections.map((key) => (
+            <button
+              key={key}
+              type="button"
+              className={section === key ? "tab tab--active" : "tab"}
+              onClick={() => {
+                setSection(key);
+              }}
+            >
+              {ROTULO_DA_SECAO[key]}
+            </button>
+          ))}
+        </nav>
+      )}
 
       {failed ? (
         <p className="scope">
           Não foi possível carregar os dados do portfólio. O motor pode não
           estar ativo ainda.
         </p>
-      ) : null}
-
-      {section === "oportunidades" ? (
-        <>
-          <table className="grid grid--compacta">
-            <caption>
-              Painel de oportunidade. Um mercado vetado aparece aqui com o
-              motivo do veto — nunca escondido, e nunca como &quot;quase
-              entrável&quot;. Abra a linha para ver invalidação, cenários,
-              limitadores e a idade de cada entrada.
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Mercado</th>
-                <th scope="col">Lado</th>
-                <th scope="col">Bid/Ask</th>
-                <th scope="col">q [q_lo, q_hi]</th>
-                <th scope="col">Edge líq.</th>
-                <th scope="col">Tamanho</th>
-                <th scope="col">Limitador</th>
-                <th scope="col">Risco resol.</th>
-                <th scope="col">Livro</th>
-                <th scope="col">Situação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {oportunidades.page.map((opportunity) => (
-                <OportunidadeLinha
-                  key={opportunity.token_id}
-                  opportunity={opportunity}
-                />
-              ))}
-            </tbody>
-          </table>
-          <Pager
-            index={oportunidades.index}
-            pages={oportunidades.pages}
-            total={data.opportunities.length}
-            onChange={oportunidades.setIndex}
-            label="Paginação das oportunidades"
-          />
-        </>
-      ) : null}
-
-      {section === "rapidos" ? (
-        <RapidosSection opportunities={data.opportunities} />
       ) : null}
 
       {section === "exposicao" ? (
@@ -930,8 +769,8 @@ export function PortfolioPanel({
           <p className="scope">
             Ordenado por <code>decision_id</code>, que é a ordem de inserção e é
             total. Ordenar por <code>decision_ts</code> varria a tabela inteira
-            (715 ms medidos contra o orçamento de 1 s da API) e empatava entre
-            decisões do mesmo ciclo.
+            — não há índice só nele — e empatava entre decisões do mesmo ciclo.
+            A medição que motivou a troca está na RFC-015 §3, com data.
           </p>
           <table className="grid grid--compacta">
             <caption>
@@ -949,6 +788,7 @@ export function PortfolioPanel({
                 <th scope="col">Limitador</th>
                 <th scope="col">Resultado</th>
                 <th scope="col">Motivo</th>
+                <th scope="col">Ordem paper</th>
               </tr>
             </thead>
             <tbody>
@@ -969,10 +809,17 @@ export function PortfolioPanel({
                   <td title={decision.decision_kind ?? undefined}>
                     {rotulo(decision.decision_kind, TIPO_DECISAO)}
                   </td>
-                  <td>
-                    <code title={decision.condition_id ?? undefined}>
-                      {(decision.condition_id ?? "").slice(0, 12)}…
-                    </code>
+                  <td
+                    className={
+                      decision.question === null ? "sem-nome" : undefined
+                    }
+                    title={`${decision.condition_id ?? "sem condition_id"}${
+                      decision.category === null
+                        ? ""
+                        : ` · ${rotulo(decision.category, CATEGORIA)}`
+                    }`}
+                  >
+                    {decision.question ?? "sem nome"}
                   </td>
                   <td title={decision.market_side ?? undefined}>
                     {rotulo(decision.market_side, LADO)}
@@ -995,6 +842,21 @@ export function PortfolioPanel({
                   >
                     {rotulo(decision.reason_code, MOTIVO_DECISAO)}
                   </td>
+                  {/* Um aceite sem ordem é o caso que a D7 põe no bloco de
+                      ação da Mesa; aqui ele fica explícito linha por linha.
+                      Uma recusa não tem ordem por construção, e a célula fica
+                      vazia em vez de dizer "sem ordem" e soar como defeito. */}
+                  <td>
+                    {decision.outcome === "ACCEPTED" ? (
+                      decision.paper_order_id === null ? (
+                        <span className="badge badge--atencao">sem ordem</span>
+                      ) : (
+                        String(decision.paper_order_id)
+                      )
+                    ) : (
+                      ""
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1009,171 +871,5 @@ export function PortfolioPanel({
         </>
       ) : null}
     </section>
-  );
-}
-
-/**
- * "Rápidos": the panel ranked by how long the market has left to live.
- *
- * This tab exists because RFC-016 put the real end instant in reach (the
- * versioned rule chain, which the opportunities endpoint now reads — see
- * RFC-015 §8). Before that, the horizon a consumer could see was the date-only
- * end, which is midnight of the expiry day and therefore negative for most of
- * the day.
- *
- * The empty state is deliberately specific. A market universe with nothing
- * expiring soon is a NORMAL state of this system — 142 markets expired on
- * 2026-09-01 and the next batch was 11 hours out — and "nenhum mercado" with
- * no explanation reads as a broken tab.
- */
-function RapidosSection({
-  opportunities,
-}: Readonly<{ opportunities: readonly Opportunity[] }>) {
-  const [janelaHoras, setJanelaHoras] = useState(6);
-  const agora = Date.now();
-
-  const comHorizonte = opportunities
-    .map((opportunity) => ({
-      opportunity,
-      ms: horizonMs(opportunity.end_ts, agora),
-    }))
-    .filter((linha) => linha.ms !== null && linha.ms > 0)
-    .sort((left, right) => (left.ms ?? 0) - (right.ms ?? 0));
-  const naJanela = comHorizonte.filter(
-    (linha) => (linha.ms ?? 0) <= janelaHoras * 3_600_000,
-  );
-  const semInstante = opportunities.filter(
-    (opportunity) => opportunity.end_ts === null,
-  ).length;
-  const pagina = usePage(naJanela);
-
-  return (
-    <>
-      <p className="scope">
-        Mercados ordenados pelo <strong>instante real de fim</strong> (RFC-016:
-        a cadeia versionada da regra, não a data sem hora). O custo de
-        ida-e-volta é <code>spread + 2 × (fee + slippage)</code> por cota — os
-        componentes ficam ao lado para você conferir a conta em vez de confiar
-        nela.
-      </p>
-
-      <form className="filters" aria-label="Janela do horizonte">
-        <label>
-          Janela
-          <select
-            value={String(janelaHoras)}
-            onChange={(event) => {
-              setJanelaHoras(Number(event.target.value));
-              pagina.setIndex(0);
-            }}
-          >
-            {[1, 6, 24, 168, 8760].map((horas) => (
-              <option key={horas} value={String(horas)}>
-                {horas === 1
-                  ? "1 hora"
-                  : horas < 168
-                    ? `${String(horas)} horas`
-                    : horas === 168
-                      ? "7 dias"
-                      : "tudo"}
-              </option>
-            ))}
-          </select>
-        </label>
-      </form>
-
-      {naJanela.length === 0 ? (
-        <p className="scope">
-          Nenhum mercado vence nas próximas{" "}
-          {janelaHoras === 1 ? "1 hora" : `${String(janelaHoras)} horas`}.{" "}
-          {comHorizonte.length === 0
-            ? "Nenhum mercado do painel tem vencimento futuro registrado."
-            : `O painel tem ${String(comHorizonte.length)} mercado(s) com vencimento futuro; o mais próximo é em ${horizonLabel(comHorizonte[0]?.ms ?? null)}.`}{" "}
-          Isso é um estado normal: o universo vence em lotes, e entre um lote e
-          o seguinte não há nada rápido.
-        </p>
-      ) : null}
-
-      {semInstante === 0 ? null : (
-        <p className="scope">
-          {String(semInstante)} mercado(s) do painel não têm instante de fim
-          registrado e ficam fora desta lista. Isso é diferente de &quot;vence
-          longe&quot;.
-        </p>
-      )}
-
-      <table className="grid grid--compacta">
-        <caption>
-          Do que vence primeiro para o que vence depois. Um mercado vetado
-          continua aparecendo, com o motivo.
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Mercado</th>
-            <th scope="col">Falta</th>
-            <th scope="col">Vence em</th>
-            <th scope="col">Lado</th>
-            <th scope="col">Bid/Ask</th>
-            <th scope="col">Spread</th>
-            <th scope="col">Ida-e-volta</th>
-            <th scope="col">Edge líq.</th>
-            <th scope="col">Situação</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pagina.page.map(({ opportunity, ms }) => {
-            const panel = opportunity.panel;
-            const custo = roundTripCost(panel);
-            return (
-              <tr key={opportunity.token_id}>
-                <td>
-                  <code title={opportunity.condition_id}>
-                    {opportunity.condition_id.slice(0, 12)}…
-                  </code>
-                </td>
-                <td>{horizonLabel(ms)}</td>
-                <td>
-                  {(opportunity.end_ts ?? "").replace("T", " ").slice(0, 16)}
-                </td>
-                <td title={panel.suggested_side ?? undefined}>
-                  {rotulo(panel.suggested_side, LADO)}
-                </td>
-                <td>
-                  {panel.market_bid ?? "—"} / {panel.market_ask ?? "—"}
-                </td>
-                <td>{panel.spread ?? "—"}</td>
-                <td
-                  title={`spread ${panel.spread ?? "—"} + 2 × (fee ${panel.fee ?? "—"} + slippage ${panel.slippage ?? "—"})`}
-                >
-                  {custo === null ? "—" : custo.toFixed(6)}
-                </td>
-                <td>{panel.edge_net ?? "—"}</td>
-                <td>
-                  {opportunity.vetoed ? (
-                    <span className="badge badge--alerta">
-                      Vetado: {opportunity.veto_reason ?? "sem motivo"}
-                    </span>
-                  ) : opportunity.entrable ? (
-                    <span className="badge badge--ok">entrável</span>
-                  ) : (
-                    <span className="badge badge--neutro">
-                      {panel.entry_reason ?? "não entrável"}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-
-      <Pager
-        index={pagina.index}
-        pages={pagina.pages}
-        total={naJanela.length}
-        onChange={pagina.setIndex}
-        label="Paginação dos mercados rápidos"
-      />
-    </>
   );
 }

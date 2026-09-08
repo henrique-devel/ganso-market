@@ -6,12 +6,26 @@
 import { authorizedGet } from "./resolution";
 import type { ResolutionFetcher, ResolutionGetResult } from "./resolution";
 
+/** Níveis de livro que a tela mostra por lado (RFC-026 D6). */
+export const BOOK_LEVELS = 10;
+
 export type PortfolioStateName = "NORMAL" | "REDUCE_ONLY" | "HALTED";
 export type GateStatus = "PASS" | "FAIL" | "INSUFFICIENT_DATA";
 
 export interface PanelLimiter {
   readonly constraint: string;
   readonly max_shares: string | null;
+}
+
+/**
+ * Um nível do livro L2, como o motor grava: preço e tamanho em texto decimal.
+ *
+ * Texto e não `number` porque é o preço com que a conta do edge foi feita —
+ * arredondar aqui produziria uma tela que discorda da decisão que ela explica.
+ */
+export interface BookLevel {
+  readonly price: string;
+  readonly size: string;
 }
 
 /** The RFC's task-6 fields, as the panel snapshot stores them. */
@@ -44,11 +58,38 @@ export interface OpportunityPanel {
   readonly estimate_age_ms: number | null;
   readonly resolution_age_ms: number | null;
   readonly worst_case: string | null;
+  /**
+   * RFC-026 D6: os dez níveis de cada lado que o motor grava e o parser
+   * descartava desde a RFC-013 — só `book.spread` saía daqui.
+   *
+   * Medido em produção 2026-09-08 sobre os 200 snapshots mais recentes: o
+   * máximo é 10 de cada lado, e um livro fino chega com menos (8 bids num
+   * mercado observado). A lista vem na ordem do motor — melhor preço
+   * primeiro — e é truncada em 10 para que um payload inesperado não estique
+   * a tela.
+   */
+  readonly book_bids: readonly BookLevel[];
+  readonly book_asks: readonly BookLevel[];
+  /** Só o modo engenheiro mostra: trecho da regra e mercados correlacionados. */
+  readonly rule_excerpt: string | null;
+  readonly correlated_markets: readonly string[];
+  readonly best_case: string | null;
+  readonly likely_case: string | null;
+  readonly fifty_fifty_case: string | null;
 }
 
 export interface Opportunity {
   readonly condition_id: string;
   readonly token_id: string;
+  /**
+   * RFC-026 D2: o nome do mercado, do registro (`polymarket_markets.question`).
+   *
+   * `null` significa que o mercado não tem linha no registro — a tela escreve
+   * "sem nome" em cinza e mantém o `condition_id` no `title`. Nunca célula
+   * vazia, nunca hash fazendo o papel de nome.
+   */
+  readonly question: string | null;
+  readonly category: string | null;
   readonly computed_at: string | null;
   readonly entrable: boolean;
   readonly vetoed: boolean;
@@ -127,6 +168,8 @@ export interface Decision {
   readonly decision_kind: string | null;
   readonly condition_id: string | null;
   readonly token_id: string | null;
+  readonly question: string | null;
+  readonly category: string | null;
   readonly decision_ts: string | null;
   readonly market_side: string | null;
   readonly edge_net: number | null;
@@ -135,6 +178,22 @@ export interface Decision {
   readonly outcome: string | null;
   readonly reason_code: string | null;
   readonly portfolio_state: string | null;
+  /**
+   * Preço com que a decisão foi precificada, em texto decimal.
+   *
+   * É o que marca o nível no livro L2 da Mesa: sem ele, a tela mostraria dez
+   * níveis e nenhuma indicação de onde a ordem sugerida cairia.
+   */
+  readonly exec_price: string | null;
+  /**
+   * A ordem paper que nasceu desta decisão, ou `null`.
+   *
+   * Um aceite com `null` aqui é uma decisão que não virou nada — o caso que a
+   * RFC-026 D7 põe no bloco "O que eu faço agora?". Antes desta RFC a coluna
+   * existia no banco (migration 0014) e não saía da API, então a tela mostrava
+   * o aceite e não podia mostrar que ele morreu ali.
+   */
+  readonly paper_order_id: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +244,32 @@ function nested(
     current = current[key];
   }
   return current;
+}
+
+/** Até 10 níveis, na ordem em que o motor gravou; lixo vira lista vazia. */
+function parseBookSide(raw: unknown): readonly BookLevel[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .flatMap((item): BookLevel[] => {
+      if (!isRecord(item)) {
+        return [];
+      }
+      const price = asKey(item.price);
+      const size = asKey(item.size);
+      return price === null || size === null ? [] : [{ price, size }];
+    })
+    .slice(0, BOOK_LEVELS);
+}
+
+function parseStrings(raw: unknown): readonly string[] {
+  return Array.isArray(raw)
+    ? raw.flatMap((item) => {
+        const text = asKey(item);
+        return text === null ? [] : [text];
+      })
+    : [];
 }
 
 function parsePanel(raw: unknown): OpportunityPanel {
@@ -240,6 +325,13 @@ function parsePanel(raw: unknown): OpportunityPanel {
       nested(record, ["data_freshness", "resolution_age_ms"]),
     ),
     worst_case: asString(nested(record, ["scenarios", "worst"])),
+    book_bids: parseBookSide(nested(record, ["book", "bids"])),
+    book_asks: parseBookSide(nested(record, ["book", "asks"])),
+    rule_excerpt: asString(record.rule_excerpt),
+    correlated_markets: parseStrings(record.correlated_markets),
+    best_case: asString(nested(record, ["scenarios", "best"])),
+    likely_case: asString(nested(record, ["scenarios", "likely"])),
+    fifty_fifty_case: asString(nested(record, ["scenarios", "fifty_fifty"])),
   };
 }
 
@@ -255,6 +347,8 @@ function parseOpportunity(row: unknown): Opportunity | null {
   return {
     condition_id: conditionId,
     token_id: tokenId,
+    question: asKey(row.question),
+    category: asKey(row.category),
     computed_at: asString(row.computed_at),
     entrable: row.entrable === true,
     vetoed: row.vetoed === true,
@@ -458,6 +552,8 @@ export function fetchDecisions(
               decision_kind: asString(row.decision_kind),
               condition_id: asString(row.condition_id),
               token_id: asString(row.token_id),
+              question: asKey(row.question),
+              category: asKey(row.category),
               decision_ts: asString(row.decision_ts),
               market_side: asString(row.market_side),
               edge_net: asNumeric(row.edge_net),
@@ -466,12 +562,166 @@ export function fetchDecisions(
               outcome: asString(row.outcome),
               reason_code: asString(row.reason_code),
               portfolio_state: asString(row.portfolio_state),
+              exec_price: asString(row.exec_price),
+              paper_order_id: asNumeric(row.paper_order_id),
             };
           })
         : null,
     fetcher,
     signal,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Limites: os quatro números que explicam a recusa (RFC-026 D6)
+//
+// `/portfolio/limits` já era publicado pelo perímetro e não tinha nenhum
+// consumidor (`grep` da RFC: 0 ocorrências). O bloco `config` que o PR 1 desta
+// RFC acrescentou é o que permite a tela dizer "faltam 0,004 para aceitar" sem
+// fixar 0,02 no front — e, por consequência, é o que faz a tela continuar certa
+// quando a config do motor mudar.
+// ---------------------------------------------------------------------------
+
+export interface LimitsConfig {
+  readonly config_version: string | null;
+  /** Piso de edge da config, em texto decimal exatamente como o motor gravou. */
+  readonly edgeLiqMin: string | null;
+  readonly safetyMarginMin: string | null;
+  readonly bookMaxAgeMs: number | null;
+  readonly estimateMaxAgeMs: number | null;
+}
+
+export interface LimitsCap {
+  readonly dimension: string;
+  readonly dimension_key: string;
+  readonly worst_case_usd: string | null;
+  readonly cap_usd: string | null;
+  readonly utilization: number | null;
+}
+
+export interface PortfolioLimits {
+  readonly caps: readonly LimitsCap[];
+  readonly bindingConstraints24h: readonly {
+    readonly binding_constraint: string | null;
+    readonly decisions: number | null;
+  }[];
+  /**
+   * `null` quando a API não sabe dizer os limites (nenhuma versão de config
+   * registrada). A tela escreve "não medido" em cinza: um limite inventado no
+   * cliente é a coisa que a D6 existe para impedir.
+   */
+  readonly config: LimitsConfig | null;
+}
+
+function parseLimitsConfig(raw: unknown): LimitsConfig | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  return {
+    config_version: asKey(raw.config_version),
+    edgeLiqMin: asKey(raw.edgeLiqMin),
+    safetyMarginMin: asKey(raw.safetyMarginMin),
+    bookMaxAgeMs: asNumeric(raw.bookMaxAgeMs),
+    estimateMaxAgeMs: asNumeric(raw.estimateMaxAgeMs),
+  };
+}
+
+export function fetchLimits(
+  accessToken: string,
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionGetResult<PortfolioLimits>> {
+  return authorizedGet(
+    "/api/polymarket/portfolio/limits",
+    accessToken,
+    (body) => {
+      if (!isRecord(body)) {
+        return null;
+      }
+      return {
+        caps: mapRows(body.caps, (row) => {
+          if (!isRecord(row)) {
+            return null;
+          }
+          const dimension = asKey(row.dimension);
+          const key = asKey(row.dimension_key);
+          return dimension === null || key === null
+            ? null
+            : {
+                dimension,
+                dimension_key: key,
+                worst_case_usd: asString(row.worst_case_usd),
+                cap_usd: asString(row.cap_usd),
+                utilization: asNumeric(row.utilization),
+              };
+        }),
+        bindingConstraints24h: mapRows(body.binding_constraints_24h, (row) =>
+          isRecord(row)
+            ? {
+                binding_constraint: asString(row.binding_constraint),
+                decisions: asNumeric(row.decisions),
+              }
+            : null,
+        ),
+        config: parseLimitsConfig(body.config),
+      };
+    },
+    fetcher,
+    signal,
+  );
+}
+
+/**
+ * Folga para aceitar: `edge.net − max(costs.safety_margin, edgeLiqMin)`
+ * (RFC-026 D6).
+ *
+ * Positiva significa que o edge líquido já passa do piso; negativa é o quanto
+ * falta, e é o número que a tela escreve como "faltam 0,004 para aceitar".
+ *
+ * `valor: null` é "não medido", e é o resultado sempre que QUALQUER das três
+ * entradas falta — inclusive quando só uma metade do piso é conhecida. Isso é
+ * deliberado e é a direção segura: com `safety_margin` ausente, tomar o piso
+ * como `edgeLiqMin` sozinho o subestimaria, e a tela anunciaria folga positiva
+ * num mercado que o motor recusa. "Não medido" em cinza nunca mente; um número
+ * otimista mente.
+ */
+export interface Folga {
+  readonly valor: number | null;
+  readonly piso: number | null;
+  /** Quais entradas faltaram, para a tela dizer o que falta medir. */
+  readonly faltando: readonly string[];
+}
+
+export function folgaParaAceitar(
+  panel: Pick<OpportunityPanel, "edge_net" | "safety_margin">,
+  config: LimitsConfig | null,
+): Folga {
+  const edge = numeroDecimal(panel.edge_net);
+  const margem = numeroDecimal(panel.safety_margin);
+  const pisoConfig = numeroDecimal(config?.edgeLiqMin ?? null);
+  const faltando: string[] = [];
+  if (edge === null) {
+    faltando.push("edge líquido");
+  }
+  if (margem === null) {
+    faltando.push("margem de segurança");
+  }
+  if (pisoConfig === null) {
+    faltando.push("piso de edge da config");
+  }
+  if (edge === null || margem === null || pisoConfig === null) {
+    return { valor: null, piso: null, faltando };
+  }
+  const piso = Math.max(margem, pisoConfig);
+  return { valor: edge - piso, piso, faltando: [] };
+}
+
+function numeroDecimal(value: string | null): number | null {
+  if (value === null || value.trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // ---------------------------------------------------------------------------
