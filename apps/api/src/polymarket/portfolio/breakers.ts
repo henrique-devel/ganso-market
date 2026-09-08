@@ -78,8 +78,22 @@ export interface BreakerObservation {
 
   /** Instant of the newest MATERIAL clarification, or null. */
   readonly clarifiedAt: Date | null;
-  /** Instant the newest venue parameter version became valid, or null. */
+  /**
+   * RFC-025 D1: instant of the newest REAL venue parameter change, or null.
+   *
+   * "Real" is the store's job to decide (`loadMarketChangeStates`), and it means
+   * one of the four EV-bearing fields moved from a non-null value to a different
+   * non-null value. It is deliberately NOT "the newest parameter version": that
+   * reading made every market's birth look like a fee schedule change and froze
+   * the whole hourly universe for its entire life.
+   */
   readonly paramChangedAt: Date | null;
+  /** Which fields moved at `paramChangedAt`, and at which version. */
+  readonly paramChangedFields: readonly string[];
+  readonly paramChangedVersion: number | null;
+  /** Previous and new values of those fields, for the breaker's evidence. */
+  readonly paramChangedFrom: Readonly<Record<string, unknown>> | null;
+  readonly paramChangedTo: Readonly<Record<string, unknown>> | null;
 
   /** Age of the newest recorded book, in ms. Null when there is no book. */
   readonly bookAgeMs: number | null;
@@ -197,10 +211,27 @@ export function detectBreakers(input: {
     });
   }
 
-  // (iv) Fee schedule, tick or status changed. Every cost in the EV was
+  // (iv) Fee schedule or tick actually changed. Every cost in the EV was
   //      computed under the old parameters.
+  //
+  //      RFC-025 D1. What this used to read was "the newest parameter version
+  //      is less than 24 h old", and a market's version 1 is by definition
+  //      brand new — so every market entered the universe frozen for a day,
+  //      and an hourly market never lived long enough to thaw. 92.4% of the
+  //      1 661 breakers ever opened here were that (version 1, plus the
+  //      collector's late `fee_base_bps` fill), against ZERO real changes to
+  //      `taker_fee_bps` or `fee_curve_json` in the whole history.
+  //
+  //      The window is untouched at 24 h (P2 = D2-A): the real changes that
+  //      remain are `tick_size` flipping at 0.96/0.04, on markets the price
+  //      band already refuses.
+  //
+  //      `paramChangedFields` is required non-empty, not just trusted to be:
+  //      a breaker that cannot name the field it opened for is the state this
+  //      RFC exists to end, so it fails closed instead.
   if (
     o.paramChangedAt !== null &&
+    o.paramChangedFields.length > 0 &&
     now.getTime() - o.paramChangedAt.getTime() <= BREAKER_EVENT_WINDOW_MS
   ) {
     signals.push({
@@ -211,6 +242,10 @@ export function detectBreakers(input: {
       detail: {
         param_changed_at: o.paramChangedAt.toISOString(),
         window_ms: BREAKER_EVENT_WINDOW_MS,
+        changed_fields: [...o.paramChangedFields],
+        version: o.paramChangedVersion,
+        from: o.paramChangedFrom,
+        to: o.paramChangedTo,
       },
     });
   }

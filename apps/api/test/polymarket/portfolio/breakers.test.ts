@@ -47,8 +47,28 @@ const QUIET: BreakerObservation = {
   knownCatalystInWindow: false,
   clarifiedAt: null,
   paramChangedAt: null,
+  paramChangedFields: [],
+  paramChangedVersion: null,
+  paramChangedFrom: null,
+  paramChangedTo: null,
   bookAgeMs: 2_000,
 };
+
+/** A real tick change, the shape RFC-025 D1 says is the only one left. */
+const TICK_CHANGE = {
+  paramChangedFields: ["tick_size"],
+  paramChangedVersion: 2,
+  paramChangedFrom: { tick_size: "0.01" },
+  paramChangedTo: { tick_size: "0.001" },
+};
+
+function signals(overrides: Partial<BreakerObservation>): BreakerSignal[] {
+  return detectBreakers({
+    observation: { ...QUIET, ...overrides },
+    config: CONFIG,
+    now: NOW,
+  });
+}
 
 function detect(overrides: Partial<BreakerObservation>): string[] {
   return detectBreakers({
@@ -144,8 +164,55 @@ describe("circuit breaker detection", () => {
   it("PARAM_CHANGE: a fee schedule or tick change inside the window", () => {
     // Every cost in the EV was computed under the old parameters.
     expect(
-      detect({ paramChangedAt: new Date(NOW.getTime() - 60_000) }),
+      detect({
+        paramChangedAt: new Date(NOW.getTime() - 60_000),
+        ...TICK_CHANGE,
+      }),
     ).toContain("PARAM_CHANGE");
+  });
+
+  it("PARAM_CHANGE: the detail names the field, the version and both values", () => {
+    // RFC-025 D1 and acceptance 1: a breaker whose detail cannot say which
+    // parameter moved is not auditable, and 92.4% of the ones ever opened here
+    // could not. `openBreaker` serializes the whole detail, so this is what
+    // lands in `detail_json`.
+    const signal = signals({
+      paramChangedAt: new Date(NOW.getTime() - 60_000),
+      ...TICK_CHANGE,
+    }).find((candidate) => candidate.kind === "PARAM_CHANGE");
+    expect(signal?.detail).toMatchObject({
+      param_changed_at: new Date(NOW.getTime() - 60_000).toISOString(),
+      window_ms: BREAKER_EVENT_WINDOW_MS,
+      changed_fields: ["tick_size"],
+      version: 2,
+      from: { tick_size: "0.01" },
+      to: { tick_size: "0.001" },
+    });
+  });
+
+  it("PARAM_CHANGE: an instant with no changed field does NOT open", () => {
+    // Fails closed on the pair. The store is what decides a change is real, and
+    // if it ever hands over an instant without a field the breaker refuses to
+    // open rather than freeze a market for a reason it cannot state.
+    expect(
+      detect({
+        paramChangedAt: new Date(NOW.getTime() - 60_000),
+        paramChangedFields: [],
+      }),
+    ).not.toContain("PARAM_CHANGE");
+  });
+
+  it("PARAM_CHANGE: the window is still 24 h, and still lifts", () => {
+    // P2 = D2-A: the constant is untouched by this RFC. What changed is what
+    // counts as the event, not how long the freeze lasts.
+    expect(
+      detect({
+        paramChangedAt: new Date(
+          NOW.getTime() - BREAKER_EVENT_WINDOW_MS - 1_000,
+        ),
+        ...TICK_CHANGE,
+      }),
+    ).not.toContain("PARAM_CHANGE");
   });
 
   it("DATA_STALENESS: a book past the TTL on a market we hold", () => {
@@ -160,6 +227,7 @@ describe("circuit breaker detection", () => {
       disputeActive: true,
       bookAgeMs: 60_000,
       paramChangedAt: new Date(NOW.getTime() - 1_000),
+      ...TICK_CHANGE,
     });
     expect(kinds).toContain("UMA_PROPOSED_OR_DISPUTED");
     expect(kinds).toContain("DATA_STALENESS");
@@ -173,7 +241,10 @@ describe("circuit breaker detection", () => {
       ...detect({ disputeActive: true }),
       ...detect({ midBeforeScaled: s("0.17"), midNowScaled: s("0.95") }),
       ...detect({ clarifiedAt: new Date(NOW.getTime() - 1_000) }),
-      ...detect({ paramChangedAt: new Date(NOW.getTime() - 1_000) }),
+      ...detect({
+        paramChangedAt: new Date(NOW.getTime() - 1_000),
+        ...TICK_CHANGE,
+      }),
       ...detect({ bookAgeMs: 60_000 }),
     ]);
     for (const kind of BREAKER_KINDS) {

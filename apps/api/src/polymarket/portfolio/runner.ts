@@ -588,6 +588,10 @@ export function createPortfolioRunner(
         knownCatalystInWindow: macroCatalyst || ownCatalyst,
         clarifiedAt: change.clarifiedAt,
         paramChangedAt: change.paramChangedAt,
+        paramChangedFields: change.paramChangedFields,
+        paramChangedVersion: change.paramChangedVersion,
+        paramChangedFrom: change.paramChangedFrom,
+        paramChangedTo: change.paramChangedTo,
         bookAgeMs:
           book === null ? null : now.getTime() - book.receivedAt.getTime(),
       };

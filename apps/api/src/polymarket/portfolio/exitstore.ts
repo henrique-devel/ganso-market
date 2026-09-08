@@ -34,6 +34,13 @@ function integer(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
 }
 
+/** A jsonb object column as a plain record, or null for anything else. */
+function record(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 /** One open paper position, joined to what the exit cycle needs to judge it. */
 export interface OpenPositionRow {
   readonly tokenId: string;
@@ -358,8 +365,31 @@ export async function lastExitSignature(
 export interface MarketChangeState {
   /** Newest MATERIAL clarification instant, or null. */
   readonly clarifiedAt: Date | null;
-  /** Newest venue parameter version's valid_from, or null. */
+  /**
+   * RFC-025 D1: `valid_from` of the newest parameter version that changed a
+   * cost the EV actually reads, from a NON-NULL value to a DIFFERENT non-null
+   * value. Null when no such version exists.
+   *
+   * This used to be `max(valid_from)` — the newest version, whatever it was —
+   * and that made a market's BIRTH look like a venue parameter change. Version 1
+   * has nothing to be compared against, and the collector's late fill of
+   * `fee_base_bps` (`NULL -> 1000`, ~40 min after version 1) is a gap in our own
+   * recording, not a change at the venue. Together those two were 92.4% of the
+   * 1 661 `PARAM_CHANGE` ever opened, and they froze every hourly market for its
+   * entire life: 50 of 50 "Up or Down" markets discovered in 24 h had their FIRST
+   * entry decision refused by this breaker.
+   */
   readonly paramChangedAt: Date | null;
+  /**
+   * Which fields changed at that version, so the breaker can say WHY it opened
+   * and the count is auditable by field rather than by guess.
+   */
+  readonly paramChangedFields: readonly string[];
+  /** `version` of that parameter version, or null. */
+  readonly paramChangedVersion: number | null;
+  /** Previous and new values, keyed by field — only the fields that changed. */
+  readonly paramChangedFrom: Readonly<Record<string, unknown>> | null;
+  readonly paramChangedTo: Readonly<Record<string, unknown>> | null;
   /** Rule-precision multiplier in [0, 1] from the RFC-012 score, scaled. */
   readonly rulePrecisionScaled: bigint | null;
 }
@@ -367,8 +397,28 @@ export interface MarketChangeState {
 export const NO_MARKET_CHANGE: MarketChangeState = Object.freeze({
   clarifiedAt: null,
   paramChangedAt: null,
+  paramChangedFields: Object.freeze([]),
+  paramChangedVersion: null,
+  paramChangedFrom: null,
+  paramChangedTo: null,
   rulePrecisionScaled: null,
 });
+
+/**
+ * The parameters whose change is a reason to re-price, and nothing else.
+ *
+ * `fee_base_bps` is in the list because `store.ts:85` reads it AS the taker fee
+ * whenever `taker_fee_bps` is NULL (`COALESCE(p.taker_fee_bps, p.fee_base_bps)`)
+ * — leaving it out would ignore a real change in the very field the engine used.
+ * `maker_fee_bps`, `min_order_size` and `neg_risk` are NOT in it: they never
+ * enter the EV (`store.ts:83-85`) and have never once changed.
+ */
+export const PARAM_CHANGE_FIELDS = Object.freeze([
+  "taker_fee_bps",
+  "fee_curve_json",
+  "tick_size",
+  "fee_base_bps",
+] as const);
 
 /**
  * Clarifications, parameter changes and the rule-precision multiplier, for a
@@ -394,17 +444,91 @@ export async function loadMarketChangeStates(
   }
   const ids = [...new Set(conditionIds)];
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT m.condition_id,
+    // The parameter half is RFC-025 D1: `lag()` over the version series, then
+    // the NEWEST version whose diff against its predecessor moved at least one
+    // EV-bearing field from a non-null value to a different non-null value.
+    //
+    //   * `version = 1` is excluded because `lag()` gives it no predecessor: a
+    //     market entering the recorder is not the venue changing anything.
+    //   * `NULL -> value` is excluded by requiring the previous value to be NOT
+    //     NULL: that is the collector filling a gap in our own recording.
+    //   * `value -> NULL` is excluded by requiring the new value to be NOT NULL:
+    //     losing a datum is a finding for the data-quality surface, not a reason
+    //     to freeze a market.
+    //
+    // `DISTINCT ON ... ORDER BY version DESC` is what makes it the newest such
+    // version; `valid_from` would order the same way but `version` is the column
+    // with the UNIQUE constraint, so it cannot tie.
+    `WITH v AS (
+       SELECT pv.condition_id, pv.version, pv.valid_from,
+              pv.taker_fee_bps, pv.fee_curve_json, pv.tick_size, pv.fee_base_bps,
+              lag(pv.taker_fee_bps)  OVER w AS p_taker,
+              lag(pv.fee_curve_json) OVER w AS p_curve,
+              lag(pv.tick_size)      OVER w AS p_tick,
+              lag(pv.fee_base_bps)   OVER w AS p_base
+         FROM polymarket_param_versions pv
+        WHERE pv.condition_id = ANY($1::text[])
+       WINDOW w AS (PARTITION BY pv.condition_id ORDER BY pv.version)
+     ),
+     diffed AS (
+       SELECT v.condition_id, v.version, v.valid_from,
+              (v.p_taker IS NOT NULL AND v.taker_fee_bps IS NOT NULL
+                 AND v.taker_fee_bps <> v.p_taker)      AS d_taker,
+              (v.p_curve IS NOT NULL AND v.fee_curve_json IS NOT NULL
+                 AND v.fee_curve_json <> v.p_curve)     AS d_curve,
+              (v.p_tick IS NOT NULL AND v.tick_size IS NOT NULL
+                 AND v.tick_size <> v.p_tick)           AS d_tick,
+              (v.p_base IS NOT NULL AND v.fee_base_bps IS NOT NULL
+                 AND v.fee_base_bps <> v.p_base)        AS d_base,
+              v.taker_fee_bps, v.fee_curve_json, v.tick_size, v.fee_base_bps,
+              v.p_taker, v.p_curve, v.p_tick, v.p_base
+         FROM v
+        WHERE v.version > 1
+     ),
+     changed AS (
+       SELECT d.condition_id, d.version, d.valid_from,
+              ARRAY(SELECT f FROM unnest(ARRAY[
+                CASE WHEN d.d_taker THEN 'taker_fee_bps'  END,
+                CASE WHEN d.d_curve THEN 'fee_curve_json' END,
+                CASE WHEN d.d_tick  THEN 'tick_size'      END,
+                CASE WHEN d.d_base  THEN 'fee_base_bps'   END
+              ]) AS f WHERE f IS NOT NULL) AS fields,
+              jsonb_strip_nulls(jsonb_build_object(
+                'taker_fee_bps',  CASE WHEN d.d_taker THEN to_jsonb(d.p_taker) END,
+                'fee_curve_json', CASE WHEN d.d_curve THEN d.p_curve END,
+                'tick_size',      CASE WHEN d.d_tick  THEN to_jsonb(d.p_tick)  END,
+                'fee_base_bps',   CASE WHEN d.d_base  THEN to_jsonb(d.p_base)  END
+              )) AS from_json,
+              jsonb_strip_nulls(jsonb_build_object(
+                'taker_fee_bps',  CASE WHEN d.d_taker THEN to_jsonb(d.taker_fee_bps) END,
+                'fee_curve_json', CASE WHEN d.d_curve THEN d.fee_curve_json END,
+                'tick_size',      CASE WHEN d.d_tick  THEN to_jsonb(d.tick_size)     END,
+                'fee_base_bps',   CASE WHEN d.d_base  THEN to_jsonb(d.fee_base_bps)  END
+              )) AS to_json
+         FROM diffed d
+        WHERE d.d_taker OR d.d_curve OR d.d_tick OR d.d_base
+     ),
+     newest AS (
+       SELECT DISTINCT ON (c.condition_id)
+              c.condition_id, c.version, c.valid_from, c.fields, c.from_json, c.to_json
+         FROM changed c
+        ORDER BY c.condition_id, c.version DESC
+     )
+     SELECT m.condition_id,
             (SELECT max(c.valid_from) FROM resolution_clarifications c
               WHERE c.condition_id = m.condition_id
                 AND c.classification = 'material') AS clarified_at,
-            (SELECT max(pv.valid_from) FROM polymarket_param_versions pv
-              WHERE pv.condition_id = m.condition_id) AS param_changed_at,
+            n.valid_from  AS param_changed_at,
+            n.fields      AS param_changed_fields,
+            n.version     AS param_changed_version,
+            n.from_json   AS param_changed_from,
+            n.to_json     AS param_changed_to,
             (SELECT s.features_json #>> '{rule_precision,value}'
                FROM resolution_scores s
               WHERE s.condition_id = m.condition_id
               ORDER BY s.computed_at DESC LIMIT 1) AS rule_precision_risk
-       FROM unnest($1::text[]) AS m(condition_id)`,
+       FROM unnest($1::text[]) AS m(condition_id)
+       LEFT JOIN newest n ON n.condition_id = m.condition_id`,
     [ids],
   );
   for (const row of result.rows) {
@@ -414,9 +538,20 @@ export async function loadMarketChangeStates(
       risk === null || !Number.isFinite(risk)
         ? null
         : Math.min(Math.max(1 - risk, 0), 1);
+    const changedAt = date(row.param_changed_at);
+    const fields = Array.isArray(row.param_changed_fields)
+      ? row.param_changed_fields.map((field) => String(field))
+      : [];
     out.set(String(row.condition_id), {
       clarifiedAt: date(row.clarified_at),
-      paramChangedAt: date(row.param_changed_at),
+      // Fail closed on the pair: an instant without a field would open a
+      // breaker that cannot say why, which is the state RFC-025 exists to end.
+      paramChangedAt:
+        changedAt !== null && fields.length > 0 ? changedAt : null,
+      paramChangedFields: fields,
+      paramChangedVersion: integer(row.param_changed_version),
+      paramChangedFrom: record(row.param_changed_from),
+      paramChangedTo: record(row.param_changed_to),
       rulePrecisionScaled:
         multiplier === null
           ? null
