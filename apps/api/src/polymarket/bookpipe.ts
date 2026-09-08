@@ -103,6 +103,22 @@ export interface BookPipelineDeps {
     firstReceivedAt: Date;
     lastReceivedAt: Date;
   }) => void;
+  /**
+   * RFC-024 D3: a token entered the subscription and no `book` arrived inside
+   * `subscribeBookTimeoutMs`. The caller opens a `subscribe_book_missing` gap.
+   *
+   * This is the continuous, in-production measurement of H1: the recorder
+   * resubscribes by sending a frame on a live socket, and 19 of 27 tokens
+   * measured on 02-03/09/2026 never got a book afterwards. Until now that was
+   * invisible — no log, no gap, no metric.
+   */
+  readonly onSubscribeBookMissing?: (tokenId: string) => void;
+  /** The book finally arrived: the caller closes the gap it opened. */
+  readonly onSubscribeBookArrived?: (tokenId: string) => void;
+  /** Grace before a subscribed token counts as bookless. RFC-024: 60 s. */
+  readonly subscribeBookTimeoutMs?: number;
+  readonly setTimer?: (run: () => void, delayMs: number) => unknown;
+  readonly clearTimer?: (handle: unknown) => void;
 }
 
 export interface BookPipelineStats {
@@ -135,6 +151,21 @@ export interface BookPipeline {
   runAnchorPass(): Promise<void>;
   /** The next `book` event for this token persists with reason 'resync'. */
   requestResync(tokenId: string): void;
+  /**
+   * RFC-024 D3: tokens just added to the subscription. Each one that has
+   * never delivered a book starts a 60 s timer; if no `book` arrives, the
+   * caller is told to open a `subscribe_book_missing` gap.
+   *
+   * Only tokens that ENTER are armed. A token already in `seenTokens` has a
+   * book and is not re-armed, so a routine resubscribe of the whole universe
+   * does not open 200 gaps.
+   */
+  armSubscribeWatch(tokenIds: readonly string[]): void;
+  /**
+   * The tokens left the universe. Their pending watches are cancelled, so a
+   * market leaving on the same cycle it entered cannot open a spurious gap.
+   */
+  cancelSubscribeWatch(tokenIds: readonly string[]): void;
   getCachedBook(tokenId: string): OrderBook | null;
   cachedTokens(): string[];
   stats(): BookPipelineStats;
@@ -203,10 +234,25 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
   const deltaFlushMs = deps.deltaFlushMs ?? DEFAULT_DELTA_FLUSH_MS;
   const deltaQueueMax = deps.deltaQueueMax ?? DEFAULT_DELTA_QUEUE_MAX;
   const throttle = new SnapshotThrottle(deps.snapshotIntervalMs);
+  const subscribeBookTimeoutMs = deps.subscribeBookTimeoutMs ?? 60_000;
+  const setTimer =
+    deps.setTimer ??
+    ((run: () => void, delayMs: number): unknown => setTimeout(run, delayMs));
+  const clearTimer =
+    deps.clearTimer ??
+    ((handle: unknown): void => {
+      clearTimeout(handle as ReturnType<typeof setTimeout>);
+    });
 
   const books = new Map<string, OrderBook>();
   const conditionByToken = new Map<string, string>();
   const seenTokens = new Set<string>();
+  // RFC-024 D3: token -> pending "no book yet" timer. A token is in here only
+  // between entering the subscription and its first book (or the timeout).
+  const subscribeWatch = new Map<string, unknown>();
+  // Tokens whose gap is open, so the arrival closes exactly one gap and a
+  // second book does not close it twice.
+  const subscribeGapOpen = new Set<string>();
   const lastPersistedVenueHash = new Map<string, string>();
   const resyncSignaled = new Set<string>();
   const lastAnchorMs = new Map<string, number>();
@@ -603,6 +649,11 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
     books.set(tokenId, book);
     resyncSignaled.delete(tokenId);
 
+    // RFC-024 D3: the book arrived, so the token is not bookless. This runs
+    // for every book, `subscribe` or `resync`, because the gap is about the
+    // token having a book at all — not about which reason wrote it.
+    clearSubscribeWatch(tokenId, "arrived");
+
     let reason: "subscribe" | "resync" | "anchor";
     if (!seenTokens.has(tokenId)) {
       reason = "subscribe";
@@ -633,6 +684,28 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
     }
     await insertTopSnapshot(tokenId, msg.timestamp);
     await updateMinute(tokenId);
+  }
+
+  /**
+   * RFC-024 D3: stop watching `tokenId`, and close its gap if one is open.
+   *
+   * `reason` is "arrived" when a book landed and "exit" when the market left
+   * the universe. Only "arrived" closes the gap: a market that leaves without
+   * ever getting a book has a REAL gap, and closing it on the way out would
+   * erase the very measurement the gap exists for.
+   */
+  function clearSubscribeWatch(
+    tokenId: string,
+    reason: "arrived" | "exit",
+  ): void {
+    const handle = subscribeWatch.get(tokenId);
+    if (handle !== undefined) {
+      clearTimer(handle);
+      subscribeWatch.delete(tokenId);
+    }
+    if (reason === "arrived" && subscribeGapOpen.delete(tokenId)) {
+      deps.onSubscribeBookArrived?.(tokenId);
+    }
   }
 
   async function anchorIfDue(tokenId: string): Promise<void> {
@@ -798,6 +871,39 @@ export function createBookPipeline(deps: BookPipelineDeps): BookPipeline {
     requestResync(tokenId: string): void {
       // Force the token out of "first time" mode so the next book is 'resync'.
       seenTokens.add(tokenId);
+    },
+    armSubscribeWatch(tokenIds: readonly string[]): void {
+      for (const tokenId of tokenIds) {
+        // A token that already has a book is not bookless, and a token
+        // already being watched keeps its ORIGINAL deadline — re-arming on
+        // every cycle would push the deadline forward forever and the gap
+        // would never open.
+        if (seenTokens.has(tokenId) || subscribeWatch.has(tokenId)) {
+          continue;
+        }
+        const handle = setTimer(() => {
+          subscribeWatch.delete(tokenId);
+          // Between arming and firing the book may have landed; `seenTokens`
+          // is the authority, and the timer must not contradict it.
+          if (seenTokens.has(tokenId)) {
+            return;
+          }
+          subscribeGapOpen.add(tokenId);
+          logJson(
+            "warn",
+            "SUBSCRIBE_BOOK_MISSING",
+            "polymarket_bookpipe_subscribe_book_missing",
+            { token_id: tokenId, waited_ms: subscribeBookTimeoutMs },
+          );
+          deps.onSubscribeBookMissing?.(tokenId);
+        }, subscribeBookTimeoutMs);
+        subscribeWatch.set(tokenId, handle);
+      }
+    },
+    cancelSubscribeWatch(tokenIds: readonly string[]): void {
+      for (const tokenId of tokenIds) {
+        clearSubscribeWatch(tokenId, "exit");
+      }
     },
     getCachedBook(tokenId: string): OrderBook | null {
       return books.get(tokenId) ?? null;

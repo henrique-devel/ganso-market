@@ -5,8 +5,15 @@ import {
   type ExtendedMarketRecord,
 } from "../../src/polymarket/gamma.js";
 import {
+  FAST_SERIES_MAX_MARKETS,
+  HOURLY_SERIES_SLUG_PATTERN,
+  MAX_UNIVERSE_MARKETS,
+  MAX_UNIVERSE_TOKENS,
+  SHORT_HORIZON_RESERVED_MARKETS,
+  SHORT_SERIES_PATTERN,
   capPriority,
   exclusionReason,
+  isShortHorizon,
   refreshParams,
   runGammaCycle,
   selectUniverse,
@@ -598,5 +605,435 @@ describe("refreshParams", () => {
       cause: "fee_poll_failed",
     });
     expect(db.paramVersions).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RFC-024 D2 — descoberta por série horária
+// ---------------------------------------------------------------------------
+
+/**
+ * The 24 real hourly slugs of one day, captured live from Gamma on 2026-09-08
+ * via `GET /events?series_id=10114&closed=false`, plus every neighbouring
+ * cadence the venue publishes in the same family. The regex has to take the
+ * 24 and refuse all the rest — the `SHORT_SERIES_PATTERN` it sits beside
+ * matches 5min, 15min and 4h too, and using that one would put the whole
+ * sub-hourly population into the fast universe.
+ */
+const HOURLY_SLUGS_REAIS = [
+  "bitcoin-up-or-down-september-8-2026-12am-et",
+  "bitcoin-up-or-down-september-8-2026-1am-et",
+  "bitcoin-up-or-down-september-8-2026-2am-et",
+  "bitcoin-up-or-down-september-8-2026-3am-et",
+  "bitcoin-up-or-down-september-8-2026-4am-et",
+  "bitcoin-up-or-down-september-8-2026-5am-et",
+  "bitcoin-up-or-down-september-8-2026-6am-et",
+  "bitcoin-up-or-down-september-8-2026-7am-et",
+  "bitcoin-up-or-down-september-8-2026-8am-et",
+  "bitcoin-up-or-down-september-8-2026-9am-et",
+  "bitcoin-up-or-down-september-8-2026-10am-et",
+  "bitcoin-up-or-down-september-8-2026-11am-et",
+  "bitcoin-up-or-down-september-8-2026-12pm-et",
+  "bitcoin-up-or-down-september-8-2026-1pm-et",
+  "bitcoin-up-or-down-september-8-2026-2pm-et",
+  "bitcoin-up-or-down-september-8-2026-3pm-et",
+  "bitcoin-up-or-down-september-8-2026-4pm-et",
+  "bitcoin-up-or-down-september-8-2026-5pm-et",
+  "bitcoin-up-or-down-september-8-2026-6pm-et",
+  "bitcoin-up-or-down-september-8-2026-7pm-et",
+  "bitcoin-up-or-down-september-8-2026-8pm-et",
+  "bitcoin-up-or-down-september-8-2026-9pm-et",
+  "bitcoin-up-or-down-september-8-2026-10pm-et",
+  "bitcoin-up-or-down-september-8-2026-11pm-et",
+];
+
+/** Real slugs of every other cadence in the same family, same listing. */
+const NAO_HORARIOS_REAIS = [
+  "btc-updown-5m-1788807600",
+  "btc-updown-15m-1788827400",
+  "btc-updown-4h-1788811200",
+  "bitcoin-up-or-down-on-september-7-2026",
+];
+
+const SERIE_URL =
+  "https://gamma.test/events?series_id=10114&closed=false&limit=100";
+
+/** One `/events` row, shaped exactly like the live response. */
+function serieEvent(
+  slug: string,
+  endDate: string,
+  overrides: {
+    conditionId?: string;
+    tokenIds?: string;
+    tags?: unknown;
+    markets?: unknown;
+  } = {},
+): Record<string, unknown> {
+  return {
+    id: `evt-${slug}`,
+    ticker: slug,
+    slug,
+    title: slug,
+    endDate,
+    // The tags live on the EVENT; the nested market has none.
+    tags: overrides.tags ?? [{ slug: "crypto" }, { slug: "crypto-prices" }],
+    markets: overrides.markets ?? [
+      {
+        conditionId: overrides.conditionId ?? `0x${slug.slice(-8)}`,
+        question: `Bitcoin Up or Down - ${slug}`,
+        slug,
+        clobTokenIds: overrides.tokenIds ?? '["u1","d1"]',
+        outcomes: '["Up","Down"]',
+        description:
+          'This market will resolve to "Up" if the close price is greater than or equal to the open price for the BTC/USDT 1 hour candle.',
+        resolutionSource: "https://www.binance.com/en/trade/BTC_USDT",
+        resolvedBy: "0x65070BE91477460D8A7AeEb94ef92fe056C2f2A7",
+        endDate,
+        umaBond: "250",
+        umaReward: "0.6",
+        updatedAt: "2026-08-19T11:59:00Z",
+        orderPriceMinTickSize: 0.001,
+        orderMinSize: 5,
+        active: true,
+        closed: false,
+        enableOrderBook: true,
+        negRisk: false,
+        negRiskOther: false,
+      },
+    ],
+  };
+}
+
+/** Splits the two Gamma calls the cycle now makes. */
+function seriesFetcher(
+  seriesBody: unknown,
+  options: { top500?: unknown; seriesOk?: boolean } = {},
+): { fetcher: JsonFetcher; calls: string[] } {
+  return stubFetcher((url) =>
+    url.includes("/events?series_id=")
+      ? { ok: options.seriesOk ?? true, body: seriesBody }
+      : { ok: true, body: options.top500 ?? [gammaRow()] },
+  );
+}
+
+/** ISO of a market ending `minutes` after NOW. */
+function endIn(minutes: number): string {
+  return new Date(NOW.getTime() + minutes * 60_000).toISOString();
+}
+
+describe("RFC-024 D2 — a regex horária", () => {
+  it("casa os 24 slugs reais do dia", () => {
+    expect(HOURLY_SLUGS_REAIS).toHaveLength(24);
+    for (const slug of HOURLY_SLUGS_REAIS) {
+      expect(HOURLY_SERIES_SLUG_PATTERN.test(slug), slug).toBe(true);
+    }
+  });
+
+  it("recusa 5 min, 15 min, 4 h e diário — que a SHORT_SERIES_PATTERN casava", () => {
+    for (const slug of NAO_HORARIOS_REAIS) {
+      expect(HOURLY_SERIES_SLUG_PATTERN.test(slug), slug).toBe(false);
+      // The regression this replaces: the old pattern took all of them.
+      expect(
+        SHORT_SERIES_PATTERN.test(`Bitcoin Up or Down ${slug}`),
+        slug,
+      ).toBe(true);
+    }
+  });
+
+  it("recusa vizinhos malformados e outros ativos", () => {
+    for (const slug of [
+      "ethereum-up-or-down-september-8-2026-3pm-et",
+      "bitcoin-up-or-down-september-8-2026-13pm-et",
+      "bitcoin-up-or-down-sept-8-2026-3pm-et",
+      "bitcoin-up-or-down-september-8-2026-3pm-et-resolved",
+      "x-bitcoin-up-or-down-september-8-2026-3pm-et",
+      "bitcoin-up-or-down-september-32-2026-3pm-et",
+    ]) {
+      expect(HOURLY_SERIES_SLUG_PATTERN.test(slug), slug).toBe(false);
+    }
+  });
+});
+
+describe("RFC-024 D2 — a janela de lookahead", () => {
+  it("mercado a 80 min do fim NÃO entra; a 70 min entra", async () => {
+    const db = new FakeDb();
+    const { fetcher, calls } = seriesFetcher([
+      serieEvent("bitcoin-up-or-down-september-8-2026-3pm-et", endIn(80), {
+        conditionId: "0xlonge",
+        tokenIds: '["l1","l2"]',
+      }),
+      serieEvent("bitcoin-up-or-down-september-8-2026-2pm-et", endIn(70), {
+        conditionId: "0xperto",
+        tokenIds: '["p1","p2"]',
+      }),
+    ]);
+
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+
+    expect(calls).toContain(SERIE_URL);
+    const ids = result.universe.map((member) => member.conditionId);
+    expect(ids).toContain("0xperto");
+    expect(ids).not.toContain("0xlonge");
+    expect(result.series.candidates).toBe(1);
+    expect(result.series.entered).toBe(1);
+    // 70 min of lead: the RFC's target is >= 60.
+    expect(result.series.leadMinutes).toEqual([70]);
+  });
+
+  it("mercado já vencido não entra, mesmo com closed=false", async () => {
+    // The live listing carried a May event still marked `closed=false`.
+    const db = new FakeDb();
+    const { fetcher } = seriesFetcher([
+      serieEvent("bitcoin-up-or-down-may-20-2026-6am-et", endIn(-159_290), {
+        conditionId: "0xvelho",
+      }),
+    ]);
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+    expect(result.universe.map((member) => member.conditionId)).not.toContain(
+      "0xvelho",
+    );
+    expect(result.series.candidates).toBe(0);
+  });
+
+  it("com 4 já dentro, o 5.º é recusado — os 4 mais próximos do fim", async () => {
+    const db = new FakeDb();
+    const { fetcher } = seriesFetcher(
+      [10, 20, 30, 40, 50].map((minutes, index) =>
+        serieEvent(
+          `bitcoin-up-or-down-september-8-2026-${String(index + 1)}pm-et`,
+          endIn(minutes),
+          {
+            conditionId: `0xh${String(minutes)}`,
+            tokenIds: `["a${String(minutes)}","b${String(minutes)}"]`,
+          },
+        ),
+      ),
+    );
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+    expect(result.series.candidates).toBe(FAST_SERIES_MAX_MARKETS);
+    const ids = result.universe.map((member) => member.conditionId);
+    for (const minutes of [10, 20, 30, 40]) {
+      expect(ids).toContain(`0xh${String(minutes)}`);
+    }
+    expect(ids).not.toContain("0xh50");
+  });
+});
+
+describe("RFC-024 D2 — a falha da série não custa o ciclo", () => {
+  it("série falhando: top-500 intacto e lacuna gamma/series_fetch_failed", async () => {
+    const db = new FakeDb();
+    const { fetcher } = seriesFetcher(null, { seriesOk: false });
+
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+
+    // The top-500 selection is untouched.
+    expect(result.universe.map((member) => member.conditionId)).toEqual([
+      "0xbtc",
+    ]);
+    expect(result.fetchFailed).toBe(false);
+    expect(result.series.fetchFailed).toBe(true);
+    expect(result.series.candidates).toBe(0);
+
+    const gap = db.dataGaps.find((row) => row.cause === "series_fetch_failed");
+    expect(gap).toBeDefined();
+    expect(gap?.source).toBe("gamma");
+    // No token: the gap is about the listing, not about one market.
+    expect(gap?.token_id).toBeNull();
+    expect(gap?.details_json).toMatchObject({ series_id: "10114" });
+  });
+
+  it("série com corpo inesperado não derruba o ciclo", async () => {
+    const db = new FakeDb();
+    const { fetcher } = seriesFetcher({ nao: "um array" });
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+    expect(result.universe.map((member) => member.conditionId)).toEqual([
+      "0xbtc",
+    ]);
+    expect(result.series.fetchFailed).toBe(false);
+    expect(result.series.candidates).toBe(0);
+  });
+});
+
+describe("RFC-024 D2 — o motivo do enter", () => {
+  it("entrada pela série termina em _series; pelo top-500 não", async () => {
+    const db = new FakeDb();
+    const { fetcher } = seriesFetcher([
+      serieEvent("bitcoin-up-or-down-september-8-2026-2pm-et", endIn(70), {
+        conditionId: "0xserie",
+        tokenIds: '["s1","s2"]',
+      }),
+    ]);
+
+    await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+
+    const enters = db.universeLog.filter((row) => row.action === "enter");
+    const bySeries = enters.find((row) => row.condition_id === "0xserie");
+    const byTop500 = enters.find((row) => row.condition_id === "0xbtc");
+    expect(String(bySeries?.reason)).toMatch(/_series$/);
+    // Priority 2 and the horizon bucket are still in there: the suffix ADDS
+    // the source, it does not replace the RFC-016 information.
+    expect(String(bySeries?.reason)).toMatch(/^priority_2_crypto_/);
+    expect(String(byTop500?.reason)).not.toMatch(/_series$/);
+  });
+
+  it("mercado que o top-500 já achou não conta como entrada por série", async () => {
+    const db = new FakeDb();
+    // The same conditionId in both sources.
+    const both = gammaRow({
+      conditionId: "0xdupla",
+      slug: "bitcoin-up-or-down-september-8-2026-2pm-et",
+      endDate: endIn(70),
+      clobTokenIds: '["x1","x2"]',
+    });
+    const { fetcher } = seriesFetcher(
+      [
+        serieEvent("bitcoin-up-or-down-september-8-2026-2pm-et", endIn(70), {
+          conditionId: "0xdupla",
+          tokenIds: '["x1","x2"]',
+        }),
+      ],
+      { top500: [both] },
+    );
+
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+
+    expect(result.series.candidates).toBe(1);
+    expect(result.series.newToUniverse).toBe(0);
+    expect(result.series.entered).toBe(0);
+    // One market, not two: the merge dedupes by condition_id.
+    expect(result.universe).toHaveLength(1);
+    const enter = db.universeLog.find(
+      (row) => row.action === "enter" && row.condition_id === "0xdupla",
+    );
+    expect(String(enter?.reason)).not.toMatch(/_series$/);
+  });
+});
+
+describe("RFC-024 D2 — cap e reserva intocados", () => {
+  it("a série não altera o cap de 100 mercados nem a reserva de 25", () => {
+    expect(MAX_UNIVERSE_MARKETS).toBe(100);
+    expect(MAX_UNIVERSE_TOKENS).toBe(200);
+    expect(SHORT_HORIZON_RESERVED_MARKETS).toBe(25);
+  });
+
+  it("um horário a 70 min cai em capPriority 2 e na fila reservada", () => {
+    const hourly = record({
+      conditionId: "0xh",
+      slug: "bitcoin-up-or-down-september-8-2026-2pm-et",
+      question: "Bitcoin Up or Down - September 8, 2PM ET",
+      endDate: endIn(70),
+      tags: [{ slug: "crypto" }],
+    });
+    expect(capPriority(hourly, NOW)).toBe(2);
+    expect(isShortHorizon(hourly, NOW)).toBe(true);
+  });
+
+  it("a série obedece ao cap: com o universo cheio, ela não entra", async () => {
+    const db = new FakeDb();
+    // 100 top-500 markets fill the cap; two tokens each hits the token cap
+    // first, which is the tighter of the two.
+    const top500 = Array.from({ length: 100 }, (_, index) =>
+      gammaRow({
+        conditionId: `0xfill${String(index)}`,
+        slug: `fill-${String(index)}`,
+        question: `Will Bitcoin close above $${String(index)}k?`,
+        clobTokenIds: `["f${String(index)}a","f${String(index)}b"]`,
+        endDate: endIn(30),
+      }),
+    );
+    const { fetcher } = seriesFetcher(
+      [
+        serieEvent("bitcoin-up-or-down-september-8-2026-2pm-et", endIn(70), {
+          conditionId: "0xserie",
+          tokenIds: '["s1","s2"]',
+        }),
+      ],
+      { top500 },
+    );
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+    expect(result.universe.length).toBeLessThanOrEqual(MAX_UNIVERSE_MARKETS);
+    const tokens = result.universe.flatMap((member) => member.tokenIds);
+    expect(tokens.length).toBeLessThanOrEqual(MAX_UNIVERSE_TOKENS);
+  });
+});
+
+describe("RFC-024 D2 — a consulta é a que funciona", () => {
+  it("usa /events?series_id, nunca /markets?series_id", async () => {
+    const db = new FakeDb();
+    const { fetcher, calls } = seriesFetcher([]);
+    await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+    expect(calls).toContain(SERIE_URL);
+    // Measured 2026-09-08: /markets?series_id ignores the filter and answers
+    // with unrelated markets. Using it would put politics in the fast universe.
+    expect(calls.some((url) => url.includes("/markets?series_id="))).toBe(
+      false,
+    );
+  });
+
+  it("o mercado aninhado herda as tags do evento (classifica como crypto)", async () => {
+    const db = new FakeDb();
+    const { fetcher } = seriesFetcher([
+      serieEvent("bitcoin-up-or-down-september-8-2026-2pm-et", endIn(70), {
+        conditionId: "0xtags",
+        tokenIds: '["t1","t2"]',
+      }),
+    ]);
+    const result = await runGammaCycle({
+      pool: db,
+      fetcher,
+      now: () => NOW,
+      baseUrl: "https://gamma.test",
+    });
+    const member = result.universe.find(
+      (entry) => entry.conditionId === "0xtags",
+    );
+    // Without the graft the nested market has no tags at all and would fall
+    // through to the keyword classifier.
+    expect(member?.category).toBe("crypto");
   });
 });

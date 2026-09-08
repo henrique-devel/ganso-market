@@ -382,6 +382,108 @@ const MARKET_COLUMNS =
   "rules_version, tick_size, min_order_size, fee_type, end_date_iso, end_ts, " +
   "active, closed, source_ts, received_at, updated_at";
 
+/**
+ * RFC-024 D4: the hourly BTC series' coverage, per UTC day.
+ *
+ * Every number here has a definition that does not move, because the whole
+ * point is to tell a real improvement from a change of ruler:
+ *
+ * - `emitidos`: hourly markets whose end falls in the day, **as the recorder
+ *   saw them in a Gamma response** (they are in `polymarket_markets` because a
+ *   cycle upserted them) — never the 24 the grid implies. A day the series
+ *   stops answering has a SMALLER denominator, and the caller publishes
+ *   `null`, never 100 %.
+ * - `com_livro_t15`: a `polymarket_series_1m` bucket in
+ *   [end − 15 min, end − 14 min) with `updates_count >= 1` on at least one
+ *   token. This is the RFC's ruler. The "8 %" of the diagnosis was measured on
+ *   `polymarket_book_snapshots` over the final 3 h — a DIFFERENT instrument;
+ *   the baseline on THIS ruler, re-measured 2026-09-08 over 72 h, is 2 of 65.
+ * - `catalogados_60min`: first `enter` at or before end − 60 min.
+ * - `lead_mediano_min`: median of (end − first `enter`).
+ * - `entradas_por_serie`: entries whose reason ends in `_series`, so the two
+ *   discovery sources stay distinguishable.
+ *
+ * The slug pattern is the same hourly one as `registry.ts`, spelled for
+ * Postgres: it takes the hourly series and refuses `btc-updown-5m|15m|4h-*`
+ * and the daily `bitcoin-up-or-down-on-*`.
+ *
+ * Plan measured against the production Postgres on 2026-09-08 before the
+ * merge: 20,6 ms for one day (planning 1,7 ms). RFC-024 D4 sends the
+ * aggregation to the recorder only past 200 ms, so it stays here — and it runs
+ * inside the route's existing `Promise.all`, so it costs wall-clock only if it
+ * becomes the slowest of the four.
+ */
+const FAST_COVERAGE_SQL = `WITH serie AS (
+         SELECT pm.condition_id,
+                pm.clob_token_ids,
+                COALESCE(pm.end_ts, rv.end_date) AS fim
+           FROM polymarket_markets pm
+           LEFT JOIN (
+             SELECT DISTINCT ON (condition_id) condition_id, end_date
+               FROM polymarket_rule_versions
+              ORDER BY condition_id, valid_from DESC
+           ) rv ON rv.condition_id = pm.condition_id
+          WHERE pm.slug ~ '^bitcoin-up-or-down-[a-z]+-[0-9]{1,2}-[0-9]{4}-[0-9]{1,2}(am|pm)-et$'
+       ),
+       dias AS (
+         SELECT s.condition_id,
+                s.fim,
+                date_trunc('day', s.fim) AS dia,
+                jsonb_array_elements_text(
+                  CASE jsonb_typeof(s.clob_token_ids)
+                    WHEN 'array' THEN s.clob_token_ids ELSE '[]'::jsonb END
+                ) AS token_id
+           FROM serie s
+          WHERE s.fim >= date_trunc('day', $1::timestamptz) - ($2::int * INTERVAL '1 day')
+            AND s.fim <  date_trunc('day', $1::timestamptz) + INTERVAL '1 day'
+       ),
+       por_mercado AS (
+         SELECT d.condition_id,
+                d.dia,
+                d.fim,
+                (SELECT min(ul.at) FROM polymarket_universe_log ul
+                  WHERE ul.condition_id = d.condition_id
+                    AND ul.action = 'enter') AS primeiro_enter,
+                EXISTS (SELECT 1 FROM polymarket_universe_log ul
+                         WHERE ul.condition_id = d.condition_id
+                           AND ul.action = 'enter'
+                           AND ul.reason LIKE '%_series') AS por_serie,
+                bool_or(
+                  EXISTS (SELECT 1 FROM polymarket_series_1m sm
+                           WHERE sm.token_id = d.token_id
+                             AND sm.bucket_start >= d.fim - INTERVAL '15 minutes'
+                             AND sm.bucket_start <  d.fim - INTERVAL '14 minutes'
+                             AND sm.updates_count >= 1)
+                ) AS tem_livro
+           FROM dias d
+          GROUP BY d.condition_id, d.dia, d.fim
+       )
+       SELECT dia,
+              count(*)::bigint AS emitidos,
+              count(*) FILTER (WHERE tem_livro)::bigint AS com_livro_t15,
+              count(*) FILTER (
+                WHERE primeiro_enter IS NOT NULL
+                  AND primeiro_enter <= fim - INTERVAL '60 minutes'
+              )::bigint AS catalogados_60min,
+              count(*) FILTER (WHERE por_serie)::bigint AS entradas_por_serie,
+              percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY EXTRACT(EPOCH FROM (fim - primeiro_enter)) / 60.0
+              ) AS lead_mediano_min
+         FROM por_mercado
+        GROUP BY dia
+        ORDER BY dia DESC`;
+
+/** `subscribe_book_missing` gaps in the last 24 h (RFC-024 D3). */
+const SUBSCRIBE_BOOK_MISSING_SQL = `SELECT
+         count(*)::bigint AS total,
+         count(*) FILTER (WHERE gap_end IS NULL)::bigint AS abertas
+       FROM polymarket_data_gaps
+      WHERE cause = 'subscribe_book_missing'
+        AND gap_start >= $1::timestamptz - INTERVAL '24 hours'`;
+
+/** The soak reads three UTC days plus today (RFC-024 acceptance criteria). */
+const FAST_COVERAGE_DAYS = 3;
+
 // Latest enter/exit per condition_id up to a point in time; membership is
 // "latest action is enter".
 const UNIVERSE_MEMBERS_SQL = `SELECT condition_id, reason, at
@@ -952,7 +1054,7 @@ export function registerPolymarketReadRoutes(
     { preHandler: guard },
     wrap(async (_request, reply) => {
       const now = clock();
-      const [gaps, lag, sizes] = await Promise.all([
+      const [gaps, lag, sizes, coverage, bookMissing] = await Promise.all([
         pool.query<Row>(
           `SELECT source,
                   COUNT(*)::bigint AS gap_count,
@@ -979,6 +1081,8 @@ export function registerPolymarketReadRoutes(
           pool,
           RETENTION_TABLES.map((config) => config.table),
         ),
+        pool.query<Row>(FAST_COVERAGE_SQL, [now, FAST_COVERAGE_DAYS]),
+        pool.query<Row>(SUBSCRIBE_BOOK_MISSING_SQL, [now]),
       ]);
 
       // Absent from the catalog means the table does not exist yet, which is
@@ -1003,6 +1107,38 @@ export function registerPolymarketReadRoutes(
         0,
       );
       const lagRow = lag.rows[0] ?? {};
+      const missingRow = bookMissing.rows[0] ?? {};
+      // RFC-024 D4, the degeneration lens: with `emitidos = 0` the series did
+      // not answer for that day, and every derived field is `null`. Publishing
+      // 0/0 as 100 % is the failure this guard exists to prevent — and 0 as a
+      // lead would read as "discovered at the buzzer", the opposite of true.
+      const coverageDays = coverage.rows.map((row) => {
+        const emitidos = toFiniteNumber(row["emitidos"]) ?? 0;
+        const comLivro = toFiniteNumber(row["com_livro_t15"]) ?? 0;
+        const catalogados = toFiniteNumber(row["catalogados_60min"]) ?? 0;
+        const degenerate = emitidos === 0;
+        return {
+          dia:
+            row["dia"] instanceof Date
+              ? (row["dia"] as Date).toISOString().slice(0, 10)
+              : null,
+          emitidos,
+          com_livro_t15: degenerate ? null : comLivro,
+          com_livro_t15_pct: degenerate
+            ? null
+            : Math.round((comLivro / emitidos) * 100 * 10) / 10,
+          catalogados_60min: degenerate ? null : catalogados,
+          catalogados_60min_pct: degenerate
+            ? null
+            : Math.round((catalogados / emitidos) * 100 * 10) / 10,
+          entradas_por_serie: degenerate
+            ? null
+            : (toFiniteNumber(row["entradas_por_serie"]) ?? 0),
+          lead_mediano_min: degenerate
+            ? null
+            : toFiniteNumber(row["lead_mediano_min"]),
+        };
+      });
       return reply.code(200).send({
         generated_at: now.toISOString(),
         gaps_24h: gaps.rows.map((row) => ({
@@ -1015,6 +1151,27 @@ export function registerPolymarketReadRoutes(
         ingest_lag_ms_last_hour: {
           p50: toFiniteNumber(lagRow["p50"]),
           p99: toFiniteNumber(lagRow["p99"]),
+        },
+        // RFC-024 D4: the fast universe's coverage, by UTC day of the market's
+        // END (not of the measurement), so a day's number never moves again
+        // once the day is over.
+        fast_coverage: {
+          serie: "btc-up-or-down-hourly",
+          definicoes: {
+            emitidos:
+              "mercados horarios da serie com fim no dia, como o recorder os viu na resposta da Gamma",
+            com_livro_t15:
+              "bucket de polymarket_series_1m em [fim-15min, fim-14min) com updates_count >= 1 em algum token",
+            catalogados_60min: "primeiro enter em <= fim - 60 min",
+            lead_mediano_min: "mediana de (fim - primeiro enter), em minutos",
+            entradas_por_serie:
+              "entradas cujo motivo termina em _series (a segunda fonte de descoberta)",
+          },
+          dias: coverageDays,
+          subscribe_book_missing_24h: {
+            total: toFiniteNumber(missingRow["total"]) ?? 0,
+            abertas: toFiniteNumber(missingRow["abertas"]) ?? 0,
+          },
         },
         storage: {
           basis:

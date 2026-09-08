@@ -128,6 +128,114 @@ export function createGapWriter(pool: QueryPool): GapWriter {
   };
 }
 
+/**
+ * RFC-024 D3: one open gap per token, opened and closed by cause.
+ *
+ * Two things make this worth a named helper rather than four inline lines.
+ *
+ * 1. **The close can lose a race with the open.** The book may arrive before
+ *    the INSERT returns the gap id, and closing "the gap for this token" then
+ *    has nothing to close. Holding the PROMISE of the id and awaiting it in
+ *    `close` is what keeps the gap from leaking open — the same shape the
+ *    orchestrator already uses for `both_connections_down`.
+ * 2. **One gap per episode.** A token re-armed while its gap is still open
+ *    must not open a second one; the count is of bookless episodes, not of
+ *    arming events.
+ */
+export interface TokenGapTracker {
+  /** Open a gap for this token, unless one is already open. */
+  open(input: {
+    readonly tokenId: string;
+    readonly source: GapSource;
+    readonly cause: string;
+    readonly at: Date;
+    readonly details?: Record<string, unknown>;
+  }): void;
+  /** Close this token's open gap, if any. */
+  close(tokenId: string, at: Date): void;
+  /** Forget this token's gap WITHOUT closing it (it stays open on purpose). */
+  abandon(tokenId: string): void;
+  /** Tokens with a gap currently open. */
+  openTokens(): string[];
+}
+
+export function createTokenGapTracker(deps: {
+  readonly gaps: Pick<GapWriter, "openGap" | "closeGap">;
+  readonly log?: (
+    level: "error" | "warn" | "info",
+    reasonCode: string,
+    extra?: Record<string, unknown>,
+  ) => void;
+}): TokenGapTracker {
+  const pending = new Map<string, Promise<number | null>>();
+  const log =
+    deps.log ??
+    ((level, reasonCode, extra): void => {
+      process.stderr.write(
+        `${JSON.stringify({
+          level,
+          service: "polymarket-recorder",
+          timestamp: new Date().toISOString(),
+          reason_code: reasonCode,
+          ...extra,
+        })}\n`,
+      );
+    });
+
+  return {
+    open(input): void {
+      if (pending.has(input.tokenId)) {
+        return;
+      }
+      pending.set(
+        input.tokenId,
+        (async (): Promise<number | null> => {
+          try {
+            return await deps.gaps.openGap({
+              source: input.source,
+              tokenId: input.tokenId,
+              cause: input.cause,
+              start: input.at,
+              ...(input.details === undefined
+                ? {}
+                : { details: input.details }),
+            });
+          } catch {
+            log("error", "GAP_PERSIST_FAILED", {
+              cause: input.cause,
+              token_id: input.tokenId,
+            });
+            return null;
+          }
+        })(),
+      );
+    },
+    close(tokenId, at): void {
+      const promise = pending.get(tokenId);
+      if (promise === undefined) {
+        return;
+      }
+      pending.delete(tokenId);
+      void promise
+        .then((gapId) =>
+          gapId === null ? undefined : deps.gaps.closeGap(gapId, at),
+        )
+        .catch(() => {
+          log("error", "GAP_PERSIST_FAILED", {
+            cause: "close_token_gap",
+            token_id: tokenId,
+          });
+        });
+    },
+    abandon(tokenId): void {
+      pending.delete(tokenId);
+    },
+    openTokens(): string[] {
+      return [...pending.keys()];
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Feed health (in-memory, 24h window)
 // ---------------------------------------------------------------------------

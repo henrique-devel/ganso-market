@@ -10,6 +10,7 @@ import { parseMarketFrame } from "./messages.js";
 import { createCalendarSync, createReleaseCollector } from "./macro.js";
 import {
   createGapWriter,
+  createTokenGapTracker,
   createFeedHealth,
   createReconciler,
   type InstantGapInput,
@@ -486,6 +487,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   let wsGapPromise: Promise<number | null> | null = null;
   let stopped = false;
   const lastRestResyncMs = new Map<string, number>();
+  // RFC-024 D3: the `subscribe_book_missing` gaps, one per bookless token.
+  const subscribeGaps = createTokenGapTracker({ gaps, log: logJson });
 
   async function resyncFromRest(tokenId: string): Promise<void> {
     const now = Date.now();
@@ -566,6 +569,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         windowStart: now,
         windowEnd: now,
       });
+    },
+    // RFC-024 D3: a token entered the subscription and stayed bookless for
+    // 60 s. Reuses the orchestrator's `gaps` writer and its pool — a second
+    // pool for a gap writer is how connection budgets get spent twice.
+    onSubscribeBookMissing: (tokenId: string) => {
+      subscribeGaps.open({
+        tokenId,
+        source: "clob_ws",
+        cause: "subscribe_book_missing",
+        at: new Date(),
+      });
+    },
+    onSubscribeBookArrived: (tokenId: string) => {
+      subscribeGaps.close(tokenId, new Date());
     },
   });
 
@@ -663,6 +680,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       logJson("warn", "GAMMA_EMPTY_UNIVERSE_KEPT", {});
       return;
     }
+    const previousTokenIds = tokenIds;
     universe = result.universe;
     const nextTokenIds = universe.flatMap((member) => [...member.tokenIds]);
     const changed =
@@ -677,6 +695,43 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         tokens: tokenIds.length,
       });
     }
+
+    // RFC-024 D3: watch the tokens that ENTERED, release the ones that left.
+    // Computed from the token lists rather than from `result.entered`, because
+    // membership is per market and the watch is per token — and a market can
+    // enter with one of its tokens already known.
+    const previousSet = new Set(previousTokenIds);
+    const nextSet = new Set(nextTokenIds);
+    const enteredTokens = nextTokenIds.filter((id) => !previousSet.has(id));
+    const exitedTokens = previousTokenIds.filter((id) => !nextSet.has(id));
+    if (exitedTokens.length > 0) {
+      pipeline.cancelSubscribeWatch(exitedTokens);
+    }
+    if (enteredTokens.length > 0) {
+      pipeline.armSubscribeWatch(enteredTokens);
+    }
+
+    // RFC-024 D4: one line per cycle saying what the series source did. The
+    // day aggregation lives in GET /polymarket/data-quality; this is the
+    // per-cycle trace that says whether the source is even running.
+    const leads = [...result.series.leadMinutes].sort((a, b) => a - b);
+    logJson("info", "FAST_COVERAGE", {
+      series_fetch_failed: result.series.fetchFailed,
+      series_candidates: result.series.candidates,
+      series_new_to_universe: result.series.newToUniverse,
+      series_entered: result.series.entered,
+      // `null` and never 0 when nothing entered: 0 would read as "entered at
+      // the buzzer", which is the exact failure this RFC exists to fix.
+      series_lead_min_median:
+        leads.length === 0
+          ? null
+          : (leads[Math.floor(leads.length / 2)] ?? null),
+      series_lead_min_min: leads[0] ?? null,
+      universe_markets: universe.length,
+      universe_tokens: tokenIds.length,
+      subscribe_watch_armed: enteredTokens.length,
+      subscribe_watch_released: exitedTokens.length,
+    });
     if (dual === null) {
       dual = createDualMarketSocket({
         socketFactory,

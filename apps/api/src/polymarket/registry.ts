@@ -48,6 +48,40 @@ export const SHORT_HORIZON_MS = 6 * 60 * 60 * 1_000;
  */
 export const SHORT_HORIZON_RESERVED_MARKETS = 25;
 
+/**
+ * RFC-024 D2: how far ahead the hourly-series source will reach.
+ *
+ * 75 min = the 10 min gamma cycle plus margin, so the `enter` lands at least
+ * 60 min before the end even in the worst phase (a market at 76 min is
+ * refused and enters the next cycle at 66 min). Measured 2026-09-08: the
+ * series publishes 48 h ahead, so the binding constraint is this window and
+ * nothing else.
+ */
+export const FAST_SERIES_LOOKAHEAD_MS = 75 * 60 * 1_000;
+/**
+ * Ceiling on series markets admitted per cycle. At one hourly market per hour
+ * and a 75 min window, 1-2 are live at any time; 4 is the ceiling that keeps
+ * a venue that starts emitting faster from quietly eating the reserve.
+ */
+export const FAST_SERIES_MAX_MARKETS = 4;
+
+/** Gamma series id of `btc-up-or-down-hourly`, confirmed live 2026-09-08. */
+export const HOURLY_SERIES_ID = "10114";
+
+/**
+ * The hourly BTC "up or down" series slug.
+ *
+ * Listed live on 2026-09-08 (URL in RFC-024): the hourly markets carry
+ * `bitcoin-up-or-down-september-8-2026-3pm-et`, the 5min/15min/4h carry
+ * `btc-updown-5m-<epoch>` / `-15m-` / `-4h-`, and the daily carries
+ * `bitcoin-up-or-down-on-september-8-2026`. The `SHORT_SERIES_PATTERN` above
+ * matches all of them; this one matches ONLY the hourly, which is what the
+ * fast universe is about. Anchored at both ends: a suffixed or malformed slug
+ * is not the series.
+ */
+export const HOURLY_SERIES_SLUG_PATTERN =
+  /^bitcoin-up-or-down-(?:january|february|march|april|may|june|july|august|september|october|november|december)-(?:[1-9]|[12][0-9]|3[01])-\d{4}-(?:1[0-2]|[1-9])(?:am|pm)-et$/;
+
 const USER_AGENT = "GansoMarketRecorder/1.0 (+public-data-recorder)";
 
 // Hard exclusions applied to question/slug regardless of tag classification.
@@ -64,7 +98,7 @@ const SUBJECTIVE_SOURCE_PATTERN =
 
 // Short-series crypto markets (5min/15min/1h "up or down" style) are the
 // lowest cap priority.
-const SHORT_SERIES_PATTERN =
+export const SHORT_SERIES_PATTERN =
   /\b\d{1,2}\s?(?:min|m)\b|\b1\s?h(?:our)?\b|hourly|up or down|\d{1,2}\s?(?:am|pm)\b|:\d{2}\s?(?:am|pm)/i;
 
 export type JsonFetcher = (
@@ -78,6 +112,23 @@ export interface UniverseMember {
   readonly category: string;
 }
 
+/**
+ * RFC-024 D4: what the hourly-series source did this cycle, so the orchestrator
+ * can emit FAST_COVERAGE without querying anything.
+ */
+export interface SeriesCycleReport {
+  /** The series listing failed; a `series_fetch_failed` gap was recorded. */
+  readonly fetchFailed: boolean;
+  /** Hourly markets inside the lookahead window, after the cap. */
+  readonly candidates: number;
+  /** Of those, the ones the top-500 had NOT already found. */
+  readonly newToUniverse: number;
+  /** Series markets that entered the universe this cycle. */
+  readonly entered: number;
+  /** Minutes from now to the end, per series market that entered. */
+  readonly leadMinutes: readonly number[];
+}
+
 export interface GammaCycleResult {
   readonly universe: UniverseMember[];
   readonly entered: string[];
@@ -85,7 +136,16 @@ export interface GammaCycleResult {
   /** True when the Gamma fetch failed completely: the previous universe must
    * be kept untouched by the caller (no resubscribe, no exits). */
   readonly fetchFailed: boolean;
+  readonly series: SeriesCycleReport;
 }
+
+const EMPTY_SERIES_REPORT: SeriesCycleReport = {
+  fetchFailed: false,
+  candidates: 0,
+  newToUniverse: 0,
+  entered: 0,
+  leadMinutes: [],
+};
 
 export interface GammaCycleDeps {
   readonly pool: DatabasePool;
@@ -395,6 +455,120 @@ async function fetchGammaPages(
     }
   }
   return { records, unparsedCount, failed: false };
+}
+
+/**
+ * RFC-024 D2: the second discovery source — the hourly BTC series, listed by
+ * series id instead of by 24 h volume.
+ *
+ * WHY a second source at all. `fetchGammaPages` asks for the top 500 by
+ * `volume24hr`, which is the right query for everything the recorder priced
+ * until now and the wrong one for a market that lives 60 minutes. An hourly
+ * only accumulates enough volume to enter the top 500 in its last ~20 min:
+ * measured 2026-09-08 over 65 expired hourlies, the median `enter` was
+ * **12,6 min** before the end (q1 2,9; q3 16,3) and NONE reached 60 min.
+ * Listed by series, the same markets are visible **48 h ahead** with
+ * `volume24hr` null — which is exactly why volume ordering never finds them.
+ *
+ * `GET /events?series_id=...&closed=false` is the query that works. Measured
+ * the same day, `GET /markets?series_id=...` IGNORES the filter and returns
+ * unrelated markets, so it must never be used for this.
+ *
+ * The nested market object inside an event carries everything `parseMarket`
+ * needs EXCEPT `tags` (which live on the event) and `events` (absent). Both
+ * are grafted on before parsing, so a series record goes through exactly the
+ * same parser, classification and hard exclusions as a top-500 record — a
+ * second code path with its own semantics is how two sources come to disagree.
+ */
+async function fetchSeriesMarkets(
+  fetcher: JsonFetcher,
+  baseUrl: string,
+  now: Date,
+): Promise<FetchOutcome> {
+  const url =
+    `${baseUrl}/events?series_id=${HOURLY_SERIES_ID}` +
+    `&closed=false&limit=${PAGE_LIMIT}`;
+  let rows: unknown[];
+  try {
+    const response = await fetcher(url, {
+      headers: { accept: "application/json", "user-agent": USER_AGENT },
+    });
+    if (!response.ok) {
+      return { records: [], unparsedCount: 0, failed: true };
+    }
+    const body = (await response.json()) as unknown;
+    rows = Array.isArray(body) ? body : [];
+  } catch {
+    return { records: [], unparsedCount: 0, failed: true };
+  }
+
+  const nowMs = now.getTime();
+  const candidates: Array<{ record: ExtendedMarketRecord; endMs: number }> = [];
+  let unparsedCount = 0;
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null) {
+      unparsedCount += 1;
+      continue;
+    }
+    const event = row as Record<string, unknown>;
+    const slug = typeof event["slug"] === "string" ? event["slug"] : "";
+    // The regex is the second guard, not the discovery: the series id already
+    // selects the hourly series. It is here so that a venue that re-points the
+    // id, or adds another cadence to the same series, cannot widen the fast
+    // universe silently.
+    if (!HOURLY_SERIES_SLUG_PATTERN.test(slug)) {
+      continue;
+    }
+    const markets = Array.isArray(event["markets"]) ? event["markets"] : [];
+    for (const nested of markets) {
+      if (typeof nested !== "object" || nested === null) {
+        unparsedCount += 1;
+        continue;
+      }
+      const enriched = {
+        ...(nested as Record<string, unknown>),
+        // The event owns the tags; without them the nested market classifies
+        // by keyword fallback instead of by the venue's own taxonomy.
+        tags: event["tags"],
+        events: [
+          {
+            id: event["id"],
+            slug: event["slug"],
+            title: event["title"],
+            ticker: event["ticker"],
+          },
+        ],
+      };
+      const record = parseExtendedMarket(enriched);
+      if (record === null) {
+        unparsedCount += 1;
+        continue;
+      }
+      const end = parseIsoDate(record.endDate);
+      if (end === null) {
+        continue;
+      }
+      const endMs = end.getTime();
+      // Two-sided: the listing carries stale `closed=false` leftovers (one
+      // from May was live in the 2026-09-08 response), and a market whose end
+      // has passed must never enter the universe.
+      if (endMs <= nowMs || endMs - nowMs > FAST_SERIES_LOOKAHEAD_MS) {
+        continue;
+      }
+      candidates.push({ record, endMs });
+    }
+  }
+
+  // Soonest first, then capped: if the venue ever emits more than the ceiling
+  // inside the window, the ones closest to resolving are the ones worth having.
+  candidates.sort((left, right) => left.endMs - right.endMs);
+  return {
+    records: candidates
+      .slice(0, FAST_SERIES_MAX_MARKETS)
+      .map((entry) => entry.record),
+    unparsedCount,
+    failed: false,
+  };
 }
 
 interface UniverseLogState {
@@ -807,7 +981,13 @@ export async function runGammaCycle(
     } catch {
       log("error", "GAP_PERSIST_FAILED", "polymarket_gap_persist_failed");
     }
-    return { universe: [], entered: [], exited: [], fetchFailed: true };
+    return {
+      universe: [],
+      entered: [],
+      exited: [],
+      fetchFailed: true,
+      series: EMPTY_SERIES_REPORT,
+    };
   }
   if (outcome.failed) {
     log("warn", "GAMMA_FETCH_PARTIAL", "polymarket_gamma_fetch_partial", {
@@ -820,7 +1000,53 @@ export async function runGammaCycle(
     });
   }
 
-  const selection = selectUniverse(outcome.records, now());
+  // RFC-024 D2: the hourly series, in parallel with the top-500 and joined
+  // BEFORE selection so the cap, the hard exclusions and the reserve act on
+  // one list. A series failure NEVER costs the cycle: the top-500 selection
+  // proceeds untouched and the failure is recorded as a gap.
+  const seriesConditionIds = new Set<string>();
+  const seriesEndMs = new Map<string, number>();
+  let seriesRecords: ExtendedMarketRecord[] = [];
+  const series = await fetchSeriesMarkets(fetcher, baseUrl, now());
+  if (series.failed) {
+    log("warn", "SERIES_FETCH_FAILED", "polymarket_series_fetch_failed", {
+      series_id: HOURLY_SERIES_ID,
+    });
+    try {
+      await insertDataGap(pool, "gamma", null, "series_fetch_failed", now(), {
+        series_id: HOURLY_SERIES_ID,
+        base_url: baseUrl,
+      });
+    } catch {
+      log("error", "GAP_PERSIST_FAILED", "polymarket_gap_persist_failed");
+    }
+  } else {
+    // A market the top-500 already found is NOT counted as a series entrant:
+    // the reason suffix has to say which source actually discovered it.
+    const fromTop500 = new Set(
+      outcome.records.map((record) => record.conditionId),
+    );
+    seriesRecords = series.records.filter(
+      (record) => !fromTop500.has(record.conditionId),
+    );
+    for (const record of seriesRecords) {
+      seriesConditionIds.add(record.conditionId);
+      const end = parseIsoDate(record.endDate);
+      if (end !== null) {
+        seriesEndMs.set(record.conditionId, end.getTime());
+      }
+    }
+    if (series.unparsedCount > 0) {
+      log("warn", "SERIES_PARSE_SKIPPED", "polymarket_series_rows_unparsed", {
+        count: series.unparsedCount,
+      });
+    }
+  }
+
+  const selection = selectUniverse(
+    [...outcome.records, ...seriesRecords],
+    now(),
+  );
   const selectedIds = new Set(
     selection.selected.map((record) => record.conditionId),
   );
@@ -840,6 +1066,8 @@ export async function runGammaCycle(
 
   const entered: string[] = [];
   const exited: string[] = [];
+  let seriesEntered = 0;
+  const seriesLeadMinutes: number[] = [];
   const rejectionByCondition = new Map<
     string,
     { action: "rejected_filter" | "rejected_cap"; reason: string }
@@ -955,17 +1183,28 @@ export async function runGammaCycle(
             tx,
             record.conditionId,
             "enter",
-            // RFC-016 appends the horizon bucket, so "how much of the turnover
-            // is the fast universe" is answerable from the membership log
-            // alone — no join against a rule chain that has moved on by the
-            // time anyone asks.
-            `priority_${String(capPriority(record, observedAt))}_${record.category ?? "unknown"}_${horizonBucketLabel(record, observedAt)}`,
+            // RFC-016 appends the horizon bucket; RFC-024 appends `_series`
+            // when the hourly-series source is what found the market, so the
+            // coverage metric can tell the two discovery paths apart from the
+            // membership log alone.
+            `priority_${String(capPriority(record, observedAt))}_${record.category ?? "unknown"}_${horizonBucketLabel(record, observedAt)}${
+              seriesConditionIds.has(record.conditionId) ? "_series" : ""
+            }`,
             observedAt,
           );
         }
       });
       if (entering) {
         entered.push(record.conditionId);
+        if (seriesConditionIds.has(record.conditionId)) {
+          seriesEntered += 1;
+          const endMs = seriesEndMs.get(record.conditionId);
+          if (endMs !== undefined) {
+            seriesLeadMinutes.push(
+              Math.round(((endMs - observedAt.getTime()) / 60_000) * 10) / 10,
+            );
+          }
+        }
       }
       await upsertEvents(pool, record, observedAt);
       await applyRuleObservation(pool, ruleObservationFrom(record), observedAt);
@@ -1035,7 +1274,19 @@ export async function runGammaCycle(
     }
   }
 
-  return { universe, entered, exited, fetchFailed: false };
+  return {
+    universe,
+    entered,
+    exited,
+    fetchFailed: false,
+    series: {
+      fetchFailed: series.failed,
+      candidates: series.records.length,
+      newToUniverse: seriesRecords.length,
+      entered: seriesEntered,
+      leadMinutes: seriesLeadMinutes,
+    },
+  };
 }
 
 export interface RefreshParamsDeps {
