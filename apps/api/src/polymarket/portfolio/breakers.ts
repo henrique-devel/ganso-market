@@ -105,6 +105,13 @@ export interface BreakerConfigInput {
   readonly jumpWindowMs: number;
   /** Book older than this is stale (the same TTL the entry gate uses). */
   readonly bookMaxAgeMs: number;
+  /**
+   * The entry price band, already scaled (RFC-025 D3). Both ends of a jump
+   * outside it, with no position, is the one case where opening the breaker
+   * changes nothing about the verdict — see branch (ii).
+   */
+  readonly bandMinBuyScaled: bigint;
+  readonly bandMaxBuyScaled: bigint;
 }
 
 /**
@@ -173,9 +180,33 @@ export function detectBreakers(input: {
   //      The documented patterns are 17%->95% and 9%->100%; a move that size
   //      with no catalyst is either information nobody published or a book
   //      being pushed, and neither is a reason to enter.
+  //
+  //      RFC-025 D3: with NO position and BOTH mids outside the entry band, the
+  //      breaker is omitted. The threshold is 15% RELATIVE, and the median
+  //      `mid_before` of the 9 570 historical firings was $0.019 — at that price
+  //      15% is 0.7 of a cent, one tick. 80% of the firings were outside the
+  //      band. In that case `PRICE_OUT_OF_BAND` refuses the entry on the CURRENT
+  //      price in the same cycle (`engine.ts:496-499`), so the verdict is
+  //      identical and only the label changes; what the breaker was adding was
+  //      noise in `portfolio_circuit_breakers` and a distorted G3 reading.
+  //
+  //      Why BOTH ends and not just `mid_before`: looking at `mid_before` alone
+  //      would be a LOOSENING. A token at 0.96 falling 17% to 0.80 with no
+  //      catalyst is exactly the RFC-013 4(ii) pattern — `mid_before` outside,
+  //      `mid_now` INSIDE the band — and with the naive condition the entry at
+  //      0.80 would sail past `PRICE_OUT_OF_BAND` and reach the arithmetic. That
+  //      case still opens. With a position, nothing changes at any price.
   if (o.midNowScaled !== null && o.midBeforeScaled !== null) {
     const move = relativeMove(o.midNowScaled, o.midBeforeScaled);
-    if (move > config.jumpThresholdScaled && !o.knownCatalystInWindow) {
+    const inBand = (price: bigint): boolean =>
+      price >= config.bandMinBuyScaled && price <= config.bandMaxBuyScaled;
+    const tradeable =
+      o.holdsPosition || inBand(o.midBeforeScaled) || inBand(o.midNowScaled);
+    if (
+      move > config.jumpThresholdScaled &&
+      !o.knownCatalystInWindow &&
+      tradeable
+    ) {
       signals.push({
         kind: "PRICE_JUMP_NO_CATALYST",
         scope: "token",
@@ -187,6 +218,9 @@ export function detectBreakers(input: {
           relative_move: money(move),
           threshold: money(config.jumpThresholdScaled),
           window_ms: config.jumpWindowMs,
+          band_min_buy: money(config.bandMinBuyScaled),
+          band_max_buy: money(config.bandMaxBuyScaled),
+          holds_position: o.holdsPosition,
         },
       });
     }
