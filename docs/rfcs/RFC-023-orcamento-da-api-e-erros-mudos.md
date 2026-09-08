@@ -1,6 +1,7 @@
 # RFC-023 — Orçamento de 1 s da API e erros mudos: cada consulta declara o que pode custar, cada falha diz o que falhou
 
-**Status:** accepted — autorizado para implementação (2026-09-04); sem decisão pendente (2026-09-05)
+**Status:** **implemented (2026-09-07/08, PRs [#113](https://github.com/henrique-devel/ganso-market/pull/113) D1+D2, [#114](https://github.com/henrique-devel/ganso-market/pull/114) D3, [#115](https://github.com/henrique-devel/ganso-market/pull/115) D4)** — os três mergeados, deployados e verificados em produção; `release-sha` conferido em cada container reconstruído. A1–A6 no `docs/HANDOFF.md`.
+Antes: accepted — autorizado para implementação (2026-09-04); sem decisão pendente (2026-09-05)
 **Origem:** diagnóstico de 2026-09-02 (relatório publicado: https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6 — item RFC-023, dívidas D15/D16/D44, céticos 13 e 15) e a seção "O 500 de 31/08 não era irreproduzível" do `docs/HANDOFF.md`
 **Dependências:** PR-0 (a) — hotfix sem RFC (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item a): `overview.ts` `occurred_at` → `event_ts`, mensagem no `OVERVIEW_API_FAILED` e teste que executa o SQL contra o esquema real. Esta RFC **não** refaz o PR-0; ela parte dele. RFC-015 (endpoints do painel), RFC-002 (perímetro: nada novo é publicado)
 **Habilita:** diagnóstico em minutos em vez de dias (o defeito do `occurred_at` ficou 40 h invisível porque o log dizia só `error_name: "error"`); painel sem 500 com cache frio; `live_volume` deixa de ser um `NULL` mudo há mais de 30 h
@@ -14,6 +15,21 @@
 ## Fatos medidos (02–03/09/2026; RE-MEDIR antes de codar)
 
 Linhas conferidas no worktree em 2026-09-03 (`git rev-parse --short HEAD` = `ef7ca2d`).
+
+> **RE-MEDIÇÃO DE 2026-09-07 (sessão executora).** Das nove premissas, **sete se
+> confirmaram, uma se fortaleceu e uma caiu.**
+>
+> | Premissa | Resultado |
+> | --- | --- |
+> | PR-0 (a) mergeado | ✅ `grep -n "occurred_at >" overview.ts` vazio; o alias do feed `/events` continua e é legítimo |
+> | `database.ts` deriva o timeout do de conexão | ✅ ainda derivava, nas linhas **75-76** (não 40-41: a RFC-020 D3 deslocou o arquivo) |
+> | `connect_timeout_ms = 1000` | ✅ inalterado |
+> | `proxy_read_timeout 5s` | ✅ inalterado ⇒ teto de 4 000 ms |
+> | `SAMPLER_FETCH_FAILED` ~90/15 min | ⚠️ **486 em 2 h** = ~61/15 min, menos do que os ~90 registrados |
+> | 549/551 com `path: /live-volume` | ⬆️ **486 de 486 = 100 %**, mais forte que os 99,6 % anteriores |
+> | `live_volume` NULL em 100 % | ✅ **0 preenchidos em 972** (2 h) e **0 em 17 800** (30 h) |
+> | `/overview` quente: coleta 212,7 ms, modelo 382 ms | ⚠️ **melhorou**: coleta 45–59 ms, modelo 90–216 ms. Segue sendo o par dominante; insumo da D2, não parada |
+> | **Postgres recriado a cada merge** | ❌ **CAIU.** A RFC-020 parou a recriação (esta RFC dependia dela sem saber). `StartedAt` = `2026-09-07T01:08:01Z`, 21 h de pé. **Consequência:** não existe mais janela fria após o CD, e a coluna "frio" da D2 só saiu com um `docker compose restart postgres` **autorizado pelo proprietário** em 22:59:17Z. O risco que a RFC descrevia — "a frio, na janela pós-deploy, viram o próximo 500" — **não existe mais nessa forma**: o cache sobrevive ao deploy. O orçamento continua valendo, porque um restart de banco ainda acontece, e agora ele é a única fonte de frio. |
 
 ### O orçamento herdado
 

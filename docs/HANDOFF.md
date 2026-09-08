@@ -1,6 +1,29 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-07 (2) — **RFC-022 CODADA E TESTADA, NENHUM PR MERGEADO OU
+- Última atualização: 2026-09-08 — **RFC-023 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** Três PRs
+  ([#113](https://github.com/henrique-devel/ganso-market/pull/113) orçamento,
+  [#114](https://github.com/henrique-devel/ganso-market/pull/114) mensagens,
+  [#115](https://github.com/henrique-devel/ganso-market/pull/115) `/live-volume`), mergeados,
+  deployados e com `release-sha` conferido em todos os containers reconstruídos. **A premissa
+  central da RFC caiu:** o Postgres **não é mais recriado a cada merge** — a RFC-020 parou isso,
+  e esta RFC dependia dela sem saber (`StartedAt` de 21 h atravessando vários merges). Não
+  existe mais janela fria pós-deploy, então a coluna "frio" da D2 só saiu com um
+  `restart postgres` **autorizado pelo proprietário** às 22:59:17Z. **O orçamento agora é
+  declarado por rota** (22 rotas, teto 4 000, padrão 2 000) e foi provado contra o Postgres de
+  produção: `SHOW statement_timeout` devolve 1500/4000/500 ms por rota,
+  `transaction_read_only=on`, e uma escrita dentro do executor é recusada pelo servidor com
+  **SQLSTATE 25006**. **Os 105 sítios de log passam a dizer o que falhou** — o defeito que ficou
+  40 h invisível hoje imprime
+  `{"error_message":"column \"occurred_at\" does not exist","pg_code":"42703"}` numa linha.
+  **O `/live-volume` não estava extinto:** era chamado com o identificador errado, e agora
+  responde por event id — `live_volume` foi de **0 de 17 800** linhas para **150 de 150** no
+  primeiro ciclo, e `SAMPLER_FETCH_FAILED` de ~61/15 min para **0**. **Duas dívidas registradas
+  e deliberadamente não pagas** (exigem migration): o índice que falta ao `percentile_cont` do
+  `/data-quality`, que ficou **no teto sem folga** (2 601 ms a frio, 244 mil linhas/hora), e o
+  `MAX(decision_ts)` do `/overview`, que varre 1 084 410 entradas. **A2 depende do
+  proprietário** abrir todas as abas em ≤ 5 min de um restart da API; A1 e A3 refazer 24 h após
+  08/09 00:05Z. Ver a seção "SESSÃO 2026-09-08" ao final.
+- 2026-09-07 (2) — **RFC-022 CODADA E TESTADA, NENHUM PR MERGEADO OU
   DEPLOYADO.** Os três PRs estão abertos ([#109](https://github.com/henrique-devel/ganso-market/pull/109)
   D1 ponte, [#110](https://github.com/henrique-devel/ganso-market/pull/110) D2+D3 runtime,
   [#111](https://github.com/henrique-devel/ganso-market/pull/111) D4-A saídas), com `make verify`
@@ -4779,3 +4802,142 @@ vez de devolver as linhas cruas. Antes, um cutoff derivado da constante errada �
 placeholder errado — passaria; agora muda as linhas que o fake devolve. É a mesma lição do
 `overview.pg.test.ts` de 04/09, em que a suíte antiga concordava com o código contra a
 realidade.
+
+---
+
+## SESSÃO 2026-09-08 — RFC-023: o orçamento que ninguém declarou, e o log que não dizia nada
+
+**Três PRs mergeados, deployados e verificados em produção**:
+[#113](https://github.com/henrique-devel/ganso-market/pull/113) (D1+D2, orçamento),
+[#114](https://github.com/henrique-devel/ganso-market/pull/114) (D3, mensagens),
+[#115](https://github.com/henrique-devel/ganso-market/pull/115) (D4, `/live-volume`).
+`make verify` verde em cada um; cada regressão vista falhando no HEAD anterior.
+`release-sha` conferido em **todos** os containers reconstruídos.
+
+### A re-medição: sete premissas confirmadas, uma fortalecida, **uma caiu**
+
+| Premissa | Resultado |
+| --- | --- |
+| PR-0 (a) mergeado (`occurred_at` → `event_ts`) | ✅ `grep "occurred_at >"` vazio; o alias do feed `/events` fica, e é legítimo |
+| `database.ts` deriva o timeout de query do de conexão | ✅ ainda derivava — nas linhas **75-76**, não 40-41 (a RFC-020 D3 deslocou o arquivo) |
+| `connect_timeout_ms = 1000` | ✅ |
+| `proxy_read_timeout 5s` | ✅ ⇒ teto 4 000 ms |
+| `SAMPLER_FETCH_FAILED` ~90/15 min | ⚠️ **486 em 2 h** ≈ 61/15 min |
+| 549/551 com `path: /live-volume` | ⬆️ **486 de 486 = 100 %** |
+| `live_volume` NULL em 100 % | ✅ **0 de 972** (2 h), **0 de 17 800** (30 h) |
+| `/overview` quente: coleta 212,7 / modelo 382 ms | ⚠️ **melhorou**: 45–59 / 90–216 ms. Segue o par dominante |
+| **Postgres recriado a cada merge** | ❌ **CAIU** |
+
+**A premissa que caiu é a mais importante da RFC.** A RFC-023 justificava a urgência
+assim: "a frio, na janela pós-deploy em que o postgres é recriado a cada merge, [as
+consultas de 212 e 382 ms] viram o próximo 500". Só que a **RFC-020 parou a recriação** —
+esta RFC dependia da anterior sem saber. `StartedAt` do
+`ganso-market-postgres-1` era `2026-09-07T01:08:01Z`, **21 h de pé** através de vários
+merges. Consequências:
+
+1. **O risco central mudou de forma.** O cache sobrevive ao deploy, então o painel não
+   encontra mais um banco frio depois de cada merge. O orçamento continua valendo — um
+   restart de banco ainda acontece, e agora ele é a **única** fonte de frio — mas a
+   ameaça deixou de ser rotineira.
+2. **A coluna "frio" da D2 não existia mais.** Foi produzida com um
+   `docker compose restart postgres` **autorizado pelo proprietário**, executado às
+   **22:59:17Z**; a passada fria saiu entre 22:59:40Z e 22:59:46Z. Um segundo restart,
+   que teria completado quatro consultas medidas depois, **não foi feito**: as quatro
+   estão marcadas `frio*` na D2 e são um piso, não o frio verdadeiro.
+
+### D1/D2 — o orçamento (PR #113)
+
+`createDatabasePool` fazia `overrides.queryTimeoutMs ?? config.database.connectTimeoutMs`,
+e o pool da API não passava override. Toda consulta do painel corria sob **1 000 ms que
+ninguém escolheu** — o timeout de *conexão*, posto no `runtime.json` para outra coisa.
+Agora o boot falha com `QUERY_TIMEOUT_UNDECLARED` sem orçamento explícito, e
+`services.api.statement_timeout_ms` declara teto 4 000, padrão 2 000 e **22 rotas**.
+
+**Provado contra o Postgres de produção**, via o `readOnly` compilado da própria API:
+
+```
+/polymarket/overview       declarado=1500ms  SHOW=1500ms  read_only=on
+/polymarket/data-quality   declarado=4000ms  SHOW=4s      read_only=on
+/polymarket/gates          declarado=500ms   SHOW=500ms   read_only=on
+escrita recusada: 25006 cannot execute CREATE TABLE in a read-only transaction
+```
+
+**Duas dívidas registradas e deliberadamente NÃO pagas** (a D1 proíbe subir orçamento
+para uma consulta caber; as duas exigem índice, logo migration, logo fora do escopo):
+
+1. **`/data-quality` ficou exatamente no teto, sem folga.** `percentile_cont` sobre
+   **244 134 linhas/hora** de `polymarket_book_deltas`: 889,7 ms quente, **2 601,7 ms a
+   frio**. O índice `_received_at_idx` acha a janela, mas `ingest_lag_ms` não está nele,
+   então cada linha vira acesso ao heap. Falta `(received_at) INCLUDE (ingest_lag_ms)`.
+2. **`/overview` gasta 290 dos seus 300 ms quentes num `MAX(decision_ts)`** que varre
+   **1 084 410** entradas de índice, porque nenhum dos seis índices de
+   `fundamental_estimates` tem `decision_ts` como primeira coluna. A tabela cresce todo
+   dia; hoje cabe em 1 500 ms, e é a primeira que estoura quando não couber.
+
+Um teste lê o `infra/nginx/nginx.conf` e falha se uma rota sob prefixo publicado não tiver
+orçamento próprio — publicar sem declarar custo passa a ser impossível. Verificado
+falhando.
+
+**Achado de brinde, pego pelo CI:** o `config/runtime.json` é lido por **três** serviços,
+e os três recusam chave desconhecida. O primeiro commit ensinou só o parser TypeScript, e
+o market-engine parou de subir (`CONFIG_INVALID ... line 15, column 28`). O model-worker
+tinha o mesmo defeito latente. Os dois passaram a parsear a chave **com os mesmos
+limites** — um parser mais permissivo que o outro é um arquivo que um serviço aceita e o
+outro recusa, descoberto no deploy.
+
+### D3 — as mensagens (PR #114)
+
+Os **105** sítios de log passam por `errorFields(error)` → `error_name`, `error_message`,
+`pg_code`. Demonstração controlada contra o Postgres de produção, com o exato defeito que
+ficou 40 h invisível e com o timeout que o orçamento produz de propósito:
+
+```json
+{"reason_code":"DEMO_COLUNA","error_name":"error","error_message":"column \"occurred_at\" does not exist","pg_code":"42703"}
+{"reason_code":"DEMO_TIMEOUT","error_name":"error","error_message":"canceling statement due to statement timeout","pg_code":"57014"}
+```
+
+Antes, as duas linhas eram `{"error_name":"error"}` e nada mais.
+
+### D4 — `/live-volume` (PR #115)
+
+**O endpoint não estava extinto.** Medido de dentro do servidor antes de qualquer código:
+
+| Chamada | Status | Corpo |
+| --- | --- | --- |
+| `?market=<conditionId>` — o que o código fazia | **400** | `{"error":"required query param 'id' not provided"}` |
+| `?id=<conditionId>` | 400 | `{"error":"strconv.Atoi: parsing \"0xcc57…\": invalid syntax"}` |
+| `?id=978462` (event id) | **200** | `[{"total":10900.5,"markets":[{"market":"0xcc57…","value":10900.5}]}]` |
+
+Duas coisas erradas, não uma: o **parâmetro** (é o id numérico do EVENTO, que
+`polymarket_event_markets` guarda desde a migration 0005) e a **forma do corpo** (é a
+quebra por mercado do evento; ler o `total` teria dado **285 817 188** a cada perna de um
+grupo negRisk em vez dos **83 454 379** da primeira — corrigir só a query string teria
+trocado um NULL por um número errado).
+
+As 17 800 linhas antigas seguem NULL e **não são preenchíveis**: o endpoint só reporta
+volume corrente. Documentado em `readapi.ts`, na rota que expõe o campo — ali NULL é
+"não coletado", nunca "zero".
+
+### Aceite em produção
+
+Deploy dos workers às **2026-09-07T23:59Z**, do recorder às **00:04:54Z**.
+
+| # | Critério | Medido | Status |
+| - | --- | --- | --- |
+| A1 | nenhum `*_FAILED` mudo | **0 sem `error_message`** nos seis serviços — mas com **0 `*_FAILED` no total**, isto é, denominador zero até agora. A demonstração controlada acima mostra o formato funcionando | ✅ com ressalva; refazer 24 h após 08/09 00:05Z |
+| A2 | nenhum 500 no painel | **0** `status_code:500`. Mas só `/health/*` foi chamado: **o proprietário ainda não abriu as abas** | ⏳ **depende do proprietário** — abrir todas as abas em ≤ 5 min de um restart da API e registrar o horário |
+| A3 | nenhum timeout da API | **0** `"pg_code":"57014"` em todos os serviços | ✅ preliminar; refazer em 24 h |
+| A4 | orçamento declarado é o que roda | `SHOW statement_timeout` = 1500/4000/500 ms por rota contra o Postgres de produção; `transaction_read_only=on`; escrita recusada com **25006**. Mais o teste com pool falso, por rota | ✅ |
+| A5 | `live_volume` resolvido | **150 de 150** linhas com valor no primeiro ciclo após o PR 3 (era **0 de 17 800**). `SAMPLER_FETCH_FAILED` = **0** (era ~61/15 min). `LIVE_VOLUME_EVENT_UNKNOWN` = **0** | ✅ |
+| A6 | tabela D2 preenchida | 11 locations / 22 rotas, quente e frio | ✅ com a ressalva das quatro linhas `frio*` |
+
+### O que quem retomar precisa fazer
+
+1. **A2 depende de uma ação humana.** Abrir todas as abas do painel em ≤ 5 min após um
+   restart da API e registrar o horário. Sem isso o A2 fica com denominador zero.
+2. **Refazer A1 e A3 em 24 h** (após 2026-09-08 00:05Z), com os comandos da RFC-023.
+3. **Decidir as duas dívidas de índice.** As duas são migration e ficaram fora por regra
+   da própria RFC. A do `/data-quality` é a urgente: a rota está **no teto, sem folga**, e
+   é a única cujo orçamento não tem margem nenhuma.
+4. **Um segundo restart de Postgres** completaria as quatro linhas `frio*` da D2, se o
+   proprietário achar que vale.
