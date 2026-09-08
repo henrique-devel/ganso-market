@@ -4931,6 +4931,26 @@ Deploy dos workers às **2026-09-07T23:59Z**, do recorder às **00:04:54Z**.
 | A5 | `live_volume` resolvido | **150 de 150** linhas com valor no primeiro ciclo após o PR 3 (era **0 de 17 800**). `SAMPLER_FETCH_FAILED` = **0** (era ~61/15 min). `LIVE_VOLUME_EVENT_UNKNOWN` = **0** | ✅ |
 | A6 | tabela D2 preenchida | 11 locations / 22 rotas, quente e frio | ✅ com a ressalva das quatro linhas `frio*` |
 
+### Um artefato do deploy que o leitor do soak vai encontrar
+
+Há **8 lacunas `subscribe_book_missing` permanentemente abertas**, todas
+anteriores ao PR #123, e elas **não** são um defeito da versão em produção:
+
+- 6 nasceram no ciclo de 02:51:45Z e 2 no de 03:01:44Z, todas com o build que
+  ainda mandava frame em socket vivo. São a própria evidência da H1;
+- o rastreador de lacuna é **em memória** por desenho (`createTokenGapTracker`),
+  então o rebuild do profile às 03:07Z zerou o mapa. As 8 linhas ficaram sem
+  ninguém para fechá-las, e vão continuar com `gap_end IS NULL` para sempre.
+
+Consequência prática, para não ser lida como regressão: por 24 h o
+`subscribe_book_missing_24h` do `data-quality` conta essas 8, e o campo
+`abertas` também. Depois disso elas saem da janela. **O que interessa medir no
+soak são as lacunas com `gap_start` a partir de 09/09**, e o
+`scripts/rfc024/soak_query.sql` já agrupa por dia justamente por isso.
+
+Fechá-las à mão seria uma escrita fora de deploy numa tabela de coleta, e esta
+sessão não faz isso.
+
 ### O que quem retomar precisa fazer
 
 1. **A2 depende de uma ação humana.** Abrir todas as abas do painel em ≤ 5 min após um
@@ -4941,3 +4961,368 @@ Deploy dos workers às **2026-09-07T23:59Z**, do recorder às **00:04:54Z**.
    é a única cujo orçamento não tem margem nenhuma.
 4. **Um segundo restart de Postgres** completaria as quatro linhas `frio*` da D2, se o
    proprietário achar que vale.
+
+## SESSÃO 2026-09-08 (2) — RFC-024: o universo rápido era descoberto por volume, e a folga do `book_deltas` não existia mais
+
+**Estado ao fim desta entrada:** PRs [#117](https://github.com/henrique-devel/ganso-market/pull/117) (prova no fio),
+[#119](https://github.com/henrique-devel/ganso-market/pull/119) (fix de teste) e
+[#118](https://github.com/henrique-devel/ganso-market/pull/118) (série, lacuna e métrica) — ver a seção "O que
+quem retomar precisa fazer" ao fim para o que ficou aberto.
+
+### A re-medição: a premissa central piorou, e uma premissa lateral CAIU
+
+Medida em produção entre 01:41Z e 02:10Z, somente leitura, com `psql` direto
+(as consultas de população não cabem no `statement_timeout` da API). População:
+os **65 horários BTC com fim nas últimas 72 h**.
+
+| Premissa | Resultado |
+| --- | --- |
+| Mediana do `enter` = 21,0 min antes do fim | ⬇️ **piorou: 12,6 min** (q1 2,9; q3 16,3), **0 de 65** com ≥ 60 min |
+| Cobertura de livro ~8 % | ⬇️ **3,1 % na régua da D4** (2 de 65); 4,6 % na régua antiga nas mesmas 72 h |
+| Catálogo cobre ~72 % dos horários | ⬆️ **90 %** (65 de 72) — o gargalo não é catalogar, é *quando* |
+| 313,67 B por linha de `book_deltas` | ✅ **idêntico** |
+| 11,33–15,59 M linhas/dia | ✅ **13,2 M/dia** medido em 24 h |
+| RFC-020 não entregue | ⬆️ **entregue** — `Created` do postgres em 07/09 00:11:02Z, sobreviveu a vários merges |
+| RFC-021 não entregue | ⚠️ **segue não entregue** (prompt 13 pendente) |
+| **Folga de 11,6 GiB em `book_deltas`** | ❌ **CAIU** |
+
+**A premissa que caiu é a da P2, e o proprietário pediu o número real antes do
+PR 2. Aqui está.**
+
+| Grandeza | RFC (02/09) | Medido (08/09) | Fonte |
+| --- | --- | --- | --- |
+| Bytes **vivos** | 35,174 GiB | **44,43 GiB** | `RETENTION_BLOAT` do recorder, 00:05:09Z (`live_bytes: 47705950084`) |
+| Bytes vivos (2.ª medição) | — | 44,855 GiB | `psql` 01:45Z, fórmula do `measureTableSizes` replicada |
+| Bytes físicos | — | 56,29 GiB (bloat 11,4 GiB) | `pg_total_relation_size` |
+| Linhas vivas | 120,4 M | **153,5 M** | `n_live_tup` |
+| **Folga até o gatilho de 46,8 GiB** | **11,6 GiB** | **1,9–2,4 GiB** | 46,8 − 44,4 |
+| Crescimento líquido | — | **~1,6 GiB/dia** | (44,43 − 35,17) / 6 dias |
+
+Em seis dias a tabela comeu 9,3 dos 11,6 GiB de folga. A poda por quota vai
+disparar em ~1,2 dia **sem** o incremento desta RFC, e mais cedo com ele — o
+que a RFC já declara **normal** (0,9 → 0,8 leva a 41,6 GiB), não defeito. O que
+mudou é a margem: não há 11,6 GiB de espaço, há ~2.
+
+Saúde da poda, medida: TTL rodando (última 00:05:09Z, 71 044 linhas), e em 30 h
+de log **zero** `RETENTION_QUOTA_UNMET`, `RETENTION_QUOTA_NO_PROGRESS` ou
+`RETENTION_STEP_FAILED`. Mas **3** `SERIES_COVERAGE_MISSING` em 30 h — a guarda
+por fatia estancando a poda de um token com buraco. Não é condição de parada, e
+é o que pode fazer a poda não acompanhar no soak: **é o número a olhar**.
+
+### A série, listada ao vivo — o que a RFC deixou explicitamente para a sessão
+
+`GET https://gamma-api.polymarket.com/events?series_id=10114&closed=false&limit=100`
+— série **`btc-up-or-down-hourly`**, `series_id` **10114**, `recurrence: "hourly"`.
+Descoberta a partir do campo `series` de
+`GET /events?slug=bitcoin-up-or-down-september-8-2026-3pm-et`.
+
+1. **A série publica 48 h à frente.** 50 eventos, do horário em curso até
+   `september-9-2026-9pm-et` (2 890 min), todos com `clobTokenIds` e
+   `active=true` — e **`volume24hr` nulo ou desprezível** (4,98 a 14,94 em 4 dos
+   50). É a causa mecânica em uma linha: nenhum deles pode entrar num top-500
+   **ordenado por volume**. A informação sempre esteve lá; a consulta é que não
+   a pedia.
+2. **`GET /markets?series_id=10114` IGNORA o filtro** e devolve
+   `xi-jinping-out-before-2027` e primárias de 2028. Das três formas que a D2
+   listou como não verificadas, a que serve é `/events?series_id=`.
+3. **O slug separa as cadências sem ambiguidade** — horário
+   `bitcoin-up-or-down-september-7-2026-8pm-et`, 15 min `btc-updown-15m-<epoch>`,
+   5 min `btc-updown-5m-<epoch>`, 4 h `btc-updown-4h-<epoch>`, diário
+   `bitcoin-up-or-down-on-september-7-2026`. A `SHORT_SERIES_PATTERN` casa
+   **todas**; a regex nova casa só a horária (24/24, e 0 das outras).
+4. **O mercado aninhado no evento não tem `tags` nem `events`** — as tags vivem
+   no evento. Sem enxertar os dois antes do parse, o registro da série cairia no
+   classificador por palavra-chave em vez da taxonomia da venue.
+
+### PR #117 — a prova no fio, e o defeito que ela trouxe
+
+`apps/api/src/polymarket/wireprobe.ts` + `wire-probe-cli.ts`: o protocolo D1
+como módulo puro, mais o CLI que roda na mesma imagem com
+`docker compose run --rm --no-deps`. Duas travas com teste: o grafo transitivo
+de import tem exatamente dois arquivos e um pacote externo (`ws`) — **a
+asserção é sobre os especificadores de import, não sobre o texto**, porque os
+dois arquivos citam `database.ts` e `pg` nos comentários para explicar por que
+não os importam —, e `probeSubscribeFrame` é byte-idêntico ao
+`subscribeMessage` do recorder.
+
+Uma correção do protocolo, contra o que eu tinha escrito primeiro: **a conexão
+B abre no instante do frame extra**, não no começo da rodada. Um B aberto 60 s
+antes provaria que o token estava vivo um minuto atrás, o que não é a pergunta
+que o controle positivo faz.
+
+**O defeito, e ele derrubou o `main`:** o teste
+`roda igual com as variaveis do recorder` executava
+`apps/api/dist/wire-probe-cli.js`, e o `Makefile` roda **`test` antes de
+`build`**. Passou local (eu tinha buildado), falhou no CI do merge — e como o
+job `deploy` tem `needs: verify`, **o main vermelho bloqueou o deploy**.
+Corrigido no [#119](https://github.com/henrique-devel/ganso-market/pull/119):
+a verificação passou a ser **em processo** (com as duas variáveis ausentes e
+depois presentes, o frame e a listagem saem idênticos) mais a metade estática e
+mais forte — **nenhum arquivo do grafo do CLI lê `process.env`**. Reproduzido
+nas duas direções com o `dist/` removido: teste antigo 1 failed / 15 passed,
+teste novo 17 passed.
+
+### PR #118 — a série, a lacuna e a métrica
+
+- **D2:** `fetchSeriesMarkets` junta os registros da série aos do top-500
+  **antes** do `selectUniverse` — cap, exclusões duras e reserva agem sobre uma
+  lista só. `FAST_SERIES_LOOKAHEAD_MS = 75 min` (ciclo de 10 min + margem, para
+  o `enter` cair em [65, 75] min), `FAST_SERIES_MAX_MARKETS = 4`. Cap de 100/200
+  e reserva de 25 **intocados**, com teste que lê as três constantes. A janela é
+  **de dois lados**: a listagem carrega sobras com `closed=false` — uma de 20/05
+  estava viva na resposta de 08/09 — e vencido não entra. O sufixo `_series`
+  entra **só quando a série foi quem achou**; um mercado que o top-500 já tinha
+  não vira entrada por série, ou a métrica creditaria a fonte errada.
+- **D3:** token que entra na assinatura e fica 60 s sem `book` abre
+  `subscribe_book_missing`; o `book` fecha. Só tokens que **entram** são armados
+  (senão um resubscribe de rotina abriria 200 lacunas), re-armar **não** empurra
+  o prazo, e o `exit` cancela o timer mas **não fecha lacuna já aberta** — um
+  mercado que saiu sem nunca ter livro tem uma lacuna real, e fechá-la na saída
+  apagaria a medição. O par abre/fecha saiu para `createTokenGapTracker` em
+  `quality.ts` por um motivo concreto: **o `book` pode chegar antes do INSERT
+  devolver o `gap_id`**, e guardar a *promessa* do id é o que impede a lacuna de
+  vazar aberta (há teste que segura o INSERT em voo, fecha, e só então libera).
+- **D4:** campo `fast_coverage` no `GET /polymarket/data-quality` que já existe,
+  por dia UTC do **fim** do mercado. **Plano medido contra o Postgres de
+  produção antes do merge: 20,6 ms** (planning 1,7 ms) — abaixo dos 200 ms que
+  mandariam a agregação ao recorder, e roda dentro do `Promise.all` que a rota
+  já tem. Contexto que importa: a RFC-023 deixou esta rota **no teto de 4 000 ms
+  sem folga** (889,7 ms quente / 2 601,7 ms a frio), e 20 ms em paralelo não
+  move isso. Duas lentes de degeneração com teste: `emitidos = 0` publica `null`
+  e nunca 100 %; dia sem nenhum `enter` publica lead `null` e nunca 0 — um 0
+  leria como "descoberto no estouro", o oposto de "nunca descoberto".
+
+**34 regressões novas, todas vistas falhando no HEAD anterior.** Sem migration,
+sem location novo, sem endpoint de escrita, `retention.ts` intocado.
+
+### PR #120 — a primeira rodada ao vivo tinha três defeitos, e um deles teria matado o PR 3
+
+A primeira execução no servidor, `2026-09-08T02:19:43Z`, voltou assim:
+
+```
+| 1 | only_new | 2026-09-08T02:19:43.075Z | BOOK_ON_A | -59999 ms | sim (537 frames) | 22 ms | 0 |
+```
+
+Três coisas erradas numa linha. E a D3 lê `BOOK_ON_A` como **"H1 refutada — não
+faça o PR 3, pare e re-diagnostique os 19 'nunca'"**: essa linha teria
+encerrado a investigação com base numa tautologia.
+
+1. **A linha-base e o "token novo" eram o mesmo mercado.** O CLI escolhia a
+   base como `live[0]` (o horário mais próximo do fim, 40 min) e o novo como
+   *o primeiro entre 30 e 75 min* — o mesmo. A sonda assinou um token que já
+   tinha e viu o livro vindo da fase de linha-base. Agora o novo vem de mercado
+   com `conditionId` diferente **e** sem interseção de tokens, e a rodada recusa
+   (`new_token_is_in_baseline`) se o chamador insistir.
+2. **`msToBookOnA` negativo era reportado como resultado.** −59 999 ms significa
+   que o livro chegou 60 s **antes** do frame extra; se já estava lá, o frame
+   não provou nada. Um tempo negativo é estruturalmente impossível numa rodada
+   válida, e agora sai `INVALID` com `book_on_a_before_extra_frame`.
+3. **`price_change` carrega o token id ANINHADO em `price_changes[].asset_id`**,
+   não no topo, e um frame pode carregar vários. O parser lia só o campo de topo
+   e contou **zero** `price_change` para um token que estava negociando — logo a
+   volumetria, que é o número de que a **P2** depende, sairia 0. Agora cada
+   entrada do array conta, com fallback para o campo de topo.
+
+6 testes novos; **os 4 substantivos vistos falhando** no código não corrigido.
+A rodada de 02:19Z está **descartada** e não entra na RFC como resultado.
+
+### Deploy verificado em produção
+
+`release-sha` **`d01b5827fea5d7368f51c78688cdb9cbd2f7a1a9`** conferido no
+`polymarket-recorder` **e** na `api` — o campo novo do `data-quality` vive na
+API, e o CD reinicia containers **sem trocar a imagem**, então o terceiro passo
+(rebuild do profile `polymarket`) foi feito à mão, como o protocolo manda.
+`Created` do `ganso-market-postgres-1` segue `2026-09-07T00:11:02Z`: a RFC-020
+aguentou, o banco não foi recriado.
+
+**O log `FAST_COVERAGE` apareceu no primeiro ciclo** (02:41:43Z):
+
+```json
+{"reason_code":"FAST_COVERAGE","series_fetch_failed":false,"series_candidates":1,
+ "series_new_to_universe":1,"series_entered":1,"series_lead_min_median":18.3,
+ "universe_markets":81,"universe_tokens":162,"subscribe_watch_armed":162,
+ "subscribe_watch_released":0}
+```
+
+Dois fatos que valem registro:
+
+- **A série entrou de primeira** (`series_entered: 1`). O lead de 18,3 min é
+  fase, não defeito: às 02:41Z o horário das 03:00Z estava a 18,3 min e o das
+  04:00Z a 78,3 min — **fora** da janela de 75 min por 3 minutos. O ciclo
+  seguinte o pega a ~68 min. Confirma o desenho: o lead cai em [65, 75] min em
+  regime, e só o primeiro ciclo depois de um deploy pode ver um lead curto.
+- **`subscribe_watch_armed: 162` e ZERO lacunas.** O boot arma todos os tokens
+  (a lista anterior é vazia), e nenhum deles ficou sem livro em 60 s. Isso é
+  informação, não sorte: numa conexão **nova** o venue entrega livro para tudo
+  o que foi assinado no `open`. Logo qualquer lacuna que apareça daqui em diante
+  vem de um `resubscribe` num socket **vivo** — que é exatamente a assinatura da
+  H1. A lacuna nasceu já calibrada.
+
+### A prova no fio, verbatim — H1 CONFIRMADA, 2 de 2
+
+```
+| # | variante     | inicio                   | veredito   | book em A | antigos seguem em A | book em B | price_change/min em B |
+| 1 | only_new     | 2026-09-08T02:42:28.329Z | NEVER_ON_A | nunca     | sim (4497 frames)   | 21 ms     | 9.5                   |
+| 2 | old_plus_new | 2026-09-08T02:53:28.499Z | NEVER_ON_A | nunca     | sim (6776 frames)   | 22 ms     | 1244.5                |
+
+rodadas validas: 2 de 2
+H1 (o frame extra NAO entrega livro): 2 de 2 rodadas validas
+```
+
+**A variante que importa é a segunda.** `old_plus_new` manda *a lista antiga
+mais o token novo* — **exatamente o que `resubscribe` faz hoje** — e deu
+`NEVER_ON_A` igual à `only_new`, com o controle positivo em 22 ms. Não é um
+detalhe de formato do frame; é o comportamento do recorder, reproduzido em
+condições controladas.
+
+**A hipótese estava certa na conclusão e errada no mecanismo.** A H1 foi
+construída sobre o RTDS, onde "frames sucessivos **substituem** a anterior". No
+WS de mercado do CLOB não é substituição: os antigos seguiram fluindo (4 497 e
+6 776 frames após o frame extra). O frame nem soma nem substitui — é
+**ignorado** para tokens novos. Para o PR 3 dá no mesmo; o diagnóstico correto
+importa para quem ler depois. (O rótulo agregado que o CLI imprime, "o frame
+SOMA", é impreciso e sobrevive de um mundo com só duas hipóteses; a coluna a ler
+é a dos antigos.)
+
+**E a mesma coisa medida sem sonda, no recorder:**
+
+| Instante | Como os tokens entraram | Tokens | Lacunas em 60 s |
+| --- | --- | --- | --- |
+| 02:41:43Z (boot) | assinatura no `open` de conexões **novas** | **162** | **0** |
+| 02:51:45Z (ciclo gamma) | frame `subscribe` em sockets **vivos** | **6** | **6** |
+
+Sete minutos depois, as seis seguiam abertas — nenhum daqueles tokens jamais
+recebeu livro. Duas delas são os dois tokens do
+`bitcoin-up-or-down-september-7-2026-11pm-et`, **o mercado que a fonte por
+série acabara de descobrir 68,3 min antes do fim**. O PR 2 resolveu a
+descoberta; o livro exigia o PR 3. Conexão nova: 162 de 162. Conexão viva: 0 de
+6.
+
+### A volumetria da P2, medida com o instrumento da RFC
+
+A projeção do próprio CLI (1,13 GiB/dia) é um **piso**, não a estimativa: a
+conexão B viu T−78..T−68 min (9,5/min) e T−67..T−57 min (1 244,5/min), e nenhuma
+das duas cobre a última hora, que é onde o volume está. O número vem do
+`updates_count` de `polymarket_series_1m`, o mesmo que a RFC usou:
+
+| Faixa até o fim | Buckets | Média/min | Mediana | Máximo |
+| --- | --- | --- | --- | --- |
+| T−60..T−30 | 50 | **2 428,9** | 2 410,0 | 5 150 |
+| T−30..T−15 | 296 | **2 712,7** | 2 163,0 | 8 237 |
+| T−15..T−0 | 762 | **3 004,5** | 1 655,0 | 20 543 |
+| qualquer token do universo (6 h) | 39 870 | 77,8 | 18,0 | — |
+
+**A assunção da RFC está confirmada.** 158 626 updates por token nos 60 min
+finais × 2 tokens × 24 mercados/dia = **7,61 M linhas/dia** (estimava 7,5 M);
+a 313,67 B/linha, **+2,22 GiB/dia** (+2,39 GB/dia; estimava +2,3 GB/dia).
+
+O que **não** se confirmou foi a folga — e é o que a P2 pediu por escrito:
+
+| Grandeza | RFC (02/09) | Medido (08/09) |
+| --- | --- | --- |
+| Bytes vivos | 35,174 GiB | **44,4–45,0 GiB** |
+| Folga até o gatilho de 46,8 GiB | 11,6 GiB | **1,8–2,4 GiB** |
+| Quando a poda por quota dispara | ~5 dias | **~11 h** |
+| Dias retidos com a quota de 52 GiB | 7,7–9,5 | **~8,5** (52 ÷ 6,1 GiB/dia) |
+
+### PR #123 — a reconexão rolante (D3), autorizada pela prova
+
+`resubscribe` passa a **reconectar um slot por vez** quando tokens entram; a
+P4 aprovou "rolante primeiro". O gêmeo fica de pé, então `onBothDown` nunca
+dispara por resubscribe; o slot que volta assina a lista nova no **frame de
+abertura**, que é o único que o venue honra; **só saída não reconecta**; um
+segundo resubscribe com o rolo em voo não derruba o gêmeo (e não custa nada,
+porque o slot que volta assina a lista como ela está); e com **uma** conexão de
+pé o rolo é recusado e logado — rolar a sobrevivente cegaria o recorder, e a
+lacuna registrando "sem livro" é estritamente melhor que um apagão de feed.
+
+Dois detalhes: o rolo prefere um slot **já fechado** (custa zero redundância) e
+**zera o backoff**, porque um close deliberado não pode herdar o castigo de um
+apagão anterior. `rollingResubscribes` e `resubscribesWithoutEntry` entram em
+`stats()` **separados** de `reconnects`.
+
+10 testes novos, os **7 substantivos vistos falhando** no HEAD anterior.
+
+### Correção de um número que eu publiquei errado: o custo do plano da D4
+
+Eu medi **20,6 ms** e mantive a agregação na API — mas medi uma consulta de
+**um dia**, e o que foi para produção cobre **3 dias mais o corrente**. Medido
+de novo, com o SQL extraído da imagem publicada: **596,8 ms a frio**, 7,6–42,6
+ms quente. A frio isso **passa** os 200 ms da D4.
+
+Segue na API, e é decisão consciente com três razões: o `budgetedPool` da
+RFC-023 envolve **por consulta e não por requisição** (`budgets.ts:55-66`),
+então as cinco consultas da rota correm em transações próprias; o custo
+marginal em wall-clock é ~0, porque a rota já espera a percentil de
+`ingest_lag_ms` a **2 601,7 ms** a frio; e a alternativa que a D4 nomeia
+("a agregação vai para o recorder e a API só lê") exige persistir o agregado,
+logo uma **migration**, que a mesma RFC proíbe nos três PRs. A regra dos 200 ms
+e o "sem migration" da RFC se contradizem, e isso **volta ao proprietário**.
+
+### O soak de 3 dias: instrumentado e começado, NÃO fechado
+
+Isto é o que esta sessão **não** entregou, e o motivo é o calendário, não um
+obstáculo técnico: o código foi para produção às **03:07Z de 2026-09-08**. Um
+soak de 3 dias UTC consecutivos precisa de 09, 10 e 11/09 completos, e só é
+mensurável em 12/09. Nenhuma sessão fecha isso no mesmo dia.
+
+O que **está** pronto para que quem retomar só leia o resultado:
+
+| Item | Estado |
+| --- | --- |
+| Instrumento (`fast_coverage` no `GET /polymarket/data-quality`) | **em produção**, com as definições publicadas na própria resposta |
+| Log por ciclo (`FAST_COVERAGE`) | **em produção**, verificado em 4 ciclos |
+| Lacuna `subscribe_book_missing` | **em produção**, já produziu 6 casos e o experimento natural |
+| Linha-base na régua exata, ANTES do soak | **3,1 %** (2 de 65 em 72 h) e lead **12,6 min** |
+| Consulta de leitura do soak | `scripts/rfc024/soak_query.sql` — cobertura, lead, bytes vivos, lacunas e poda, por dia |
+| Leitura dos logs do soak | `scripts/rfc024/soak_logs.sh` — inclui os três `RETENTION_*` que são condição de parada |
+
+**A janela do soak começa no primeiro dia UTC inteiro depois do deploy: 09/09.**
+Rodar em 12/09:
+
+```bash
+docker exec -i ganso-market-postgres-1 \
+  psql -U ganso_market -d ganso_market -f /dev/stdin < scripts/rfc024/soak_query.sql
+ssh -i ~/.ssh/id_ed25519 root@178.105.65.251 'sh -s' < scripts/rfc024/soak_logs.sh 72h
+```
+
+Alvos, da RFC: `com_livro_t15/emitidos ≥ 90 %` por dia, `lead_mediano_min ≥ 60`,
+bytes vivos de `polymarket_book_deltas` **≤ 52 GiB** todo o tempo.
+
+**Duas ressalvas honestas sobre a mensurabilidade do soak:**
+
+1. **A RFC-021 não está em produção** (prompt 13 pendente). A RFC-024 lista as
+   duas dependências dizendo "sem elas o soak não é mensurável". A RFC-020
+   **foi** entregue, e era a que protegia a condição de parada explícita (deploy
+   que recria o Postgres reinicia o soak) — verificado: o `Created` do
+   `ganso-market-postgres-1` segue `2026-09-07T00:11:02Z` através de quatro
+   deploys desta sessão. A RFC-021 falta, e o que ela custa é específico: se o
+   feed silenciar com as conexões vivas, a cobertura cai e **não haverá como
+   separar** "a descoberta falhou" de "o feed morreu". Não é bloqueio para o
+   código; é uma ambiguidade que ficará no resultado se acontecer. Registrado
+   aqui para não ser descoberto na leitura do dia 12.
+2. **A poda por quota vai disparar quase no início** (folga de ~1,9 GiB, ~11 h),
+   e isso é o comportamento normal (0,9 → 0,8). Cruzar 46,8 GiB **não** é
+   parada. Parada é passar de **52 GiB** ou aparecer
+   `RETENTION_QUOTA_UNMET` / `RETENTION_QUOTA_NO_PROGRESS` /
+   `RETENTION_STEP_FAILED` para `polymarket_book_deltas`. Havia **3**
+   `SERIES_COVERAGE_MISSING` em 30 h antes do deploy — a guarda por fatia
+   estancando a poda de um token com buraco. Não é condição de parada, mas é o
+   caminho pelo qual a poda deixaria de acompanhar: **é o número a olhar** se os
+   bytes subirem.
+
+### O que quem retomar precisa fazer
+
+1. **Ler o soak em 12/09** com os dois scripts acima, e registrar cobertura,
+   lead e bytes vivos por dia.
+2. **Verificar que a reconexão rolante entrega o livro.** O critério
+   pós-deploy da RFC é "próximo horário BTC com `enter` ≥ 60 min antes do fim
+   **e `book` em ≤ 60 s**". A primeira metade já está verificada (68,3 min no
+   ciclo de 02:51:45Z). A segunda depende do PR 3, que foi para produção às
+   03:07Z: confirmar num ciclo em que tokens **entrem** que o
+   `WS_ROLLING_RESUBSCRIBE` aparece e que **nenhuma** lacuna
+   `subscribe_book_missing` abre.
+3. **Decidir a inconsistência da D4** (regra dos 200 ms × "sem migration"), com
+   os números de 596,8 ms a frio / 7,6 ms quente na mão.
+4. **Prompt 13 (RFC-021)** continua sendo o próximo da ordem, e agora tem um
+   motivo extra: ele é o que torna a leitura do soak não-ambígua.

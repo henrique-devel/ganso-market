@@ -55,6 +55,151 @@ Mecanismo no código: o `enter` do universo chama `dual.resubscribe(tokenIds)` (
 
 ---
 
+## Re-medição de 2026-09-08 (antes de codar; RFC-024 "RE-MEDIR antes de codar")
+
+Medida em produção, somente leitura, entre 01:41Z e 02:10Z de 2026-09-08, com
+`psql` direto no `ganso-market-postgres-1` (a API roda sob `statement_timeout`,
+e as consultas de população não caberiam nele). População: os horários BTC da
+série com **fim nas últimas 72 h** — 65 mercados.
+
+**Nenhuma condição de parada disparou.** A premissa central não caiu: piorou.
+
+| Fato | RFC (02–03/09) | Re-medido (08/09) | Veredito |
+| --- | --- | --- | --- |
+| Mediana do `enter` antes do fim | 21,0 min (q1 10,0; q3 26,1) | **12,6 min** (q1 2,9; q3 16,3) | **confirmada, pior** |
+| Horários com lead ≥ 60 min | — | **0 de 65** | parada em ≥ 60 min **não** disparou |
+| Livro a T−15, **régua da D4** | não medido nesta régua | **2 de 65 = 3,1 %** | **linha-base nova** |
+| Livro nas 3 h finais, régua antiga, mesmas 72 h | 19/240 = 8 % (14 dias) | 3 de 65 = 4,6 % | consistente |
+| Cobertura do catálogo de horários | ~72 % | 65 de 72 = **90 %** | melhorou; não muda o gargalo |
+| B/linha de `book_deltas` | 313,67 | **313,67** (idêntico) | confirmada |
+| Linhas/dia de `book_deltas` | 11,33 / 13,69 / 15,59 M | **13,2 M** (24 h) | confirmada |
+| RFC-020 em produção | não entregue | **entregue** | melhorou |
+| RFC-021 em produção | não entregue | **ainda não entregue** | risco do soak, registrado |
+
+`com_livro_t15` por dia UTC de fim, na régua exata da D4 (bucket de
+`polymarket_series_1m` em [fim−15 min, fim−14 min) com `updates_count ≥ 1`):
+0/15 em 05/09, **0/24** em 06/09, **2/24** em 07/09, 0/2 em 08/09.
+
+### A premissa que CAIU: a folga de `book_deltas` não é 11,6 GiB
+
+A RFC declarou 35,174 GiB vivos (02/09) e **11,6 GiB de folga** até o gatilho de
+46,8 GiB. Seis dias depois:
+
+| Grandeza | RFC (02/09) | Medido (08/09) | Fonte |
+| --- | --- | --- | --- |
+| Bytes **vivos** | 35,174 GiB | **44,43 GiB** | log `RETENTION_BLOAT` do recorder, 00:05:09Z (`live_bytes: 47705950084`) |
+| Bytes vivos, 2.ª medição | — | 44,855 GiB | `psql` 01:45Z, fórmula do `measureTableSizes` replicada |
+| Bytes **físicos** | — | 56,29 GiB | `pg_total_relation_size` |
+| Linhas vivas | 120,4 M | **153,5 M** | `n_live_tup` |
+| **Folga até o gatilho de 46,8 GiB** | **11,6 GiB** | **1,9–2,4 GiB** | 46,8 − 44,4 |
+| Crescimento líquido | — | ~1,6 GiB/dia | (44,43 − 35,17) / 6 dias |
+
+**Isto é o "número real" que a P2 exigiu antes do PR 2.** A poda por quota vai
+disparar em ~1,2 dia sem o incremento, e mais cedo com ele — o que a própria
+RFC já declara **normal** (0,9 → 0,8), não defeito. O que muda é a margem: não
+há 11,6 GiB de espaço, há ~2. A poda por TTL está saudável e rodando (última em
+00:05:09Z, 71 044 linhas), e em 30 h de log **não houve** nenhum
+`RETENTION_QUOTA_UNMET`, `RETENTION_QUOTA_NO_PROGRESS` nem
+`RETENTION_STEP_FAILED`. Há **3** `SERIES_COVERAGE_MISSING` em 30 h — a guarda
+por fatia reportando buraco, que estanca a poda daquele token; é o risco a
+observar no soak, e não uma das condições de parada listadas.
+
+### A série, listada ao vivo (o que a D2 deixou para a sessão)
+
+`GET https://gamma-api.polymarket.com/events?series_id=10114&closed=false&limit=100`
+— série **`btc-up-or-down-hourly`**, `series_id` **10114**,
+`recurrence: "hourly"`, `seriesType: "single"`. Confirmada em 2026-09-08 02:05Z
+a partir do próprio evento de um horário
+(`GET /events?slug=bitcoin-up-or-down-september-8-2026-3pm-et`, campo `series`).
+
+Três achados que a RFC não podia prever:
+
+1. **A série publica 48 h à frente.** 50 eventos na resposta, do horário em
+   curso até `bitcoin-up-or-down-september-9-2026-9pm-et` (2 890 min), todos com
+   `clobTokenIds`, `active=true`, `closed=false` — e `volume24hr` **nulo ou
+   desprezível** (4,98 a 14,94 em 4 dos 50). É a causa mecânica do problema:
+   nenhum deles pode entrar num top-500 **ordenado por volume**.
+2. **`GET /markets?series_id=10114` IGNORA o filtro** e devolve mercados sem
+   relação (`xi-jinping-out-before-2027`, primárias de 2028). Das três formas
+   que a D2 listou como não verificadas (`/events?slug=`, `series_id`,
+   `/markets?slug=`), a que serve é `/events?series_id=`.
+3. **O slug separa as quatro cadências sem ambiguidade**, e a regex é sobre ele:
+
+   | Forma | Slug real | Casa a regex nova? |
+   | --- | --- | --- |
+   | horário | `bitcoin-up-or-down-september-7-2026-8pm-et` | **sim** (24/24) |
+   | 15 min | `btc-updown-15m-1788827400` | não |
+   | 5 min | `btc-updown-5m-1788807600` | não |
+   | 4 h | `btc-updown-4h-1788811200` | não |
+   | diário | `bitcoin-up-or-down-on-september-7-2026` | não (o `-on-`) |
+
+   A `SHORT_SERIES_PATTERN` (`registry.ts:101`) casa **todas** elas; a nova casa
+   só a horária, e o teste verifica os dois lados.
+
+4. **O mercado aninhado no evento não tem `tags`** (elas vivem no evento) nem
+   `events`. Sem enxertar os dois antes do parse, o registro da série cairia no
+   classificador por palavra-chave em vez da taxonomia da venue.
+
+### A URL da consulta da série, confirmada na doc da Gamma
+
+A série foi confirmada **pelo próprio dado**, e é o registro que a D2 pediu:
+
+```
+GET https://gamma-api.polymarket.com/events?slug=bitcoin-up-or-down-september-8-2026-3pm-et
+  -> events[0].series[0] = { "id": "10114", "ticker": "btc-up-or-down-hourly",
+                             "slug": "btc-up-or-down-hourly",
+                             "title": "BTC Up or Down Hourly",
+                             "seriesType": "single", "recurrence": "hourly" }
+```
+
+E a consulta que o `fetchSeriesMarkets` usa, com o `series_id` que veio dali:
+
+```
+GET https://gamma-api.polymarket.com/events?series_id=10114&closed=false&limit=100
+```
+
+A forma **`/markets?series_id=`** foi testada na mesma sessão e **ignora o
+filtro**: devolveu `xi-jinping-out-before-2027` e primárias de 2028. Fica
+registrada como a que **não** serve, para ninguém tentar de novo.
+
+### Correção do custo do plano da D4 (o número que eu publiquei primeiro estava medido na consulta errada)
+
+A D4 manda medir o plano antes do merge e mover a agregação para o recorder se
+passar de 200 ms. Eu medi **20,6 ms** e mantive na API — mas medi uma consulta
+de **um dia**, e o que foi para produção cobre **3 dias mais o corrente**. A
+medição correta, contra o Postgres de produção, com o SQL extraído da imagem
+publicada:
+
+| Passada | Tempo |
+| --- | --- |
+| primeira (frio) | **596,8 ms** |
+| repetições quentes (5×) | 42,6 / 8,6 / 8,3 / 7,8 / 7,6 ms |
+
+Quente cabe folgado nos 200 ms; **a frio não**. Por que segue na API, e não é
+uma decisão silenciosa:
+
+- o `budgetedPool` da RFC-023 envolve **por consulta, e não por requisição**,
+  exatamente para que um `Promise.all` não fique preso a um cliente só
+  (`apps/api/src/budgets.ts:55-66`, com o comentário que explica o porquê). As
+  cinco consultas da rota correm em transações próprias, cada uma com o
+  orçamento da rota;
+- logo o custo marginal em wall-clock é ~0: a rota já espera a percentil de
+  `ingest_lag_ms`, medida pela RFC-023 em **2 601,7 ms a frio**, e 596,8 ms
+  terminam bem antes dela. O pool é `max: 4` (`database.ts:130`), então a quinta
+  consulta espera o primeiro cliente livre — e as rápidas liberam primeiro;
+- a alternativa que a D4 nomeia — "a agregação vai para o ciclo do recorder e a
+  API só lê" — exige **persistir o agregado**, isto é, uma tabela, isto é, uma
+  **migration**; e a mesma RFC declara "Migration? não" para os três PRs. A
+  regra e a restrição da própria RFC se contradizem nesse ponto.
+
+**Fica registrado como decisão consciente, não como omissão:** a agregação
+segue na API, com 596,8 ms a frio contra um teto de 4 000 ms por consulta, e a
+inconsistência entre a regra dos 200 ms e o "sem migration" volta ao
+proprietário. Se ele preferir a letra da D4, o caminho é uma migration nova
+pelo protocolo do CD — fora do escopo desta RFC.
+
+---
+
 ## Decisões desta RFC
 
 ### D1 — a prova no fio vem antes da solução
@@ -162,4 +307,147 @@ Mercados de 5 min (basis TWAP 13 %, zero livro), ETH/SOL/XRP (RTDS só entrega B
 
 ## Resultado da prova no fio
 
-*(a preencher pelo PR 1, verbatim, com data/hora e as 3 rodadas em tabela: variante, tempo até `book` em A, comportamento dos tokens antigos, `book` em B, `price_change`/min.)*
+Executada de dentro do servidor de produção, na imagem do recorder
+(`release-sha` `d01b5827fea5d7368f51c78688cdb9cbd2f7a1a9`), com
+`docker compose run --rm --no-deps polymarket-recorder node
+apps/api/dist/wire-probe-cli.js --rounds 1` — container descartável, o processo
+de coleta intocado. Somente leitura de mercado, zero escrita.
+
+### A rodada verbatim, 2026-09-08
+
+```
+RFC-024 D1 — prova no fio do resubscribe
+url: wss://ws-subscriptions-clob.polymarket.com/ws/market
+iniciado: 2026-09-08T02:42:28.227Z
+janelas: baseline 5000 ms, frame extra em 60000 ms, book em A ate 120000 ms, taxa 600000 ms
+
+serie horaria (GET /events?series_id=10114&closed=false): 50 slugs casando a regex, 49 com fim no futuro
+  bitcoin-up-or-down-september-7-2026-10pm-et  fim em 18 min  tokens 2
+  bitcoin-up-or-down-september-7-2026-11pm-et  fim em 78 min  tokens 2
+  bitcoin-up-or-down-september-8-2026-12am-et  fim em 138 min  tokens 2
+  bitcoin-up-or-down-september-8-2026-1am-et  fim em 198 min  tokens 2
+
+linha-base: bitcoin-up-or-down-september-7-2026-10pm-et fim em 18 min (2 tokens)
+token novo: bitcoin-up-or-down-september-7-2026-11pm-et fim em 78 min
+
+| # | variante | inicio | veredito | book em A | antigos seguem em A | book em B | price_change/min em B | motivo do INVALID |
+| - | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | only_new | 2026-09-08T02:42:28.329Z | NEVER_ON_A | nunca | sim (4497 frames) | 21 ms | 9.5 |  |
+| 2 | old_plus_new | 2026-09-08T02:53:28.499Z | NEVER_ON_A | nunca | sim (6776 frames) | 22 ms | 1244.5 |  |
+
+rodadas validas: 2 de 2
+H1 (o frame extra NAO entrega livro): 2 de 2 rodadas validas
+o frame SOMA (antigos seguem fluindo): 2 de 2; SUBSTITUI: 0 de 2
+
+VOLUMETRIA (P2), da taxa medida em B
+  price_change/min por token (mediana de 2): 1244.5
+  assuncao: 1 price_change = 1 linha de polymarket_book_deltas a 313.67 B
+  incremento: 2 tokens x 65 min x 24 mercados/dia = 3882840 linhas/dia = 1.13 GiB/dia (1.22 GB/dia)
+
+terminado: 2026-09-08T03:04:28.582Z
+```
+
+### O que a rodada decide
+
+**H1 confirmada, 2 de 2, e a variante que importa é a segunda.** A
+`old_plus_new` manda *a lista antiga mais o token novo* — **exatamente o que
+`resubscribe` faz hoje** —, e deu `NEVER_ON_A` igual à `only_new`, com o
+controle positivo em 22 ms. Não é um detalhe de formato do frame: é o
+comportamento do recorder em produção, reproduzido em condições controladas.
+
+**H1 confirmada.** Um segundo frame `subscribe` numa conexão **viva**, com um
+token que não estava no primeiro frame, não entregou livro em 120 s — enquanto
+uma conexão aberta **no mesmo instante**, com só aquele token, recebeu o livro
+em **21 ms**. O controle positivo prova que o token estava vivo e que o venue
+estava disposto a servi-lo: o que falhou foi o frame, não o mercado.
+
+**E a hipótese estava certa na conclusão e errada no mecanismo.** A H1 foi
+construída sobre o padrão medido no RTDS — *"frames sucessivos **substituem** a
+anterior"*. No WS de mercado do CLOB não é substituição: os tokens antigos
+seguiram fluindo em A, **4 497 frames** depois do frame extra. O frame nem soma
+nem substitui: é **ignorado** para tokens novos, deixando a assinatura anterior
+intacta. Para o PR 3 dá no mesmo — só uma conexão nova entrega livro —, mas o
+diagnóstico correto importa para quem ler isto depois.
+
+Uma ressalva sobre o rótulo do CLI: ele imprime *"o frame SOMA (antigos seguem
+fluindo): 2 de 2"*, e "soma" é impreciso. O que a rodada mostra é que os
+antigos **não são silenciados** e o novo **não é atendido** — o frame não
+substitui nem acrescenta. A coluna a ler é a dos antigos; o rótulo agregado
+sobrevive de um mundo com só duas hipóteses.
+
+### A mesma coisa, medida em produção sem sonda nenhuma
+
+No mesmo processo do recorder, no mesmo dia, a lacuna `subscribe_book_missing`
+da D3 produziu o experimento natural que a sonda reproduz em condições
+controladas:
+
+| Instante | Como os tokens entraram | Tokens | Lacunas em 60 s |
+| --- | --- | --- | --- |
+| 02:41:43Z (boot) | assinatura no `open` de conexões **novas** | **162** | **0** |
+| 02:51:45Z (ciclo gamma) | frame `subscribe` em sockets **vivos** | **6** | **6** |
+
+As seis, com o slug do mercado:
+
+```
+2026-09-08 02:52:45.255+00 | 1016931503 | btc-updown-4h-1788825600
+2026-09-08 02:52:45.256+00 | 2786450160 | bitcoin-up-or-down-september-7-2026-11pm-et
+2026-09-08 02:52:45.256+00 | 4507236779 | bitcoin-up-or-down-september-7-2026-11pm-et
+2026-09-08 02:52:45.256+00 | 5110713006 | ethereum-up-or-down-on-september-8-2026
+2026-09-08 02:52:45.256+00 | 4085911012 | ethereum-up-or-down-on-september-8-2026
+2026-09-08 02:52:45.256+00 | 1060935077 | btc-updown-4h-1788825600
+```
+
+Sete minutos depois, **as seis seguiam abertas**: nenhum daqueles tokens jamais
+recebeu livro. E as duas primeiras são os dois tokens do
+`bitcoin-up-or-down-september-7-2026-11pm-et` — o mercado que a fonte por série
+acabara de descobrir **68,3 min antes do fim**. O PR 2 resolveu a descoberta; o
+livro exigia o PR 3.
+
+Conexão nova: 162 de 162. Conexão viva: 0 de 6. É o mesmo veredito da sonda,
+pelo instrumento que fica ligado depois que a sonda vai embora.
+
+### Volumetria para a P2 — e por que o número da sonda **não** é o número
+
+A própria projeção do CLI (1,13 GiB/dia, da mediana de 1 244,5/min) é um
+**piso**, não a estimativa, e a razão está nas duas rodadas: a conexão B da
+rodada 1 observou um mercado a **T−78..T−68 min**, quando ele está parado
+(9,5/min), e a da rodada 2 a **T−67..T−57 min**, quando ele começa a acordar
+(1 244,5/min). Nenhuma das duas cobre a última hora, que é onde o volume está.
+Por isso a volumetria da P2 vem do `updates_count`, abaixo, e não da sonda.
+
+O `price_change/min em B` de 9,5 da rodada 1, isolado, seria um erro maior ainda.
+A conexão B observou um mercado a **T−78..T−68 min** do fim, quando ele ainda
+está parado; a estimativa da RFC (2 100–2 700/min) foi medida na **última
+hora**, quando ele negocia. São faixas diferentes do mesmo mercado, não medições
+conflitantes.
+
+Medido com o mesmo instrumento da RFC — `updates_count` de
+`polymarket_series_1m` por bucket de 1 min, horários BTC dos últimos 14 dias:
+
+| Faixa até o fim | Buckets | Média/min | Mediana | Máximo |
+| --- | --- | --- | --- | --- |
+| T−60..T−30 | 50 | **2 428,9** | 2 410,0 | 5 150 |
+| T−30..T−15 | 296 | **2 712,7** | 2 163,0 | 8 237 |
+| T−15..T−0 | 762 | **3 004,5** | 1 655,0 | 20 543 |
+| qualquer token do universo (6 h, comparação) | 39 870 | 77,8 | 18,0 | — |
+
+**A assunção da RFC está confirmada.** Um horário nos 60 min finais custa
+72 867 + 40 691 + 45 068 = **158 626 updates por token**; dois tokens dão
+317 252 por mercado, e 24 mercados/dia dão **7,61 M linhas/dia** — contra os
+7,5 M estimados. A 313,67 B/linha (re-medido idêntico), são **+2,22 GiB/dia**
+(+2,39 GB/dia) contra os +2,3 GB/dia estimados.
+
+O que **não** se confirmou foi a folga, e é o que a P2 pediu por escrito:
+
+| Grandeza | RFC (02/09) | Medido (08/09) |
+| --- | --- | --- |
+| Bytes vivos de `polymarket_book_deltas` | 35,174 GiB | **44,4–45,0 GiB** |
+| Folga até o gatilho de 46,8 GiB | 11,6 GiB | **1,8–2,4 GiB** |
+| Incremento medido | +2,3 GB/dia (estimado) | **+2,22 GiB/dia** (medido) |
+| Quando a poda por quota dispara | ~5 dias | **~11 h** |
+| Dias retidos com a quota de 52 GiB | 7,7–9,5 | **~8,5** (52 ÷ 6,1 GiB/dia) |
+
+A poda disparar é o comportamento **normal** (0,9 → 0,8 leva a 41,6 GiB), como
+a RFC já declarava; o que muda é que ela dispara quase imediatamente, e não
+depois de cinco dias. A quota de 52 GiB e o TTL de 14 dias **não** foram
+tocados.
