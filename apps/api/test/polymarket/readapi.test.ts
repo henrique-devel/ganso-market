@@ -999,8 +999,13 @@ describe("GET /polymarket/data-quality — fast_coverage (RFC-024 D4)", () => {
     // The hourly slug, not the 5min/15min/4h pattern.
     expect(coverageCall?.text).toContain("bitcoin-up-or-down-");
     expect(coverageCall?.text).toContain("(am|pm)-et");
-    // The `_series` suffix is what separates the two discovery sources.
-    expect(coverageCall?.text).toContain("'%_series'");
+    // The `_series` suffix is what separates the two discovery sources — and
+    // the underscore MUST be escaped: `_` is a single-character wildcard in
+    // LIKE, so the unescaped pattern also matches `xseries`. Proved against
+    // the production Postgres: `'xseries' LIKE '%_series'` is TRUE, and with
+    // `ESCAPE` it is FALSE.
+    expect(coverageCall?.text).toContain("LIKE '%\\_series' ESCAPE '\\'");
+    expect(coverageCall?.text).not.toContain("LIKE '%_series'");
   });
 
   it("continua GET-only: todo outro método é 404 no perímetro", async () => {
