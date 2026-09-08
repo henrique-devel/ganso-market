@@ -281,3 +281,197 @@ describe("dual market socket: reconnection and gap signalling", () => {
     expect(h.dual.stats().openConnections).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC-024 D3 — reconexão rolante em `resubscribe`
+// ---------------------------------------------------------------------------
+
+/**
+ * The branch this file predicted in 2026-08: "If the venue ever requires a
+ * fresh socket per subscription, close/reopen here instead". It does.
+ *
+ * Measured 2026-09-08 on the wire (`wire-probe-cli`, 02:42:28Z): an extra
+ * `subscribe` frame on a LIVE connection with a token not in the first frame
+ * gave `NEVER_ON_A` — no book in 120 s — while a connection opened at the
+ * same instant with only that token got its book in **21 ms**. And in
+ * production (02:51:45Z): all six tokens added by a `resubscribe` opened a
+ * `subscribe_book_missing` gap, while 162 tokens subscribed on FRESH
+ * connections at boot opened none.
+ *
+ * These tests pin the shape the RFC's P4 approved: rolling, one slot at a
+ * time, only on entry, never `onBothDown`.
+ */
+describe("RFC-024 D3 — resubscribe reconecta um slot por vez", () => {
+  /** Bring both slots up and clear their opening frames. */
+  function bothUp(harness: Harness): [FakeSocket, FakeSocket] {
+    const [first, second] = harness.sockets as [FakeSocket, FakeSocket];
+    first.emitOpen();
+    second.emitOpen();
+    return [first, second];
+  }
+
+  it("token novo reconecta UM slot, e o gêmeo segue de pé", () => {
+    const harness = makeHarness({ tokenIds: ["a", "b"] });
+    const [first, second] = bothUp(harness);
+
+    harness.dual.resubscribe(["a", "b", "novo"]);
+
+    // Exactly one slot was closed by us.
+    expect(first.closedByClient).toBe(true);
+    expect(second.closedByClient).toBe(false);
+    // And the twin never went down, so no gap was ever signalled.
+    expect(harness.bothDown).toEqual([]);
+    expect(harness.dual.stats().rollingResubscribes).toBe(1);
+    expect(harness.dual.stats().openConnections).toBe(1);
+  });
+
+  it("o slot reconectado assina a lista NOVA no frame de abertura", () => {
+    const harness = makeHarness({ tokenIds: ["a", "b"] });
+    bothUp(harness);
+    harness.dual.resubscribe(["a", "b", "novo"]);
+
+    // The close triggers the backoff reconnect.
+    vi.advanceTimersByTime(1_000);
+    const replacement = harness.sockets[2] as FakeSocket;
+    expect(replacement).toBeDefined();
+    replacement.emitOpen();
+
+    // The opening frame is what the venue honours, and it carries the new
+    // token — which is the entire point of reconnecting instead of sending.
+    expect(replacement.sent[0]).toBe(subscribeMessage(["a", "b", "novo"]));
+    expect(harness.dual.stats().openConnections).toBe(2);
+  });
+
+  it("só saída (nenhum token novo) NÃO reconecta", () => {
+    const harness = makeHarness({ tokenIds: ["a", "b", "c"] });
+    const [first, second] = bothUp(harness);
+
+    harness.dual.resubscribe(["a", "b"]);
+
+    expect(first.closedByClient).toBe(false);
+    expect(second.closedByClient).toBe(false);
+    expect(harness.dual.stats().rollingResubscribes).toBe(0);
+    expect(harness.dual.stats().resubscribesWithoutEntry).toBe(1);
+    // The shrunken list still reaches the live sockets.
+    expect(first.sent[1]).toBe(subscribeMessage(["a", "b"]));
+  });
+
+  it("lista idêntica não reconecta", () => {
+    const harness = makeHarness({ tokenIds: ["a", "b"] });
+    const [first] = bothUp(harness);
+    harness.dual.resubscribe(["a", "b"]);
+    expect(first.closedByClient).toBe(false);
+    expect(harness.dual.stats().rollingResubscribes).toBe(0);
+  });
+
+  it("um segundo resubscribe com o rolo em voo NÃO derruba o gêmeo", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    const [first, second] = bothUp(harness);
+
+    harness.dual.resubscribe(["a", "n1"]);
+    expect(first.closedByClient).toBe(true);
+    // The rolled slot has not come back yet, and another cycle brings a
+    // second new token. Rolling again here would blind the recorder.
+    harness.dual.resubscribe(["a", "n1", "n2"]);
+    expect(second.closedByClient).toBe(false);
+    expect(harness.dual.stats().rollingResubscribes).toBe(1);
+    expect(harness.bothDown).toEqual([]);
+
+    // When the first slot returns it subscribes with the list AS IT STANDS,
+    // which already contains both new tokens — so the skipped roll cost
+    // nothing.
+    vi.advanceTimersByTime(1_000);
+    const replacement = harness.sockets[2] as FakeSocket;
+    replacement.emitOpen();
+    expect(replacement.sent[0]).toBe(subscribeMessage(["a", "n1", "n2"]));
+    // And the guard is released, so the next entry can roll again.
+    harness.dual.resubscribe(["a", "n1", "n2", "n3"]);
+    expect(harness.dual.stats().rollingResubscribes).toBe(2);
+  });
+
+  it("com só uma conexão de pé, NÃO reconecta — e diz por quê", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    const [first, second] = bothUp(harness);
+    // One connection drops on its own; the twin is the only feed left.
+    first.emitClose();
+    expect(harness.dual.stats().openConnections).toBe(1);
+
+    harness.dual.resubscribe(["a", "novo"]);
+
+    // Rolling the survivor would blind the recorder. The tokens stay
+    // bookless, and the `subscribe_book_missing` gap records exactly that —
+    // which is strictly better than a feed outage.
+    expect(second.closedByClient).toBe(false);
+    expect(harness.bothDown).toEqual([]);
+    expect(harness.dual.stats().openConnections).toBe(1);
+  });
+
+  it("prefere o slot já fechado: cicla sem custar redundância", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    const [first, second] = bothUp(harness);
+    // Slot 0 is already down and waiting for its backoff.
+    first.emitClose();
+    // Its reconnect lands and is still connecting (socket created, not open).
+    vi.advanceTimersByTime(1_000);
+    const reconnecting = harness.sockets[2] as FakeSocket;
+    expect(reconnecting).toBeDefined();
+
+    harness.dual.resubscribe(["a", "novo"]);
+
+    // The open twin was left alone; the slot that was already down is the one
+    // cycled, so redundancy never dropped below what it already was.
+    expect(second.closedByClient).toBe(false);
+    expect(harness.dual.stats().openConnections).toBe(1);
+  });
+
+  it("o rolo NUNCA dispara onBothDown, nem com os dois slots ciclados em sequência", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    bothUp(harness);
+
+    for (let round = 0; round < 5; round += 1) {
+      harness.dual.resubscribe([
+        "a",
+        ...Array.from({ length: round + 1 }, (_, i) => `n${String(i)}`),
+      ]);
+      vi.advanceTimersByTime(1_000);
+      const latest = harness.sockets[harness.sockets.length - 1] as FakeSocket;
+      latest.emitOpen();
+    }
+    expect(harness.bothDown).toEqual([]);
+    expect(harness.dual.stats().openConnections).toBe(2);
+    expect(harness.dual.stats().rollingResubscribes).toBe(5);
+  });
+
+  it("o rolo zera o backoff: um close deliberado não herda castigo", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    const [first, second] = bothUp(harness);
+    // Two failures push slot 0's backoff to 4 s.
+    first.emitClose();
+    vi.advanceTimersByTime(1_000);
+    (harness.sockets[2] as FakeSocket).emitClose();
+    vi.advanceTimersByTime(2_000);
+    const third = harness.sockets[3] as FakeSocket;
+    third.emitOpen();
+    expect(harness.dual.stats().openConnections).toBe(2);
+
+    harness.dual.resubscribe(["a", "novo"]);
+    // A deliberate close must reconnect at the BASE delay, not at whatever
+    // penalty an earlier outage left behind.
+    vi.advanceTimersByTime(1_000);
+    const afterRoll = harness.sockets[harness.sockets.length - 1] as FakeSocket;
+    expect(afterRoll).toBeDefined();
+    afterRoll.emitOpen();
+    expect(afterRoll.sent[0]).toBe(subscribeMessage(["a", "novo"]));
+    expect(second.closedByClient).toBe(false);
+  });
+
+  it("os frames seguem chegando pelo gêmeo durante o rolo", () => {
+    const harness = makeHarness({ tokenIds: ["a"] });
+    const [, second] = bothUp(harness);
+    harness.dual.resubscribe(["a", "novo"]);
+    // The rolled slot is down; the twin is still delivering, which is the
+    // whole reason the reconnect is rolling and not simultaneous.
+    second.emitMessage(frames.book);
+    expect(harness.received).toContain(frames.book);
+  });
+});
