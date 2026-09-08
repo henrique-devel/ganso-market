@@ -1,6 +1,27 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-08 — **RFC-023 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** Três PRs
+- Última atualização: 2026-09-08 (3) — **RFC-025 PARADA NA RE-MEDIÇÃO, zero código escrito.** O
+  prompt 17 manda parar se a atribuição do `PARAM_CHANGE` cair abaixo de 50 %: caiu para
+  **29,7 % (94 de 317)** contra 98,6 % na RFC, e a fatia do funil em disjuntor foi de 55,9 % para
+  **1,81 % (317 de 17 484)**. **Mas o defeito não melhorou — a régua mudou.** O disjuntor é o
+  degrau 1 (`engine.ts:334`), antes dos gates de frescor, então `DATA_STALE`/`BOOK_STALE` não
+  roubam o denominador; o que mudou é que **uma decisão só é gravada quando o veredito muda**
+  (`runner.ts:971–977`), e um mercado congelado sem interrupção grava **uma** linha —
+  `PARAM_CHANGE` aparece com **94 n sobre 94 mercados**, um para um. Por mercado o defeito está
+  intacto: **50 de 50** "Up or Down" descobertos nas últimas 24 h tiveram a **primeira** decisão em
+  `PORTFOLIO_CIRCUIT_BREAKER`, **50 de 50 atribuídos ao `PARAM_CHANGE`**; **35 mercados** presos
+  agora com **p50 de 6,9 h**; e das aberturas das últimas 24 h **96 % são artefato** (94 versão 1,
+  26 `NULL → valor`, 5 tick real) — 92,4 % na história inteira, com **zero** mudança real de
+  `taker_fee`/`fee_curve` desde sempre. **O número da própria RFC não reproduz:** o dia 02/09
+  inteiro dá 21,19 %, não 55,9 % — o recorte original era janela móvel pegando a cauda de 01/09,
+  quando o veredito batia a cada ciclo (24 283 decisões em disjuntor num dia, contra 178 hoje).
+  P1–P3 seguem aprovadas, a SQL de `paramChangedAt` segue `max(valid_from)` intocada e nenhuma
+  outra sessão tocou `breakers.ts`/`exitstore.ts` — **ninguém chegou antes**. **O proprietário
+  decidiu SEGUIR** (08/09), com a premissa relida por mercado e o gatilho de 50 % da atribuição
+  trocado pelo recorte do aceite 2, que é imune à dedup. A implementação seguiu na mesma sessão —
+  ver "SESSÃO 2026-09-08 (4)". Instrumento em `scripts/rfc025/measure_before.sql`; a parada e a
+  medição do "antes" ficam na seção "SESSÃO 2026-09-08 (3)".
+- 2026-09-08 — **RFC-023 IMPLEMENTADA E VERIFICADA EM PRODUÇÃO.** Três PRs
   ([#113](https://github.com/henrique-devel/ganso-market/pull/113) orçamento,
   [#114](https://github.com/henrique-devel/ganso-market/pull/114) mensagens,
   [#115](https://github.com/henrique-devel/ganso-market/pull/115) `/live-volume`), mergeados,
@@ -5473,3 +5494,133 @@ bytes vivos de `polymarket_book_deltas` **≤ 52 GiB** todo o tempo.
    os números de 596,8 ms a frio / 7,6 ms quente na mão.
 4. **Prompt 13 (RFC-021)** continua sendo o próximo da ordem, e agora tem um
    motivo extra: ele é o que torna a leitura do soak não-ambígua.
+
+## SESSÃO 2026-09-08 (3) — RFC-025: PARADA na re-medição. O número da premissa caiu; o defeito que ele media não
+
+**Nenhuma linha de código foi escrita.** O prompt 17 manda re-medir antes de codar e PARAR se a
+atribuição do `PARAM_CHANGE` cair abaixo de 50 %. Ela caiu — **29,7 %**, contra 98,6 % na RFC —
+e a parada foi respeitada. Mas a re-medição também mostrou, por três medidas independentes, que
+**o defeito descrito na RFC-025 está inteiro e ativo**: o gatilho disparou num número que virou
+artefato de contagem, não numa melhora do sistema. A decisão de seguir ou não é do proprietário,
+e está no fim desta seção.
+
+### O que fica registrado sobre as condições de parada
+
+| Condição de parada do prompt 17 | Estado |
+| --- | --- |
+| P1 `pendente` na tabela da RFC | **não** — P1, P2 e P3 aprovadas na recomendação em 2026-09-05, coluna preenchida |
+| SQL de `paramChangedAt` já diferente de `max(valid_from)` | **não** — `exitstore.ts:401–402` segue `max(pv.valid_from)`, intocada |
+| Outra sessão tocou `breakers.ts` / `exitstore.ts` | **não** — último commit nos dois é `f679f8d` (RFC-018 item 3) |
+| **Atribuição ao `PARAM_CHANGE` < 50 %** | **SIM — 29,7 % (94 de 317). Esta é a parada.** |
+
+### A medição (08/09/2026 ~09:50Z, consultas A1–A3 do Apêndice A, sem reescrever)
+
+Instrumento guardado em `scripts/rfc025/measure_before.sql`, rodado contra o Postgres de
+produção. Container `polymarket-portfolio` em `release-sha` `da6d5603` (o `main` local está 4
+commits à frente, todos de documentação da RFC-024 — nenhuma mudança de código no serviço).
+
+**A1 — entradas das 24 h por `reason_code`:**
+
+| `reason_code` | kind do disjuntor | n | mercados |
+| --- | --- | --- | --- |
+| `DATA_STALE` | — | 7 021 | 75 |
+| `BOOK_STALE` | — | 5 499 | 71 |
+| `LOWER_BOUND_BELOW_COSTS` | — | 2 464 | 33 |
+| `PRICE_OUT_OF_BAND` | — | 2 153 | 35 |
+| `PORTFOLIO_CIRCUIT_BREAKER` | `PRICE_JUMP_NO_CATALYST` | 222 | 20 |
+| `PORTFOLIO_CIRCUIT_BREAKER` | **`PARAM_CHANGE`** | **94** | **94** |
+| `EDGE_BELOW_MIN` | — | 21 | 1 |
+| (aceita) | — | 15 | 1 |
+| `PORTFOLIO_CIRCUIT_BREAKER` | `DATA_STALENESS` | 1 | 1 |
+
+- Total `ENTRY` em 24 h: **17 484**; em disjuntor **317 (1,81 %)** — a RFC media 55,9 %.
+- Atribuídas ao `PARAM_CHANGE`: **94 de 317 = 29,7 %** — a RFC media 98,6 %.
+
+**A2 — causa de cada `PARAM_CHANGE` (história inteira, 1 661 aberturas):**
+
+| Causa | n | % | Natureza |
+| --- | --- | --- | --- |
+| Versão 1 (mercado acabou de entrar no recorder) | **1 102** | 66,3 % | artefato de coleta |
+| `fee_base_bps` `NULL → valor` | **434** | 26,1 % | artefato de coleta |
+| `tick_size` real | 125 | 7,5 % | mudança real |
+| `taker_fee` / `fee_curve` / `fee_base` não nulo → diferente | **0** | 0 % | nunca observado |
+| sem casamento / outro | 0 | 0 % | — |
+
+**92,4 % de artefato de coleta** — a RFC media 92 % (617/247/75). Nas **últimas 24 h** a
+proporção é ainda pior: **94 por versão 1, 26 por `NULL → valor`, 5 por tick real = 96 % de
+artefato**.
+
+**A3 — universo rápido ("Up or Down") nas 24 h: 50 mercados, 50 de 50 decisões em
+`PORTFOLIO_CIRCUIT_BREAKER` — 100 %.** E o recorte do aceite 2 já dá a linha-base perfeita:
+dos **50** "Up or Down" **descobertos** nas últimas 24 h (`received_at`), **50 tiveram decisão** e
+**50 tiveram a PRIMEIRA decisão em `PORTFOLIO_CIRCUIT_BREAKER`** — e a atribuição por kind desses
+50 é **`PARAM_CHANGE` em 50 de 50**. Todo mercado rápido continua nascendo congelado, sem exceção.
+
+**Estado agora:** 35 `PARAM_CHANGE` abertos, 35 mercados, **p50 411 min (6,9 h)** de janela aberta,
+contra um universo de 169 mercados avaliados em 24 h. Também abertos: 1 `DATA_STALENESS`
+(9 696 min) e 1 `PRICE_JUMP_NO_CATALYST`.
+
+### Por que o número caiu sem o defeito melhorar
+
+Não é o feed roubando o denominador: o disjuntor é o **degrau 1** em `engine.ts:334`, antes da
+camada RFC-012 e antes dos gates de frescor, então um mercado com disjuntor aberto morre em
+`PORTFOLIO_CIRCUIT_BREAKER` e **nunca** pode ser contado como `DATA_STALE`/`BOOK_STALE`. As
+categorias são exclusivas e o disjuntor vem primeiro.
+
+O que mudou é a **contagem de linhas**. Uma decisão só é gravada quando o veredito **muda**
+(`runner.ts:971–977`; `entrySignature` = `kind|outcome|reasonCode|bindingConstraint`,
+`decisionrow.ts:75–87`). Um mercado congelado sem interrupção grava **uma** linha e cala. É
+exatamente o que se vê: `PARAM_CHANGE` com **94 n sobre 94 mercados** e o universo rápido com
+**50 sobre 50** — um para um. Na janela que a RFC mediu o veredito estava batendo a cada ciclo, e
+a série diária mostra a queda:
+
+| Dia | `ENTRY` | em disjuntor | mercados |
+| --- | --- | --- | --- |
+| 01/09 | 36 907 | **24 283** | 130 |
+| 02/09 | 21 583 | 4 574 | 184 |
+| 03/09 | 22 637 | 683 | 171 |
+| 04/09 | 26 091 | 619 | 187 |
+| 05/09 | 24 401 | 743 | 148 |
+| 06/09 | 16 813 | 620 | 160 |
+| 07/09 | 19 126 | 319 | 168 |
+| 08/09 (parcial) | 7 662 | 178 | 96 |
+
+**Nota sobre o número da própria RFC:** o "recorte 02/09" da RFC (29 600 de 52 983 = 55,9 %) **não
+reproduz** contra o dia 02/09 medido agora — o dia inteiro dá **4 574 de 21 583 = 21,19 %**. O
+número da RFC casa com o dia **01/09** (24 283 de 36 907 = 65,8 %), então o recorte original era
+uma janela móvel de 24 h pegando a cauda de 01/09. A premissa foi escrita sobre a contagem de
+linhas do pico de churn, não sobre um estado estacionário.
+
+### O que isso significa
+
+- **Premissa como está escrita (atribuição por decisão ≥ 50 %): CAIU.** 29,7 %.
+- **Premissa em substância: DE PÉ, e mais nítida que na RFC.** 96 % das aberturas de 24 h são
+  artefato; 50 de 50 mercados rápidos nascem congelados; 35 mercados presos com p50 de 6,9 h;
+  zero mudança real de `taker_fee`/`fee_curve` em toda a história.
+- **Ninguém chegou antes**, que é o risco que a condição de parada existia para pegar.
+
+O gatilho é por decisão gravada; a dedup de veredito fez essa métrica deixar de medir congelamento
+e passar a medir churn. A métrica que sobrevive à dedup é **por mercado**: 35 de 169 presos,
+50 de 50 rápidos presos, 100 %.
+
+### Decisão que volta ao proprietário
+
+O prompt 17 manda parar, e a sessão parou: **PR 1, PR 2 e PR 3 não foram abertos, nada foi
+mesclado, nada foi deployado.** O que se pede é uma escolha entre:
+
+1. **Seguir**, relendo a premissa da RFC-025 em base **por mercado** (50 de 50 rápidos congelados
+   por `PARAM_CHANGE`; 96 % de artefato nas aberturas de 24 h) em vez de por decisão gravada, e
+   trocar o gatilho de 50 % da atribuição por decisão pelo recorte do aceite 2, que é imune à
+   dedup. D1–D5 seguem válidas sem uma vírgula de mudança.
+2. **Não seguir** — a RFC-025 volta a `pendente` com a premissa marcada como caída, e a fila segue
+   para o prompt 18.
+
+Recomendação: **(1)**. O defeito é o mesmo, a correção é a mesma, e a única coisa que a
+re-medição desmentiu foi a régua. Se seguir, os "antes" a colar em "Medido depois" são os desta
+seção, e o aceite 3 (A1, antes 55,9 %) precisa ser reescrito para a linha-base real de **1,81 %**
+antes de valer como critério.
+
+**RESOLVIDO — o proprietário decidiu (1) em 2026-09-08**, na recomendação: seguir com a premissa
+relida em base por mercado, gatilho trocado pelo recorte do aceite 2, aceite 3 contra 1,81 %.
+Registro na RFC-025, seção "Re-medição" → "Decisão do proprietário". A implementação está na
+seção **"SESSÃO 2026-09-08 (4)"**.
