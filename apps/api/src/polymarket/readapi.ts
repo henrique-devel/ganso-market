@@ -447,7 +447,10 @@ const FAST_COVERAGE_SQL = `WITH serie AS (
                 EXISTS (SELECT 1 FROM polymarket_universe_log ul
                          WHERE ul.condition_id = d.condition_id
                            AND ul.action = 'enter'
-                           AND ul.reason LIKE '%_series') AS por_serie,
+                           -- Underscore is a single-char wildcard in LIKE,
+                           -- so the suffix has to escape it: unescaped, the
+                           -- pattern also matches xseries.
+                           AND ul.reason LIKE '%\\_series' ESCAPE '\\') AS por_serie,
                 bool_or(
                   EXISTS (SELECT 1 FROM polymarket_series_1m sm
                            WHERE sm.token_id = d.token_id
