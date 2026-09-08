@@ -865,6 +865,12 @@ export function registerPolymarketReadRoutes(
         });
       }
 
+      // RFC-023 D4. `live_volume` is NULL for every row written before
+      // 2026-09-07: the sampler asked `/live-volume?market=<conditionId>` and
+      // the endpoint, which takes the Gamma EVENT id, answered 400 every time
+      // for over 30 hours. Rows from before the fix keep the NULL — it is not
+      // backfillable, the endpoint only reports current volume — so a reader
+      // of this series must treat NULL as "not collected", not as "zero".
       const columns =
         metric === "oi"
           ? "condition_id, token_id, open_interest, live_volume, source_ts, received_at"
