@@ -1,6 +1,29 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-08 (4) — **RFC-025 IMPLEMENTADA E DEPLOYADA; a medição de 24 h fecha
+- Última atualização: 2026-09-08 (5) — **RFC-026 PR 1 MESCLADO E EM PRODUÇÃO**
+  ([#133](https://github.com/henrique-devel/ganso-market/pull/133)), CD verde, `release-sha`
+  **`061f1ba16697dcfa65853f5dad1fca6f9c6ec23a`** conferido **no container da `api` e dentro do
+  bundle do `web`**. A Mesa (tecla `1`) é a tela padrão: nome do mercado em toda célula, escada dos
+  sete degraus, as oito respostas do POLY-10, livro L2 de dez níveis e o bloco "O que eu faço
+  agora?". **Três coisas que já estavam no banco e não saíam da API agora saem:** `m.question`/
+  `m.category` em `/opportunities` e `/decisions`, `paper_order_id` em `/decisions` e o bloco
+  `config` da D6 em `/portfolio/limits`. **Aceite A3 fechado em produção: 200 de 200 linhas do
+  painel e 500 de 500 do log de decisões com nome — zero `question` nula, zero fora do registro,
+  zero sem categoria.** A2 fechado; A7 em **0** e refazer em 24 h.
+  **Duas premissas caíram.** (1) O orçamento da D5 conta "status do App 4" por minuto, mas
+  `fetchDashboardStatus` faz **duas** requisições por tique (`/health/live` + `/health/ready`),
+  então a soma dada como 18 era **22** — acima do teto de 20 do A5. Corrigido movendo o status e o
+  feed de eventos para rodarem só na tela que os mostra (Sistema): a Mesa fecha em **14 req/min**.
+  (2) **O aceite A5 não é executável como está escrito**: o `log_format ganso_json`
+  (`infra/nginx/nginx.conf:11-15`) não registra URI nem IP do cliente — só instante, método, status
+  e tempo. O substituto é contar TODAS as requisições do edge em 60 s com a Mesa aberta, e isso
+  **depende do proprietário abrir a tela**, porque nenhum agente tem sessão.
+  **Desvio deliberado da D6, com o motivo medido:** o bloco `config` sai de
+  `portfolio_config_versions`, não da "config carregada pela API" — o serviço `api` não monta
+  `config/portfolio.json` nem define `GANSO_PORTFOLIO_CONFIG_FILE`, então
+  `loadPortfolioConfig()` ali devolveria os **defaults compilados**, que é o mesmo hardcode que a
+  D6 remove, uma camada atrás. Ver "SESSÃO 2026-09-08 (5)" ao final.
+- 2026-09-08 (4) — **RFC-025 IMPLEMENTADA E DEPLOYADA; a medição de 24 h fecha
   em 09/09 14:19:53Z.** Dois PRs de código mesclados
   ([#129](https://github.com/henrique-devel/ganso-market/pull/129) D1,
   [#131](https://github.com/henrique-devel/ganso-market/pull/131) D3), CD verde, **rebuild do
@@ -5764,3 +5787,152 @@ aceites 1–4.
 **Restos de `BOOK_STALE`/`DATA_STALE` são sintoma do feed (RFC-021/RFC-024) — registrar, não
 consertar.** No recorte de 08/09 eram **12 520 das 17 484** entradas (71,6 %), e seguem sendo o
 gargalo real do funil depois desta RFC. Esta RFC nunca prometeu mexer nisso.
+
+---
+
+## SESSÃO 2026-09-08 (5) — RFC-026 PR 1: a tela deixou de chamar um hash de "mercado"
+
+Executado o prompt `prompts/roadmap/18a-rfc-026-pr1-mesa.md` até o fim: re-medição → código →
+testes → merge → CD → verificação em produção. PR
+[#133](https://github.com/henrique-devel/ganso-market/pull/133), squash em `main` como `061f1ba`.
+Zero endpoint novo, zero location, zero migration, zero gate, zero `replayDecision`, zero
+biblioteca nova em `apps/web`.
+
+### Re-medição: as nove premissas do prompt, todas de pé
+
+| Premissa | Medido em 08/09 |
+| --- | --- |
+| PR-0 (a) mergeado | `grep "AND occurred_at"` **vazio**; `OVERVIEW_API_FAILED` em 24 h = **0** |
+| Nenhuma rota expõe `edgeLiqMin`/`bookMaxAgeMs` | 0 ocorrências |
+| `/opportunities` sem `m.question` | vazio |
+| `/decisions` sem `paper_order_id` | vazio |
+| `slice(0, 12)` | **3** células |
+| `parsePanel` lê só `book.spread` | 1 linha |
+| `<Badge` sem `compacto` | **9** e **0** |
+| `.shell--wide` | 72 rem |
+| Nome do mercado no registro | **71 de 71** do painel da última hora, com `question` **e** `category` — 100 %, como os 110 de 110 de 02/09 |
+
+Duas medições novas que o código exigiu: o livro do `panel_json` tem no **máximo 10 níveis por
+lado** (200 snapshots mais recentes; um livro fino chega com 8, e o parser diz quantos veio), e nas
+500 decisões mais recentes havia **3 aceitas, 2 sem `paper_order_id`** — o bloco D7 tem dado real.
+
+### EXPLAIN (ANALYZE, BUFFERS) em produção, com o SQL que foi para o ar
+
+| Consulta | 1.ª execução | Quente |
+| --- | --- | --- |
+| `/opportunities` + `m.question, m.category` | **281,1 ms** | 8,6 ms |
+| `/decisions` + JOIN + `paper_order_id` | **5,7 ms** (planejamento 92,4 ms) | 0,68 ms |
+| bloco `config` de `/portfolio/limits` | **0,29 ms** | — |
+
+O JOIN de `/decisions` fica na API com folga: 500 linhas resolvidas em **54 buscas de índice** e 446
+acertos de Memoize, porque uma página de 500 repete os mesmos mercados. O gatilho da RFC ("> 500 ms
+a frio ⇒ cruzar no cliente") não disparou. Como o Postgres **não é recriado a cada merge** desde a
+RFC-020, "a frio" aqui é a primeira execução da consulta com o cache que houvesse — os `read=` do
+plano estão nos comentários do código, e ninguém reiniciou o postgres para isto.
+
+### Premissa 1 que caiu: o orçamento de requisições da D5
+
+A D5 soma "status do App 4" por minuto. `fetchDashboardStatus` faz **duas** requisições por tique
+(`apps/web/src/health.ts:35-36`, `/api/health/live` e `/api/health/ready`), logo **8** — e a soma
+dada como 18 era **22** com a Mesa aberta, acima do teto de 20 do aceite A5. O defeito era pagar
+8 req/min por um cartão que está em outra tela.
+
+Corrigido pelo mesmo princípio que a D5 já aplicava ao feed: **quem não mostra o dado não paga por
+ele**. O status e o `/events` (5 s = 12/min) passam a rodar só na tela Sistema. Com a Mesa aberta:
+8 da faixa (`/overview` + `/paper/performance`) + 6 da Mesa (`/opportunities`, `/decisions`,
+`/portfolio/exposure` a 30 s) = **14 req/min**, com folga para as 2 do `/series` do PR 3.
+`/portfolio/limits` fica **fora** do poll e só é relido quando a `config_version` do painel discorda
+da carregada.
+
+### Premissa 2 que caiu: o aceite A5 não é executável como está escrito
+
+A5 manda contar "requisições `/api/` do IP do operador em 60 s" no access log do Nginx. O
+`log_format ganso_json` (`infra/nginx/nginx.conf:11-15`) registra **`$time_iso8601`, `$request_id`,
+`$request_method`, `$status` e `$request_time` — e mais nada**: sem URI e sem IP. Conferido no
+container: o log vai para `/dev/stdout` e as linhas saem sem path.
+
+Substituto válido, porque o edge só serve este painel: contar **todas** as requisições concluídas
+em 60 s com a Mesa aberta, que é um teto superior do que a faixa + a Mesa gastam.
+
+```bash
+ssh -i ~/.ssh/id_ed25519 root@178.105.65.251 \
+  "docker logs ganso-market-nginx-1 --since 60s 2>&1 | grep -c http_request_completed"
+```
+
+**Isso depende do proprietário**: nenhum agente tem sessão do painel, e o poll só existe depois do
+login — antes dele a SPA mostra a tela de entrada e não chama nada. Medido agora, com ninguém
+olhando: **0 requisições em 3 min**, o que confirma que o número que sair será do painel e não de
+ruído. Acrescentar URI ao `log_format` seria mexer no arquivo do perímetro e passar a registrar
+caminho e IP de quem opera — decisão do proprietário, não deste PR.
+
+### Desvio deliberado da D6, com o motivo
+
+A D6 diz que o bloco `config` sai "da config carregada pela API". Medido: o serviço `api`
+**não** monta `config/portfolio.json` e **não** define `GANSO_PORTFOLIO_CONFIG_FILE` — só o
+`polymarket-portfolio` faz (`docker-compose.yml:357,375`). `loadPortfolioConfig()` na API
+devolveria os **defaults compilados**, e publicar 0,02 como "o piso do motor" enquanto se é cego ao
+arquivo que o motor leu é o mesmo hardcode que a D6 existe para remover, uma camada atrás.
+
+O bloco lê `portfolio_config_versions`: escrita pelo próprio motor no boot (`runner.ts:1523`),
+imutável por trigger, e é onde o `config_version` de cada decisão e de cada snapshot aponta. Em
+vigor pela `valid_from` mais recente — **1.2.0**, a mesma versão carimbada na decisão 890828.
+Sem linha, `config: null`, e a tela escreve "não medido" em cinza. Alternativa recusada: montar o
+arquivo no container da `api`, que muda a superfície de deploy que esta RFC não autorizou e derruba
+a API se o mount faltar (`loadPortfolioConfig` lança com env definido e arquivo ilegível).
+
+### Uma regra de leitura que valeu a pena escrever no código
+
+A escada lê a última decisão do mercado **como um corte**: o `reason_code` diz em que degrau o
+motor parou, então os degraus antes dele passaram, aquele reprovou, e os de depois são
+**"não avaliado"** — nunca "passou". Sem essa regra a escada teria de adivinhar, e adivinhar aqui
+produz a tela otimista que a RFC proíbe. Sem decisão do mercado na amostra, nenhum degrau se
+declara aprovado (marca neutra `·`), e a tela diz de qual decisão os ✓/✗ foram lidos, porque painel
+e decisão são de ciclos diferentes e podem discordar — discordância que não é defeito.
+
+### Verificação
+
+- `make verify` **verde**: **1 738 passed | 79 skipped** (API), **113 passed** (web), 70 (contracts),
+  13 + 61 (python), build, secret scan, política de compose.
+- `scripts/tests/test_nginx_perimeter.py` **inalterado e verde** (dentro dos 61).
+- Suíte pg do portfólio **rodada de verdade** contra Postgres 18.4 descartável com as migrations
+  aplicadas pelo protocolo do CD: **`33 passed`** — o mesmo número da sessão (4), logo sem
+  regressão.
+- **32 testes vistos falhando no código anterior** (`git stash` só de `src/`): 14 de cliente, 12 de
+  tela e 6 de API. O do aceite A4 falha com a mensagem exata do defeito:
+  `expected ' Normal NORMAL  ' not to contain 'NORMAL'`.
+- **Um defeito encontrado pelo próprio teste novo:** a nota do primeiro degrau imprimia
+  `consequencia(...)`, que termina no código bruto de propósito porque é `title` — punha
+  `(LOWER_BOUND_BELOW_COSTS)` no texto da tela e violava o A4 pelo caminho mais discreto possível.
+- Um teste existente mudou de texto: o da RFC-015 que exigia `ORDER BY decision_id DESC` agora exige
+  `ORDER BY d.decision_id DESC`, porque a tabela ganhou alias com o JOIN. O invariante — ordenar pela
+  chave primária, nunca por `decision_ts` — segue asseverado.
+- Fixtures de teste são **`panel_json` reais** de produção (`apps/web/test/fixtures/`). O único caso
+  construído é a folga positiva, porque **produção não tem nenhuma**: a última `ENTRY ACCEPTED` é de
+  06/09. Está marcado como construído dentro do teste.
+- Layout conferido no navegador com fixture real: duas colunas **795/589 px** em 1 440, coluna única
+  em 1 050, **zero estouro horizontal**, 7 degraus, 20 níveis de livro, 8 respostas.
+
+### Aceites em produção
+
+| # | Situação |
+| --- | --- |
+| A1 | não se aplica ao PR 1 (nenhum location novo) |
+| A2 | ✔ `release-sha` `061f1ba…` no container da `api` **e** dentro do bundle do `web`; textos novos da Mesa presentes no JS servido |
+| A3 | ✔ **200 de 200** linhas do painel e **500 de 500** do log com nome; 0 `question` nula com registro, 0 fora do registro, 0 sem categoria |
+| A4 | ✔ por teste (o texto renderizado não contém código com o modo engenheiro desligado); inspeção visual feita na prévia local, não no painel autenticado |
+| A5 | **PENDENTE e depende do proprietário** — método da RFC não é executável (log sem URI/IP); usar o `grep -c http_request_completed` acima com a Mesa aberta 60 s. Aritmética do código: **14 req/min** |
+| A6 | ✔ para as consultas deste PR (tabela de EXPLAIN acima) |
+| A7 | **0** em 24 h agora (`grep -c '"pg_code":"57014"'` no log da `api`); **refazer em 2026-09-09 ~18:35Z** |
+
+### Duas coisas para quem retomar
+
+**A amostra de 500 decisões cobre 26 minutos.** Medido às 18:35Z: as 500 mais recentes vão de
+18:08:49Z a 18:34:50Z. A frase "N aceites não viraram ordem paper" da D7 só vê essa janela — é
+literalmente o que o aviso "amostra das últimas 500" diz, e é por isso que ele está na tela. Às
+18:35Z a janela tinha **0 aceitas**, então a frase (corretamente) cala; às 17:50Z tinha 3 aceitas e
+2 sem ordem. O PR 2 da RFC-027, se quiser uma frase que cubra o dia, precisa de agregado, não de
+página.
+
+**O que o PR 2 herda pronto:** `paper_order_id` já sai de `/decisions`, o bloco `config` já existe
+e a Carteira (tecla `2`) já é uma casca com exposição e estado, esperando `/paper/positions` e
+`/paper/orders`. A P1 do proprietário segue aprovada e registrada.
