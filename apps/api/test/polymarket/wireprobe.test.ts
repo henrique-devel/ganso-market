@@ -1,0 +1,570 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+import { subscribeMessage } from "../../src/polymarket/recorder.js";
+import {
+  HOURLY_SERIES_ID,
+  HOURLY_SERIES_SLUG_PATTERN,
+  listHourlySeries,
+  parseProbeFrame,
+  parseTokenIds,
+  probeSubscribeFrame,
+  projectVolumetry,
+  runProbeRound,
+  type ProbeFetcher,
+  type ProbeSocket,
+} from "../../src/polymarket/wireprobe.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SRC = resolve(HERE, "../../src");
+
+/**
+ * The 24 real hourly slugs of a day, plus every neighbouring form the venue
+ * publishes, captured live from Gamma on 2026-09-08 (RFC-024 D2). The regex
+ * has to take the 24 and refuse all the rest.
+ */
+const HOURLY_SLUGS = [
+  "bitcoin-up-or-down-september-8-2026-12am-et",
+  "bitcoin-up-or-down-september-8-2026-1am-et",
+  "bitcoin-up-or-down-september-8-2026-2am-et",
+  "bitcoin-up-or-down-september-8-2026-3am-et",
+  "bitcoin-up-or-down-september-8-2026-4am-et",
+  "bitcoin-up-or-down-september-8-2026-5am-et",
+  "bitcoin-up-or-down-september-8-2026-6am-et",
+  "bitcoin-up-or-down-september-8-2026-7am-et",
+  "bitcoin-up-or-down-september-8-2026-8am-et",
+  "bitcoin-up-or-down-september-8-2026-9am-et",
+  "bitcoin-up-or-down-september-8-2026-10am-et",
+  "bitcoin-up-or-down-september-8-2026-11am-et",
+  "bitcoin-up-or-down-september-8-2026-12pm-et",
+  "bitcoin-up-or-down-september-8-2026-1pm-et",
+  "bitcoin-up-or-down-september-8-2026-2pm-et",
+  "bitcoin-up-or-down-september-8-2026-3pm-et",
+  "bitcoin-up-or-down-september-8-2026-4pm-et",
+  "bitcoin-up-or-down-september-8-2026-5pm-et",
+  "bitcoin-up-or-down-september-8-2026-6pm-et",
+  "bitcoin-up-or-down-september-8-2026-7pm-et",
+  "bitcoin-up-or-down-september-8-2026-8pm-et",
+  "bitcoin-up-or-down-september-8-2026-9pm-et",
+  "bitcoin-up-or-down-september-8-2026-10pm-et",
+  "bitcoin-up-or-down-september-8-2026-11pm-et",
+];
+
+const NON_HOURLY_SLUGS = [
+  // 5 min / 15 min / 4 h: a different slug scheme entirely.
+  "btc-updown-5m-1788807600",
+  "btc-updown-15m-1788827400",
+  "btc-updown-4h-1788811200",
+  // The daily, which shares the prefix and is separated by `-on-`.
+  "bitcoin-up-or-down-on-september-7-2026",
+  // Other assets in the same family.
+  "ethereum-up-or-down-september-8-2026-3pm-et",
+  // Shapes the old SHORT_SERIES_PATTERN would have matched.
+  "bitcoin-up-or-down-september-8-2026-3pm-et-resolved",
+  "bitcoin-up-or-down-september-8-2026-13pm-et",
+  "bitcoin-up-or-down-sept-8-2026-3pm-et",
+];
+
+class FakeProbeSocket implements ProbeSocket {
+  public readonly sent: string[] = [];
+  public closed = false;
+  #open: (() => void) | null = null;
+  #message: ((raw: string) => void) | null = null;
+  #close: (() => void) | null = null;
+  #error: ((error: unknown) => void) | null = null;
+
+  public onOpen(handler: () => void): void {
+    this.#open = handler;
+  }
+  public onMessage(handler: (raw: string) => void): void {
+    this.#message = handler;
+  }
+  public onClose(handler: () => void): void {
+    this.#close = handler;
+  }
+  public onError(handler: (error: unknown) => void): void {
+    this.#error = handler;
+  }
+  public send(data: string): void {
+    this.sent.push(data);
+  }
+  public close(): void {
+    this.closed = true;
+    this.#close?.();
+  }
+  public fireOpen(): void {
+    this.#open?.();
+  }
+  public deliver(raw: string): void {
+    this.#message?.(raw);
+  }
+  public fail(error: unknown): void {
+    this.#error?.(error);
+  }
+}
+
+function bookFrame(assetId: string): string {
+  return JSON.stringify([
+    { event_type: "book", asset_id: assetId, market: "0xm", hash: "h" },
+  ]);
+}
+
+function priceChangeFrame(assetId: string): string {
+  return JSON.stringify([
+    { event_type: "price_change", asset_id: assetId, market: "0xm" },
+  ]);
+}
+
+/**
+ * A deterministic clock plus a timer queue: `setTimer` records the callback,
+ * and `advance` fires everything due, moving the clock as it goes. Without
+ * this the round's 60 s / 120 s / 600 s waits would be real seconds.
+ */
+function fakeTimers(startMs = 1_000_000) {
+  let nowMs = startMs;
+  let pending: Array<{ at: number; seq: number; run: () => void }> = [];
+  let seq = 0;
+  // Each timer fired hands control back to an async continuation that may
+  // register the NEXT timer, so a single microtask turn is not enough: the
+  // queue has to be re-checked after draining, or the round's 60 s wait is
+  // never registered and the whole chain stalls.
+  const drain = async (): Promise<void> => {
+    for (let turn = 0; turn < 50; turn += 1) {
+      await Promise.resolve();
+    }
+  };
+  return {
+    clock: (): number => nowMs,
+    setTimer: (run: () => void, delayMs: number): unknown => {
+      seq += 1;
+      pending.push({ at: nowMs + delayMs, seq, run });
+      return null;
+    },
+    /** Run every timer due within `byMs`, in due order, draining between. */
+    async advance(byMs: number): Promise<void> {
+      const target = nowMs + byMs;
+      await drain();
+      for (;;) {
+        pending.sort((a, b) => (a.at !== b.at ? a.at - b.at : a.seq - b.seq));
+        const next = pending[0];
+        if (next === undefined || next.at > target) {
+          break;
+        }
+        pending = pending.slice(1);
+        nowMs = Math.max(nowMs, next.at);
+        next.run();
+        await drain();
+      }
+      nowMs = target;
+      await drain();
+    },
+  };
+}
+
+describe("RFC-024 D1 — o CLI da prova no fio nao tem banco", () => {
+  // The RFC's stop condition in code form: the probe runs in the recorder
+  // image, where GANSO_CONFIG_FILE and GANSO_POSTGRES_PASSWORD_FILE are set.
+  // If it reached database.ts it would try to connect, and a probe that needs
+  // the database is not a probe that can run without touching collection.
+  //
+  // The assertion is on the IMPORT SPECIFIERS, not on the file text: the two
+  // files name `database.ts` and `pg` in their comments precisely to explain
+  // why they do not import them, and a grep over raw text would flunk the
+  // explanation instead of the dependency.
+  const FORBIDDEN_MODULES = ["pg", "pg-pool", "postgres"];
+  const FORBIDDEN_LOCAL = /(?:^|\/)(database|config)\.(?:js|ts)$/;
+
+  interface Module {
+    readonly source: string;
+    readonly specifiers: readonly string[];
+  }
+
+  function importSpecifiers(source: string): string[] {
+    const out: string[] = [];
+    // `import ... from "x"`, bare `import "x"`, `export ... from "x"`, and
+    // dynamic `import("x")` — every form that creates a runtime edge.
+    const patterns = [
+      /(?:^|\n)\s*import\s+(?:type\s+)?[^;]*?from\s+["']([^"']+)["']/g,
+      /(?:^|\n)\s*import\s+["']([^"']+)["']/g,
+      /(?:^|\n)\s*export\s+(?:type\s+)?[^;]*?from\s+["']([^"']+)["']/g,
+      /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+      /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ];
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) {
+        const specifier = match[1];
+        if (specifier !== undefined) {
+          out.push(specifier);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Every module reachable from `entry` by relative import, transitively. */
+  function transitiveGraph(entry: string): Map<string, Module> {
+    const seen = new Map<string, Module>();
+    const queue = [entry];
+    while (queue.length > 0) {
+      const file = queue.shift() as string;
+      if (seen.has(file)) {
+        continue;
+      }
+      const source = readFileSync(file, "utf8");
+      const specifiers = importSpecifiers(source);
+      seen.set(file, { source, specifiers });
+      for (const specifier of specifiers) {
+        // Type-only imports are erased by tsc, so they cannot pull a runtime
+        // module in — they are followed anyway, which makes the assertion
+        // STRICTER than the runtime claim, not weaker.
+        if (specifier.startsWith(".")) {
+          queue.push(resolve(dirname(file), specifier.replace(/\.js$/, ".ts")));
+        }
+      }
+    }
+    return seen;
+  }
+
+  it("wire-probe-cli.ts nao alcanca database.ts, config.ts nem pg", () => {
+    const graph = transitiveGraph(resolve(SRC, "wire-probe-cli.ts"));
+    const files = [...graph.keys()]
+      .map((file) => file.replace(`${SRC}/`, ""))
+      .sort();
+    // The graph is small on purpose: the CLI and the probe module. Anything
+    // else appearing here is a new dependency that has to be justified.
+    expect(files).toEqual(["polymarket/wireprobe.ts", "wire-probe-cli.ts"]);
+    for (const [file, module] of graph) {
+      const short = file.replace(`${SRC}/`, "");
+      for (const specifier of module.specifiers) {
+        expect(
+          FORBIDDEN_MODULES.includes(specifier),
+          `${short} importa ${specifier}`,
+        ).toBe(false);
+        expect(
+          FORBIDDEN_LOCAL.test(specifier),
+          `${short} importa ${specifier}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("o unico pacote externo e `ws`", () => {
+    const graph = transitiveGraph(resolve(SRC, "wire-probe-cli.ts"));
+    const external = [...graph.values()]
+      .flatMap((module) => module.specifiers)
+      .filter((specifier) => !specifier.startsWith("."));
+    expect([...new Set(external)].sort()).toEqual(["ws"]);
+  });
+
+  it("nao le GANSO_CONFIG_FILE nem GANSO_POSTGRES_PASSWORD_FILE", () => {
+    const graph = transitiveGraph(resolve(SRC, "wire-probe-cli.ts"));
+    for (const [file, module] of graph) {
+      // The comments name both variables to explain WHY they are ignored;
+      // what must not appear is a read of process.env for them.
+      expect(
+        /process\.env\[?["']?GANSO_/.test(module.source),
+        `${file} le uma variavel GANSO_*`,
+      ).toBe(false);
+    }
+  });
+
+  it("roda igual com as variaveis do recorder presentes ou ausentes", () => {
+    const cli = resolve(SRC, "../dist/wire-probe-cli.js");
+    const run = (env: NodeJS.ProcessEnv): string =>
+      execFileSync(process.execPath, [cli, "--help"], {
+        env,
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+    const base = { PATH: process.env["PATH"] ?? "" };
+    const withVars = {
+      ...base,
+      GANSO_CONFIG_FILE: "/nonexistent/runtime.json",
+      GANSO_POSTGRES_PASSWORD_FILE: "/nonexistent/password",
+    };
+    const without = run(base);
+    const present = run(withVars);
+    expect(present).toBe(without);
+    expect(without).toContain("RFC-024 D1");
+  });
+});
+
+describe("RFC-024 D1 — o frame e o mesmo que o recorder envia", () => {
+  it("probeSubscribeFrame e byte-identico a subscribeMessage", () => {
+    for (const tokens of [[], ["a"], ["a", "b"], ["1", "2", "3"]]) {
+      expect(probeSubscribeFrame(tokens)).toBe(subscribeMessage(tokens));
+    }
+  });
+});
+
+describe("RFC-024 D1 — a rodada", () => {
+  it("sem controle positivo em B sai INVALID, nao resultado", async () => {
+    const sockets: FakeProbeSocket[] = [];
+    const timers = fakeTimers();
+    const promise = runProbeRound(
+      {
+        baselineTokenIds: ["base1"],
+        newTokenId: "novo",
+        variant: "only_new",
+      },
+      {
+        socketFactory: () => {
+          const socket = new FakeProbeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    await Promise.resolve();
+    const a = sockets[0] as FakeProbeSocket;
+    a.fireOpen();
+    a.deliver(bookFrame("base1"));
+    await timers.advance(60_000);
+    // B is opened at the extra-frame instant and never delivers: the token is
+    // quiet, so the round cannot decide.
+    (sockets[1] as FakeProbeSocket).fireOpen();
+    await timers.advance(5_000);
+    const result = await promise;
+    expect(result.verdict).toBe("INVALID");
+    expect(result.invalidReason).toBe("no_control_book_on_b_in_5000ms");
+    expect(result.msToBookOnA).toBeNull();
+  });
+
+  it("sem book da linha-base em A sai INVALID", async () => {
+    const sockets: FakeProbeSocket[] = [];
+    const timers = fakeTimers();
+    const promise = runProbeRound(
+      { baselineTokenIds: ["base1"], newTokenId: "novo", variant: "only_new" },
+      {
+        socketFactory: () => {
+          const socket = new FakeProbeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    await Promise.resolve();
+    (sockets[0] as FakeProbeSocket).fireOpen();
+    await timers.advance(5_000);
+    const result = await promise;
+    expect(result.verdict).toBe("INVALID");
+    expect(result.invalidReason).toBe("no_baseline_book_on_a_in_5000ms");
+  });
+
+  it("H1 confirmada: book em B, nunca em A, e os antigos seguem fluindo", async () => {
+    const sockets: FakeProbeSocket[] = [];
+    const timers = fakeTimers();
+    const promise = runProbeRound(
+      {
+        baselineTokenIds: ["base1", "base2"],
+        newTokenId: "novo",
+        variant: "old_plus_new",
+      },
+      {
+        socketFactory: () => {
+          const socket = new FakeProbeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    await Promise.resolve();
+    const a = sockets[0] as FakeProbeSocket;
+    a.fireOpen();
+    a.deliver(bookFrame("base1"));
+    await timers.advance(60_000);
+    // The extra frame carried the old list plus the new token, exactly as
+    // `resubscribe` does.
+    expect(a.sent[1]).toBe(
+      JSON.stringify({
+        assets_ids: ["base1", "base2", "novo"],
+        type: "market",
+      }),
+    );
+    // B was opened at that same instant: the control positive.
+    expect(sockets).toHaveLength(2);
+    const b = sockets[1] as FakeProbeSocket;
+    b.fireOpen();
+    b.deliver(bookFrame("novo"));
+    await timers.advance(5_000);
+    // Old tokens keep flowing on A: the frame SUMS, it does not silence them.
+    a.deliver(priceChangeFrame("base1"));
+    a.deliver(priceChangeFrame("base2"));
+    // ...but the new token's book never arrives on A.
+    await timers.advance(120_000);
+    b.deliver(priceChangeFrame("novo"));
+    b.deliver(priceChangeFrame("novo"));
+    await timers.advance(600_000);
+    const result = await promise;
+    expect(result.verdict).toBe("NEVER_ON_A");
+    expect(result.msToBookOnA).toBeNull();
+    expect(result.msToBookOnB).toBe(0);
+    expect(result.baselineStillFlowingOnA).toBe(true);
+    expect(result.baselineFramesAfterExtra).toBe(2);
+    expect(result.priceChangeFramesOnB).toBe(2);
+    expect(a.closed).toBe(true);
+    expect(b.closed).toBe(true);
+  });
+
+  it("H1 refutada: o frame extra entrega o book em A", async () => {
+    const sockets: FakeProbeSocket[] = [];
+    const timers = fakeTimers();
+    const promise = runProbeRound(
+      { baselineTokenIds: ["base1"], newTokenId: "novo", variant: "only_new" },
+      {
+        socketFactory: () => {
+          const socket = new FakeProbeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        clock: timers.clock,
+        setTimer: timers.setTimer,
+      },
+    );
+    await Promise.resolve();
+    const a = sockets[0] as FakeProbeSocket;
+    a.fireOpen();
+    a.deliver(bookFrame("base1"));
+    await timers.advance(60_000);
+    expect(a.sent[1]).toBe(
+      JSON.stringify({ assets_ids: ["novo"], type: "market" }),
+    );
+    const b = sockets[1] as FakeProbeSocket;
+    b.fireOpen();
+    b.deliver(bookFrame("novo"));
+    await timers.advance(3_000);
+    a.deliver(bookFrame("novo"));
+    await timers.advance(600_000);
+    const result = await promise;
+    expect(result.verdict).toBe("BOOK_ON_A");
+    expect(result.msToBookOnA).toBe(3_000);
+  });
+});
+
+describe("RFC-024 D2 — a regex horaria", () => {
+  it("casa os 24 slugs reais do dia", () => {
+    expect(HOURLY_SLUGS).toHaveLength(24);
+    for (const slug of HOURLY_SLUGS) {
+      expect(HOURLY_SERIES_SLUG_PATTERN.test(slug), slug).toBe(true);
+    }
+  });
+
+  it("recusa 5 min, 15 min, 4 h, diario e vizinhos", () => {
+    for (const slug of NON_HOURLY_SLUGS) {
+      expect(HOURLY_SERIES_SLUG_PATTERN.test(slug), slug).toBe(false);
+    }
+  });
+});
+
+describe("RFC-024 D2 — listagem da serie ao vivo", () => {
+  const event = (slug: string, endDate: string, tokens: string[]): unknown => ({
+    id: "1",
+    slug,
+    endDate,
+    markets: [
+      {
+        conditionId: `0x${slug.slice(-6)}`,
+        endDate,
+        // Gamma serialises this as a JSON STRING, not an array.
+        clobTokenIds: JSON.stringify(tokens),
+      },
+    ],
+  });
+
+  it("usa /events?series_id e ordena por proximidade do fim", async () => {
+    const urls: string[] = [];
+    const fetcher: ProbeFetcher = (input) => {
+      urls.push(input);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve([
+            event(
+              "bitcoin-up-or-down-september-8-2026-5pm-et",
+              "2026-09-08T22:00:00Z",
+              ["t5a", "t5b"],
+            ),
+            event(
+              "bitcoin-up-or-down-september-8-2026-3pm-et",
+              "2026-09-08T20:00:00Z",
+              ["t3a", "t3b"],
+            ),
+            // Must be dropped by the regex.
+            event("btc-updown-15m-1788827400", "2026-09-08T20:15:00Z", ["x"]),
+            event(
+              "bitcoin-up-or-down-on-september-8-2026",
+              "2026-09-08T20:00:00Z",
+              ["y"],
+            ),
+          ]),
+      });
+    };
+    const now = Date.parse("2026-09-08T19:00:00Z");
+    const out = await listHourlySeries(fetcher, now);
+    expect(urls[0]).toBe(
+      `https://gamma-api.polymarket.com/events?series_id=${HOURLY_SERIES_ID}&closed=false&limit=100`,
+    );
+    expect(out.map((entry) => entry.slug)).toEqual([
+      "bitcoin-up-or-down-september-8-2026-3pm-et",
+      "bitcoin-up-or-down-september-8-2026-5pm-et",
+    ]);
+    expect(out[0]?.minutesToEnd).toBe(60);
+    expect(out[0]?.tokenIds).toEqual(["t3a", "t3b"]);
+  });
+
+  it("HTTP nao-ok vira erro nomeado, nao lista vazia silenciosa", async () => {
+    const fetcher: ProbeFetcher = () =>
+      Promise.resolve({
+        ok: false,
+        status: 503,
+        json: () => Promise.resolve([]),
+      });
+    await expect(listHourlySeries(fetcher, Date.now())).rejects.toThrow(
+      "gamma_series_http_503",
+    );
+  });
+});
+
+describe("RFC-024 — utilitarios da prova", () => {
+  it("parseProbeFrame ignora PONG, lixo e frames sem event_type", () => {
+    expect(parseProbeFrame("PONG")).toEqual([]);
+    expect(parseProbeFrame("   ")).toEqual([]);
+    expect(parseProbeFrame("{nao json")).toEqual([]);
+    expect(parseProbeFrame(JSON.stringify([{ asset_id: "a" }]))).toEqual([]);
+    expect(parseProbeFrame(bookFrame("a"))).toEqual([
+      { eventType: "book", assetId: "a" },
+    ]);
+  });
+
+  it("parseTokenIds aceita string JSON e array, e recusa o resto", () => {
+    expect(parseTokenIds('["a","b"]')).toEqual(["a", "b"]);
+    expect(parseTokenIds(["a"])).toEqual(["a"]);
+    expect(parseTokenIds("nao json")).toEqual([]);
+    expect(parseTokenIds(null)).toEqual([]);
+    expect(parseTokenIds([1, "a", null])).toEqual(["a"]);
+  });
+
+  it("projectVolumetry usa a taxa medida e os 313,67 B/linha", () => {
+    const out = projectVolumetry({
+      perMinutePerToken: 2_400,
+      tokensPerMarket: 2,
+      minutesPerMarket: 65,
+      marketsPerDay: 24,
+      bytesPerRow: 313.67,
+    });
+    expect(out.rowsPerDay).toBe(7_488_000);
+    // The RFC's own estimate: +7,5 M linhas/dia, +2,3 GB/dia.
+    expect(out.gbPerDay).toBeCloseTo(2.35, 2);
+  });
+});
