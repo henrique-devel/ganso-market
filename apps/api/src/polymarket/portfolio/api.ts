@@ -113,6 +113,44 @@ function bodyRecord(request: FastifyRequest): Record<string, unknown> {
     : {};
 }
 
+/** Milliseconds as stored in the config JSON; anything unparseable is absent. */
+function ageMs(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * The RFC-026 D6 `config` block, or null when the engine has never registered
+ * a version.
+ *
+ * Null is not "no limits": it is "this endpoint cannot tell you the limits",
+ * and the panel is required to print that in grey rather than fall back to a
+ * number of its own.
+ */
+function configBlock(row: Record<string, unknown> | undefined): {
+  readonly config_version: string | null;
+  readonly edgeLiqMin: string | null;
+  readonly safetyMarginMin: string | null;
+  readonly bookMaxAgeMs: number | null;
+  readonly estimateMaxAgeMs: number | null;
+} | null {
+  if (row === undefined) {
+    return null;
+  }
+  const text = (value: unknown): string | null =>
+    typeof value === "string" && value !== "" ? value : null;
+  return {
+    config_version: text(row.version),
+    edgeLiqMin: text(row.edge_liq_min),
+    safetyMarginMin: text(row.safety_margin_min),
+    bookMaxAgeMs: ageMs(row.book_max_age_ms),
+    estimateMaxAgeMs: ageMs(row.estimate_max_age_ms),
+  };
+}
+
 export function registerPortfolioRoutes(
   app: FastifyInstance,
   deps: PortfolioRoutesDeps,
@@ -190,6 +228,15 @@ export function registerPortfolioRoutes(
         //
         // Both joins stay LEFT: a snapshot must never disappear from the panel
         // because its registry row has not been re-observed yet.
+        //
+        // RFC-026 D2: `question` and `category` ride the JOIN that was already
+        // here for `end_ts` — the panel showed a truncated condition_id as the
+        // market name, which is not a name. Two columns on an existing join,
+        // measured in production 2026-09-08: 281,1 ms first execution and
+        // 8,6 ms warm, against the 500 ms the RFC budgets. A market whose
+        // registry row is missing keeps `question` null and the screen says
+        // "sem nome" in grey — never an empty cell, never a hash pretending to
+        // be a name.
         `WITH RECURSIVE tokens AS (
              (SELECT token_id FROM portfolio_panel_snapshots
                ORDER BY token_id LIMIT 1)
@@ -202,6 +249,7 @@ export function registerPortfolioRoutes(
          SELECT s.snapshot_id, s.condition_id, s.token_id, s.computed_at,
                 s.panel_json, s.decision_id, s.entrable, s.vetoed,
                 s.veto_reason, s.config_version,
+                m.question, m.category,
                 COALESCE(f.end_date, m.end_ts) AS end_ts
            FROM tokens t
            CROSS JOIN LATERAL (
@@ -311,10 +359,44 @@ export function registerPortfolioRoutes(
           GROUP BY binding_constraint
           ORDER BY count(*) DESC`,
       );
+      // RFC-026 D6: the four thresholds the screen needs to say WHY the engine
+      // refused, plus the version they belong to.
+      //
+      // Read from `portfolio_config_versions`, NOT from a config file loaded by
+      // this process, and that is a deliberate departure from the RFC's wording
+      // ("lidos da config carregada pela API"). Measured 2026-09-08: the `api`
+      // service neither mounts `config/portfolio.json` nor sets
+      // GANSO_PORTFOLIO_CONFIG_FILE (only `polymarket-portfolio` does,
+      // docker-compose.yml:357,375), so `loadPortfolioConfig()` here would
+      // return the compiled DEFAULTS — publishing 0.02 as "the engine's edge
+      // floor" while being blind to the file the engine actually read. That is
+      // the front-end hardcode D6 exists to remove, moved one layer back.
+      //
+      // This table is written by the engine itself at boot (`runner.ts:1523`),
+      // is immutable by trigger, and is what `config_version` on every decision
+      // and every panel snapshot points at. Newest `valid_from` is the version
+      // in force: today 1.2.0, which is also the version stamped on the newest
+      // decision (890828). 0,29 ms measured, 3 rows, seq scan.
+      //
+      // The two edge thresholds stay as the decimal TEXT the engine stored, so
+      // the client compares them against `edge.net` without a float detour; the
+      // two ages are milliseconds and become numbers. No row → `config: null`,
+      // and the screen says "não medido" instead of inventing a limit.
+      const config = await pool.query<Record<string, unknown>>(
+        `SELECT v.version,
+                v.content_json->'costs'->>'edgeLiqMin'           AS edge_liq_min,
+                v.content_json->'costs'->>'safetyMarginMin'      AS safety_margin_min,
+                v.content_json->'staleness'->>'bookMaxAgeMs'     AS book_max_age_ms,
+                v.content_json->'staleness'->>'estimateMaxAgeMs' AS estimate_max_age_ms
+           FROM portfolio_config_versions v
+          ORDER BY v.valid_from DESC
+          LIMIT 1`,
+      );
       return reply.send({
         simulation: SIMULATION_BANNER,
         caps: caps.rows,
         binding_constraints_24h: binding.rows,
+        config: configBlock(config.rows[0]),
       });
     }),
   );
@@ -485,17 +567,33 @@ export function registerPortfolioRoutes(
   // TOTAL order: decision_ts ties (one engine cycle stamps many rows with the
   // same instant) made the old order ambiguous, which was its own latent bug.
   // Measured after: index-only scan backward, 0.17 ms, 104 buffer hits.
+  //
+  // RFC-026 D2 adds the market's name and `paper_order_id` to the same query.
+  // The name comes from a LEFT JOIN on the registry's primary key, and the
+  // column tells the reader whether an ACCEPTED decision ever became a paper
+  // order — the bridge column exists since migration 0014 (`:143`) and had
+  // never left the database, so the panel could show an accept and could not
+  // show that nothing came of it.
+  //
+  // Measured in production 2026-09-08 with the query below verbatim: 5,7 ms on
+  // the first execution (92,4 ms planning) and 0,68 ms warm, against the 500 ms
+  // the RFC sets as the point where the JOIN would move to the client. The
+  // planner memoizes the lookup — 500 rows resolved with 54 index searches,
+  // 446 cache hits — because a 500-row page repeats the same markets.
   app.get(
     "/polymarket/decisions",
     { preHandler: guard },
     wrap(async (_request, reply) => {
       const rows = await pool.query(
-        `SELECT decision_id, decision_kind, condition_id, token_id,
-                market_side, order_side, decision_ts, q_lo, q_hi, exec_price,
-                edge_net, size_shares, binding_constraint, outcome, reason_code,
-                portfolio_state, config_version, config_hash
-           FROM portfolio_decisions
-          ORDER BY decision_id DESC
+        `SELECT d.decision_id, d.decision_kind, d.condition_id, d.token_id,
+                d.market_side, d.order_side, d.decision_ts, d.q_lo, d.q_hi,
+                d.exec_price, d.edge_net, d.size_shares, d.binding_constraint,
+                d.outcome, d.reason_code, d.portfolio_state, d.config_version,
+                d.config_hash, d.paper_order_id,
+                m.question, m.category
+           FROM portfolio_decisions d
+           LEFT JOIN polymarket_markets m ON m.condition_id = d.condition_id
+          ORDER BY d.decision_id DESC
           LIMIT ${String(HISTORY_LIMIT)}`,
       );
       return reply.send({

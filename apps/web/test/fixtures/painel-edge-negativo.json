@@ -1,0 +1,144 @@
+{
+  "book": {
+    "asks": [
+      {
+        "size": "30",
+        "price": "0.061"
+      },
+      {
+        "size": "106",
+        "price": "0.064"
+      },
+      {
+        "size": "100",
+        "price": "0.065"
+      },
+      {
+        "size": "183.82",
+        "price": "0.066"
+      },
+      {
+        "size": "500",
+        "price": "0.067"
+      },
+      {
+        "size": "200",
+        "price": "0.071"
+      },
+      {
+        "size": "500",
+        "price": "0.072"
+      },
+      {
+        "size": "1000",
+        "price": "0.079"
+      },
+      {
+        "size": "200",
+        "price": "0.086"
+      },
+      {
+        "size": "9588",
+        "price": "0.087"
+      }
+    ],
+    "bids": [
+      {
+        "size": "495",
+        "price": "0.058"
+      },
+      {
+        "size": "874.99",
+        "price": "0.057"
+      },
+      {
+        "size": "51.16",
+        "price": "0.055"
+      },
+      {
+        "size": "200",
+        "price": "0.054"
+      },
+      {
+        "size": "396.84",
+        "price": "0.053"
+      },
+      {
+        "size": "48.84",
+        "price": "0.052"
+      },
+      {
+        "size": "9588",
+        "price": "0.051"
+      },
+      {
+        "size": "823.52",
+        "price": "0.049"
+      },
+      {
+        "size": "105",
+        "price": "0.047"
+      },
+      {
+        "size": "205",
+        "price": "0.043"
+      }
+    ],
+    "spread": "0.003000"
+  },
+  "edge": {
+    "net": "-0.016912",
+    "gross": "0.000179"
+  },
+  "costs": {
+    "fee": "0.000000",
+    "capital": "0.000000",
+    "slippage": "0.000000",
+    "safety_margin": "0.010000",
+    "resolution_buffer": "0.000013"
+  },
+  "estimate": {
+    "q": "0.061179",
+    "q_hi": "0.078257",
+    "q_lo": "0.044101",
+    "source": "MARKET_BASELINE"
+  },
+  "max_size": {
+    "shares": null,
+    "limiters": [],
+    "binding_constraint": null
+  },
+  "scenarios": {
+    "best": "1.000000",
+    "worst": "perda total da posição",
+    "likely": "0.044101",
+    "fifty_fifty": "0.000000"
+  },
+  "entry_reason": "preço fora da banda permitida",
+  "invalidation": {
+    "prob_lower_below": null
+  },
+  "rule_excerpt": "This market will immediately resolve to \"Yes\" if any Binance 1 minute candle for ETH/USDT during the month specified in the title (from 00:00 AM ET on the first day to 11:59 PM ET on the last), has a final High price equal to or greater tha…",
+  "data_freshness": {
+    "book_age_ms": 12227,
+    "estimate_age_ms": 130496,
+    "resolution_age_ms": 910269
+  },
+  "suggested_side": "YES",
+  "resolution_risk": {
+    "action": "NONE",
+    "buffer": "0.000013",
+    "p_5050": "0.000000",
+    "expected_lockup_s": 2280
+  },
+  "resolution_source": "0x65070BE91477460D8A7AeEb94ef92fe056C2f2A7",
+  "correlated_markets": [
+    "LADDER:0xdc793562774bdd6eed1f8441f3b680dfb38aec5ddbc1c8239263cdbecb088ad0"
+  ],
+  "market_probability": {
+    "ask": "0.061",
+    "bid": "0.058",
+    "microprice": "0.060828"
+  },
+  "invalidation_condition": null
+}

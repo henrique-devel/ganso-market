@@ -37,7 +37,11 @@ interface Journal {
 
 function worldPool(
   record: Journal,
-  overrides: { readonly state?: Row | null } = {},
+  overrides: {
+    readonly state?: Row | null;
+    /** `null` = o motor nunca registrou uma versão de config. */
+    readonly configVersion?: Row | null;
+  } = {},
 ): DatabasePool {
   const stateRow: Row | null =
     overrides.state === undefined
@@ -78,6 +82,7 @@ function worldPool(
         return respond(stateRow === null ? [] : [stateRow]);
       }
       if (text.includes("FROM portfolio_panel_snapshots")) {
+        record.reads.push({ text, params });
         return respond([
           {
             snapshot_id: 1,
@@ -86,6 +91,8 @@ function worldPool(
             computed_at: new Date("2026-08-26T00:00:00Z"),
             panel_json: { suggested_side: "YES" },
             decision_id: 7,
+            question: "Bitcoin acima de US$ 200 mil em 2026?",
+            category: "crypto",
             entrable: false,
             vetoed: true,
             veto_reason: "RFC-012: veto de resolução",
@@ -188,8 +195,29 @@ function worldPool(
             portfolio_state: "NORMAL",
             config_version: "1.0.0",
             config_hash: "a".repeat(64),
+            question: "Bitcoin acima de US$ 200 mil em 2026?",
+            category: "crypto",
+            paper_order_id: null,
           },
         ]);
+      }
+      // RFC-026 D6: a versão de config que o motor registrou no boot é de onde
+      // sai o bloco `config` de /portfolio/limits.
+      if (text.includes("FROM portfolio_config_versions")) {
+        record.reads.push({ text, params });
+        return respond(
+          overrides.configVersion === null
+            ? []
+            : [
+                overrides.configVersion ?? {
+                  version: "1.2.0",
+                  edge_liq_min: "0.02",
+                  safety_margin_min: "0.01",
+                  book_max_age_ms: "30000",
+                  estimate_max_age_ms: "300000",
+                },
+              ],
+        );
       }
       return respond([]);
     },
@@ -248,8 +276,136 @@ describe("GET /polymarket/decisions", () => {
         query.text.includes("LIMIT"),
     );
     expect(read).toBeDefined();
-    expect(read?.text).toContain("ORDER BY decision_id DESC");
-    expect(read?.text).not.toContain("ORDER BY decision_ts DESC");
+    // A tabela ganhou o alias `d` quando a RFC-026 D2 acrescentou o LEFT JOIN
+    // do registro. O invariante é o mesmo e é o que importa: ordena pela chave
+    // primária, nunca por `decision_ts`.
+    expect(read?.text).toContain("ORDER BY d.decision_id DESC");
+    expect(read?.text).not.toContain("decision_ts DESC");
+  });
+});
+
+// RFC-026 D2/D6: o nome do mercado, a ponte para a ordem paper e os quatro
+// limites que explicam a recusa. Nada disso é dado novo — as três coisas já
+// estavam no banco e não saíam da API, então a tela mostrava um hash truncado
+// como nome, mostrava um aceite sem poder dizer que ele morreu ali, e teria de
+// fixar 0,02 no cliente para explicar a recusa.
+describe("RFC-026: nome do mercado, ordem paper e bloco config", () => {
+  it("/opportunities devolve question e category no mesmo JOIN que já existia", async () => {
+    const record = { writes: [] as Recorded[], reads: [] as Recorded[] };
+    const instance = await buildApp(worldPool(record));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/opportunities",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      opportunities: { question: string | null; category: string | null }[];
+    };
+    expect(body.opportunities[0]?.question).toBe(
+      "Bitcoin acima de US$ 200 mil em 2026?",
+    );
+    expect(body.opportunities[0]?.category).toBe("crypto");
+    // O corpo sozinho não distingue: o pool falso devolve a linha inteira
+    // independentemente do SELECT. O que prova a mudança é a consulta pedir as
+    // duas colunas — no JOIN que já existia para o `end_ts`, sem JOIN novo.
+    const consulta = record.reads.find((query) =>
+      query.text.includes("FROM portfolio_panel_snapshots"),
+    );
+    expect(consulta?.text).toContain("m.question, m.category");
+    expect(
+      (consulta?.text.match(/LEFT JOIN polymarket_markets/g) ?? []).length,
+    ).toBe(1);
+  });
+
+  it("/decisions cruza o registro pela chave primária e devolve paper_order_id", async () => {
+    const record = { writes: [] as Recorded[], reads: [] as Recorded[] };
+    const instance = await buildApp(worldPool(record));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/decisions",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      decisions: {
+        question: string | null;
+        category: string | null;
+        paper_order_id: number | null;
+      }[];
+    };
+    expect(body.decisions[0]?.question).toBe(
+      "Bitcoin acima de US$ 200 mil em 2026?",
+    );
+    expect(body.decisions[0]?.paper_order_id).toBeNull();
+
+    const read = record.reads.find((query) =>
+      query.text.includes("FROM portfolio_decisions d"),
+    );
+    // LEFT, e pela PK do registro: um mercado sem linha em
+    // polymarket_markets nunca pode desaparecer do log de decisões.
+    expect(read?.text).toContain(
+      "LEFT JOIN polymarket_markets m ON m.condition_id = d.condition_id",
+    );
+    expect(read?.text).toContain("d.paper_order_id");
+    expect(read?.text).toContain("ORDER BY d.decision_id DESC");
+  });
+
+  it("/portfolio/limits devolve o bloco config com as cinco chaves da D6", async () => {
+    const instance = await buildApp(worldPool({ writes: [], reads: [] }));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/portfolio/limits",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      config: Record<string, unknown> | null;
+    };
+    expect(body.config).toEqual({
+      config_version: "1.2.0",
+      edgeLiqMin: "0.02",
+      safetyMarginMin: "0.01",
+      bookMaxAgeMs: 30000,
+      estimateMaxAgeMs: 300000,
+    });
+    // Os dois limiares de edge seguem TEXTO decimal: é com eles que o cliente
+    // compara `edge.net`, e um float no meio do caminho mudaria a conta.
+    expect(typeof body.config?.edgeLiqMin).toBe("string");
+    expect(typeof body.config?.bookMaxAgeMs).toBe("number");
+  });
+
+  it("sem versão de config registrada, o bloco é null — nunca um limite inventado", async () => {
+    const instance = await buildApp(
+      worldPool({ writes: [], reads: [] }, { configVersion: null }),
+    );
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/portfolio/limits",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { config: unknown }).config).toBeNull();
+  });
+
+  it("a versão em vigor é a de valid_from mais recente", async () => {
+    const record = { writes: [] as Recorded[], reads: [] as Recorded[] };
+    const instance = await buildApp(worldPool(record));
+    await instance.inject({
+      method: "GET",
+      url: "/polymarket/portfolio/limits",
+      headers: AUTH,
+    });
+
+    const read = record.reads.find((query) =>
+      query.text.includes("FROM portfolio_config_versions"),
+    );
+    expect(read?.text).toContain("ORDER BY v.valid_from DESC");
+    expect(read?.text).toContain("LIMIT 1");
   });
 });
 

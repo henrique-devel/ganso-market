@@ -20,6 +20,7 @@ import {
   rotulo,
   tom,
 } from "./dicionario";
+import { useModoEngenheiro } from "./modo.tsx";
 import {
   fetchEvents,
   fetchOverview,
@@ -102,20 +103,19 @@ export function Badge({
   codigo,
   dicionario,
   prefixo,
-  compacto,
 }: Readonly<{
   codigo: string | null;
   dicionario?: Readonly<Record<string, { rotulo: string }>>;
   prefixo?: string;
-  /**
-   * Drop the inline code where the column is too narrow to hold it.
-   *
-   * The code does not disappear: `consequencia` always ends with it, and that
-   * is the `title`. The rule is that the operator can always recover the raw
-   * code — not that it is always printed at full width.
-   */
-  compacto?: boolean;
 }>) {
+  // RFC-026 D4: compacto é o padrão, e o código volta no modo engenheiro.
+  //
+  // O `compacto` opcional saiu: quando ele era a exceção, o padrão imprimia
+  // rótulo e código colados — "Normal NORMAL", "Nenhuma NONE" — em nove
+  // `<Badge>` do Portfólio e na faixa. O invariante do `dicionario.ts` fica
+  // intacto porque `consequencia` termina no código e é o `title`: o operador
+  // sempre recupera o código bruto, com o mouse ou com a tecla `?`.
+  const engenheiro = useModoEngenheiro();
   if (codigo === null) {
     return <span className="badge badge--neutro">—</span>;
   }
@@ -126,7 +126,7 @@ export function Badge({
     >
       {prefixo === undefined ? "" : `${prefixo} `}
       {rotulo(codigo, dicionario)}
-      {compacto === true ? null : <code>{codigo}</code>}
+      {engenheiro ? <code>{codigo}</code> : null}
     </span>
   );
 }
@@ -433,7 +433,6 @@ export function OverviewPanel({
               <Badge
                 codigo={overview.rfc_009_status}
                 dicionario={STATUS_RFC009}
-                compacto
               />
             </span>
             <span className="card-nota">
@@ -448,11 +447,7 @@ export function OverviewPanel({
                     {gate.gate}
                   </th>
                   <td>
-                    <Badge
-                      codigo={gate.status}
-                      dicionario={SITUACAO_GATE}
-                      compacto
-                    />
+                    <Badge codigo={gate.status} dicionario={SITUACAO_GATE} />
                   </td>
                   <td
                     className="celula-motivo"
@@ -504,8 +499,9 @@ export function OverviewPanel({
       <h3 className="feed-titulo">O que aconteceu</h3>
       <p className="scope">
         Só o que mudou alguma coisa. Decisões entram quando são{" "}
-        <code>ACCEPTED</code> — as recusas são 234.549 das 234.571 linhas do log
-        e enterrariam o resto. O feed é keyset por fonte: não pula nem repete.
+        <code>ACCEPTED</code>: a recusa é o normal do motor e é a quase
+        totalidade do log, então enterraria o resto. O feed é keyset por fonte:
+        não pula nem repete.
       </p>
       {feedDegraded ? (
         <p className="scope" role="alert">
@@ -591,10 +587,21 @@ export interface OverviewState {
  * needs to be; putting the aggregate on the feed's would triple its cost for
  * numbers that do not move that fast.
  */
+/**
+ * A faixa (15 s) sempre; o feed (5 s) só onde ele aparece.
+ *
+ * RFC-026 D5: o orçamento da Mesa é de 20 requisições por minuto, e o feed de
+ * eventos sozinho são 12. Ele existe na tela Sistema, então é lá que ele roda —
+ * antes desta RFC o poll de 5 s corria em toda aba, inclusive nas que não
+ * mostram um evento. O cursor é um `ref` e sobrevive ao desligamento, então
+ * voltar ao Sistema retoma de onde parou em vez de repetir a página.
+ */
 export function useOverview(
   accessToken: string,
   onUnauthorized: () => void,
+  options: Readonly<{ feed?: boolean }> = {},
 ): OverviewState {
+  const feedLigado = options.feed !== false;
   const [overview, setOverview] = useState<Overview | null>(null);
   const [performance, setPerformance] = useState<Performance | null>(null);
   const [events, setEvents] = useState<readonly FeedEvent[]>([]);
@@ -674,19 +681,27 @@ export function useOverview(
   useEffect(() => {
     mounted.current = true;
     void refresh();
-    void pollFeed();
     const aggregateTimer = window.setInterval(() => {
       void refresh();
     }, OVERVIEW_REFRESH_MS);
+    return () => {
+      mounted.current = false;
+      window.clearInterval(aggregateTimer);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!feedLigado) {
+      return;
+    }
+    void pollFeed();
     const feedTimer = window.setInterval(() => {
       void pollFeed();
     }, EVENTS_REFRESH_MS);
     return () => {
-      mounted.current = false;
-      window.clearInterval(aggregateTimer);
       window.clearInterval(feedTimer);
     };
-  }, [refresh, pollFeed]);
+  }, [feedLigado, pollFeed]);
 
   return useMemo(
     () => ({ overview, performance, events, degraded, feedDegraded }),
