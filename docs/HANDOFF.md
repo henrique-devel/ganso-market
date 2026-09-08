@@ -4931,6 +4931,109 @@ Deploy dos workers às **2026-09-07T23:59Z**, do recorder às **00:04:54Z**.
 | A5 | `live_volume` resolvido | **150 de 150** linhas com valor no primeiro ciclo após o PR 3 (era **0 de 17 800**). `SAMPLER_FETCH_FAILED` = **0** (era ~61/15 min). `LIVE_VOLUME_EVENT_UNKNOWN` = **0** | ✅ |
 | A6 | tabela D2 preenchida | 11 locations / 22 rotas, quente e frio | ✅ com a ressalva das quatro linhas `frio*` |
 
+### PR #125 — o rolo mentia em dois casos, e o instrumento é o que estava errado
+
+Revisando o #123 antes do soak. O rolo escolhia o alvo com *"prefira um slot já
+fechado, ciclar custa zero redundância"* — ideia certa, execução errada em dois
+casos que aparecem sozinhos em produção:
+
+1. **Slot esperando o backoff** (`socket === null`): o `rollSlot` retornava
+   `false` (não há socket para fechar) e o código logava
+   `WS_ROLLING_RESUBSCRIBE_DEFERRED`, um **`warn`** que diz "não consegui
+   rolar". A verdade é o oposto: o reconnect pendente daquele slot assina a
+   lista **atual** quando abrir, porque o `onOpen` de `connect` lê `tokenIds`
+   na hora. Não havia nada a fazer, e o log dizia que os tokens estavam presos.
+2. **Slot em handshake** (`socket !== null`, `open === false`): era **fechado**.
+   Também sem necessidade — o socket que está abrindo já vai assinar a lista
+   nova. Fechá-lo compra um handshake desperdiçado.
+
+Nenhum dos dois quebrava a entrega do livro. O que quebrava era o
+**instrumento**: um `warn` de "deferred" durante o soak seria lido como "a
+reconexão falhou, estes tokens estão sem livro" — exatamente o tipo de
+conclusão errada que esta RFC existe para eliminar.
+
+Agora o caminho é explícito, e o `DEFERRED` passa a significar **uma coisa só**:
+
+| Estado dos slots | O que acontece | Log |
+| --- | --- | --- |
+| algum slot **não** aberto | nada — ele assina a lista nova sozinho | `WS_ROLLING_RESUBSCRIBE_NOT_NEEDED` (info) |
+| os dois abertos | fecha o slot 0; o gêmeo entrega durante o rolo | `WS_ROLLING_RESUBSCRIBE` (info) |
+| **só um** aberto | não rola — rolá-lo custaria o feed | `WS_ROLLING_RESUBSCRIBE_DEFERRED` (warn) |
+
+O `DEFERRED` é agora a única situação em que os tokens realmente ficam sem
+livro até o próximo ciclo, e é a que a lacuna deve registrar. 2 testes novos,
+os dois vistos falhando no #123.
+
+### O custo do re-book do PR #123, medido — e a P4 resolvida com número
+
+A P4 aprovou "rolante primeiro; dedicada só se o re-book pesar", e a RFC deixou
+`polymarket_book_snapshots_full` como o lugar onde ele pesaria. Medido:
+
+| Grandeza | Valor |
+| --- | --- |
+| Bytes **vivos** de `snapshots_full` | **3,342 GiB** contra quota de **4 GiB** |
+| Gatilho de poda (0,9) | 3,6 GiB ⇒ folga de **0,258 GiB** (~190 k linhas) |
+| Bytes por linha | **1 458,7** |
+| Volume atual | ~244 k `anchor` + ~21 k `resync`/dia ≈ **265 k linhas/dia** (0,361 GiB/dia) |
+
+Custo do rolo: ~165 tokens re-bookados por reconexão, e a reconexão acontece
+**no máximo uma vez por ciclo gamma com entrada**. Dos ciclos observados fora do
+boot, 2 de 3 tiveram entrada ⇒ 96 reconexões/dia no pior caso, ou
+**~15 840 linhas `resync`/dia**: **+6 %** sobre as 265 k, ou **+0,023 GiB/dia**.
+
+**A P4 fica resolvida na recomendação: o re-book NÃO pesa, então a rolante
+fica e a terceira conexão dedicada não é necessária.** O que ele encurta é a
+janela de replay de `snapshots_full`, que já é governada pela quota e não pelo
+TTL de 30 dias — em 6 %.
+
+Uma ressalva para o soak: o dedupe por hash de `bookpipe.ts`
+(`lastPersistedVenueHash`) **não** absorve o re-book como a RFC supôs. Ele só
+suprime books com o **mesmo** hash de venue, e entre a assinatura original e o
+re-book o livro se moveu — os preços mudam a cada segundo. Então o re-book é
+persistido, e é dele que vêm as 15 840 linhas. A absorção que a RFC previu
+existe para os books idênticos que as **duas** conexões entregam, não para os
+de uma reconexão.
+
+### A métrica, lida do banco pelo SQL da imagem publicada
+
+Verificada contra o Postgres de produção com o `FAST_COVERAGE_SQL` **extraído da
+imagem** `9ff7138` (e desescapado com o próprio motor JS — ler o texto do `.js`
+entrega o escape do **fonte**, não a string que o banco recebe; a primeira
+tentativa fez isso e o psql recusou com `invalid escape string`, que era o meu
+método e não o código):
+
+```
+          dia           | emitidos | com_livro_t15 | catalogados_60min | entradas_por_serie | lead_mediano_min
+------------------------+----------+---------------+-------------------+--------------------+------------------
+ 2026-09-08 00:00:00+00 |        5 |             1 |                 1 |                  2 |         15.02955
+ 2026-09-07 00:00:00+00 |       24 |             2 |                 0 |                  0 |        12.562383
+ 2026-09-06 00:00:00+00 |       24 |             0 |                 0 |                  0 |         9.615075
+ 2026-09-05 00:00:00+00 |       17 |             0 |                 0 |                  0 |        12.879183
+```
+
+**`catalogados_60min` = 1 em 08/09 é o primeiro da história do sistema.** Nas
+três colunas de dias anteriores ele é 0, e a re-medição sobre 72 h também deu
+0 de 65. O 1 é o `bitcoin-up-or-down-september-7-2026-11pm-et`, descoberto pela
+série a 68,3 min do fim. `entradas_por_serie` = 2 credita a segunda fonte pelas
+duas entradas do dia, com o `ESCAPE` do PR #121 já em produção.
+
+Tempo: **504,8 ms** nesta passada fria, consistente com os 596,8 ms medidos
+antes do merge, e 7,6–42,6 ms quente.
+
+### Como ler `series_new_to_universe` no `FAST_COVERAGE`
+
+O campo conta os candidatos da série que **o top-500 não trouxe naquele
+ciclo** — e não "mercados que passaram a ser membros". Um mercado que a série
+já tinha colocado no universo num ciclo anterior continua contando 1 aqui,
+porque a série continua sendo a única fonte que o vê, enquanto
+`series_entered` corretamente marca 0 (não houve `enter` novo).
+
+Ver `"series_new_to_universe":1` ao lado de `"series_entered":0` é o normal em
+regime, não um defeito: significa *"este mercado está no universo por causa da
+série, e nada mudou neste ciclo"*. O campo que responde "entrou agora?" é
+`series_entered`, e o que responde "com quanto de antecedência?" é
+`series_lead_min_median` — `null`, nunca 0, quando nada entrou.
+
 ### Um artefato do deploy que o leitor do soak vai encontrar
 
 Há **8 lacunas `subscribe_book_missing` permanentemente abertas**, todas
@@ -5128,12 +5231,22 @@ A rodada de 02:19Z está **descartada** e não entra na RFC como resultado.
 
 ### Deploy verificado em produção
 
-`release-sha` **`d01b5827fea5d7368f51c78688cdb9cbd2f7a1a9`** conferido no
-`polymarket-recorder` **e** na `api` — o campo novo do `data-quality` vive na
-API, e o CD reinicia containers **sem trocar a imagem**, então o terceiro passo
-(rebuild do profile `polymarket`) foi feito à mão, como o protocolo manda.
-`Created` do `ganso-market-postgres-1` segue `2026-09-07T00:11:02Z`: a RFC-020
-aguentou, o banco não foi recriado.
+Cinco deploys nesta sessão, cada um em três passos — merge, CD, e **rebuild do
+profile `polymarket` à mão**, porque o CD reinicia containers **sem trocar a
+imagem**. `release-sha` conferido no `polymarket-recorder` **e** na `api` a
+cada um (o campo novo do `data-quality` vive na API):
+
+| Deploy | `release-sha` | O que entrou |
+| --- | --- | --- |
+| 02:17Z | `3dd46e0` | #117 + #119 (o CLI da prova) |
+| 02:41Z | `d01b582` | #118 + #120 + #121 + #122 (série, lacuna, métrica) |
+| 03:07Z | `9ff7138` | #123 (reconexão rolante) |
+| 03:31Z | `da6d560` | #125 (o alvo do rolo) |
+
+`Created` do `ganso-market-postgres-1` segue **`2026-09-07T00:11:02Z`** através
+dos cinco: a RFC-020 aguentou, o banco não foi recriado nenhuma vez — e é a
+condição de parada explícita da RFC-024 (deploy que recria o Postgres reinicia
+o soak).
 
 **O log `FAST_COVERAGE` apareceu no primeiro ciclo** (02:41:43Z):
 
