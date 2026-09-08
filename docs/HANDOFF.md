@@ -5372,6 +5372,43 @@ marginal em wall-clock é ~0, porque a rota já espera a percentil de
 logo uma **migration**, que a mesma RFC proíbe nos três PRs. A regra dos 200 ms
 e o "sem migration" da RFC se contradizem, e isso **volta ao proprietário**.
 
+### ACEITE PÓS-DEPLOY: o critério da RFC, cumprido nas duas metades
+
+O critério é *"próximo horário BTC com `enter` ≥ 60 min antes do fim **e** `book`
+em ≤ 60 s"*. Cumprido às 03:46:37Z, na imagem `da6d560`:
+
+```json
+{"reason_code":"FAST_COVERAGE","series_candidates":2,"series_new_to_universe":1,
+ "series_entered":1,"series_lead_min_median":73.4,"universe_markets":85,
+ "universe_tokens":170,"subscribe_watch_armed":6,"subscribe_watch_released":0}
+{"reason_code":"WS_ROLLING_RESUBSCRIBE","slot":0,"entering":6,"tokens":170,
+ "open_connections":2}
+{"reason_code":"WS_SINGLE_CONNECTION_DOWN","connection":0}
+```
+
+| Metade do critério | Resultado |
+| --- | --- |
+| `enter` ≥ 60 min antes do fim | **73,4 min** ✅ |
+| `book` em ≤ 60 s | **0 lacunas** `subscribe_book_missing` após o prazo de 03:47:37Z ✅ |
+| o feed não pode cair | **0** `WS_BOTH_CONNECTIONS_DOWN`; só o `WS_SINGLE_CONNECTION_DOWN` do slot rolado ✅ |
+
+**O contraste é o resultado.** Duas vezes no mesmo dia, seis tokens entraram
+num ciclo gamma:
+
+| Ciclo | Build | Como os tokens foram assinados | Lacunas em 60 s |
+| --- | --- | --- | --- |
+| 02:51:45Z | antes do PR #123 | frame `subscribe` em socket vivo | **6 de 6** (nenhuma fechou) |
+| 03:46:37Z | com o PR #123 | reconexão rolante do slot 0 | **0 de 6** |
+
+Mesmo evento, resultado oposto. E o `open_connections: 2` no instante do rolo
+mostra a guarda funcionando: o rolo só aconteceu porque havia um gêmeo para
+segurar o feed.
+
+Uma ressalva de leitura: o `STATUS` do recorder lido logo depois ainda mostrava
+`rollingResubscribes: 0` e `reconnects: [0,0]`. É um snapshot **velho** — o job
+de STATUS roda num intervalo mais longo que os 90 s entre as duas leituras. A
+evidência do rolo é a linha `WS_ROLLING_RESUBSCRIBE`, não o STATUS.
+
 ### O soak de 3 dias: instrumentado e começado, NÃO fechado
 
 Isto é o que esta sessão **não** entregou, e o motivo é o calendário, não um
@@ -5428,13 +5465,10 @@ bytes vivos de `polymarket_book_deltas` **≤ 52 GiB** todo o tempo.
 
 1. **Ler o soak em 12/09** com os dois scripts acima, e registrar cobertura,
    lead e bytes vivos por dia.
-2. **Verificar que a reconexão rolante entrega o livro.** O critério
-   pós-deploy da RFC é "próximo horário BTC com `enter` ≥ 60 min antes do fim
-   **e `book` em ≤ 60 s**". A primeira metade já está verificada (68,3 min no
-   ciclo de 02:51:45Z). A segunda depende do PR 3, que foi para produção às
-   03:07Z: confirmar num ciclo em que tokens **entrem** que o
-   `WS_ROLLING_RESUBSCRIBE` aparece e que **nenhuma** lacuna
-   `subscribe_book_missing` abre.
+2. ~~Verificar que a reconexão rolante entrega o livro.~~ **FEITO** às
+   03:46:37Z: lead de **73,4 min**, `WS_ROLLING_RESUBSCRIBE` no slot 0 com
+   `open_connections: 2`, e **0** lacunas depois do prazo. As duas metades do
+   critério pós-deploy estão cumpridas; ver a seção "ACEITE PÓS-DEPLOY" acima.
 3. **Decidir a inconsistência da D4** (regra dos 200 ms × "sem migration"), com
    os números de 596,8 ms a frio / 7,6 ms quente na mão.
 4. **Prompt 13 (RFC-021)** continua sendo o próximo da ordem, e agora tem um
