@@ -1615,3 +1615,139 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Séries de preço (RFC-026 D10) --------------------------------------- */
+
+/* Alta/baixa em verde/vermelho: por D3 a variação de preço é um dos DOIS
+   lugares onde essas cores significam ganho e perda (o outro é o PnL). Quem
+   não lê a cor lê a mesma coisa no aria-label e no title. */
+.spark {
+  display: block;
+  overflow: visible;
+}
+
+.spark polyline {
+  fill: none;
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.spark--alta polyline,
+.spark--alta circle {
+  stroke: #7fc79a;
+  fill: #7fc79a;
+}
+
+.spark--baixa polyline,
+.spark--baixa circle {
+  stroke: #eb8a90;
+  fill: #eb8a90;
+}
+
+/* Estável não é uma terceira notícia: é cinza, como todo "nada aconteceu". */
+.spark--estavel polyline,
+.spark--estavel circle {
+  stroke: #a9bcb0;
+  fill: #a9bcb0;
+}
+
+/* "sem série" é cinza e é uma PALAVRA. Nunca uma linha no zero, que se leria
+   como "o preço caiu a zero". */
+.spark--vazia {
+  color: #6f8778;
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.mesa-spark {
+  width: 5.5rem;
+  padding-block: 0.15rem;
+}
+
+.serie {
+  margin: 0 0 1rem;
+}
+
+.serie-svg {
+  width: 100%;
+  height: auto;
+  background: #0a100d;
+  border: 1px solid #1e2d24;
+  border-radius: 0.25rem;
+}
+
+.serie-linha {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.serie-svg--alta .serie-linha {
+  stroke: #7fc79a;
+}
+
+.serie-svg--baixa .serie-linha {
+  stroke: #eb8a90;
+}
+
+.serie-svg--estavel .serie-linha {
+  stroke: #a9bcb0;
+}
+
+/* A banda mid_low/mid_high é a mesma cor da linha, quase transparente: é o
+   intervalo em que o preço andou dentro do minuto, não uma segunda série. */
+.serie-banda {
+  fill: #7fc79a;
+  fill-opacity: 12%;
+  stroke: none;
+}
+
+.serie-svg--baixa .serie-banda {
+  fill: #eb8a90;
+}
+
+.serie-svg--estavel .serie-banda {
+  fill: #a9bcb0;
+}
+
+/* Vermelho e tracejado: bloqueio que não sai sozinho (D3). */
+.serie-engate {
+  stroke: #eb8a90;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+
+.serie-marca {
+  font-size: 9px;
+  fill: #cfe0d5;
+}
+
+/* Comprar/vender em azul/laranja por D3; o aceite é o convite a comprar. */
+.serie-marca--aceite {
+  fill: #86b7f0;
+}
+
+.serie-marca--ordem {
+  fill: #e0a86a;
+}
+
+.serie-marca--fill {
+  fill: #e8eee9;
+}
+
+.serie-eixo {
+  font-size: 9px;
+  fill: #6f8778;
+}
+
+.serie-legenda,
+.serie-vazia {
+  margin: 0.35rem 0 0;
+  color: #6f8778;
+  font-size: 0.75rem;
+}
+
+.serie-vazia {
+  font-style: italic;
+}

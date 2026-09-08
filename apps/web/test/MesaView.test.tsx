@@ -143,6 +143,43 @@ function mesa(
   );
 }
 
+describe("RFC-026 D10 — o sparkline na linha da Mesa", () => {
+  const serie = [0, 1, 2].map((m) => ({
+    bucket_start: new Date(
+      Date.parse("2026-09-08T17:00:00Z") + m * 60_000,
+    ).toISOString(),
+    mid_open: "0.50",
+    mid_high: "0.52",
+    mid_low: "0.49",
+    mid_close: `0.5${String(m)}`,
+    updates_count: 4,
+  }));
+
+  it("desenha a série da linha quando o lote a trouxe", () => {
+    const html = mesa({ series: new Map([["t1", serie]]) });
+
+    expect(html).toContain("mesa-spark");
+    expect(html).toContain("<polyline");
+    // Direção em palavras, não só em cor (D3).
+    expect(html).toContain("spark--alta");
+  });
+
+  it("um mercado sem série diz `sem série`, e não desenha linha no zero", () => {
+    const html = mesa({ series: new Map([["t1", []]]) });
+
+    expect(texto(html)).toContain("sem série");
+    expect(html).not.toContain("<polyline");
+  });
+
+  it("sem lote nenhum, a coluna não afirma que não há série", () => {
+    // O padrão do prop é um mapa vazio: nenhum token foi respondido ainda.
+    const html = mesa();
+
+    expect(html).toContain("mesa-spark");
+    expect(texto(html)).not.toContain("sem série");
+  });
+});
+
 describe("A3 — o nome do mercado em toda célula", () => {
   it("mostra o nome na lista e no detalhe", () => {
     const html = mesa();

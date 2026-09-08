@@ -31,6 +31,7 @@ REARM = "/api/polymarket/paper/kill-switch/rearm"
 PERFORMANCE = "/api/polymarket/paper/performance"
 POSITIONS = "/api/polymarket/paper/positions"
 ORDERS = "/api/polymarket/paper/orders"
+SERIES = "/api/polymarket/series"
 
 # Every path under /api/polymarket/paper the perimeter is allowed to name, and
 # the ONE method each may carry. Anything else under that prefix — intents, the
@@ -164,6 +165,32 @@ class NginxPerimeterTests(unittest.TestCase):
         self.assertIn("^~ /api/", specs)
         catch_all = next(body for spec, body in locations() if spec == "^~ /api/")
         self.assertIn("return 404", catch_all)
+
+    def test_the_series_prefix_is_published_and_get_only(self) -> None:
+        # RFC-026 D10 (owner decision P2). Unlike the surfaces above this one is
+        # a PREFIX, because the module answers both `/series` (the batch) and
+        # `/series/:tokenId`. A prefix is the shape that needs watching: it also
+        # publishes every path anyone adds under it later, so the guard has to
+        # be there and has to be the only one.
+        matches = [spec for spec, _ in locations() if spec.split()[-1] == SERIES]
+        self.assertEqual(
+            matches,
+            [f"^~ {SERIES}"],
+            "the series surface must be published as exactly one `^~` location",
+        )
+        body = next(body for spec, body in locations() if spec == f"^~ {SERIES}")
+        guards = re.findall(r"\$request_method\s*!=\s*(\w+)", body)
+        self.assertEqual(
+            guards,
+            ["GET"],
+            "the series prefix must refuse every method but GET, and say so once",
+        )
+        self.assertIn("return 404", body)
+
+    def test_the_series_prefix_cannot_reach_the_paper_module(self) -> None:
+        # `^~ /api/polymarket/series` is only safe while it stays outside
+        # `/paper`. This is the assertion that a later rename cannot slip past.
+        self.assertFalse(SERIES.startswith("/api/polymarket/paper"))
 
     def test_read_surfaces_remain_get_only(self) -> None:
         for spec, body in locations():
