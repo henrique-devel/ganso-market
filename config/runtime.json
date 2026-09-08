@@ -20,6 +20,8 @@
           "/polymarket/events": 500,
           "/polymarket/data-quality": 4000,
           "/polymarket/paper/performance": 500,
+          "/polymarket/paper/positions": 500,
+          "/polymarket/paper/orders": 500,
           "/polymarket/opportunities": 1000,
           "/polymarket/opportunities/:tokenId": 1000,
           "/polymarket/portfolio/exposure": 500,

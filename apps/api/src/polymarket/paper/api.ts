@@ -388,13 +388,29 @@ export function registerPaperRoutes(
         if (statusRaw !== undefined && status === null) {
           return await jsonError(reply, 400, "INVALID_STATUS_FILTER");
         }
+        // RFC-026 D8 adds the market's name, and nothing else: an order row
+        // already carries its queue position, its side and its size, and the
+        // one thing it could not say was WHICH market it was in — the panel
+        // printed a truncated condition_id and called that a market.
+        //
+        // The JOIN is on the registry's primary key and cannot add a row:
+        // `polymarket_markets.condition_id` is unique, so a LEFT JOIN is 1:1
+        // or 1:0. `o.*` keeps every column the route published before, so no
+        // reader loses a field to this change.
         const rows =
           status === null
             ? await pool.query(
-                "SELECT * FROM paper_orders ORDER BY created_at DESC LIMIT 200",
+                `SELECT o.*, m.question
+                   FROM paper_orders o
+                   LEFT JOIN polymarket_markets m ON m.condition_id = o.condition_id
+                  ORDER BY o.created_at DESC LIMIT 200`,
               )
             : await pool.query(
-                "SELECT * FROM paper_orders WHERE status = $1 ORDER BY created_at DESC LIMIT 200",
+                `SELECT o.*, m.question
+                   FROM paper_orders o
+                   LEFT JOIN polymarket_markets m ON m.condition_id = o.condition_id
+                  WHERE o.status = $1
+                  ORDER BY o.created_at DESC LIMIT 200`,
                 [status],
               );
         return await reply.send({
@@ -413,8 +429,51 @@ export function registerPaperRoutes(
     { preHandler: guard },
     async (_request, reply) => {
       try {
+        // RFC-026 D8. Two LEFT JOINs, both on a primary key, so neither can
+        // change the number of rows this route returns:
+        //
+        //   - `polymarket_markets` on `condition_id` (PK) gives the name.
+        //   - `fundamental_labels` on `token_id` (PK, migration 0006 `:172`)
+        //     gives `is_final`, which is the ONLY input to the "resolved on
+        //     the venue, not settled in paper" seal.
+        //
+        // The label join MUST be on token_id and never on condition_id: a
+        // market has two tokens, `fundamental_labels_condition_idx` is not
+        // unique, and joining there would return each position twice — the
+        // panel would print a duplicated portfolio and the row count test
+        // below is what holds that line.
+        //
+        // `pending_settlement` is computed here rather than in the client
+        // because it is a fact about the database, not a rendering choice.
+        // It is deliberately NOT the `mark_stale + end_ts < now()` heuristic:
+        // a stale mark means the recorder stopped, which is a different
+        // failure from the venue having resolved, and a passed end_ts is a
+        // schedule, not an outcome. Only the label says the outcome is known.
+        // `is_final` is NULL when no label exists — an unlabelled position is
+        // not pending settlement, so COALESCE makes the absence a false.
+        //
+        // `end_ts` follows the RFC-016 precedence the opportunities panel
+        // already uses: the VERSIONED rule chain first, the flat registry
+        // column only as a fallback. `polymarket_markets.end_date_iso` is the
+        // date-only copy migration 0017 exists to warn about (wrong by up to
+        // 24 h), and `m.end_ts` alone had an instant for 219 of 372 panel
+        // tokens — reading it by itself prints "no deadline" for a market that
+        // has one.
         const rows = await pool.query(
-          "SELECT * FROM paper_positions ORDER BY updated_at DESC LIMIT 500",
+          `SELECT p.*, m.question, fl.is_final,
+                  COALESCE(f.end_date, m.end_ts) AS end_ts,
+                  COALESCE(fl.is_final, FALSE) AND p.shares::numeric > 0
+                    AS pending_settlement
+             FROM paper_positions p
+             LEFT JOIN polymarket_markets m ON m.condition_id = p.condition_id
+             LEFT JOIN fundamental_labels fl ON fl.token_id = p.token_id
+             LEFT JOIN LATERAL (
+               SELECT r.end_date FROM polymarket_rule_versions r
+                WHERE r.condition_id = p.condition_id AND r.valid_to IS NULL
+                ORDER BY r.version DESC
+                LIMIT 1
+             ) f ON TRUE
+            ORDER BY p.updated_at DESC LIMIT 500`,
         );
         const nowMs = (brokerDeps.clock?.() ?? new Date()).getTime();
         const positions = rows.rows.map((row) => {

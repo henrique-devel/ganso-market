@@ -1380,3 +1380,238 @@ h1 {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* --- RFC-026 D8 · Carteira: cartões de posição, ordens e barras de cap ---- */
+
+.cartoes-posicao {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.cartao-posicao {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #28372e;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 2%);
+}
+
+/* Comprar/vender em azul/laranja (D3): a faixa lateral é redundante com a
+   palavra "Comprado"/"Vendido" no corpo, nunca a substitui. */
+.cartao-posicao[data-lado="Comprado"] {
+  border-left: 3px solid rgb(110 158 214 / 70%);
+}
+
+.cartao-posicao[data-lado="Vendido"] {
+  border-left: 3px solid rgb(214 145 86 / 70%);
+}
+
+.cartao-posicao[data-lado="Encerrada"] {
+  border-left: 3px solid #28372e;
+  opacity: 0.72;
+}
+
+.cartao-posicao > header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.cartao-posicao h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.cartao-selos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.cartao-grade {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.75rem;
+  margin: 0;
+}
+
+.cartao-grade dt {
+  color: #8eaa98;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cartao-grade dd {
+  margin: 0.1rem 0 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.cartao-idade {
+  color: #8eaa98;
+  font-size: 0.72rem;
+}
+
+/* D3: verde é ganho, vermelho é perda, cinza é "não medido" — e um valor não
+   medido nunca pode ser pintado como se fosse zero. */
+.valor-ganho {
+  color: #7fc79a;
+}
+
+.valor-perda {
+  color: #eb8a90;
+}
+
+.valor-nao-medido {
+  color: #6f8778;
+}
+
+.secao-titulo {
+  margin: 1.2rem 0 0.5rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8eaa98;
+}
+
+.barras-uso {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.7rem;
+}
+
+.barra-uso-cabeca {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+}
+
+.barra-uso-rotulo {
+  color: #dfe8e2;
+}
+
+.barra-uso-valor {
+  color: #8eaa98;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Vermelho só no cap estourado: é bloqueio, não "quase". */
+.barra-uso-valor--estourado {
+  color: #eb8a90;
+}
+
+.barra-uso-trilho {
+  height: 6px;
+  margin: 0.3rem 0 0.25rem;
+  border-radius: 999px;
+  background: #1b261f;
+  overflow: hidden;
+}
+
+.barra-uso-preenchida {
+  display: block;
+  height: 100%;
+  background: rgb(87 214 141 / 55%);
+}
+
+.barra-uso-preenchida--estourada {
+  background: rgb(179 73 79 / 70%);
+}
+
+.barra-uso-nota {
+  margin: 0;
+  color: #6f8778;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Decisões: filtros no cliente e detalhe ------------------------------ */
+
+.filtros-decisao {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.filtro-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  color: #8eaa98;
+}
+
+.filtro-campo input {
+  min-width: 15rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #28372e;
+  border-radius: 4px;
+  background: #101711;
+  color: #dfe8e2;
+  font: inherit;
+}
+
+.link-detalhe {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #8eaa98;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-detalhe:hover,
+.link-detalhe:focus-visible {
+  color: #dfe8e2;
+}
+
+.detalhe-decisao {
+  margin-top: 0.9rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid #28372e;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 2%);
+}
+
+.detalhe-decisao h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+}
+
+.detalhe-grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.45rem 0.9rem;
+  margin: 0;
+}
+
+.detalhe-grade dt {
+  color: #8eaa98;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.detalhe-grade dd {
+  margin: 0.1rem 0 0;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+@media (width <= 40rem) {
+  .cartao-grade {
+    grid-template-columns: 1fr;
+  }
+}

@@ -236,9 +236,13 @@ const TELAS: readonly Aba[] = [
 // Constantes de módulo, não literais na renderização: o painel de portfólio
 // busca em função das seções que recebe, e um array novo a cada renderização
 // reiniciaria o poll a cada renderização.
-const SECOES_CARTEIRA: readonly Section[] = ["exposicao", "estado"];
+// RFC-026 D8/PR 2: Posições e Ordens entram na frente, e "Exposição" sai — o
+// uso dos caps agora aparece como barra dentro de Posições, que é onde se
+// olha para saber quanto ainda cabe. A tabela de exposição por dimensão
+// continua existindo, na tela de Sistema, para quem quer a linha a linha.
+const SECOES_CARTEIRA: readonly Section[] = ["posicoes", "ordens", "estado"];
 const SECOES_DECISOES: readonly Section[] = ["decisoes", "consulta"];
-const SECOES_SISTEMA: readonly Section[] = ["gates"];
+const SECOES_SISTEMA: readonly Section[] = ["gates", "exposicao"];
 
 function Dashboard({
   session,
@@ -407,21 +411,12 @@ function Dashboard({
             overview={overview}
           />
         ) : tela === "carteira" ? (
-          <>
-            <PortfolioPanel
-              accessToken={session.accessToken}
-              onUnauthorized={onUnauthorized}
-              sections={SECOES_CARTEIRA}
-              rotulo="Carteira"
-            />
-            <p className="scope">
-              Cartões de posição, ordens com fila e barras de limite chegam no
-              PR 2 desta RFC, quando <code>/paper/positions</code> e{" "}
-              <code>/paper/orders</code> forem publicados como{" "}
-              <code>location =</code>. Até então esta tela mostra a exposição e
-              o estado, que já eram publicados.
-            </p>
-          </>
+          <PortfolioPanel
+            accessToken={session.accessToken}
+            onUnauthorized={onUnauthorized}
+            sections={SECOES_CARTEIRA}
+            rotulo="Carteira"
+          />
         ) : tela === "decisoes" ? (
           <PortfolioPanel
             accessToken={session.accessToken}

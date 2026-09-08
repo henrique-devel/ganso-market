@@ -37,7 +37,11 @@ import {
 import { Badge, idade } from "./Overview.tsx";
 import { horizonLabel, horizonMs, roundTripCost } from "./Portfolio.tsx";
 import { useModoEngenheiro } from "./modo.tsx";
-import { rearmKillSwitch } from "./paper.js";
+import {
+  fetchPaperPositions,
+  rearmKillSwitch,
+  type PaperPosition,
+} from "./paper.js";
 import {
   fetchDecisions,
   fetchExposures,
@@ -289,15 +293,20 @@ export interface Frase {
 /**
  * Até três frases, e só quando exigem ação ou decisão de quem opera.
  *
- * Recusa rotineira NUNCA vira frase: 52 868 recusas em 24 h (RFC-026, medido
- * em 02/09) transformariam este bloco no próprio ruído que ele existe para
- * cortar. A terceira fonte da D7 — posição resolvida na venue e não liquidada
- * no paper — depende de `/paper/positions`, que o PR 2 publica; até lá ela não
- * aparece, e isso está dito na tela.
+ * Recusa rotineira NUNCA vira frase: 18 931 recusas em 24 h (RFC-026, remedido
+ * em 08/09; eram 52 868 em 02/09) transformariam este bloco no próprio ruído
+ * que ele existe para cortar.
+ *
+ * As três fontes, na ordem em que aparecem, que é a ordem de quem não sai
+ * sozinho primeiro: o kill switch engatado (o broker não aceita ordem até o
+ * rearme), aceites que não viraram ordem, e posição com o mercado resolvido na
+ * venue e ainda não liquidada no paper. A terceira chegou com o PR 2, quando
+ * `/paper/positions` passou a ser publicada e a trazer `pending_settlement`.
  */
 export function frasesAgora(
   overview: Overview | null,
   decisoes: readonly Decision[],
+  posicoes: readonly PaperPosition[] = [],
 ): readonly Frase[] {
   const frases: Frase[] = [];
   const kill = overview?.kill_switch ?? null;
@@ -319,6 +328,20 @@ export function frasesAgora(
       chave: "sem-ordem",
       tom: "atencao",
       texto: `${String(semOrdem)} aceite(s) não viraram ordem paper (amostra das últimas 500 decisões).`,
+    });
+  }
+  // `pending_settlement` vem decidido do servidor (D8): rótulo fundamental
+  // final E cotas positivas. A tela não recalcula nem adivinha — e não usa
+  // "marca velha" nem "venceu" como substituto, porque nenhum dos dois é o
+  // mesmo fato. Vermelho: a liquidação não acontece sozinha.
+  const naoLiquidadas = posicoes.filter(
+    (posicao) => posicao.pending_settlement,
+  ).length;
+  if (naoLiquidadas > 0) {
+    frases.push({
+      chave: "nao-liquidada",
+      tom: "alerta",
+      texto: `${String(naoLiquidadas)} posição(ões) com o mercado resolvido na venue e ainda não liquidada(s) no paper.`,
     });
   }
   return frases.slice(0, 3);
@@ -1085,6 +1108,7 @@ export function AgoraBloco({
 export function MesaView({
   opportunities,
   decisoes,
+  posicoes = [],
   config,
   comPosicao,
   overview,
@@ -1096,6 +1120,8 @@ export function MesaView({
 }: Readonly<{
   opportunities: readonly Opportunity[];
   decisoes: readonly Decision[];
+  /** Só para a terceira frase da D7; a Mesa não lista posições. */
+  posicoes?: readonly PaperPosition[];
   config: LimitsConfig | null;
   comPosicao: ReadonlySet<string>;
   overview: Overview | null;
@@ -1216,7 +1242,7 @@ export function MesaView({
       </p>
 
       <AgoraBloco
-        frases={frasesAgora(overview, decisoes)}
+        frases={frasesAgora(overview, decisoes, posicoes)}
         onRearmar={onRearmar}
         rearmando={rearmando}
         erroRearme={erroRearme}
@@ -1395,6 +1421,7 @@ export function Mesa({
   );
   const [decisoes, setDecisoes] = useState<readonly Decision[]>([]);
   const [comPosicao, setComPosicao] = useState<ReadonlySet<string>>(new Set());
+  const [posicoes, setPosicoes] = useState<readonly PaperPosition[]>([]);
   const [config, setConfig] = useState<LimitsConfig | null>(null);
   const [falhou, setFalhou] = useState(false);
   const [atualizadoEm, setAtualizadoEm] = useState<number | null>(null);
@@ -1408,16 +1435,21 @@ export function Mesa({
       () => controller.abort(),
       REQUEST_TIMEOUT_MS,
     );
-    const [painel, log, exposicoes] = await Promise.all([
+    // Quatro requisições por tique de 30 s = 8/min, mais a faixa fixa
+    // (`/overview` + `/paper/performance` a 15 s = 8/min): 16 req/min, sob o
+    // teto de 20 da D5/A5. `/paper/positions` entrou aqui porque a terceira
+    // frase da D7 depende dela e o bloco "O que eu faço agora?" é da Mesa.
+    const [painel, log, exposicoes, carteira] = await Promise.all([
       fetchOpportunities(accessToken, fetch, controller.signal),
       fetchDecisions(accessToken, fetch, controller.signal),
       fetchExposures(accessToken, fetch, controller.signal),
+      fetchPaperPositions(accessToken, fetch, controller.signal),
     ]);
     window.clearTimeout(timeout);
     if (!mounted.current) {
       return;
     }
-    const resultados = [painel, log, exposicoes];
+    const resultados = [painel, log, exposicoes, carteira];
     if (resultados.some((resultado) => resultado.kind === "unauthorized")) {
       onUnauthorized();
       return;
@@ -1441,6 +1473,9 @@ export function Mesa({
             .map((exposicao) => exposicao.dimension_key),
         ),
       );
+    }
+    if (carteira.kind === "ok") {
+      setPosicoes(carteira.value);
     }
     setAtualizadoEm(Date.now());
   }, [accessToken, onUnauthorized]);
@@ -1520,6 +1555,7 @@ export function Mesa({
     <MesaView
       opportunities={opportunities}
       decisoes={decisoes}
+      posicoes={posicoes}
       config={config}
       comPosicao={comPosicao}
       overview={overview}

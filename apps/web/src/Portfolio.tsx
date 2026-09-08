@@ -48,14 +48,29 @@ import {
   fetchDecisions,
   fetchExposures,
   fetchGateMeasurements,
+  fetchDecision,
   fetchGates,
+  fetchLimits,
   fetchPortfolioState,
   type Decision,
   type Exposure,
   type GateMeasurementPage,
   type GateSnapshot,
+  type PortfolioLimits,
   type PortfolioStateSnapshot,
 } from "./portfolio";
+import {
+  STATUS_ABERTO,
+  duracaoTexto,
+  fetchPaperOrders,
+  fetchPaperPositions,
+  idadeTexto,
+  quantidadeTexto,
+  sinalTexto,
+  usdTexto,
+  type PaperOrder,
+  type PaperPosition,
+} from "./paper";
 
 const REFRESH_MS = 30_000;
 // The other tabs already bounded their polls; this one did not, so a stalled
@@ -65,9 +80,17 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const ROWS_PER_PAGE = 25;
 
 export type Section =
-  "exposicao" | "estado" | "gates" | "consulta" | "decisoes";
+  | "posicoes"
+  | "ordens"
+  | "exposicao"
+  | "estado"
+  | "gates"
+  | "consulta"
+  | "decisoes";
 
 const TODAS_AS_SECOES: readonly Section[] = [
+  "posicoes",
+  "ordens",
   "exposicao",
   "estado",
   "gates",
@@ -76,6 +99,8 @@ const TODAS_AS_SECOES: readonly Section[] = [
 ];
 
 const ROTULO_DA_SECAO: Readonly<Record<Section, string>> = {
+  posicoes: "Posições",
+  ordens: "Ordens",
   exposicao: "Exposição",
   estado: "Estado",
   gates: "Gates",
@@ -124,11 +149,291 @@ function metricSummary(metrics: Readonly<Record<string, unknown>>): string {
   return parts.length === 0 ? "—" : parts.join(" · ");
 }
 
+// ---------------------------------------------------------------------------
+// RFC-026 D8 — Carteira: posições, ordens e uso dos caps
+// ---------------------------------------------------------------------------
+
+/** Uma posição está aberta quando o saldo de cotas não é zero — nos dois lados. */
+export function posicaoAberta(posicao: PaperPosition): boolean {
+  return (sinalTexto(posicao.shares) ?? 0) !== 0;
+}
+
+/**
+ * O lado da posição, lido do SINAL das cotas.
+ *
+ * Não existe coluna "side" em `paper_positions`: o saldo é que diz. Zero não é
+ * um lado, é uma posição encerrada, e a tela a rotula assim em vez de escolher
+ * "comprado" por ser o caso mais comum.
+ */
+export function ladoDaPosicao(posicao: PaperPosition): string {
+  const sinal = sinalTexto(posicao.shares);
+  if (sinal === null) {
+    return "não medido";
+  }
+  return sinal > 0 ? "Comprado" : sinal < 0 ? "Vendido" : "Encerrada";
+}
+
+function CartaoPosicao({
+  posicao,
+  agoraMs,
+}: Readonly<{ posicao: PaperPosition; agoraMs: number }>) {
+  const sinalPnl = sinalTexto(posicao.unrealized_pnl_usd);
+  const lado = ladoDaPosicao(posicao);
+  return (
+    <article
+      className="cartao-posicao"
+      data-lado={lado}
+      // O hash nunca some: o dicionário exige que o código continue legível em
+      // algum lugar, e aqui ele fica no title como em toda célula da RFC-026.
+      title={`${posicao.token_id}${
+        posicao.condition_id === null ? "" : ` · ${posicao.condition_id}`
+      }`}
+    >
+      <header>
+        <h4 className={posicao.question === null ? "sem-nome" : undefined}>
+          {posicao.question ?? "sem nome"}
+        </h4>
+        <div className="cartao-selos">
+          {/* Âmbar: a marca envelheceu, então o PnL abaixo é de antes. D3
+              reserva âmbar para "envelhecido" e vermelho para "não sai
+              sozinho" — e uma marca velha se resolve na próxima marcação. */}
+          {posicao.mark_stale === true ? (
+            <span className="badge badge--atencao">● marca envelhecida</span>
+          ) : null}
+          {/* Vermelho: a venue já resolveu e o paper ainda carrega a posição.
+              Não sai sozinho — é a liquidação que falta (PR-0 b), e esta tela
+              ROTULA o caso, não o corrige. */}
+          {posicao.pending_settlement ? (
+            <span className="badge badge--alerta">
+              ● resolvido na venue, não liquidado
+            </span>
+          ) : null}
+        </div>
+      </header>
+
+      <dl className="cartao-grade">
+        <div>
+          <dt>Lado</dt>
+          <dd>{lado}</dd>
+        </div>
+        <div>
+          <dt>Quantidade</dt>
+          <dd>{quantidadeTexto(posicao.shares)}</dd>
+        </div>
+        <div>
+          <dt>Custo</dt>
+          <dd>{usdTexto(posicao.cost_usd)}</dd>
+        </div>
+        <div>
+          <dt>Marca</dt>
+          <dd>
+            {usdTexto(posicao.mark_value_usd)}{" "}
+            <span className="cartao-idade">
+              {idadeTexto(posicao.marked_at, agoraMs)}
+            </span>
+          </dd>
+        </div>
+        <div>
+          {/* O PnL não realizado vem CALCULADO do servidor. A tela não o
+              recomputa: dois lugares calculando o mesmo número é a forma
+              conhecida de os dois discordarem na hora errada. */}
+          <dt>PnL não realizado</dt>
+          <dd
+            className={
+              sinalPnl === null
+                ? "valor-nao-medido"
+                : sinalPnl > 0
+                  ? "valor-ganho"
+                  : sinalPnl < 0
+                    ? "valor-perda"
+                    : undefined
+            }
+          >
+            {posicao.unrealized_pnl_usd === null
+              ? "— (marca envelhecida)"
+              : usdTexto(posicao.unrealized_pnl_usd)}
+          </dd>
+        </div>
+        <div>
+          <dt>Taxas pagas</dt>
+          <dd>{usdTexto(posicao.fees_paid_usd)}</dd>
+        </div>
+        <div>
+          <dt>Capital preso</dt>
+          <dd>{duracaoTexto(posicao.current_lockup_s)}</dd>
+        </div>
+        <div>
+          <dt>Vencimento</dt>
+          <dd>
+            {posicao.end_ts === null
+              ? "sem vencimento registrado"
+              : horizonLabel(horizonMs(posicao.end_ts, agoraMs))}
+          </dd>
+        </div>
+      </dl>
+    </article>
+  );
+}
+
+/**
+ * O texto do PnL não realizado somado da carteira.
+ *
+ * Uma posição sem marca fresca NÃO entra como zero: entra como uma marca
+ * ausente, e o total sai acompanhado da contagem. Somar `null` como 0 daria um
+ * total que parece medido e não é — o erro que a D3 chama de "ausência virando
+ * zero", e que aqui apareceria como uma carteira no zero a zero.
+ */
+export function totalNaoRealizado(posicoes: readonly PaperPosition[]): {
+  readonly texto: string;
+  readonly envelhecidas: number;
+} {
+  const abertas = posicoes.filter(posicaoAberta);
+  const envelhecidas = abertas.filter(
+    (posicao) => posicao.unrealized_pnl_usd === null,
+  ).length;
+  const medidas = abertas.filter(
+    (posicao) => posicao.unrealized_pnl_usd !== null,
+  );
+  if (medidas.length === 0) {
+    return {
+      texto:
+        envelhecidas === 0
+          ? "—"
+          : `— (${String(envelhecidas)} marcas envelhecidas)`,
+      envelhecidas,
+    };
+  }
+  let centavos = 0n;
+  for (const posicao of medidas) {
+    // Soma em texto, via a mesma conversão exata que a impressão usa.
+    const parcela = usdTexto(posicao.unrealized_pnl_usd);
+    const numerico = parcela.replace("−", "-").replace("$", "");
+    const [inteiro = "0", resto = "00"] = numerico.split(".");
+    const negativo = inteiro.startsWith("-");
+    const magnitude =
+      BigInt(negativo ? inteiro.slice(1) : inteiro) * 100n + BigInt(resto);
+    centavos += negativo ? -magnitude : magnitude;
+  }
+  const sinal = centavos < 0n ? "-" : "";
+  const absoluto = (centavos < 0n ? -centavos : centavos)
+    .toString()
+    .padStart(3, "0");
+  const texto = usdTexto(
+    `${sinal}${absoluto.slice(0, -2)}.${absoluto.slice(-2)}`,
+  );
+  return {
+    texto:
+      envelhecidas === 0
+        ? texto
+        : `${texto} (${String(envelhecidas)} marcas envelhecidas fora da soma)`,
+    envelhecidas,
+  };
+}
+
+/** Uma barra de uso de cap, com o número ao lado — nunca só a barra. */
+function BarraDeUso({
+  rotulo: nome,
+  chave,
+  utilizacao,
+  pior,
+  cap,
+}: Readonly<{
+  rotulo: string;
+  chave: string;
+  utilizacao: number | null;
+  pior: string;
+  cap: string;
+}>) {
+  // Acima de 1 a barra satura visualmente mas o número continua dizendo a
+  // verdade: um cap estourado não pode parecer exatamente cheio.
+  const largura =
+    utilizacao === null ? 0 : Math.max(0, Math.min(1, utilizacao)) * 100;
+  const estourado = utilizacao !== null && utilizacao > 1;
+  return (
+    <div className="barra-uso" title={chave}>
+      <div className="barra-uso-cabeca">
+        <span className="barra-uso-rotulo">{nome}</span>
+        <span
+          className={
+            estourado
+              ? "barra-uso-valor barra-uso-valor--estourado"
+              : "barra-uso-valor"
+          }
+        >
+          {utilizacao === null ? "não medido" : pct(utilizacao)}
+          {estourado ? " — acima do cap" : ""}
+        </span>
+      </div>
+      <div
+        className="barra-uso-trilho"
+        role="img"
+        aria-label={`${nome}: ${
+          utilizacao === null ? "não medido" : pct(utilizacao)
+        } do cap`}
+      >
+        <span
+          className={
+            estourado
+              ? "barra-uso-preenchida barra-uso-preenchida--estourada"
+              : "barra-uso-preenchida"
+          }
+          style={{ width: `${String(largura)}%` }}
+        />
+      </div>
+      <p className="barra-uso-nota">
+        {pior} de {cap}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * O filtro de Decisões, aplicado NO CLIENTE sobre as últimas 500.
+ *
+ * RFC-026 D9 pedia `?outcome=` e `?condition_id=` na rota, e a medição de
+ * 08/09 em produção mandou o filtro para cá: com 184 370 linhas e nenhum
+ * índice em `outcome`, `WHERE outcome = 'ACCEPTED'` custa 2 595 ms a frio —
+ * acima do teto de 500 ms da RFC e acima do `statement_timeout` de 1 s da
+ * API, o que faria a tela padrão devolver erro em vez de demorar. Filtrar
+ * aqui é o fallback que a própria D9 nomeia, e a tela diz "das últimas 500"
+ * para que ninguém leia esta lista como o histórico inteiro.
+ *
+ * O filtro de mercado casa por nome OU por hash, sem diferenciar maiúsculas:
+ * quem lê a tela procura pelo nome, quem depura procura pelo `condition_id`.
+ */
+export function filtrarDecisoes(
+  decisoes: readonly Decision[],
+  resultado: "ACCEPTED" | "REJECTED" | "todas",
+  mercado: string,
+): readonly Decision[] {
+  const alvo = mercado.trim().toLowerCase();
+  return decisoes.filter((decisao) => {
+    if (resultado !== "todas" && decisao.outcome !== resultado) {
+      return false;
+    }
+    if (alvo === "") {
+      return true;
+    }
+    return (
+      (decisao.question ?? "").toLowerCase().includes(alvo) ||
+      (decisao.condition_id ?? "").toLowerCase().includes(alvo)
+    );
+  });
+}
+
+export interface DecisionDetail {
+  readonly decision_id: number;
+  readonly campos: Readonly<Record<string, unknown>>;
+}
+
 interface Loaded {
   readonly exposures: readonly Exposure[];
   readonly state: PortfolioStateSnapshot | null;
   readonly gates: GateSnapshot | null;
   readonly decisions: readonly Decision[];
+  readonly positions: readonly PaperPosition[];
+  readonly orders: readonly PaperOrder[];
+  readonly limits: PortfolioLimits | null;
 }
 
 const EMPTY: Loaded = {
@@ -136,6 +441,9 @@ const EMPTY: Loaded = {
   state: null,
   gates: null,
   decisions: [],
+  positions: [],
+  orders: [],
+  limits: null,
 };
 
 function pct(value: number | null): string {
@@ -304,7 +612,41 @@ export function PortfolioPanel({
   );
   const [measurementsFailed, setMeasurementsFailed] = useState(false);
 
-  const decisoes = usePage(data.decisions);
+  const [filtroOrdens, setFiltroOrdens] = useState<
+    "abertas" | "encerradas" | "todas"
+  >("abertas");
+
+  // RFC-026 D9/P5: o padrão é Aceitas. É o filtro que o proprietário aprovou
+  // e é o único que torna a tela legível — no ritmo medido em 08/09 (143
+  // aceites contra 18 931 recusas em 24 h) a lista sem filtro é recusa pura.
+  const [filtroResultado, setFiltroResultado] = useState<
+    "ACCEPTED" | "REJECTED" | "todas"
+  >("ACCEPTED");
+  const [filtroMercado, setFiltroMercado] = useState("");
+  const [decisaoAberta, setDecisaoAberta] = useState<number | null>(null);
+  const [detalhe, setDetalhe] = useState<DecisionDetail | null>(null);
+  const [detalheFalhou, setDetalheFalhou] = useState(false);
+
+  // Um relógio por tique de atualização, e não `Date.now()` dentro do render:
+  // a idade impressa em cada cartão tem de ser a mesma para todos e tem de
+  // mudar quando os dados mudam, não a cada repintura do React.
+  const [agoraMs, setAgoraMs] = useState(() => Date.now());
+
+  const ordensVisiveis = data.orders.filter((ordem) =>
+    filtroOrdens === "todas"
+      ? true
+      : filtroOrdens === "abertas"
+        ? STATUS_ABERTO.includes(ordem.status ?? "")
+        : !STATUS_ABERTO.includes(ordem.status ?? ""),
+  );
+
+  const decisoesFiltradas = filtrarDecisoes(
+    data.decisions,
+    filtroResultado,
+    filtroMercado,
+  );
+
+  const decisoes = usePage(decisoesFiltradas);
 
   const refresh = useCallback(async (): Promise<void> => {
     const controller = new AbortController();
@@ -316,19 +658,36 @@ export function PortfolioPanel({
     // Só o que a tela mostra. `estado` também carrega a exposição porque o
     // cabeçalho do estado mostra a banca contra os caps; o resto é um por um.
     const quer = (secao: Section): boolean => sections.includes(secao);
-    const [exposures, state, gates, decisions] = await Promise.all([
-      quer("exposicao") ? fetchExposures(accessToken, fetch, signal) : null,
-      quer("estado") ? fetchPortfolioState(accessToken, fetch, signal) : null,
-      quer("gates") ? fetchGates(accessToken, fetch, signal) : null,
-      quer("decisoes") ? fetchDecisions(accessToken, fetch, signal) : null,
-    ]);
+    // As barras de uso de cap ficam na seção de posições, então `/exposure` e
+    // `/portfolio/limits` viajam com ela — e só com ela. A Carteira gasta 5
+    // requisições por tique de 30 s (10/min); a Mesa gasta as outras, e as
+    // duas nunca estão abertas ao mesmo tempo.
+    const querBarras = quer("posicoes") || quer("exposicao");
+    const [exposures, state, gates, decisions, positions, orders, limits] =
+      await Promise.all([
+        querBarras ? fetchExposures(accessToken, fetch, signal) : null,
+        quer("estado") ? fetchPortfolioState(accessToken, fetch, signal) : null,
+        quer("gates") ? fetchGates(accessToken, fetch, signal) : null,
+        quer("decisoes") ? fetchDecisions(accessToken, fetch, signal) : null,
+        quer("posicoes")
+          ? fetchPaperPositions(accessToken, fetch, signal)
+          : null,
+        quer("ordens") ? fetchPaperOrders(accessToken, fetch, signal) : null,
+        quer("posicoes") ? fetchLimits(accessToken, fetch, signal) : null,
+      ]);
     window.clearTimeout(timeout);
     if (!mounted.current) {
       return;
     }
-    const results = [exposures, state, gates, decisions].filter(
-      (result) => result !== null,
-    );
+    const results = [
+      exposures,
+      state,
+      gates,
+      decisions,
+      positions,
+      orders,
+      limits,
+    ].filter((result) => result !== null);
     if (results.some((result) => result.kind === "unauthorized")) {
       onUnauthorized();
       return;
@@ -336,11 +695,15 @@ export function PortfolioPanel({
     setFailed(
       results.length > 0 && results.every((result) => result.kind === "error"),
     );
+    setAgoraMs(Date.now());
     setData((atual) => ({
       exposures: exposures?.kind === "ok" ? exposures.value : atual.exposures,
       state: state?.kind === "ok" ? state.value : atual.state,
       gates: gates?.kind === "ok" ? gates.value : atual.gates,
       decisions: decisions?.kind === "ok" ? decisions.value : atual.decisions,
+      positions: positions?.kind === "ok" ? positions.value : atual.positions,
+      orders: orders?.kind === "ok" ? orders.value : atual.orders,
+      limits: limits?.kind === "ok" ? limits.value : atual.limits,
     }));
   }, [accessToken, onUnauthorized, sections]);
 
@@ -382,6 +745,36 @@ export function PortfolioPanel({
     }
     void loadMeasurements();
   }, [section, loadMeasurements]);
+
+  // O detalhe é uma leitura DELIBERADA, fora do tique de 30 s: abre quando se
+  // escolhe uma decisão e não volta a bater na rota enquanto ela fica aberta.
+  useEffect(() => {
+    if (decisaoAberta === null) {
+      setDetalhe(null);
+      setDetalheFalhou(false);
+      return;
+    }
+    let vivo = true;
+    void (async () => {
+      const resultado = await fetchDecision(accessToken, decisaoAberta);
+      if (!vivo) {
+        return;
+      }
+      if (resultado.kind === "unauthorized") {
+        onUnauthorized();
+        return;
+      }
+      setDetalheFalhou(resultado.kind === "error");
+      setDetalhe(
+        resultado.kind === "ok"
+          ? { decision_id: decisaoAberta, campos: resultado.value }
+          : null,
+      );
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, [accessToken, decisaoAberta, onUnauthorized]);
 
   useEffect(() => {
     mounted.current = true;
@@ -442,6 +835,172 @@ export function PortfolioPanel({
           Não foi possível carregar os dados do portfólio. O motor pode não
           estar ativo ainda.
         </p>
+      ) : null}
+
+      {section === "posicoes" ? (
+        <>
+          <p className="scope">
+            {(() => {
+              const abertas = data.positions.filter(posicaoAberta);
+              const total = totalNaoRealizado(data.positions);
+              return (
+                <>
+                  <strong>{String(abertas.length)}</strong> posição(ões)
+                  aberta(s) de {String(data.positions.length)} linha(s) na
+                  carteira. PnL não realizado somado:{" "}
+                  <strong>{total.texto}</strong>. O número vem do servidor
+                  posição por posição; uma marca envelhecida fica fora da soma
+                  em vez de entrar como zero.
+                </>
+              );
+            })()}
+          </p>
+
+          {data.positions.length === 0 ? (
+            <p className="scope">
+              Nenhuma posição na carteira paper. A tabela existe e está vazia —
+              não é falha de carregamento.
+            </p>
+          ) : (
+            <div className="cartoes-posicao">
+              {[...data.positions]
+                // Abertas primeiro: uma posição encerrada é histórico, e
+                // histórico não disputa o topo da tela com o que está de pé.
+                .sort(
+                  (a, b) => Number(posicaoAberta(b)) - Number(posicaoAberta(a)),
+                )
+                .map((posicao) => (
+                  <CartaoPosicao
+                    key={posicao.token_id}
+                    posicao={posicao}
+                    agoraMs={agoraMs}
+                  />
+                ))}
+            </div>
+          )}
+
+          <h4 className="secao-titulo">Uso dos caps</h4>
+          {data.exposures.length === 0 ? (
+            <p className="scope">
+              Nenhuma dimensão de exposição registrada — não medido.
+            </p>
+          ) : (
+            <div className="barras-uso">
+              {data.exposures.map((exposure) => (
+                <BarraDeUso
+                  key={`${exposure.dimension}:${exposure.dimension_key}`}
+                  rotulo={exposure.dimension}
+                  chave={exposure.dimension_key}
+                  utilizacao={exposure.utilization}
+                  pior={usd(exposure.worst_case_usd)}
+                  cap={usd(exposure.cap_usd)}
+                />
+              ))}
+            </div>
+          )}
+          <p className="scope">
+            Todo valor de cap assume <strong>perda total</strong> da posição,
+            nunca marcação a mercado.{" "}
+            {data.limits?.config === null || data.limits === null ? (
+              <>Os limites da config não foram medidos.</>
+            ) : (
+              <>
+                Config vigente{" "}
+                <code>{data.limits.config.config_version ?? "não medida"}</code>
+                : edge mínimo {data.limits.config.edgeLiqMin ?? "não medido"},
+                margem de segurança{" "}
+                {data.limits.config.safetyMarginMin ?? "não medido"}.
+              </>
+            )}
+          </p>
+        </>
+      ) : null}
+
+      {section === "ordens" ? (
+        <>
+          <nav className="chips" aria-label="Filtro de ordens">
+            {(["abertas", "encerradas", "todas"] as const).map((chave) => (
+              <button
+                key={chave}
+                type="button"
+                className={filtroOrdens === chave ? "chip chip--ativo" : "chip"}
+                onClick={() => {
+                  setFiltroOrdens(chave);
+                }}
+              >
+                {chave === "abertas"
+                  ? "Abertas"
+                  : chave === "encerradas"
+                    ? "Encerradas"
+                    : "Todas"}
+              </button>
+            ))}
+          </nav>
+          <table className="grid grid--compacta">
+            <caption>
+              Ordens do broker paper. &quot;Fila à frente&quot; é o tamanho que
+              estava na frente no momento do aceite, e é{" "}
+              <strong>conservador</strong>: a ordem entra atrás de todo o
+              tamanho visível no nível, e cancelamentos à frente nunca a
+              melhoram.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Mercado</th>
+                <th scope="col">Lado</th>
+                <th scope="col">Tipo</th>
+                <th scope="col">Preço limite</th>
+                <th scope="col">Tamanho</th>
+                <th scope="col">Executado</th>
+                <th scope="col">Fila à frente</th>
+                <th scope="col">Situação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ordensVisiveis.map((ordem) => (
+                <tr key={ordem.order_id}>
+                  <td
+                    className={ordem.question === null ? "sem-nome" : undefined}
+                    title={`${ordem.order_id}${
+                      ordem.condition_id === null
+                        ? ""
+                        : ` · ${ordem.condition_id}`
+                    }`}
+                  >
+                    {ordem.question ?? "sem nome"}
+                  </td>
+                  <td title={ordem.side ?? undefined}>
+                    {rotulo(ordem.side, LADO)}
+                  </td>
+                  <td>{ordem.order_type ?? "—"}</td>
+                  <td>{quantidadeTexto(ordem.limit_price)}</td>
+                  <td>{quantidadeTexto(ordem.size)}</td>
+                  <td>{quantidadeTexto(ordem.filled_size)}</td>
+                  {/* "não medido" em cinza, nunca 0: uma fila desconhecida e
+                      uma fila vazia levam a decisões opostas. */}
+                  <td
+                    className={
+                      ordem.queue_ahead === null
+                        ? "valor-nao-medido"
+                        : undefined
+                    }
+                  >
+                    {ordem.queue_ahead === null
+                      ? "não medido"
+                      : quantidadeTexto(ordem.queue_ahead)}
+                  </td>
+                  <td>{ordem.status ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {ordensVisiveis.length === 0 ? (
+            <p className="scope">
+              Nenhuma ordem neste filtro. A rota devolve no máximo 200 ordens,
+              das mais recentes.
+            </p>
+          ) : null}
+        </>
       ) : null}
 
       {section === "exposicao" ? (
@@ -772,6 +1331,55 @@ export function PortfolioPanel({
             — não há índice só nele — e empatava entre decisões do mesmo ciclo.
             A medição que motivou a troca está na RFC-015 §3, com data.
           </p>
+
+          <div className="filtros-decisao">
+            <nav className="chips" aria-label="Filtro por resultado">
+              {(["ACCEPTED", "REJECTED", "todas"] as const).map((chave) => (
+                <button
+                  key={chave}
+                  type="button"
+                  className={
+                    filtroResultado === chave ? "chip chip--ativo" : "chip"
+                  }
+                  onClick={() => {
+                    setFiltroResultado(chave);
+                    setDecisaoAberta(null);
+                  }}
+                >
+                  {chave === "todas"
+                    ? "Todas"
+                    : rotulo(chave, RESULTADO_DECISAO)}
+                </button>
+              ))}
+            </nav>
+            <label className="filtro-campo">
+              <span>Mercado</span>
+              <input
+                type="search"
+                value={filtroMercado}
+                placeholder="nome ou condition_id"
+                onChange={(evento) => {
+                  setFiltroMercado(evento.target.value);
+                  setDecisaoAberta(null);
+                }}
+              />
+            </label>
+          </div>
+
+          {/* O aviso é obrigatório e não é decorativo: sem ele a tela deixa
+              ler "3 aceites" como "3 aceites que existem", quando o que ela
+              mostra é "3 nas últimas 500 decisões" — cerca de 26 min no ritmo
+              atual. A medição que pôs o filtro no cliente está na D9. */}
+          <p className="scope">
+            Filtro aplicado <strong>no cliente</strong>, sobre as{" "}
+            <strong>últimas {String(data.decisions.length)}</strong> decisões
+            que a rota devolve —{" "}
+            <strong>{String(decisoesFiltradas.length)}</strong> casam.{" "}
+            <strong>Não é o histórico inteiro.</strong> Filtrar no servidor
+            exigiria um índice em <code>outcome</code> que não existe; sem ele a
+            consulta passa do limite de tempo da própria API e a tela devolveria
+            erro em vez de demorar. A medição está na RFC-026 D9, com data.
+          </p>
           <table className="grid grid--compacta">
             <caption>
               Decision log. Toda decisão registra o limitador que a limitou e o
@@ -789,6 +1397,7 @@ export function PortfolioPanel({
                 <th scope="col">Resultado</th>
                 <th scope="col">Motivo</th>
                 <th scope="col">Ordem paper</th>
+                <th scope="col">Detalhe</th>
               </tr>
             </thead>
             <tbody>
@@ -857,6 +1466,28 @@ export function PortfolioPanel({
                       ""
                     )}
                   </td>
+                  <td>
+                    {decision.decision_id === null ? (
+                      "—"
+                    ) : (
+                      <button
+                        type="button"
+                        className="link-detalhe"
+                        aria-expanded={decisaoAberta === decision.decision_id}
+                        onClick={() => {
+                          setDecisaoAberta(
+                            decisaoAberta === decision.decision_id
+                              ? null
+                              : decision.decision_id,
+                          );
+                        }}
+                      >
+                        {decisaoAberta === decision.decision_id
+                          ? "fechar"
+                          : "abrir"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -864,10 +1495,42 @@ export function PortfolioPanel({
           <Pager
             index={decisoes.index}
             pages={decisoes.pages}
-            total={data.decisions.length}
+            total={decisoesFiltradas.length}
             onChange={decisoes.setIndex}
             label="Paginação do decision log"
           />
+
+          {decisaoAberta === null ? null : (
+            <aside className="detalhe-decisao" aria-live="polite">
+              <h4>Decisão {String(decisaoAberta)}</h4>
+              {detalheFalhou ? (
+                <p className="scope" role="alert">
+                  Não foi possível carregar esta decisão.
+                </p>
+              ) : detalhe === null ? (
+                <p className="scope">Carregando…</p>
+              ) : (
+                // Par a par, cru. As colunas de `portfolio_decisions` mudam
+                // com as migrations, e uma lista fixa aqui esconderia em
+                // silêncio toda coluna nova — que é justamente o que quem abre
+                // o detalhe está procurando.
+                <dl className="detalhe-grade">
+                  {Object.entries(detalhe.campos).map(([chave, valor]) => (
+                    <div key={chave}>
+                      <dt>{chave}</dt>
+                      <dd>
+                        {valor === null
+                          ? "—"
+                          : typeof valor === "object"
+                            ? JSON.stringify(valor)
+                            : String(valor)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </aside>
+          )}
         </>
       ) : null}
     </section>
