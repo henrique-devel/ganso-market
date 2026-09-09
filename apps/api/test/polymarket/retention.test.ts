@@ -219,31 +219,41 @@ describe("retention config", () => {
       (sum, t) => sum + t.quotaBytes,
       0,
     );
-    // `declared` did NOT move with RFC-027: the two new quotas (0.01 GiB) came
-    // out of portfolio_panel_snapshots (0.54 -> 0.53), so the sum is the same
-    // 95 GiB and the headroom argument at the bottom of this test still holds.
-    expect(declared / GiB).toBeCloseTo(95, 3);
-    // `prunable` DID move, by exactly that 0.01 GiB, and in the safe direction:
-    // the budget moved from a table the pruner can reach to two it never
-    // touches. What the pruner can free is smaller, and what the alarm can be
-    // raised by is unchanged.
-    expect(prunable / GiB).toBeCloseTo(85.865, 3);
+    // `declared` DID move with RFC-028, 95 -> 96 GiB, and this is the first
+    // quota since the RFC-013 expansion that is NEW budget rather than budget
+    // taken from another table: `strategy_decisions` matches none of the
+    // prefixes of the 8 GiB RFC-010..013 reserve, so it could not be funded
+    // from inside it. The owner approved the 1 GiB as written (P4, 2026-09-05).
+    //
+    // What it costs is stated at the bottom of this test: the redeclaration
+    // headroom of polymarket_book_deltas falls from 4 to 3 GiB. What it buys is
+    // ~60x the modelled need — the D4 writes 96 rows/day (4 arms x 24 hourly
+    // markets), ~0.1 MB/day, ~17 MB over the 180-day TTL. The TTL governs this
+    // table; the quota is a ceiling that should never bind, and if it binds the
+    // worker is writing something D4 did not foresee.
+    expect(declared / GiB).toBeCloseTo(96, 3);
+    // `prunable` moved by the same 1 GiB, and in the less comfortable
+    // direction than RFC-027's trim: the new table is one the pruner CAN
+    // reach, so what a prune can free grows with it.
+    expect(prunable / GiB).toBeCloseTo(86.865, 3);
     expect(declared).toBeLessThan(trigger);
 
     // What the pruner can actually reach is smaller still, and that is the
     // point: with every prunable table pinned at quota the live total is
-    // 85.875 GiB against a 99 GiB trigger, so the alarm can only be raised by
+    // 86.875 GiB against a 99 GiB trigger, so the alarm can only be raised by
     // the protected tables overrunning their declared sizes — which the alarm's
     // TTL reduction cannot touch, because protected tables are never pruned.
     // The remedy therefore does not fit the only cause. Open for the owner.
     expect(prunable).toBeLessThan(trigger);
 
-    // The redeclaration headroom, measured on 2026-09-02. polymarket_book_deltas
-    // is the only quota with room to move, and it has exactly the 4 GiB between
-    // the declared sum and the trigger: raising it to 56 GiB would land the sum
-    // ON the trigger, which the strict comparison above forbids. So the ceiling
-    // is exclusive, and a 14-day window at the busiest measured rate (63.8 GiB)
-    // cannot be bought without moving DEFAULT_BUDGET_BYTES in the same change.
+    // The redeclaration headroom, re-argued on 2026-09-09 for RFC-028.
+    // polymarket_book_deltas is still the only quota with room to move, but the
+    // room shrank from 4 to 3 GiB, because the 1 GiB of strategy_decisions came
+    // out of exactly this slack: raising the deltas to 55 GiB would land the
+    // sum ON the trigger, which the strict comparison above forbids. So the
+    // ceiling is exclusive and now lower, and a 14-day window at the busiest
+    // measured rate (63.8 GiB) is further out of reach than it was — it cannot
+    // be bought without moving DEFAULT_BUDGET_BYTES in the same change.
     // Stated as "everything except the deltas" on purpose: written as
     // deltas + (trigger - declared) it would be algebraically constant and
     // could never fail, which is the degenerate shape this file keeps finding.
@@ -252,8 +262,8 @@ describe("retention config", () => {
     const othersDeclared = RETENTION_TABLES.filter(
       (t) => t.table !== "polymarket_book_deltas",
     ).reduce((sum, t) => sum + t.quotaBytes, 0);
-    expect(othersDeclared / GiB).toBeCloseTo(43, 3);
-    expect((trigger - othersDeclared) / GiB).toBeCloseTo(56, 3);
+    expect(othersDeclared / GiB).toBeCloseTo(44, 3);
+    expect((trigger - othersDeclared) / GiB).toBeCloseTo(55, 3);
   });
 });
 

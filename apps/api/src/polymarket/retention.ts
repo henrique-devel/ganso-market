@@ -618,6 +618,31 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     timeColumn: "generated_at",
     protected: true,
   },
+  // RFC-028 P4: as decisões da estratégia `fast`. TTL 180 d, quota 1 GiB, NÃO
+  // protegida — a proposta da P4, aprovada como escrita em 2026-09-05.
+  //
+  // O ORÇAMENTO É NOVO, e é o primeiro desde a expansão da reserva RFC-010..013
+  // que não sai de outra tabela: `strategy_decisions` não casa nenhum dos
+  // prefixos da reserva de 8 GB (`fundamental_`, `paper_`, `resolution_`,
+  // `graph_`, `portfolio_`), então ela não cabe naquela conta nem a estoura.
+  // O preço aparece noutro lugar: a soma declarada sai de 95 para 96 GiB e a
+  // folga de redeclaração de `polymarket_book_deltas` cai de 4 para 3 GiB.
+  // `budget.test.ts` e `retention.test.ts` fixam os dois números.
+  //
+  // E A QUOTA É LARGA DE PROPÓSITO, muito além da volumetria modelada: a D4
+  // grava 1 decisão por braço por mercado-hora, ou seja 4 x 24 = 96 linhas/dia.
+  // A ~1 KB por linha isso é ~0,1 MB/dia e ~17 MB nos 180 dias do TTL — cerca
+  // de 1/60 da quota. Quem governa esta tabela é o TTL; a quota é um teto que
+  // não deve morder, e se morder é sinal de que o worker está gravando algo que
+  // a D4 não previu. Registrado no HANDOFF para o proprietário decidir se
+  // prefere devolver a diferença à folga dos deltas.
+  {
+    table: "strategy_decisions",
+    ttlDays: 180,
+    quotaBytes: 1 * GB,
+    timeColumn: "received_at",
+    protected: false,
+  },
   // Metadata group: never pruned (shared 0.5 GB quota is monitored only).
   ...[
     "polymarket_markets",
