@@ -126,16 +126,47 @@
   `POST /api/polymarket/paper/intents` **404**. A imagem da API declara `strategy_decisions` na
   retenção (é ela que serve o bloco `storage` do `data-quality`); o `curl` autenticado do
   endpoint continua fora do que a sessão pode fazer, pelo mesmo motivo da RFC-027 — os tokens
-  ficam hasheados em `auth_access_tokens`. **Zero erros** em `api`, `polymarket-recorder` e
-  `polymarket-paper` na janela pós-deploy; as advertências `BOOK_DIVERGENCE` do recorder são a
-  rajada de re-subscribe já documentada, não regressão.
+  ficam hasheados em `auth_access_tokens`.
 
-  **Testes.** `make verify` verde nos dois PRs (`1863 passed | 124 skipped`); suíte com pg
+  **A janela de 30 min: 0 erros no `api`, 0 no `polymarket-paper`, e 1 no
+  `polymarket-recorder` — pré-existente.** O único erro é um `RETENTION_STEP_FAILED` com
+  `"Query read timeout"` na checagem de cobertura de **`polymarket_book_deltas`** (token
+  pesado, `slice_end` de 31/08), que é a condição recorrente já documentada desde 06/09 e que o
+  fatiamento da retenção mitiga sem eliminar. **Não toca `strategy_decisions`** (0 ocorrências
+  com esse nome) e não é regressão desta entrega. As advertências `BOOK_DIVERGENCE` e
+  `SERIES_COVERAGE_MISSING` do recorder são, respectivamente, a rajada de re-subscribe e a
+  truncagem de poda por buraco de agregado — ambas comportamento documentado. Ao fim da janela
+  o RTDS seguia vivo (0,7 s / 2,3 s de idade) e as ordens com `strategy_id` seguiam em **0**.
+
+  **UM DEFEITO ENCONTRADO NA REVISÃO FINAL, E CORRIGIDO** ([#145](https://github.com/henrique-devel/ganso-market/pull/145),
+  merge `9708d9b`). `FastStateInputs.mainPortfolioHoldsToken` existia como insumo desde o PR 1 e
+  `decideFastStrategyOrder` **nunca o consultava**: o reason code
+  `FAST_SKIPPED_MAIN_POSITION`, que a **D2** exige, não era emitido por caminho nenhum — o campo
+  era decoração. Em sombra não muda nada (nenhuma ordem nasce, nenhuma posição abre). O momento
+  em que passaria a importar é o da primeira ordem do braço C: como `paper_positions` é chaveada
+  **só por `token_id`** (`0008:86`), uma posição da sub-carteira num token que a principal já
+  segura seria a **mesma linha**, e a contabilidade das duas somaria na mesma célula — a
+  contaminação que a D2 proíbe e que o filtro `strategy_id IS NULL` **sozinho não pega**, porque
+  a posição não tem `strategy_id`, só a ordem tem. A recusa entra **depois** da soberania (kill
+  switch e disjuntor continuam ganhando, e um teste fixa essa ordem). Regressão vista falhando
+  sem a correção. `api` em produção passou a `9708d9b`; o `polymarket-recorder` fica em
+  `12de5ae` — correto, porque o que ele executa (`retention.ts`) não mudou no #145.
+
+  **Testes.** `make verify` verde nos três PRs (`1865 passed | 124 skipped` no último); suíte com pg
   ligada **`1987 passed`** contra PostgreSQL 18.4 migrado até a 0020; migration **idempotente**
   (segunda passada devolve `migration already applied`); **27 de 28** testes de
   `faststore.pg.test.ts` vistos **falhando** no esquema anterior, e 3 testes da grade de bandas
   vistos falhando no código anterior. Nenhum diff em `policy.ts` (zero linhas), `bridge.ts`,
   `brokerstore.ts`, gates, disjuntores ou migration aplicada; nenhum endpoint de escrita novo.
+
+  **Estado em produção ao fim da sessão.** `api` `9708d9b`, `polymarket-recorder` `12de5ae`
+  (o que ele executa não mudou no #145), `polymarket-paper` `da6d560` — intocado, e é o PR 3
+  que o reconstrói. `foundation = 20`; ordens `fast` **0**; `strategy_decisions` com **1** linha
+  (a sonda indelével); `fast_config_versions` com **1** (a 0.1.0); nenhuma linha de poda; RTDS
+  com **0,8 s** de idade. Kill switch **engatado**. E os `PARAM_CHANGE` abertos **subiram de 8
+  para 10 no correr da sessão** — o contador está crescendo, que é o comportamento esperado
+  enquanto a RFC-025 não estiver implementada, e reforça que o segundo bloqueio da parte B não
+  se resolve por espera.
 
   **A PARTE B (prompt 20b) ESTÁ LIBERADA POR ESCOPO E BLOQUEADA POR ESTADO.** Todo o código de
   que ela depende está em produção. O que falta é ambiente, e não é dela: (1) o **kill switch
