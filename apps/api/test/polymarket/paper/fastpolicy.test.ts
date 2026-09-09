@@ -426,6 +426,41 @@ describe("pré-condições: cada uma falhando sozinha tem o seu reason code", ()
     expect(result.reason).toBe("FAST_SKIPPED_WARMUP");
   });
 
+  it("token que a carteira principal já segura recusa (D2)", () => {
+    // `paper_positions` é chaveada só por `token_id` (0008:86): duas posições
+    // no mesmo token seriam UMA linha, e a contabilidade das duas carteiras
+    // somaria na mesma célula. Em sombra não ocorre — nenhuma ordem nasce —,
+    // mas a regra é provada aqui para já estar valendo quando o braço C
+    // emitir a primeira ordem.
+    for (const arm of ["A", "C", "D", "E"] as const) {
+      const result = decideFastStrategyOrder(
+        context({
+          arm,
+          state: { ...context().state, mainPortfolioHoldsToken: true },
+        }),
+      );
+      expect(result.reason).toBe("FAST_SKIPPED_MAIN_POSITION");
+      expect(result.verdict).toBe("skip");
+      expect(result.order).toBeUndefined();
+    }
+  });
+
+  it("a recusa por posição da principal vem DEPOIS da soberania", () => {
+    // Kill switch e disjuntor continuam ganhando: a ordem de avaliação da D4
+    // é soberania primeiro, e um token compartilhado não é motivo para
+    // esconder que o switch está engatado.
+    const result = decideFastStrategyOrder(
+      context({
+        state: {
+          ...context().state,
+          killSwitchEngaged: true,
+          mainPortfolioHoldsToken: true,
+        },
+      }),
+    );
+    expect(result.reason).toBe("FAST_SKIPPED_KILL_SWITCH");
+  });
+
   it("braço pausado recusa", () => {
     const result = decideFastStrategyOrder(
       context({ state: { ...context().state, armPaused: true } }),
