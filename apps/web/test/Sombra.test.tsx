@@ -10,6 +10,9 @@
 // O que estes testes NÃO deixam passar: um número inventado, uma ressalva que
 // some quando o resultado é bom, e qualquer botão.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -501,5 +504,32 @@ describe("a aba da tela", () => {
       "5:resolucao",
       "6:sistema",
     ]);
+  });
+});
+
+describe("a fixture continua sendo o arquivo do job", () => {
+  // O valor da fixture é não ter sido tocada. Um `make format` já a reformatou
+  // uma vez — o prettier quebrou `"model_ids": ["a", "b"]` em três linhas — e
+  // com isso ela deixou de ser byte-idêntica ao que a API serve, que é a
+  // propriedade que o teste de `payload` do lado da API afirma.
+  //
+  // Os dois hashes abaixo são os de `/var/lib/ganso/shadow-replay` no servidor,
+  // conferidos com `sha256sum` depois da primeira rodada do timer. `.prettierignore`
+  // mantém os arquivos fora do formatador; este teste é o que percebe se algo
+  // os tocar mesmo assim.
+  const ESPERADO: Readonly<Record<string, string>> = {
+    "shadow-replay-latest-B.json":
+      "46f536fc13d5070dbdde3c2ee0c221311666c8428b09064fde5bcde650b0e02f",
+    "shadow-replay-latest-A.json":
+      "c5e724ee196411d07b6afe11e7517e0adb6a98dafd58efdc796a0f090655b769",
+  };
+
+  it("bate byte a byte com o que o job gravou em produção", () => {
+    for (const [nome, hash] of Object.entries(ESPERADO)) {
+      const bytes = readFileSync(
+        new URL(`./fixtures/${nome}`, import.meta.url),
+      );
+      expect(createHash("sha256").update(bytes).digest("hex"), nome).toBe(hash);
+    }
   });
 });
