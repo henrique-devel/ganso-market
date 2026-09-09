@@ -1,6 +1,6 @@
 # RFC-028 — Estratégia `fast_btc_updown@0.1.0`: máquina de amostra com controle, em sub-carteira imaginária, primeiro em SOMBRA
 
-**Status:** accepted — autorizado para implementação (2026-09-04); P1–P8 aprovadas como escritas (2026-09-05). A primeira ordem do braço C segue **fora** desta RFC
+**Status:** accepted — autorizado para implementação (2026-09-04); P1–P8 aprovadas como escritas (2026-09-05). **PR 1 em produção** (`#142`, 2026-09-09: `fast.json` 0.1.0 congelada, parser, policy própria e backtest auditado do filtro z); **PR 2 em produção** (`#143`: migration 0020, retenção). PRs 3–4 (sombra e API) são o prompt 20b. A primeira ordem do braço C segue **fora** desta RFC
 **Dependências:** PR-0 (b), liquidação (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item b; sem ele nenhuma posição fecha e nada é rotulado); RFC-022 (`RFC-022-ponte-runtime-e-saidas.md` — ponte, runtime de resolução e saídas); RFC-025 (`RFC-025-disjuntor-de-parametro-redefinido.md` — `PARAM_CHANGE` sem contar a versão 1; sem ela todo mercado novo nasce com disjuntor aberto e a estratégia recusa tudo); RFC-011 (simulador pessimista, kill switch); RFC-016/019 (`end_ts`, abertura da janela). **RFC-024** (`RFC-024-descoberta-por-serie-e-livro-dos-rapidos.md`) é pré-condição para o braço E emitir ordem e para a cobertura do braço C — **não** para a fase sombra desta RFC. Em 04/09 a RFC-022 e a RFC-025 estão em `Status: accepted` no worktree (`RFC-022…:3`, `RFC-025…:3`) e **ainda não implementadas**; o **PR-0 está implementado e verificado em produção** (PRs #93, #94 e #96). Os prompts re-medem cada uma em produção antes do merge do PR 3.
 **Habilita:** o primeiro conjunto de regras rápidas registrado, versionado e replayável; N experimental em dias (24 mercados-hora/dia) com braço de controle, sem tocar carteira principal, gates, policy global, disjuntores ou perímetro; a evidência para decidir, depois, se algum braço emite ordem paper.
 **Origem:** diagnóstico de 02–03/09/2026, relatório publicado em <https://claude.ai/code/artifact/f7e3e623-831a-464f-8435-6cc671d325e6> (síntese da estratégia; dois juízes com enxertos; estudo updown §3, §5, §6).
@@ -124,6 +124,100 @@ versões em tabela imutável (`fast_config_versions`); qualquer mudança é vers
 hash seguem `parsePortfolioConfig`/`portfolioConfigHash` (`portfolio/config.ts:330`, `:914-929`).
 Backtest do filtro z sobre ~300 mercados é obrigatório e auditado antes do deploy (o de
 proposta não foi); seu resultado entra nesta RFC como seção "Backtest do filtro z".
+
+## Backtest do filtro z (medido 2026-09-09, auditado)
+
+CLI read-only `apps/api/src/fast-backtest-cli.ts`, aritmética em
+`fastbacktest.ts`, sem look-ahead: `S0` é o `open` do `twap60` no balde da
+abertura, `S_t` é o `close` do `twap30` do balde **estritamente anterior** à
+decisão, a cotação é o balde em ou antes dela, e o rótulo entra só no payout.
+Execução explícita por braço: A e D pagam o ask, E paga ask + 1 tick, C repousa
+no melhor bid e **só é preenchido se o preço vier até ele** (é aí que vive a
+seleção adversa). Fee taker assumida 0,07; maker zero. IC95 bootstrap por
+mercado (2 000 resamples, semente 20 260 909).
+
+### O denominador, e as duas premissas que caíram
+
+| Premissa do prompt | Medido em 09/09 |
+| --- | --- |
+| "~300 mercados BTC horários resolvidos" | **181**. A regex estrita casa 389 mercados, mas só **183** têm `end_ts`, e `end_date_iso` é uma DATA (`'2026-09-09'`), não um instante — derivar o fim dela daria meia-noite UTC e mediria o instante errado em 23 de 24 casos. Dos 183, 181 têm rótulo final. |
+| Cobertura de livro suficiente para uma grade | **36 mercados** com cotação as-of (20 %), e **25–33 em cada instante** T−k. Só **85 dos 321** tokens afirmativos foram algum dia assinados. A lacuna de descoberta que a RFC-024 fecha é o fator limitante, não o número de mercados resolvidos. |
+
+Nenhuma das duas é condição de parada desta parte; as duas estão no HANDOFF.
+
+### σ realizado — e o congelado está do lado seguro
+
+| Feed | Retornos adjacentes | σ realizado | σ congelado / realizado |
+| --- | --- | --- | --- |
+| `twap30` | 10 100 | **4,216 bps/min** | 1,19× |
+| `twap60` | 10 100 | **3,754 bps/min** | 1,33× |
+
+Só entre baldes **adjacentes**: 9,58 % dos baldes faltam em 7 dias, e um retorno
+medido sobre um vão não é um retorno de um minuto. O σ = 5 bps/min congelado na
+0.1.0 **não altera a 0.1.0** (D4) e erra para o lado **conservador**: σ maior
+encolhe |z|, então o filtro é mais seletivo do que o realizado justificaria.
+
+### Reversão de z
+
+| k | 4 | 5 | 6 | 8 | 10 | 12 |
+| --- | --- | --- | --- | --- | --- | --- |
+| taxa | 0,072 | 0,078 | 0,072 | 0,066 | 0,096 | 0,102 |
+
+166 instantes por k. O veto de reversão do braço E remove **6,6 %–10,2 %** dos
+instantes: ele quase não morde, e portanto quase não explica o resultado do
+braço.
+
+### A grade, por braço
+
+Na banda que a **própria config declara** (D5), contra o preço de entrada:
+
+| Braço | Banda | N | PnL/cota | IC95 | Acerto |
+| --- | --- | --- | --- | --- | --- |
+| A | [0,60; 0,90) | 54 | **−0,1489** | [−0,2755; −0,0319] | 0,630 |
+| C | [0,70; 0,92) | 8 | +0,1525 | [+0,1200; +0,1875] | 1,000 |
+| D | [0,60; 0,90) | 23 | −0,1662 | [−0,3586; +0,0262] | 0,609 |
+| E | [0,80; 0,95) | **5** | +0,0815 | [+0,0645; +0,1022] | 1,000 |
+
+Varrendo **todas** as bandas (o eixo "banda" da grade):
+
+| Braço | N total | N na banda | N ≥ 0,95 | PnL total | PnL ≥ 0,95 |
+| --- | --- | --- | --- | --- | --- |
+| A | 191 | 54 | 99 | −0,0401 | +0,0024 |
+| C | 21 | 8 | 8 | +0,0027 | +0,0203 |
+| D | 175 | 23 | 56 | +0,0063 | −0,0056 |
+| E | 32 | 5 | 26 | **+0,0300** | +0,0130 |
+
+### As condições de parada, resolvidas
+
+- **Direção do braço E: REPRODUZIDA.** A proposta não auditada mediu +0,055/cota
+  em 28 observações com IC incluindo zero. O auditado mede **+0,0300/cota em 32
+  observações** varrendo as bandas, e **+0,0815 em 5** dentro da banda
+  configurada. Mesmo sinal, magnitude da mesma ordem, N do mesmo tamanho.
+- **IC95 negativo em toda a grade: NÃO.** Das 116 células, muitas têm IC95
+  inteiramente positivo.
+
+Nenhuma das duas paradas dispara. **E nenhuma das duas deve ser lida como edge**,
+por três razões medidas:
+
+1. **O braço E tem N = 5 na banda que ele declara.** As outras 26 das 32
+   observações estão em [0,95; 1,00), banda que a config **exclui**. O agregado
+   +0,0300 é, em cinco sextos, um número de fora da regra.
+2. **O positivo em [0,95; 1,00) é prêmio de favorito com cauda invisível.**
+   Somando os braços: N = 189, acerto 0,9894, entrada média 0,9863. O ganho por
+   acerto é +0,0128/cota e a perda por erro é −0,9863: **um erro apaga 77
+   acertos**. Ao implícito de 98,6 % esperavam-se 2,6 erros em 189 observações e
+   houve 2. O IC95 desse regime não vê a cauda, e é exatamente a cauda de
+   −0,99/cota que a própria RFC já mediu nos favoritos p ≥ 0,90.
+3. **O braço A perde do CONTROLE.** A = −0,0401/cota [−0,0845; +0,0007] em
+   N = 191; D (lado sorteado) = +0,0063 [−0,0432; +0,0538] em N = 175. A − D é
+   negativo em **5 dos 6** instantes. O braço de controle da D1 fez a primeira
+   coisa para a qual existe: mostrar que "comprar o favorito tardio" não se
+   distingue — para pior — de comprar um lado qualquer.
+
+Isto **confirma a D1** em vez de contrariá-la: o produto da RFC é N com
+controle, não lucro, e o backtest diz que a fase sombra vale ser corrida para
+medir, não porque haja edge à vista. A parte B segue autorizada pelo escopo; a
+primeira ordem do braço C segue fora desta RFC e sujeita à P6.
 
 ### D8 — Fase sombra primeiro; a ordem é outro passo
 
