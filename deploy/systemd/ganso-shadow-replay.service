@@ -1,0 +1,41 @@
+# RFC-029 D2. The shadow replay, run by systemd instead of by a person holding
+# an SSH session open.
+#
+# The reason this unit exists at all is measured: mode B took 710 s in
+# production on 2026-09-03 when it was detached with `nohup setsid`, and the
+# same round run straight through `ssh ... docker compose exec -T` died twice
+# with exit 255, at 1.646 s and 1.268 s, with no message and `oom_kill 0`. The
+# process was fine; the socket was not.
+#
+# ExecStart points into the checkout rather than into /usr/local/sbin so the CD
+# (which rsyncs /opt/ganso-market) also updates the job. A copy under
+# /usr/local would be a second version of this script that nobody remembers to
+# refresh.
+[Unit]
+Description=Ganso Market shadow replay diário (RFC-029)
+Documentation=file:///opt/ganso-market/docs/ops/SHADOW_REPLAY_JOB.md
+Requires=docker.service
+After=docker.service network-online.target
+ConditionPathIsDirectory=/opt/ganso-market
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ganso-market
+ExecStart=/opt/ganso-market/deploy/shadow-replay-run.sh
+# 710 s + 118 s measured, with room for a slower day. A round that has not
+# finished in an hour is hung, not slow, and being killed here is better than
+# still running when the next timer fires.
+TimeoutStartSec=3600
+# The client process is cheap; the load is on postgres inside the container, and
+# the mitigation for THAT is the hour, not the priority. This only keeps the
+# `docker compose` wrapper from competing with the workers on the host.
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/ganso/shadow-replay
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ganso-shadow-replay
