@@ -11,7 +11,13 @@
   | [#150](https://github.com/henrique-devel/ganso-market/pull/150) | `e4a1b32` | D4: tela Sombra, parser tipado, tecla `4` | CD + `make server-update` |
   | [#151](https://github.com/henrique-devel/ganso-market/pull/151) | `3ba2663` | fixture byte-idêntica ao arquivo do job | CD (só texto e teste) |
 
-  `release-sha` no container `api` ao fim da sessão: **`e4a1b32668c0e903914b5e42579446e204da5b58`**.
+  `release-sha` no container `api` ao fim da sessão:
+  **`3ba26633a64e57780a1e79a84400e828ca6197a1`** — o merge do #151, não o do #150. O CD do
+  #151 reconstruiu a imagem (ele mexeu em `.prettierignore` e em arquivos de teste, que não
+  estão nas listas de "só texto" do `deploy_paths.py`), e o carimbo acompanhou. O código da
+  Sombra implantado é o mesmo: `3ba2663` contém `e4a1b32`. Vale a lembrança de sempre — em
+  produção a versão se lê em `/etc/ganso/release-sha` **por container**, e não no git, que
+  `/opt/ganso-market` nem é repositório.
 
   **A primeira rodada, com número.** `systemctl start ganso-shadow-replay.service` às
   **2026-09-09 17:44:45Z**, terminada **17:49:56Z**: `ExecMainStatus` **0**, `Result=success`,
