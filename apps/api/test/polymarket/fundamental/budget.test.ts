@@ -253,6 +253,23 @@ describe("estimate volumetry", () => {
         table.table.startsWith("portfolio_"),
     ).reduce((sum, table) => sum + table.quotaBytes, 0);
     expect(reserve).toBeLessThanOrEqual(8 * GB);
+    // RFC-028's strategy_decisions is deliberately OUTSIDE this reserve, and
+    // that is the whole funding argument: it matches none of the prefixes
+    // above, so its 1 GiB could not come from the 8 GiB (which was already
+    // full) and had to be new budget. Asserted so that renaming the table to
+    // something like `paper_strategy_decisions` — which would silently pull
+    // 1 GiB into a reserve that has none — fails here instead of in
+    // production.
+    const strategyDecisions = RETENTION_TABLES.find(
+      (table) => table.table === "strategy_decisions",
+    );
+    expect(strategyDecisions).toBeDefined();
+    expect(strategyDecisions?.quotaBytes).toBe(1 * GB);
+    expect(strategyDecisions?.ttlDays).toBe(180);
+    expect(strategyDecisions?.protected).toBe(false);
+    expect(reserve + (strategyDecisions?.quotaBytes ?? 0)).toBeGreaterThan(
+      8 * GB,
+    );
   });
 
   it("splits the RFC-013 two gigabytes as the engine's own slices", () => {
