@@ -42,8 +42,39 @@ const REQUEST_TIMEOUT_MS = 5_000;
  * `/decisions`. É por isso que existem dois arrays e não um: com o filtro
  * desligado, a seção `decisoes` não é montada e a rota não é chamada.
  */
-const SECOES_PADRAO: readonly Section[] = ["consulta"];
-const SECOES_COM_CRUAS: readonly Section[] = ["decisoes", "consulta"];
+export const SECOES_PADRAO: readonly Section[] = ["consulta"];
+export const SECOES_COM_CRUAS: readonly Section[] = ["decisoes", "consulta"];
+
+/**
+ * As buscas do carregamento padrão da tela Decisões (aceite 4).
+ *
+ * Exportada, e não embutida no efeito, para que o aceite possa ser verificado
+ * a cada `npm test` em vez de na aba de rede: o teste chama ESTA função com um
+ * `fetch` espião e afirma sobre as URLs pedidas. O componente não decide nada
+ * que esta função não decida — ele a chama e guarda o resultado.
+ *
+ * Duas rotas, e só duas: `state` alimenta Congeladas e `limits` dá o piso de
+ * edge do "Quase". O funil, o último ciclo e o "Quase" vêm do `/overview` que a
+ * App já busca, então não custam requisição aqui. `/decisions` NÃO é uma
+ * delas — ela devolve 500 linhas com um JOIN no registro de mercados, e
+ * carregá-la a cada 30 s numa tela que abre em funil seria gastar a rota mais
+ * cara do painel para mostrar o que a tela não está mostrando.
+ */
+export async function buscaDaTelaPadrao(
+  accessToken: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<
+  readonly [
+    Awaited<ReturnType<typeof fetchPortfolioState>>,
+    Awaited<ReturnType<typeof fetchLimits>>,
+  ]
+> {
+  return Promise.all([
+    fetchPortfolioState(accessToken, fetcher, signal),
+    fetchLimits(accessToken, fetcher, signal),
+  ]);
+}
 
 function instante(iso: string | null): string {
   if (iso === null) {
@@ -115,10 +146,11 @@ export function Decisoes({
       () => controller.abort(),
       REQUEST_TIMEOUT_MS,
     );
-    const [state, limits] = await Promise.all([
-      fetchPortfolioState(accessToken, fetch, controller.signal),
-      fetchLimits(accessToken, fetch, controller.signal),
-    ]);
+    const [state, limits] = await buscaDaTelaPadrao(
+      accessToken,
+      fetch,
+      controller.signal,
+    );
     window.clearTimeout(timeout);
     if (!montado.current) {
       return;

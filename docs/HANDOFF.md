@@ -1,6 +1,73 @@
 # Handoff do projeto Ganso Market
 
-- Última atualização: 2026-09-08 (7) — **RFC-026 PR 3 MESCLADO E EM PRODUÇÃO**
+- Última atualização: 2026-09-09 — **RFC-027 COMPLETA: OS DOIS PRs EM PRODUÇÃO**
+  ([#139](https://github.com/henrique-devel/ganso-market/pull/139) `ffa091e` D1–D4;
+  [#140](https://github.com/henrique-devel/ganso-market/pull/140) `cf88469` D5–D6). CD verde
+  nos dois, migration **0019** aplicada (`schema_versions.foundation = 19`) **antes** do
+  rebuild do `polymarket-portfolio`, `release-sha` conferido: `api` `cf88469`, worker
+  `ffa091e` (o PR 2 não toca o worker).
+
+  **O número da sessão: o caminho A da D1 reprova por vinte vezes, e não por pouco.** O
+  agregado direto sobre `portfolio_decisions` usa o índice certo — Index Scan em
+  `portfolio_decisions_kind_idx`, sem seq scan — e ainda assim custa **1603 ms a frio**
+  (`read=4404` blocos) e tem **p95 quente de 3508 ms** sobre 22 670 linhas, porque a tabela
+  não cabe em `shared_buffers`. `max(3 × p95, 1,5 × frio) = 10 524 ms` contra um teto de 500.
+  O pior caso está **acima do `statement_timeout` de 1 s do pool da API**: seria 57014 no
+  `/overview`, exatamente o erro que o aceite 6 exige em zero. ⇒ **caminho B** (P1, default
+  aprovado em 05/09). Depois do deploy, a consulta que a API realmente faz custa **0,062 ms**.
+
+  **O achado que mudou um número da RFC: a fórmula do "Quase" só vale para a compra.** Aberta
+  por lado sobre as 3392 linhas de `LOWER_BOUND_BELOW_COSTS` em 24 h, `q_lo − exec_price −
+  costs_total − safety_margin` dá folga positiva em **370 de 1022** linhas `NO/SELL` que o
+  motor **recusou** (máximo +0,7615), e em **0 de 2372** `YES/BUY`. A desigualdade inverte na
+  venda. Com a banda de um lado só que a RFC escreve, o "Quase" seria **390 com folga mediana
+  de +0,151** — "quase entrou" sobre linhas que passaram longe. A implementação usa banda de
+  **dois lados** (`−0,01 < folga ≤ 0`): **71** (EDGE) e **20** (LOWER_BOUND). O motor não é
+  tocado; o teto impede o **painel** de afirmar mais do que a fórmula sustenta.
+
+  **A regra da D5 provou-se dado-dirigida sozinha.** A RFC previu "travado por defeito" para o
+  G2 com `closed_positions = 0` em 02/09. Em 09/09 são **8** (a liquidação passou a fechar
+  posições: 32 fills na história, 19 ordens `filled`), e a **mesma função** devolve
+  "acumulando" sem uma linha de código nova — que é o que o aceite 3 prevê. Contra os dados
+  vivos: G1 "depende de modelo promovido", G2/G3 "acumulando", G4 "travado por defeito, sem
+  data" (`fee_samples 0/100`), G5 **"relógio, com data" = `2026-10-27T20:38:47.230Z`**
+  (exatamente a data prevista), G6 "decisão do proprietário". **Nenhum como "esperando" sem
+  data.**
+
+  **Aceites: 1 ✔ (diferença 0 nos sete degraus), 2 ◐, 3 ✔, 4 ✔, 5 ✔, 6 ✔ parcial pela janela.**
+  O aceite 2 tem a **substância** verificada — `portfolio_cycle_summary` contra o último
+  `PORTFOLIO_CYCLE` do `docker logs`, `evaluated` 84 = 84 e os sete campos idênticos — mas
+  **não o `curl` autenticado**: os tokens ficam hasheados em `auth_access_tokens` e criar
+  conta ou manusear senha está fora do que a sessão pode fazer. Sem token a rota dá 401 e os
+  métodos de escrita dão 404. **Fica para o proprietário:** um `curl -H "Authorization:
+  Bearer <token>" http://127.0.0.1/api/polymarket/overview | jq '.funnel_24h, .last_cycle'`
+  fecha o aceite. O aceite 6 está em **0** pelo método A3 (0 `57014`, 0
+  `OVERVIEW_API_FAILED`); a janela cheia de 24 h fecha em **2026-09-10 02:09Z**.
+
+  **Cinco premissas caíram e nenhuma foi parada.** (1) O log corre a **21,6 linhas/min**, não
+  11,1 — 500 linhas são ~23 min, não 45, e a tela **deriva** o aviso em vez de fixar qualquer
+  dos dois. (2) O funil das 24 h é **22 665 avaliadas / 74 `ACCEPTED` / disjuntor 2,3 %**,
+  não 52 983 / 29 / 55,9 % — a RFC-025 derrubou o `PARAM_CHANGE`, e o verbete que dizia "é
+  metade do log" saiu do dicionário por ser um número de produção fixado em texto que deixou
+  de ser verdade. (3) `/portfolio/limits` **já tinha** consumidor (a RFC-026 lê o bloco
+  `config`); `caps` e `binding_constraints_24h` é que seguiam sem tela. (4) O texto "234.549"
+  **já havia sido removido**. (5) A linha 19 do `README` do roadmap **já existia**, com status
+  "pendente" — foi atualizada, não acrescentada.
+
+  **O orçamento das duas tabelas novas não é orçamento novo.** A fatia da RFC-013 estava em
+  exatamente 2 GB e a reserva RFC-010..013 em exatamente 8 GB, as duas cheias — o teste
+  `budget.test.ts` reprovou e obrigou a re-argumentar, que é para o que ele existe. Os 0,01 GB
+  saem de `portfolio_panel_snapshots` (0,54 → 0,53), pelo mesmo caminho do bridge. Custo
+  medido: o painel grava **12,85 MB/h**, então 0,01 GiB são **~50 min** de história, contra um
+  TTL de 2 dias que a quota **já não sustentava** (733 MB físicos contra 580 MB).
+
+  Testes: API **1855** (suíte pg ligada, 7 novos contra PostgreSQL real com a 0019 aplicada
+  pelo protocolo do CD), web **218**. Cada regressão vista falhando no HEAD anterior (6 + 3 no
+  PR 1, 14 + 1 no PR 2). Perímetro Nginx **inalterado**, 11 verdes. Nenhum gate, disjuntor,
+  `config/portfolio.json`, `HISTORY_LIMIT` ou `BREAKER_EVENT_WINDOW_MS` tocado; nenhum
+  endpoint de escrita novo; nenhuma location nova.
+
+- Atualização anterior: 2026-09-08 (7) — **RFC-026 PR 3 MESCLADO E EM PRODUÇÃO**
   ([#137](https://github.com/henrique-devel/ganso-market/pull/137)), CD verde, `release-sha`
   **`93679126a9eadda80964c4fe27468b9a619eac30`** conferido no container da `api`. **A RFC-026
   está completa: os três PRs em produção.** A Mesa ganhou sparkline de 60 buckets por linha,

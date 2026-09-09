@@ -162,4 +162,100 @@ Fonte: `GET /polymarket/gates` (tem `metrics_json`), que ganha o campo `g2_clock
 
 ## Medido depois
 
-(preenchido pela sessão executora: `EXPLAIN` quente/frio do funil, caminho escolhido, `release-sha` dos containers, `curl` do aceite 2, captura do aceite 3.)
+**Sessão executora: 2026-09-09.** Dois PRs mergeados e verificados em produção:
+[#139](https://github.com/henrique-devel/ganso-market/pull/139) (`ffa091e`, D1–D4) e
+[#140](https://github.com/henrique-devel/ganso-market/pull/140) (`cf88469`, D5–D6).
+
+### O `EXPLAIN` que escolheu o caminho (D1)
+
+Caminho A, em produção 2026-09-09 01:34Z, `EXPLAIN (ANALYZE, BUFFERS)`, 22 670 linhas na janela.
+O índice `portfolio_decisions_kind_idx` **casa** — Index Scan, sem seq scan. O que reprova é volume:
+
+| medida | valor | critério |
+| --- | --- | --- |
+| frio, consulta simples (1ª execução) | **1603 ms** | 1,5 × frio = **2405 ms** |
+| frio, `EXPLAIN` (`read=4404` blocos) | 706 ms | — |
+| quente, 10 execuções (ms) | 3508,0 · 199,7 · 1396,5 · 94,6 · 187,7 · 194,8 · 186,7 · 27,9 · 23,7 · 24,0 | 3 × p95 = **10 524 ms** |
+| **`max(3 × quente p95, 1,5 × frio)`** | **10 524 ms** | **≤ 500 ms** |
+
+Reprova por vinte vezes, e o pior caso (3508 ms) está acima do `statement_timeout` de 1 s do
+pool da API: o caminho A não daria um `/overview` lento, daria **57014 no `/overview`** — o
+erro que o aceite 6 exige em zero. ⇒ **caminho B**, o default da P1 aprovado em 05/09.
+Migration **0019**, `schema_versions.foundation = 19` conferido antes do rebuild.
+
+**O que o caminho B custa, medido depois do deploy:** a consulta que a API realmente faz
+agora roda em **0,062 ms** (funil, 14 baldes) e **0,188 ms** (último ciclo, por chave
+primária). De 1603 ms para 0,062 ms.
+
+### Os seis aceites
+
+| # | Resultado |
+| --- | --- |
+| 1 | ✔ **exato.** Agregado × psql direto sobre o log, na mesma janela que a tela declara: **diferença 0 nos sete degraus** (DATA_STALE 807, BOOK_STALE 641, LOWER_BOUND 249, PRICE_OUT_OF_BAND 241, disjuntor 38, ACCEPTED 6, EDGE_BELOW_MIN 4). A cobertura de 24 h se completa 24 h após o rebuild — o agregado preenche 2 baldes por ciclo e `window_from` declara a janela real, que é o que a D1 manda. |
+| 2 | ◐ **substância verificada, `curl` não.** `portfolio_cycle_summary` (a linha que a rota serve) contra o último `PORTFOLIO_CYCLE` do `docker logs`: `evaluated` 84 = 84, e os **sete** campos idênticos. O `curl` autenticado exige uma credencial de painel que a sessão não tem — os tokens ficam **hasheados** em `auth_access_tokens` e criar conta ou manusear senha está fora do que a sessão pode fazer. Sem token: **401**; POST/PUT/DELETE/PATCH: **404**. |
+| 3 | ✔ **contra os dados vivos.** G1 "depende de modelo promovido" (`model_forecasts = 0`); G2 e G3 **"acumulando"** (`closed_positions = 8`); G4 "travado por defeito, sem data" (`fee_samples 0/100`, `slippage_samples 0/100`); G5 **"relógio, com data" = `2026-10-27T20:38:47.230Z`**, exatamente a data que a RFC previu; G6 "decisão do proprietário". **Nenhum aparece como "esperando" sem data.** O G2 como "acumulando" é o que o próprio aceite 3 prevê. |
+| 4 | ✔ **verificado por teste, não por inspeção.** `apps/web/test/DecisoesRede.test.ts` chama a função que a tela executa no efeito de carga com um `fetch` espião: as URLs pedidas são exatamente `/portfolio/state` e `/portfolio/limits`; `/decisions` não aparece. |
+| 5 | ✔ `grep -rn "234\." apps/web/src` **vazio**. `JSON.stringify` fora do modo engenheiro: **zero** — os três sítios restantes estão atrás de `useModoEngenheiro`, e o do espaço de consulta foi movido para lá neste PR. |
+| 6 | ✔ **parcial pela janela.** `docker logs ganso-market-api-1 --since 24h \| grep -c '"pg_code":"57014"'` = **0**; `OVERVIEW_API_FAILED` = **0** (método A3 da RFC-023). As 29 linhas de `canceling statement` no log do postgres em 24 h são de um `SELECT … FROM paper_ledger_events ORDER BY event_id` sem limite (defeito pré-existente, alheio a esta RFC) e da própria sessão de medição; **zero depois do CD**. A janela cheia de 24 h fecha em 2026-09-10 02:09Z. |
+
+### `release-sha` em produção
+
+| container | sha | esperado |
+| --- | --- | --- |
+| `api` | `cf8846932be48446900f2522a4e9a17823c1d96e` | merge do PR 2 ✔ |
+| `polymarket-portfolio` | `ffa091e6a5afdd6d9633eaa97a964003a5f5edb2` | merge do PR 1 ✔ (o PR 2 não toca o worker) |
+
+O bundle servido (`assets/index-BAXP6PLs.js`) carrega as marcas dos dois PRs.
+
+### O número do "Quase", e o achado da fórmula
+
+Medido 2026-09-09 01:36Z sobre as 24 h, com o `edgeLiqMin = 0.02` da config 1.2.0 em vigor:
+
+| `reason_code` | quase | avaliadas | `folga_min` | `folga_p50` |
+| --- | --- | --- | --- | --- |
+| `EDGE_BELOW_MIN` | **71** | 71 | −0,009962 | −0,005004 |
+| `LOWER_BOUND_BELOW_COSTS` | **20** | 3392 | −0,009772 | −0,006807 |
+
+**A fórmula da D3 só reproduz o veredito do motor em `YES/BUY`.** Aberta por lado sobre as
+3392 linhas de `LOWER_BOUND_BELOW_COSTS`:
+
+| `market_side` | `order_side` | n | folga > 0 | min | max |
+| --- | --- | --- | --- | --- | --- |
+| YES | BUY | 2372 | **0** | −0,1758 | −0,0025 |
+| NO | SELL | 1022 | **370** | −0,9573 | **+0,7615** |
+
+370 linhas RECUSADAS com folga positiva: a desigualdade inverte na venda e a fórmula, escrita
+para a compra, muda de sinal. Com a banda de um lado só que a RFC escreve (`folga > −0,01`), o
+"Quase" seria **390** com folga mediana de **+0,151** — dizendo "quase entrou" sobre linhas que
+passaram longe. A implementação usa uma banda de **dois lados** (`−0,01 < folga ≤ 0`); o motor
+não é tocado, e o que o teto impede é o **painel** afirmar mais do que a fórmula sustenta.
+
+`folga_p50` vem `null` no caminho B: uma mediana não se recompõe a partir de medianas horárias,
+e a mediana das medianas seria uma estatística de estatística com cara de medição. A tela usa
+`folga_min`, que é o número de que ela precisa ("faltou 1,0 c").
+
+### Premissas de 02–03/09 que caíram
+
+| Premissa | Medido 2026-09-09 | Consequência |
+| --- | --- | --- |
+| log 11,1 linhas/min; 500 ≈ 45 min | **21,6 linhas/min; 500 ≈ 23 min** | a tela não fixa nenhum dos dois; o aviso é derivado |
+| funil: 52 983 avaliadas, 29 `ACCEPTED`, disjuntor 55,9 % | **22 665 avaliadas, 74 `ACCEPTED` (0,33 %), disjuntor 2,3 %** | a RFC-025 derrubou o `PARAM_CHANGE`; registrado, não é parada |
+| caminho A ≤ 500 ms | **10 524 ms** | ⇒ caminho B (P1, default aprovado) |
+| "Quase" sem número no repositório | **71 e 20** | registrado acima |
+| G2/G4 com `closed_positions = 0` | **G2 tem 8**; 32 fills na história, 19 ordens `filled` | G2 vira "acumulando" sozinho — é o aceite 3 |
+| `/portfolio/limits` sem consumidor | **caiu**: a RFC-026 PR 1 já lê o bloco `config` | `caps` e `binding_constraints_24h` seguiam sem tela, e ganharam uma |
+| texto "234.549" fixo em `Overview.tsx:507` | **já removido** antes desta sessão | nada a fazer |
+| a linha 19 do `README` do roadmap não existe | **existe**, com status "pendente" | atualizada, não acrescentada |
+
+**Mantidas:** seis gates em `INSUFFICIENT_DATA`; `clock_start = 2026-08-28 20:38:47.23Z` nas
+duas categorias; feed com `JSON.stringify` cru; config 1.2.0 com `edgeLiqMin = 0.02`.
+
+### Orçamento das tabelas novas
+
+A fatia da RFC-013 estava em exatamente 2 GB e a reserva RFC-010..013 em exatamente 8 GB, as
+duas **cheias**. Os 0,01 GB saem de `portfolio_panel_snapshots` (0,54 → 0,53), pelo mesmo
+caminho que `portfolio_position_entries` seguiu no bridge (0,56 → 0,54). Custo medido: o painel
+grava 4432 linhas/hora a 2900,6 bytes/linha = **12,85 MB/h**, então 0,01 GiB são **~50 min** de
+história — contra um TTL declarado de 2 dias que a quota **já não sustentava** (733 MB físicos
+contra 580 MB de quota). As mesmas 24 h em snapshots de painel custariam 308 MB; no agregado,
+~200 linhas/dia.
