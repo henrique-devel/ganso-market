@@ -159,6 +159,15 @@
   vistos falhando no código anterior. Nenhum diff em `policy.ts` (zero linhas), `bridge.ts`,
   `brokerstore.ts`, gates, disjuntores ou migration aplicada; nenhum endpoint de escrita novo.
 
+  **Estado em produção ao fim da sessão.** `api` `9708d9b`, `polymarket-recorder` `12de5ae`
+  (o que ele executa não mudou no #145), `polymarket-paper` `da6d560` — intocado, e é o PR 3
+  que o reconstrói. `foundation = 20`; ordens `fast` **0**; `strategy_decisions` com **1** linha
+  (a sonda indelével); `fast_config_versions` com **1** (a 0.1.0); nenhuma linha de poda; RTDS
+  com **0,8 s** de idade. Kill switch **engatado**. E os `PARAM_CHANGE` abertos **subiram de 8
+  para 10 no correr da sessão** — o contador está crescendo, que é o comportamento esperado
+  enquanto a RFC-025 não estiver implementada, e reforça que o segundo bloqueio da parte B não
+  se resolve por espera.
+
   **A PARTE B (prompt 20b) ESTÁ LIBERADA POR ESCOPO E BLOQUEADA POR ESTADO.** Todo o código de
   que ela depende está em produção. O que falta é ambiente, e não é dela: (1) o **kill switch
   precisa ser rearmado** — RFC-021 P2, ato do proprietário; (2) os **8 `PARAM_CHANGE` precisam
