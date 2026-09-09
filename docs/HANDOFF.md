@@ -1,5 +1,158 @@
 # Handoff do projeto Ganso Market
 
+- Última atualização: 2026-09-09 — **RFC-029 (prompt 21) CONCLUÍDA E VERIFICADA EM PRODUÇÃO.**
+  Três PRs mais um de correção, timer instalado, uma rodada completa, runbook. Nenhuma escrita
+  no banco por nenhum caminho novo, nenhuma migration, nenhum endpoint de escrita, nenhum botão.
+
+  | PR | Merge | O que | Deploy |
+  | --- | --- | --- | --- |
+  | [#148](https://github.com/henrique-devel/ganso-market/pull/148) | `4218118` | D1–D2: unidades systemd, script da rodada, retenção, volume `:ro` e `GANSO_SHADOW_REPLAY_DIR` no `api`, runbook | CD + `make server-update` |
+  | [#149](https://github.com/henrique-devel/ganso-market/pull/149) | `42210f9` | D3: `GET …/shadow-replay/latest` e `/runs` lendo disco, `location ^~` GET-only | CD + `make server-update` |
+  | [#150](https://github.com/henrique-devel/ganso-market/pull/150) | `e4a1b32` | D4: tela Sombra, parser tipado, tecla `4` | CD + `make server-update` |
+  | [#151](https://github.com/henrique-devel/ganso-market/pull/151) | `3ba2663` | fixture byte-idêntica ao arquivo do job | CD (só texto e teste) |
+
+  `release-sha` no container `api` ao fim da sessão: **`e4a1b32668c0e903914b5e42579446e204da5b58`**.
+
+  **A primeira rodada, com número.** `systemctl start ganso-shadow-replay.service` às
+  **2026-09-09 17:44:45Z**, terminada **17:49:56Z**: `ExecMainStatus` **0**, `Result=success`,
+  **311 s** no total — modo B **247 s** (3 433 bytes) e modo A **63 s** (11 134 bytes). Zero
+  linhas `shadow_replay_failed` no `journalctl`, zero temporários deixados para trás, os quatro
+  arquivos no lugar (`2026-09-09-{A,B}.json` e `latest-{A,B}.json`). Foi bem mais barata que os
+  710 s medidos em 03/09 — a janela de 72 h que a P4 fixou cobre menos log do que a varredura
+  completa daquele dia cobria.
+
+  **O número da sessão: a janela do job foi mais LIMPA que a linha de base, e a prova é direta
+  em vez de inferida.** O `panelCycle` do portfólio é um `setInterval` de 60 s
+  (`config/portfolio.json:73`, `panelMs: 60000`) e o `supervised` (`runner.ts:1529–1553`) loga
+  `PORTFOLIO_JOB_STILL_RUNNING` toda vez que um tique chega com o anterior ainda rodando. Essa
+  linha **é** a medição de "ciclo acima de 60 s"; não é preciso derivá-la de intervalos entre
+  logs. Na janela do job: **0**. Nas **3 h anteriores** ao job, como comparação: **6**. O
+  critério de aceite "nenhum `PORTFOLIO_CYCLE` com duração > 60 s" está satisfeito por medição
+  direta, e a condição de parada correspondente não disparou.
+
+  Carga na janela (22 amostras de `docker stats` a cada 15 s): `postgres` em **99,7 %** de um
+  core em média, **pico 106,7 %** às 17:47:22Z, memória até 846,9 MiB de 1 GiB; `api` em 12,6 %
+  de média com pico de 74,6 %. Ou seja: **~1 core, como a RFC previa** — não mais que isso.
+  Intervalos entre `PORTFOLIO_CYCLE` na janela: **90,5 s**, 64,7, 53,9, 55,3, 58,2. Nas cinco
+  anteriores ao job: 64,2, 51,1, 51,1, 57,7, 54,5. Com tique fixo de 60 s, o intervalo é
+  `60 + (duração_{k+1} − duração_k)`, então os 90,5 s dizem que **uma duração subiu ~30 s** ao
+  job começar — e o zero de `STILL_RUNNING` é o que diz que ela **ficou abaixo de 60 s**. Um
+  disjuntor abriu na janela: `PRICE_JUMP_NO_CATALYST` no token de `0x6fa0743a…` às 17:46:12Z,
+  fechado às 17:47:18Z. **Não é `DATA_STALENESS`**, que é o nomeado na condição de parada.
+
+  **Quatro premissas da tabela do prompt caíram. Nenhuma é parada, e uma delas destravou o PR 3.**
+
+  1. **"RFC-026 `accepted` em 04/09, ainda não implementada" — FALSO: está em produção.** Os PRs
+     #133–#138 (Mesa, Carteira, séries) são todos ancestrais do `9708d9b` que o container `api`
+     servia no início da sessão. A própria linha da tabela mandava usar essa medição para
+     "decidir P5", então os dois desfechos estavam previstos: o medido **liberou** o PR 3 com a
+     tecla `4`, em vez de mandar esperar. O slot já estava reservado e desabilitado em
+     `App.tsx` com a nota "reservada à tela Sombra (RFC-029)"; o PR 3 só o habilitou.
+  2. **Os números do modo B de 03/09 não valem mais.** Funil medido em 09/09:
+     **58 451 → 11 839 → 8 109 → 3 192 → 3 121 → 443** (era 258 805 → 33 113 → 10 058 → 2 706 →
+     2 672 → 511). Mercados: 368 vistos, 100 admitidos, **67 agiriam diferente** (era 38 de 63).
+     PnL contrafactual: bruto US$ 1 012,51, custos US$ 0,16, degradação US$ 95,70, **líquido
+     +US$ 916,64**, **396 V / 47 D** (era +US$ 401,25, 414 V / 97 D). Transições dominantes:
+     `LOWER_BOUND_BELOW_COSTS → ACCEPTED` **2 418** e `PRICE_OUT_OF_BAND → ACCEPTED` **505**
+     (eram 2 022 e 557). Janela coberta 2026-09-06T17:45:18.385Z → 2026-09-09T17:44:28.742Z,
+     58 777 linhas, `closed_at_decision_id` **910574**.
+  3. **`BASELINE_ALREADY_SHADOW` é 0, não 159.** O vazamento do `estimateAsOf`
+     (`portfolio/store.ts:179–190`) não aparece nesta janela. Continua **fora do escopo** desta
+     RFC — é o PR-0 (c) — e o número novo não prova que ele foi consertado, só que esta janela
+     não o exercitou.
+  4. **Os números do modo A de 03/09 não valem mais.** 0,01 → **141 linhas / 43 mercados** (52
+     nascem `SIZE_BELOW_MIN_ORDER`); 0,015 → **91 / 32** (3); 0,02 (gravado) → **0 / 0**;
+     0,03 → **88 / 35** (0). Antes: +64/10 com 29, +37/6, 0/0, −35/8. Viradas de AÇÃO: **10**,
+     entre **0,020129 e 0,020532**, de 20 procuradas (eram 13, entre 0,0201 e 0,0232). A leitura
+     não mudou: a decisão é sensível na segunda casa decimal.
+
+  **Premissas que ficaram de pé, re-medidas antes de codar:** CLI read-only por duas travas
+  (`sweepstore.ts:42–75`), dois modos, `--format json`, só stdout, **nenhuma rota nem tela**
+  (grep vazio em `portfolio/api.ts`, `readapi.ts`, `nginx.conf`); falha com `exitCode = 1` e
+  `message` fixo, `reason_code` variável (`shadow-replay-cli.ts:809–815`, `:823`, `:827`);
+  serviço `api` montando só `runtime.json:ro` com duas variáveis de ambiente; `make server-update`
+  recriando tudo com `--force-recreate` (`Makefile:187`); Nginx com `proxy_read_timeout 5s` e
+  `^~ /api/polymarket/gates` GET-only (`nginx.conf:22`, `:129–136`).
+
+  **O que os testes contra o arquivo real pegaram — três correções de verdade, não de teste.**
+  A fixture do PR 3 é `latest-{A,B}.json` copiados de `/var/lib/ganso/shadow-replay` sem uma
+  tecla tocada, e é por isso que ela serve: uma fixture escrita por quem escreve o parser
+  concorda com o parser por construção. Ela achou (a) a frase "não é auditoria" saindo no
+  **inglês cru do CLI** numa tela que existe para ler em português — agora é português com o
+  original no `title`, como manda a regra do `dicionario.ts`; (b) o `closed_at_decision_id`
+  saindo como **`910.574`**, com separador de milhar num identificador; (c) os valores de virada
+  com **dezoito dígitos** (`0.020128609260873245`) para uma diferença que aparece na quarta
+  casa, e os instantes em **hora local** numa tela cujo job roda às 03:30 **UTC** — agora seguem
+  `Overview.tsx:90`, UTC com o `Z` à mostra. O PR #151 existe porque o `make format` do PR 3
+  reformatou a fixture e ela deixou de ser byte-idêntica; `.prettierignore` e um teste de sha256
+  impedem que se repita.
+
+  **Uma regressão NÃO falhava, e isso virou teste.** Ao verificar as regressões do PR 3,
+  desabilitar a aba Sombra (`disponivel: false`) passou em toda a suíte — ninguém testava a
+  lista de abas, e ela ficou desabilitada de 05/09 a 09/09 sem que nada percebesse. `TELAS` é
+  exportada agora, e duas asserções cobrem a aba e a ordem das teclas 1–6.
+
+  **Orçamento de statement: as duas rotas novas não declaram um, de propósito.** Elas não abrem
+  conexão de banco. Um `statement_timeout` seria uma promessa sobre SQL que elas não fazem — um
+  número no `config/runtime.json` que nada aplicaria. Em vez disso,
+  `apps/api/test/fixtures/disk-only-routes.ts` as nomeia uma vez; `route-budgets.test.ts` as
+  dispensa e confere que seguem registradas e publicadas; e `route-budgets.runtime.test.ts`
+  cobra a razão da dispensa, afirmando que elas rodam **zero** statements. Uma consulta
+  acrescentada a qualquer uma falha ali.
+
+  **Aceites, item a item.** Job rodou hoje destacado do SSH ✔ (`ExecMainStatus` 0, quatro
+  arquivos, mtime 0 h, zero `shadow_replay_failed`). Perímetro ✔ **parcial**: `401` sem sessão
+  nas duas rotas, `404` para POST/PUT/PATCH/DELETE, `POST /api/polymarket/paper/intents` segue
+  404, `test_nginx_perimeter.py` verde — falta só o `200` **com** sessão. Nenhuma escrita nova ✔
+  (grep de `INSERT|UPDATE|DELETE` no diff completo fora de `test/` **vazio** em 17 arquivos;
+  `pg_stat_user_tables` sem tabela nova; zero migration). Carga ✔ (acima). Tela ✔ para os
+  números e as ressalvas, ✔ **parcial** para a leitura com sessão de produção. `/runs` lista
+  **2** rodadas (uma por modo); o "≥ 2 após 48 h" do critério é uma espera, não um defeito.
+
+  **O que fica com o proprietário — 1 minuto.** O `200` autenticado e o `mode=C` → 400: as duas
+  verificações vêm **depois** do guard de sessão e pedem uma credencial, que esta sessão não
+  manuseia. Vale registrar quanto o `401` já prova: ele vem em **JSON, da API, com
+  `correlation_id`**, o que só acontece se o Nginx casou a `location` nova, fez proxy, e o
+  Fastify tem a rota registrada. Um caminho inventado sob o mesmo prefixo
+  (`/api/polymarket/shadow-replay/inventada`) responde `ROUTE_NOT_FOUND` **da API**, e um
+  caminho não publicado (`/api/polymarket/nao-publicada`) responde o 404 **HTML do Nginx** — as
+  duas pontas da cadeia, provadas. Falta só o guard dizer sim:
+
+  ```bash
+  ssh -i ~/.ssh/id_ed25519 root@178.105.65.251 'curl -s -H "Authorization: Bearer <token>" "http://127.0.0.1/api/polymarket/shadow-replay/latest?mode=B" | head -c 400; echo; curl -s -o /dev/null -w "mode=C -> %{http_code}\n" -H "Authorization: Bearer <token>" "http://127.0.0.1/api/polymarket/shadow-replay/latest?mode=C"'
+  ```
+
+  A leitura visual da tela **foi feita** com os dados reais: o componente renderizado com
+  `latest-{A,B}.json` de produção e o CSS servido pelo próprio servidor
+  (`/assets/index-C-DXVPH7.css`) mostra os seis blocos corretos — proveniência com
+  `closed_at_decision_id` 910574 sem separador e instantes em UTC, funil 58 451 → 443, PnL
+  +US$ 916,64 em roxo tracejado com selo HIPOTÉTICO e "(paper)", ressalva "443 liquidadas em
+  ≤ 67 mercados", matriz traduzida, varredura com o valor gravado marcado, histórico. O bundle
+  servido em produção contém as oito frases-chave e **nenhum botão**.
+
+  **Arquivos fora da lista da RFC, com o motivo (o prompt pede o registro).**
+  `deploy/shadow-replay-run.sh` e `deploy/shadow_replay_job.py`: o teste obrigatório exige "o
+  script do job apontado para um diretório temporário e um CLI falso", e um `ExecStart=`
+  embutido na unidade não é testável; ficaram em `deploy/*.sh` e não em `deploy/systemd/` porque
+  é `deploy/*.sh` que o `make lint` passa por `sh -n`. `apps/api/src/config.ts`: a D3 manda
+  declarar a env "no padrão de `API_CONFIG_FILE_ENV`". `apps/api/src/server.ts`: é a raiz de
+  composição, onde `process.env` é lido. As três de orçamento de rota: explicadas acima.
+  `apps/web/src/styles.css`: a D4 pede roxo tracejado, selo e sub-barra. `.prettierignore`: para
+  a fixture seguir byte-idêntica.
+
+  **Para a RFC-030.** A D5 inteira segue fora do escopo: persistência em tabela, cortes por
+  mercado/forma/horizonte/modelo/braço, dedup por posição e `caps`, curva de PnL com IC. E um
+  número novo diz por onde ela deveria começar: **`SHADOW_MISSING` exclui 46 612 das 58 451
+  decisões vistas (79,7 %)**. O gargalo do shadow replay hoje não é o corte da amostra nem a
+  apresentação — é a **cobertura da sombra**, que alcança 8 109 decisões de 58 451. Cortar por
+  mercado uma amostra de 443 liquidadas vai dar células de tamanho 1. Antes disso vale medir o
+  que faria a sombra cobrir mais tokens.
+
+  **Nada foi afrouxado.** Paper-only, fail-closed, GET-only, `:ro`. O kill switch **não** foi
+  rearmado; nenhum gate, disjuntor, quota ou policy mudou; nenhuma migration foi criada ou
+  alterada; nenhum modelo foi promovido. O timer tem `Persistent=false`, então uma rodada perdida
+  é uma rodada perdida — não uma rodada de recuperação numa hora qualquer do dia.
+
 - Última atualização: 2026-09-09 — **RFC-028 PARTE B (prompt 20b) PARADA NA RE-MEDIÇÃO,
   ANTES DE CODAR E ANTES DO MERGE DO PR 3.** Nenhum código escrito, nenhum PR aberto, nenhum
   merge, nenhum deploy. A parada é a que o próprio prompt manda ("Dependência (PR-0, RFC-022,
