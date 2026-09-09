@@ -92,10 +92,25 @@ services:
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # RFC-029 D3, owner decision P3. Without this variable the shadow-replay
+      # endpoints answer 404 to everything and the API is otherwise unchanged --
+      # it is the switch, not a tuning knob, and the mount below is what it
+      # points at.
+      GANSO_SHADOW_REPLAY_DIR: /var/lib/ganso/shadow-replay
     secrets:
       - postgres_password
     volumes:
       - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      # RFC-029 D1/D2. The daily job runs on the HOST, as root, and writes the
+      # replay JSONs here; the API reads them as uid `node` through this
+      # read-only mount. `:ro` is the reason the "no new write path" invariant
+      # survives a bug in the endpoint: the container cannot write this
+      # directory even if the code tried.
+      #
+      # The host path is overridable so a developer's `make up` can point it at
+      # a writable directory; production takes the default, which is what
+      # deploy/install-shadow-replay-timer.sh creates 0755 root:root.
+      - ${GANSO_SHADOW_REPLAY_HOST_DIR:-/var/lib/ganso/shadow-replay}:/var/lib/ganso/shadow-replay:ro
     expose:
       - "3000"
     networks:

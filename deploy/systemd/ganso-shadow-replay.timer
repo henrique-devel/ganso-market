@@ -1,0 +1,20 @@
+# RFC-029 D2, owner decision P4 as proposed: 03:30 UTC.
+#
+# Persistent=false on purpose. A catch-up run after a reboot would fire at
+# whatever hour the machine came back, and the whole point of 03:30Z is that it
+# is a load valley: postgres was measured at ~100 % of one core during the
+# as-of, and a portfolio cycle over 60 s in the job's window is one of this
+# RFC's stopping conditions. A missed night is a missed night; the operator can
+# run `systemctl start ganso-shadow-replay.service` when the machine is quiet.
+[Unit]
+Description=Timer diário do shadow replay (RFC-029)
+Documentation=file:///opt/ganso-market/docs/ops/SHADOW_REPLAY_JOB.md
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=false
+AccuracySec=1min
+Unit=ganso-shadow-replay.service
+
+[Install]
+WantedBy=timers.target
