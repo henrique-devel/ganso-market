@@ -1,0 +1,10 @@
+# RFC-029: as fixtures do shadow replay são arquivos que o JOB gravou em
+# produção, copiados de /var/lib/ganso/shadow-replay sem uma tecla tocada.
+#
+# É esse o valor delas. Uma fixture reformatada é uma fixture escrita por nós, e
+# uma fixture escrita por nós concorda com o nosso parser por construção — que é
+# exatamente a concordância que ela existe para NÃO fornecer. O prettier
+# quebrava `"model_ids": ["a", "b"]` em três linhas e o arquivo deixava de ser
+# byte-idêntico ao que a API serve, que é a propriedade que
+# `apps/api/test/.../api.test.ts` afirma sobre o `payload`.
+apps/web/test/fixtures/shadow-replay-latest-*.json

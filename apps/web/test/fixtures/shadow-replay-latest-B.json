@@ -43,7 +43,9 @@
       "baselineOnlyAccepted": 71,
       "coveredFrom": "2026-09-06T17:45:18.385Z",
       "coveredTo": "2026-09-09T17:44:28.742Z",
-      "modelIds": ["crypto_updown_gbm@1.1.0"]
+      "modelIds": [
+        "crypto_updown_gbm@1.1.0"
+      ]
     },
     "counterfactual_pnl": {
       "entriesConsidered": 3174,
@@ -84,7 +86,10 @@
       "tokens": 276,
       "oldest": "2026-09-06T17:44:55.953Z",
       "newest": "2026-09-09T17:44:15.132Z",
-      "model_ids": ["crypto_updown_gbm@1.0.0", "crypto_updown_gbm@1.1.0"]
+      "model_ids": [
+        "crypto_updown_gbm@1.0.0",
+        "crypto_updown_gbm@1.1.0"
+      ]
     },
     "any_model_promoted": false,
     "degradation_per_share": 0.01,

@@ -327,7 +327,10 @@
   "provenance": {
     "mode": "A",
     "analysis_mode": "audit",
-    "reads": ["portfolio_decisions", "portfolio_config_versions"],
+    "reads": [
+      "portfolio_decisions",
+      "portfolio_config_versions"
+    ],
     "window_requested": {
       "from": null,
       "to": null
@@ -337,16 +340,24 @@
       "newest": "2026-09-09T17:47:28.793Z",
       "rows": 137692,
       "markets": 662,
-      "decision_id_range": [772937, 910628],
+      "decision_id_range": [
+        772937,
+        910628
+      ],
       "closed_at_decision_id": 910628,
       "note": "the scan is pinned to this decision_id, so rows written during the run are outside it and two runs over the same range agree"
     },
-    "config_versions": ["1.2.0"],
+    "config_versions": [
+      "1.2.0"
+    ],
     "config_hashes": {
       "1.2.0": "1c8a331685828c144959600831634262cf482c0099c8a44f7eb60bf876f31faf"
     },
     "engine_default_config_version": "1.2.0",
-    "breakeven_bracket": [0.02, 1000],
+    "breakeven_bracket": [
+      0.02,
+      1000
+    ],
     "shadow_rows_in_window": 224883
   }
 }
