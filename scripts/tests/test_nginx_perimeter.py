@@ -32,6 +32,7 @@ PERFORMANCE = "/api/polymarket/paper/performance"
 POSITIONS = "/api/polymarket/paper/positions"
 ORDERS = "/api/polymarket/paper/orders"
 SERIES = "/api/polymarket/series"
+SHADOW_REPLAY = "/api/polymarket/shadow-replay"
 
 # Every path under /api/polymarket/paper the perimeter is allowed to name, and
 # the ONE method each may carry. Anything else under that prefix — intents, the
@@ -186,6 +187,44 @@ class NginxPerimeterTests(unittest.TestCase):
             "the series prefix must refuse every method but GET, and say so once",
         )
         self.assertIn("return 404", body)
+
+    def test_the_shadow_replay_prefix_is_published_and_get_only(self) -> None:
+        # RFC-029 D3. A prefix, like `series`, because the module answers
+        # `/shadow-replay/latest` and `/shadow-replay/runs`. Unlike every other
+        # location in this file, the routes behind it read a FILE and never open
+        # a database connection -- but the perimeter rule does not change for
+        # that, and neither does this test.
+        matches = [spec for spec, _ in locations() if spec.split()[-1] == SHADOW_REPLAY]
+        self.assertEqual(
+            matches,
+            [f"^~ {SHADOW_REPLAY}"],
+            "the shadow replay must be published as exactly one `^~` location",
+        )
+        body = next(body for spec, body in locations() if spec == f"^~ {SHADOW_REPLAY}")
+        guards = re.findall(r"\$request_method\s*!=\s*(\w+)", body)
+        self.assertEqual(
+            guards,
+            ["GET"],
+            "the shadow-replay prefix must refuse every method but GET, and say so once",
+        )
+        self.assertIn("return 404", body)
+
+    def test_the_shadow_replay_prefix_cannot_reach_the_paper_module(self) -> None:
+        # The prefix is only safe while it stays outside `/paper`, where the
+        # intent that CREATES an order lives. A rename cannot slip past this.
+        self.assertFalse(SHADOW_REPLAY.startswith("/api/polymarket/paper"))
+
+    def test_no_new_prefix_appeared_under_the_paper_module(self) -> None:
+        # The count is the assertion. `test_no_prefix_location_can_reach_the_
+        # paper_module` checks the shape of each `/paper` location; this checks
+        # that RFC-029 added none, so a diff that publishes a fifth paper path
+        # while adding the shadow replay fails here rather than passing both.
+        published = {
+            spec.split()[-1]
+            for spec, _ in locations()
+            if spec.split()[-1].startswith("/api/polymarket/paper")
+        }
+        self.assertEqual(published, set(PAPER_ALLOWLIST))
 
     def test_the_series_prefix_cannot_reach_the_paper_module(self) -> None:
         # `^~ /api/polymarket/series` is only safe while it stays outside

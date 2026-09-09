@@ -2,6 +2,10 @@
 // dashboard consumes, and the two manual state controls — which are the only
 // writes and are deliberately not published by the Nginx perimeter.
 
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -11,6 +15,7 @@ import type {
   SqlExecutor,
 } from "../../../src/database.js";
 import { registerPortfolioRoutes } from "../../../src/polymarket/portfolio/api.js";
+import { SIMULATION_BANNER } from "../../../src/polymarket/portfolio/types.js";
 
 type Row = Record<string, unknown>;
 
@@ -826,6 +831,343 @@ describe("gate measurement history", () => {
       expect((response.json() as { reason_code: string }).reason_code).toBe(
         reasonCode,
       );
+    }
+  });
+});
+
+// RFC-029 D3 — the shadow replay, read off disk.
+//
+// Two routes that never open a database connection, so what there is to get
+// wrong is not SQL: it is which file a query string can reach, and whether the
+// bytes the screen parses are the bytes the job wrote.
+describe("RFC-029: shadow replay em disco", () => {
+  // The real shape, trimmed: `status`, `command`, `report`, `provenance` — and
+  // the numbers written the way `JSON.stringify(x, null, 2)` writes them, which
+  // is the formatting that must survive the round trip.
+  const PAYLOAD = `{
+  "status": "ok",
+  "command": "source-replay",
+  "report": {
+    "totals": {
+      "seen": 258805,
+      "settled": 511
+    },
+    "counterfactual_pnl": {
+      "net_usd": 401.25000000000006,
+      "wins": 414,
+      "losses": 97
+    }
+  },
+  "provenance": {
+    "model_ids": ["shadow-1.0.0", "shadow-1.1.0"],
+    "closed_at_decision_id": 4210993
+  }
+}`;
+
+  async function replayDir(
+    files: Readonly<Record<string, string>> = {},
+    mtimes: Readonly<Record<string, Date>> = {},
+  ): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), "ganso-sombra-"));
+    for (const [name, body] of Object.entries(files)) {
+      const path = join(directory, name);
+      await writeFile(path, body, "utf8");
+      const when = mtimes[name];
+      if (when !== undefined) {
+        await utimes(path, when, when);
+      }
+    }
+    directories.push(directory);
+    return directory;
+  }
+
+  const directories: string[] = [];
+  afterEach(async () => {
+    for (const directory of directories.splice(0)) {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  async function buildWithDir(
+    shadowReplayDir: string | null,
+    clock?: () => Date,
+  ): Promise<FastifyInstance> {
+    const instance = Fastify();
+    registerPortfolioRoutes(instance, {
+      pool: worldPool({ writes: [], reads: [] }),
+      authService,
+      shadowReplayDir,
+      ...(clock === undefined ? {} : { clock }),
+    });
+    await instance.ready();
+    app = instance;
+    return instance;
+  }
+
+  it("devolve o payload byte-idêntico ao disco", async () => {
+    const directory = await replayDir({ "latest-B.json": `${PAYLOAD}\n` });
+    const instance = await buildWithDir(directory);
+
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=B",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    // Byte-identical, not merely equal-after-parsing: a JSON.parse/stringify
+    // round trip would reformat the document and push every number through a
+    // double. `401.25000000000006` is in the fixture because that is what the
+    // CLI printed, and it is what has to come back.
+    const body = response.body;
+    expect(body.startsWith(`{"payload":${PAYLOAD},`)).toBe(true);
+    expect(body).toContain("401.25000000000006");
+    const parsed = response.json() as {
+      payload: { report: { totals: { seen: number } } };
+      mode: string;
+      run_date: string;
+      generated_at: string;
+      stale: boolean;
+      bytes: number;
+      failure: unknown;
+      simulation: string;
+    };
+    expect(parsed.payload.report.totals.seen).toBe(258805);
+    expect(parsed.mode).toBe("B");
+    expect(parsed.failure).toBeNull();
+    expect(parsed.bytes).toBe(Buffer.byteLength(`${PAYLOAD}\n`, "utf8"));
+    expect(parsed.simulation).toBe(SIMULATION_BANNER);
+    expect(parsed.stale).toBe(false);
+  });
+
+  it("marca stale com mtime de 40 h e não marca com 35 h", async () => {
+    const now = new Date("2026-09-09T12:00:00Z");
+    const velho = new Date(now.getTime() - 40 * 3_600_000);
+    const recente = new Date(now.getTime() - 35 * 3_600_000);
+    const directory = await replayDir(
+      { "latest-A.json": "{}", "latest-B.json": "{}" },
+      { "latest-A.json": velho, "latest-B.json": recente },
+    );
+    const instance = await buildWithDir(directory, () => now);
+
+    const stale = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=A",
+      headers: AUTH,
+    });
+    const fresh = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=B",
+      headers: AUTH,
+    });
+
+    expect((stale.json() as { stale: boolean }).stale).toBe(true);
+    expect((fresh.json() as { stale: boolean }).stale).toBe(false);
+  });
+
+  it("recusa um modo que não existe e um run_date que tenta sair do diretório", async () => {
+    const directory = await replayDir({ "latest-B.json": "{}" });
+    const instance = await buildWithDir(directory);
+    const cases: readonly [string, string][] = [
+      ["?mode=C", "INVALID_MODE"],
+      ["", "INVALID_MODE"],
+      ["?mode=", "INVALID_MODE"],
+      ["?mode=b", "INVALID_MODE"],
+      ["?mode=B&run_date=../x", "INVALID_RUN_DATE"],
+      ["?mode=B&run_date=..%2F..%2Fetc%2Fpasswd", "INVALID_RUN_DATE"],
+      ["?mode=B&run_date=latest", "INVALID_RUN_DATE"],
+      ["?mode=B&run_date=2026-9-9", "INVALID_RUN_DATE"],
+      ["?mode=B&run_date=2026-09-09T00", "INVALID_RUN_DATE"],
+    ];
+    for (const [query, reasonCode] of cases) {
+      const response = await instance.inject({
+        method: "GET",
+        url: `/polymarket/shadow-replay/latest${query}`,
+        headers: AUTH,
+      });
+      expect(response.statusCode, query).toBe(400);
+      expect(
+        (response.json() as { reason_code: string }).reason_code,
+        query,
+      ).toBe(reasonCode);
+    }
+  });
+
+  it("404 quando o arquivo não está lá e quando a env não foi definida", async () => {
+    const vazio = await buildWithDir(await replayDir());
+    const ausente = await vazio.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=B",
+      headers: AUTH,
+    });
+    expect(ausente.statusCode).toBe(404);
+    expect((ausente.json() as { reason_code: string }).reason_code).toBe(
+      "RUN_NOT_FOUND",
+    );
+    await app?.close();
+    app = null;
+
+    // Sem a env, a API sobe igual e as duas rotas respondem 404 para tudo.
+    const semEnv = await buildWithDir(null);
+    for (const url of [
+      "/polymarket/shadow-replay/latest?mode=B",
+      "/polymarket/shadow-replay/runs",
+    ]) {
+      const response = await semEnv.inject({
+        method: "GET",
+        url,
+        headers: AUTH,
+      });
+      expect(response.statusCode, url).toBe(404);
+      expect((response.json() as { reason_code: string }).reason_code).toBe(
+        "RUN_NOT_FOUND",
+      );
+    }
+  });
+
+  it("mostra a falha de hoje sem apagar os últimos números bons", async () => {
+    const falha = JSON.stringify({
+      status: "error",
+      mode: "B",
+      run_date: "2026-09-09",
+      exit_status: 1,
+      reason_code: "SWEEP_KEY_REFUSED",
+      message: "shadow_replay_failed",
+    });
+    const directory = await replayDir({
+      "latest-B.json": PAYLOAD,
+      "latest-B.error.json": falha,
+    });
+    const instance = await buildWithDir(directory);
+
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=B",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const parsed = response.json() as {
+      payload: unknown;
+      failure: { reason_code: string } | null;
+    };
+    // As duas coisas, porque são duas: "a rodada de hoje falhou" e "estes são
+    // os últimos números bons, desta data".
+    expect(parsed.failure?.reason_code).toBe("SWEEP_KEY_REFUSED");
+    expect(parsed.payload).not.toBeNull();
+  });
+
+  it("o marcador de falha não vale para uma rodada datada", async () => {
+    const directory = await replayDir({
+      "2026-09-08-B.json": PAYLOAD,
+      "latest-B.error.json": '{"reason_code":"USAGE"}',
+    });
+    const instance = await buildWithDir(directory);
+
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=B&run_date=2026-09-08",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const parsed = response.json() as { failure: unknown; run_date: string };
+    expect(parsed.failure).toBeNull();
+    expect(parsed.run_date).toBe("2026-09-08");
+  });
+
+  it("um arquivo corrompido vira 500, nunca um corpo malformado", async () => {
+    const directory = await replayDir({ "latest-B.json": '{"parte": ' });
+    const instance = await buildWithDir(directory);
+
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/latest?mode=B",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect((response.json() as { reason_code: string }).reason_code).toBe(
+      "SHADOW_REPLAY_UNREADABLE",
+    );
+  });
+
+  it("/runs lista só rodadas datadas, mais nova primeiro", async () => {
+    const directory = await replayDir({
+      "2026-09-07-B.json": "{}",
+      "2026-09-08-A.json": "{}",
+      "2026-09-08-B.json": '{"a":1}',
+      // Nada disto é uma rodada: os `latest-*` são cópias de uma delas e o
+      // marcador de erro não é rodada nenhuma. Contá-los duplicaria o histórico.
+      "latest-A.json": "{}",
+      "latest-B.json": "{}",
+      "latest-B.error.json": "{}",
+      "notas.txt": "nada a ver",
+      "2026-09-08-C.json": "{}",
+    });
+    const instance = await buildWithDir(directory);
+
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/runs",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const { runs } = response.json() as {
+      runs: { run_date: string; mode: string; bytes: number; mtime: string }[];
+    };
+    expect(runs.map((run) => `${run.run_date}-${run.mode}`)).toEqual([
+      "2026-09-08-A",
+      "2026-09-08-B",
+      "2026-09-07-B",
+    ]);
+    expect(runs[1]?.bytes).toBe(7);
+    expect(new Date(runs[0]?.mtime ?? "").getTime()).toBeGreaterThan(0);
+  });
+
+  it("/runs devolve lista vazia quando o diretório existe e está vazio", async () => {
+    const instance = await buildWithDir(await replayDir());
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/shadow-replay/runs",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { runs: unknown[] }).runs).toEqual([]);
+  });
+
+  it("as duas rotas exigem sessão", async () => {
+    const instance = await buildWithDir(
+      await replayDir({ "latest-B.json": "{}" }),
+    );
+    for (const url of [
+      "/polymarket/shadow-replay/latest?mode=B",
+      "/polymarket/shadow-replay/runs",
+    ]) {
+      expect((await instance.inject({ method: "GET", url })).statusCode).toBe(
+        401,
+      );
+      const ruim = await instance.inject({
+        method: "GET",
+        url,
+        headers: { authorization: "Bearer nope" },
+      });
+      expect(ruim.statusCode, url).toBe(401);
+    }
+  });
+
+  it("não existe rota de escrita neste módulo", async () => {
+    const instance = await buildWithDir(
+      await replayDir({ "latest-B.json": "{}" }),
+    );
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) {
+      const response = await instance.inject({
+        method,
+        url: "/polymarket/shadow-replay/latest?mode=B",
+        headers: AUTH,
+      });
+      expect(response.statusCode, method).toBe(404);
     }
   });
 });

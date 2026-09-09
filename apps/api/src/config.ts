@@ -3,6 +3,17 @@ import { inspect } from "node:util";
 
 export const API_CONFIG_FILE_ENV = "GANSO_CONFIG_FILE";
 export const API_SECRET_FILE_ENV = "GANSO_POSTGRES_PASSWORD_FILE";
+/**
+ * RFC-029 D3. The directory the daily shadow-replay job writes and the API only
+ * reads, bind-mounted `:ro` (`docker-compose.yml`, service `api`).
+ *
+ * Deliberately NOT part of `ApiConfig`: it is a switch, not a setting. Unset,
+ * the API starts exactly as before and the two shadow-replay routes answer 404
+ * to everything, which is the right answer on a machine where the job has never
+ * run. Putting it in the config file would make an absent directory look like a
+ * misconfiguration to be refused at boot.
+ */
+export const API_SHADOW_REPLAY_DIR_ENV = "GANSO_SHADOW_REPLAY_DIR";
 
 const EXECUTION_MODES = ["paper"] as const;
 const MAX_SECRET_FILE_BYTES = 4 * 1024;

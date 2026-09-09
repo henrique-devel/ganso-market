@@ -7,6 +7,9 @@
 // be: paper order and position endpoints stay in the RFC-011 surface, and real
 // execution is RFC-009's exclusive scope.
 
+import { readFile, readdir, stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { DatabasePool } from "../../database.js";
@@ -38,6 +41,13 @@ export interface PortfolioRoutesDeps {
   readonly clock?: () => Date;
   /** Drawdown limit, needed to refuse an unsafe resume. */
   readonly drawdownMax?: number;
+  /**
+   * RFC-029 D3. Where the daily job leaves its JSONs, mounted `:ro`. `null` or
+   * absent means the two shadow-replay routes answer 404 to everything: the
+   * API is otherwise unchanged, and a machine where the job never ran says so
+   * instead of pretending.
+   */
+  readonly shadowReplayDir?: string | null;
 }
 
 const LIST_LIMIT = 200;
@@ -45,6 +55,47 @@ const HISTORY_LIMIT = 500;
 const MEASUREMENT_PAGE_DEFAULT = 50;
 const MEASUREMENT_PAGE_MAX = 200;
 const GATE_STATUSES: readonly string[] = ["PASS", "FAIL", "INSUFFICIENT_DATA"];
+
+// RFC-029 D3. The whole allowlist for the shadow-replay file paths: a mode out
+// of two, and optionally a run date of exactly ten characters in one shape.
+// Nothing else from the query string ever reaches a path, so `../`, an absolute
+// path, a NUL and a symlink name are all just values that fail a regex.
+const SHADOW_REPLAY_MODES: readonly string[] = ["A", "B"];
+const SHADOW_REPLAY_RUN_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const SHADOW_REPLAY_RUN_FILE = /^(\d{4}-\d{2}-\d{2})-([AB])\.json$/;
+/** Older than this and the screen must not present the numbers as today's. */
+const SHADOW_REPLAY_STALE_MS = 36 * 3_600_000;
+
+/**
+ * Join a validated file name onto the replay directory, or refuse.
+ *
+ * The name is already built out of the allowlist above, so this cannot fail in
+ * practice -- which is exactly why it is here. It is the assertion that says
+ * "if the allowlist ever stops holding, the answer is `null`, not a file from
+ * somewhere else on the disk", and it is cheap enough to keep forever.
+ */
+function shadowReplayPath(directory: string, name: string): string | null {
+  const root = resolve(directory);
+  const candidate = resolve(root, name);
+  return dirname(candidate) === root ? candidate : null;
+}
+
+/**
+ * The response body, with the CLI's own JSON spliced in VERBATIM.
+ *
+ * `JSON.parse` followed by `JSON.stringify` would reformat the document and,
+ * worse, round-trip every number in it through a double -- the counterfactual
+ * PnL and the sweep's breakeven values included. The envelope is serialised on
+ * its own and the file's bytes are placed in front of it, so what the screen
+ * parses is byte-for-byte what the job wrote.
+ */
+function shadowReplayBody(
+  envelope: Record<string, unknown>,
+  rawPayload: string | null,
+): string {
+  const head = JSON.stringify(envelope);
+  return `{"payload":${rawPayload ?? "null"},${head.slice(1)}`;
+}
 
 /**
  * Parse an ISO instant from the query string.
@@ -163,6 +214,7 @@ export function registerPortfolioRoutes(
   const { pool, authService } = deps;
   const clock = deps.clock ?? ((): Date => new Date());
   const drawdownMax = deps.drawdownMax ?? 0.1;
+  const shadowReplayDir = deps.shadowReplayDir ?? null;
 
   async function guard(
     request: FastifyRequest,
@@ -688,6 +740,202 @@ export function registerPortfolioRoutes(
         simulation: SIMULATION_BANNER,
         decision: rows.rows[0],
       });
+    }),
+  );
+
+  // -------------------------------------------------------------------------
+  // RFC-029 D3 — the shadow replay, read off disk.
+  //
+  // These two are the only routes in this module that touch no database at all.
+  // That is the point: the replay's as-of query is the one that puts postgres
+  // at ~100 % of a core for eleven minutes, so it runs once a night on the host
+  // and leaves a small JSON behind. Reading a file also puts the endpoint out
+  // of reach of the API's 1 s `statement_timeout` and the edge's 5 s
+  // `proxy_read_timeout`, neither of which a 710 s query was ever going to fit
+  // inside.
+  //
+  // Read-only in the strongest sense available: the directory is bind-mounted
+  // `:ro`, so the container cannot write it even if this code tried.
+
+  /** The failure marker, when the newest round of a mode ended badly. */
+  async function shadowReplayFailure(
+    directory: string,
+    mode: string,
+  ): Promise<unknown> {
+    const path = shadowReplayPath(directory, `latest-${mode}.error.json`);
+    if (path === null) {
+      return null;
+    }
+    try {
+      return JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      // Absent is the normal case, and a marker we cannot parse is not worth
+      // failing the good numbers over.
+      return null;
+    }
+  }
+
+  // GET /polymarket/shadow-replay/latest?mode=A|B[&run_date=YYYY-MM-DD]
+  //
+  // Without `run_date` it answers with `latest-{mode}.json` plus, when the last
+  // round failed, the failure marker beside it. Both are returned rather than
+  // one or the other, because "today's round failed" and "here are the last
+  // good numbers, from this date" are two different facts and the screen has to
+  // be able to say both. The job deletes the marker on a good round, so a
+  // present `failure` always means the NEWEST round of that mode failed.
+  app.get(
+    "/polymarket/shadow-replay/latest",
+    { preHandler: guard },
+    wrap(async (request, reply) => {
+      if (shadowReplayDir === null) {
+        return jsonError(reply, 404, "RUN_NOT_FOUND");
+      }
+      const mode = queryString(request, "mode");
+      if (mode === null || !SHADOW_REPLAY_MODES.includes(mode)) {
+        return jsonError(reply, 400, "INVALID_MODE");
+      }
+      const runDate = queryString(request, "run_date");
+      if (runDate !== null && !SHADOW_REPLAY_RUN_DATE.test(runDate)) {
+        return jsonError(reply, 400, "INVALID_RUN_DATE");
+      }
+
+      const name =
+        runDate === null ? `latest-${mode}.json` : `${runDate}-${mode}.json`;
+      const path = shadowReplayPath(shadowReplayDir, name);
+      if (path === null) {
+        return jsonError(reply, 400, "INVALID_RUN_DATE");
+      }
+
+      // A dated request is a request for that run and nothing else; the marker
+      // only ever describes the newest one.
+      const failure =
+        runDate === null
+          ? await shadowReplayFailure(shadowReplayDir, mode)
+          : null;
+
+      let raw: string;
+      let mtime: Date;
+      try {
+        const info = await stat(path);
+        if (!info.isFile()) {
+          throw new Error("not a regular file");
+        }
+        mtime = info.mtime;
+        raw = await readFile(path, "utf8");
+      } catch {
+        if (failure !== null) {
+          // Nothing good has ever been written for this mode, but today's
+          // failure is still the truth the operator needs.
+          return reply
+            .header("content-type", "application/json; charset=utf-8")
+            .send(
+              shadowReplayBody(
+                {
+                  simulation: SIMULATION_BANNER,
+                  mode,
+                  run_date: null,
+                  generated_at: null,
+                  stale: true,
+                  bytes: 0,
+                  failure,
+                },
+                null,
+              ),
+            );
+        }
+        return jsonError(reply, 404, "RUN_NOT_FOUND");
+      }
+
+      const trimmed = raw.trim();
+      try {
+        JSON.parse(trimmed);
+      } catch {
+        // A truncated file cannot happen -- the job renames into place -- but a
+        // corrupt one must not turn into a malformed response body.
+        logApiError("SHADOW_REPLAY_UNREADABLE", new Error(name));
+        return jsonError(reply, 500, "SHADOW_REPLAY_UNREADABLE");
+      }
+
+      const generatedAt = mtime.toISOString();
+      return reply
+        .header("content-type", "application/json; charset=utf-8")
+        .send(
+          shadowReplayBody(
+            {
+              simulation: SIMULATION_BANNER,
+              mode,
+              // `latest-{mode}.json` carries no date of its own; the mtime's
+              // UTC day is it, and for a round that starts at 03:30Z and ends
+              // fifteen minutes later the two cannot disagree.
+              run_date: runDate ?? generatedAt.slice(0, 10),
+              generated_at: generatedAt,
+              stale:
+                clock().getTime() - mtime.getTime() > SHADOW_REPLAY_STALE_MS,
+              bytes: Buffer.byteLength(raw, "utf8"),
+              failure,
+            },
+            trimmed,
+          ),
+        );
+    }),
+  );
+
+  // GET /polymarket/shadow-replay/runs — what is on disk, newest first.
+  //
+  // Only dated runs are listed. The `latest-*` files are copies of one of them
+  // and the `.error.json` markers are not rounds; listing either would make the
+  // history count rounds twice.
+  app.get(
+    "/polymarket/shadow-replay/runs",
+    { preHandler: guard },
+    wrap(async (_request, reply) => {
+      if (shadowReplayDir === null) {
+        return jsonError(reply, 404, "RUN_NOT_FOUND");
+      }
+      let names: string[];
+      try {
+        names = await readdir(shadowReplayDir);
+      } catch {
+        return jsonError(reply, 404, "RUN_NOT_FOUND");
+      }
+      const runs: {
+        run_date: string;
+        mode: string;
+        bytes: number;
+        mtime: string;
+      }[] = [];
+      for (const name of names.sort()) {
+        const match = SHADOW_REPLAY_RUN_FILE.exec(name);
+        if (match === null) {
+          continue;
+        }
+        const path = shadowReplayPath(shadowReplayDir, name);
+        if (path === null) {
+          continue;
+        }
+        try {
+          const info = await stat(path);
+          if (!info.isFile()) {
+            continue;
+          }
+          runs.push({
+            run_date: match[1] as string,
+            mode: match[2] as string,
+            bytes: info.size,
+            mtime: info.mtime.toISOString(),
+          });
+        } catch {
+          // A file that vanished between readdir and stat is retention doing
+          // its job, not an error worth a 500.
+          continue;
+        }
+      }
+      runs.sort((left, right) =>
+        left.run_date === right.run_date
+          ? left.mode.localeCompare(right.mode)
+          : right.run_date.localeCompare(left.run_date),
+      );
+      return reply.send({ simulation: SIMULATION_BANNER, runs });
     }),
   );
 

@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { DISK_ONLY_ROUTES } from "./fixtures/disk-only-routes.js";
+
 const REPO = new URL("../../../", import.meta.url).pathname;
 const NGINX = join(REPO, "infra/nginx/nginx.conf");
 const RUNTIME = join(REPO, "config/runtime.json");
@@ -127,6 +129,11 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
     );
     expect(published.length).toBeGreaterThan(0);
     const undeclared = published
+      // RFC-029 D3: the two shadow-replay reads open no database connection, so
+      // there is no statement for a statement budget to bound. They are excused
+      // here and held to that reason in route-budgets.runtime.test.ts, which
+      // fails if either of them ever runs a query.
+      .filter((route) => !DISK_ONLY_ROUTES.includes(route.url))
       .filter((route) => budgets[route.url] === undefined)
       .map((route) => `${route.url} (${route.file})`);
     // Publishing a route without declaring what it may cost is the thing this
@@ -146,6 +153,23 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
     ]);
     for (const write of publishedWrites) {
       expect(budgets[write.url], write.url).toBeUndefined();
+    }
+  });
+
+  it("keeps the disk-only exemption honest: they are published and registered", () => {
+    // The exemption is only safe while the list names routes that EXIST and are
+    // actually published. A stale entry here would silently excuse nothing —
+    // or, worse, excuse a route somebody later pointed at the database.
+    for (const url of DISK_ONLY_ROUTES) {
+      const route = routes.find(
+        (candidate) => candidate.method === "GET" && candidate.url === url,
+      );
+      expect(route, `${url} is not a registered GET`).toBeDefined();
+      expect(
+        isPublished({ method: "GET", url }, locations),
+        `${url} is not published by the perimeter`,
+      ).toBe(true);
+      expect(budgets[url], `${url} must not declare a budget`).toBeUndefined();
     }
   });
 

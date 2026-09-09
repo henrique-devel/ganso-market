@@ -12,7 +12,10 @@ import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import { budgetedPool, budgetForRoute, runWithBudget } from "./budgets.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig, StatementBudgets } from "./config.js";
-import { requireStatementBudgets } from "./config.js";
+import {
+  API_SHADOW_REPLAY_DIR_ENV,
+  requireStatementBudgets,
+} from "./config.js";
 import type { DatabasePool, ReadinessProbe } from "./database.js";
 import {
   POSTGRES_UNAVAILABLE,
@@ -273,6 +276,11 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     registerPortfolioRoutes(app, {
       pool: readPool,
       authService: options.authService,
+      // RFC-029 D3. Read here, at the composition root, because this is a
+      // deployment fact (a bind mount that may or may not be there) rather
+      // than a tuning knob: unset, the two shadow-replay routes answer 404 and
+      // nothing else about the API changes.
+      shadowReplayDir: process.env[API_SHADOW_REPLAY_DIR_ENV] ?? null,
     });
     // RFC-015 operator dashboard: the overview aggregate and the event feed.
     // Read-only over the tables the surfaces above already expose; it exists so
