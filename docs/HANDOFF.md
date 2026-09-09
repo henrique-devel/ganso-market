@@ -1,5 +1,102 @@
 # Handoff do projeto Ganso Market
 
+- Última atualização: 2026-09-09 — **RFC-028 PARTE B (prompt 20b) PARADA NA RE-MEDIÇÃO,
+  ANTES DE CODAR E ANTES DO MERGE DO PR 3.** Nenhum código escrito, nenhum PR aberto, nenhum
+  merge, nenhum deploy. A parada é a que o próprio prompt manda ("Dependência (PR-0, RFC-022,
+  RFC-025) ausente em produção: PARE antes do merge do PR 3"; e a invariante permanente
+  "RE-MEDIR antes de codar — premissa caída ⇒ PARE e registre no HANDOFF"). Duas dependências
+  seguem ausentes e, o que é novo nesta sessão, **o aceite da fase sombra é inalcançável por
+  construção, não por espera** — está medido abaixo.
+
+  **O número da sessão: em 7 dias não houve um único instante com zero disjuntores abertos.**
+  O aceite "Janela válida" da RFC-028 diz que *disjuntor aberto em **qualquer** instante dos 3
+  dias ⇒ a janela é inválida e recomeça*. Medido em produção por dois caminhos independentes
+  que concordam exatamente — varredura de eventos (`started_at`/`ended_at` como ±1 com soma
+  corrente) e amostragem por grade de 1 minuto: **0 de 10 081 minutos** limpos, **mínimo 5**
+  disjuntores abertos a qualquer instante, média **32,4**, máximo **78**. A janela de 3 dias
+  precisa de **4 320 minutos contíguos** limpos; o mais longo disponível é **0**. Na leitura
+  mais generosa possível — contando só disjuntores dos mercados do universo estrito da D4 —
+  há 4 062,5 minutos limpos no total, mas o **maior trecho contíguo é 150,1 minutos**: falta
+  um fator de **~29×** para os 4 320. Sob as duas leituras, a janela não fecha. Não é atraso:
+  enquanto a RFC-025 não estiver implementada, **todo mercado horário novo nasce com
+  `PARAM_CHANGE` aberto** (43 dos 46 updown descobertos em 48 h; 317 linhas `PARAM_CHANGE`
+  históricas só no universo estrito), então "nenhum disjuntor aberto o tempo todo" não pode
+  passar a valer por si.
+
+  **Dependências re-medidas em 09/09 (as três, como o prompt manda).** **PR-0 (liquidação):
+  PRESENTE** — 8 eventos `resolution` no ledger, primeiro fechamento 2026-09-04 21:23:56.924Z.
+  **RFC-022: AUSENTE** — `Status: accepted` no repo, não implementada; é ela que libera o
+  filtro na ponte (item 4 do escopo do PR 3 diz "só após o PR-1 da RFC-022"). **RFC-025:
+  AUSENTE** — `Status: accepted`, não implementada, e o sintoma está vivo e **crescendo**:
+  **12** `PARAM_CHANGE` abertos agora (eram 8 e depois 10 no correr da sessão anterior), um
+  deles no mercado `0x37caa35e…` = "Bitcoin Up or Down - September 9, 8AM ET", que é um
+  mercado **vivo do universo estrito**, aberto às 12:49:24Z para um mercado que fecha às
+  13:00Z. A receita de re-medição do prompt ("= 0 em mercados vivos") dá **1**, não 0.
+
+  **Quanto a pré-condição de disjuntor sozinha custaria, se o kill switch fosse rearmado
+  hoje.** Sobre os **44** mercados updown do universo **estrito** já encerrados nas últimas
+  48 h: disjuntor aberto atravessando a janela T−12..T−8 do braço C em **34 (77,3 %)**, e
+  atravessando o instante T−10 ± 30 s dos braços A e D em **31 (70,5 %)**. Sobram ~10
+  mercados-hora em 48 h, ~5/dia, para os quatro braços chegarem ao veredito do sinal — e o
+  aceite "Braços exercitados" pede **≥ 20 decisões por braço** que passem **todas** as
+  pré-condições, recusando explicitamente 100 % de recusa por pré-condição como evidência.
+  Com o kill switch engatado, aliás, a recusa é 100 % e uniforme: `FAST_SKIPPED_KILL_SWITCH` é
+  avaliada antes de tudo, e é exatamente o que a única linha de `strategy_decisions` em
+  produção registra (a sonda de 09/09 10:37:52Z, braço C, `mode` `shadow`).
+
+  **Kill switch: ENGATADO**, `RECORDER_STALE`, desde **2026-09-09 03:42:32.734Z**
+  (`rearmed_at` anterior 2026-09-06 23:03:10.474Z). O rearme é ato do proprietário (RFC-021
+  P2) e não foi feito aqui. Note que a causa aparente **já passou**: o último
+  `polymarket_book_snapshots.received_at` tem **0,1 s** de idade, e o RTDS está sadio
+  (`twap30` 0,25 s, `twap60` 0,88 s de idade; último balde de 1 min corrente). Ou seja, o
+  engate está **latchado** — o dado voltou, a trava não. Isso não é condição de parada da
+  RFC-028 (o gatilho é `twap60` > 24 h, e não é o caso), mas é o primeiro dos três bloqueios e
+  o único que se resolve por um ato humano de um minuto.
+
+  **O que NÃO é bloqueio, e foi verificado.** `policy.ts` **sem diff**: último commit que a
+  tocou é o `423c55e` da RFC-011 Parte B, `POLICY_VERSION` segue `"1.0.0"`. Parte A **de pé**:
+  as três tabelas (`strategy_decisions`, `fast_config_versions`, `fast_wallet_state`) existem,
+  `fast_config_versions` tem **1** linha (0.1.0, hash `6c02622cadc1d6e3d0dc…`, congelada
+  09/09 10:37:22.633Z), e `paper_orders` já tem `strategy_id` mais os CHECKs bicondicionais
+  (`source = 'fast'` ⟺ `strategy_id IS NOT NULL`). Ordens `fast` = **0**. `config/fast.json`
+  na 0.1.0 com os quatro braços em `mode: "shadow"`. Universo **melhorou** desde 03/09: **3**
+  updown vivos na regex leniente, **2** na estrita (era 0), e 38 encerrados nas últimas 24 h —
+  pequeno, mas não mais zero. `fastworker.ts` **não existe** (nada foi escrito nesta sessão).
+
+  **Snapshot pré-merge da evidência dos gates e de `/paper/performance`** — o prompt manda
+  gravá-lo antes do merge do PR 3, "sem ele o aceite não se compara". O endpoint HTTP responde
+  **401 `AUTH_UNAUTHENTICATED`** de dentro do container (`preHandler: guard`), e esta sessão
+  não tem segredo nem deve ter, então o snapshot foi tirado **das mesmas linhas que o relatório
+  lê**, com as consultas copiadas de `performance.ts:120-156` e `gatestore.ts:122-135`.
+  Comando: `docker exec ganso-market-postgres-1 psql -U ganso_market -d ganso_market` com o
+  script em `/tmp/snap.sql`. Saída de 2026-09-09 ~12:55Z: `buildPerformanceReport` →
+  não realizado **−3,411500**, `unmarked` **false**, taxa de preenchimento **GTC 99 ordens /
+  20 preenchidas** (nenhum outro `order_type`); ledger `mark` 24 783, `order_accepted` 99,
+  `cancel_effective` 79, `fill` 33, `resolution` 8, `fill_denied_degradation` 8,
+  `kill_switch_engaged` 7, `kill_switch_rearmed` 6. `loadClosedPositions` (evidência de
+  G1/G4/G5/G6) → **8** posições fechadas, realizado somado **+7,971365**, primeira
+  2026-09-04 21:23:56.924Z, última 2026-09-09 00:17:32.527Z; as 8 linhas
+  (`condition_id`, `realized_pnl_usd`, `resolved_at`) estão no script e vão de **−5,321600** a
+  **+19,895400**. Fills taker do G2 → **33**. `paper_positions` **11** linhas, **3** com
+  `shares ≠ 0`. `excluded_strategy_rows` equivalente (posições cujo `token_id` tem ordem com
+  `strategy_id`) → **0**, como a D2 prevê em sombra. **Aviso ao próximo:** este snapshot é de
+  09/09 e o livro segue operando; quem retomar o 20b deve **tirá-lo de novo** imediatamente
+  antes do merge, e de preferência pelo HTTP autenticado, que é a forma que o aceite cita.
+
+  **O que precisa ser verdade para o 20b voltar a ser executável, na ordem em que morde.**
+  (1) **RFC-025 implementada e em produção** — sem ela o aceite "Janela válida" é inalcançável
+  por construção, não por espera; medir com `SELECT count(*) FROM portfolio_circuit_breakers
+  WHERE kind = 'PARAM_CHANGE' AND ended_at IS NULL` **= 0 em mercados vivos**, e confirmar com
+  a varredura de eventos que existe pelo menos um trecho contíguo de **4 320 minutos** sem
+  disjuntor aberto no universo. (2) **Kill switch rearmado** pelo proprietário, e mantido
+  desengatado pelos 3 dias. (3) **RFC-022 implementada**, se o filtro `strategy_id IS NULL` na
+  ponte (item 4) for para o mesmo PR; se não, o PR 3 pode nascer sem a ponte, e o item volta
+  com a RFC-022. (4) RTDS **seguindo** ingerindo (hoje está, e já parou duas vezes). A
+  RFC-024 continua **não** sendo pré-condição da fase sombra — ela é da primeira ordem do
+  braço C e da cobertura do braço E (P6). Nada em `docs/rfcs/RFC-028-…` foi alterado nesta
+  sessão: o status segue `accepted` com as partes A concluídas, e **não** foi promovido a
+  "implemented (fase sombra)", porque a fase sombra não correu.
+
 - Última atualização: 2026-09-09 — **RFC-028 PARTE A COMPLETA: OS DOIS PRs EM PRODUÇÃO**
   ([#142](https://github.com/henrique-devel/ganso-market/pull/142) merge `50335a3`, PR 1;
   [#143](https://github.com/henrique-devel/ganso-market/pull/143) merge `12de5ae`, PR 2). CD verde
