@@ -1,0 +1,86 @@
+{
+  "version": "0.1.0",
+  "universe": {
+    "questionPattern": "^Bitcoin Up or Down - (January|February|March|April|May|June|July|August|September|October|November|December) [0-9]{1,2}, [0-9]{1,2}(AM|PM) ET$",
+    "windowMinutes": 60
+  },
+  "signal": {
+    "sigmaBpsPerMin": "5",
+    "tieZoneBps": "10",
+    "tieZoneMaxK": 10
+  },
+  "preconditions": {
+    "bookMaxAgeS": 10,
+    "bookMaxSpread": "0.03",
+    "rtdsMaxSampleAgeS": 3,
+    "rtdsNoGapWindowMin": 15,
+    "warmupS": 300,
+    "minSecondsToEnd": 60
+  },
+  "costs": {
+    "assumedTakerFeeRate": "0.07"
+  },
+  "ticket": {
+    "shares": "5",
+    "fakTtlS": 5
+  },
+  "arms": {
+    "C": {
+      "mode": "shadow",
+      "kMin": 8,
+      "kMax": 12,
+      "bandLow": "0.70",
+      "bandHigh": "0.92",
+      "minAbsZ": "1",
+      "gtdUntilK": 4,
+      "maxQueueTicketMultiple": "3"
+    },
+    "E": {
+      "mode": "shadow",
+      "kMin": 4,
+      "kMax": 10,
+      "bandLow": "0.80",
+      "bandHigh": "0.95",
+      "minAbsZ": "1.5",
+      "reversalBuckets": 3
+    },
+    "A": {
+      "mode": "shadow",
+      "targetK": 10,
+      "toleranceS": 30,
+      "minMid": "0.60",
+      "askLow": "0.60",
+      "askHigh": "0.90"
+    },
+    "D": {
+      "mode": "shadow",
+      "targetK": 10,
+      "toleranceS": 30,
+      "minMid": "0.60",
+      "askLow": "0.60",
+      "askHigh": "0.90",
+      "seed": 20260905
+    }
+  },
+  "limits": {
+    "maxOrdersPerArmPerMarket": 1,
+    "maxOpenPositionsPerArm": 2,
+    "maxOrdersPerDay": 24,
+    "dailyStopUsdPerArm": "10",
+    "dailyStopUsdSubAccount": "20",
+    "subAccountBankrollUsd": "100"
+  },
+  "criteria": {
+    "pauseMinN": 50,
+    "pauseHitRateGapPoints": "10",
+    "stopMinN": 100,
+    "dailyStopStrikes": 3,
+    "dailyStopStrikeWindowDays": 5,
+    "promoteMinN": 300,
+    "promoteTicketShares": "20",
+    "promoteMaxPValue": "0.05",
+    "promoteReplayMaxDeviationPct": "5",
+    "endAfterDays": 30,
+    "endAfterMarketsPerArm": 700
+  }
+}

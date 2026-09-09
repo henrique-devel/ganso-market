@@ -13,6 +13,7 @@
     "lint": "npm run check",
     "start": "node dist/main.js",
     "account": "node dist/account-cli.js",
+    "fast-backtest": "node dist/fast-backtest-cli.js",
     "polymarket-recorder": "node dist/polymarket-recorder.js",
     "polymarket-estimator": "node dist/polymarket-estimator.js",
     "test": "vitest run"
