@@ -1950,3 +1950,100 @@ h1 {
     grid-column: 2 / -1;
   }
 }
+
+/* --- RFC-029 D4: a tela Sombra ------------------------------------------- */
+
+.sombra {
+  display: grid;
+  gap: 0.9rem;
+}
+
+/* O PnL contrafactual é o único número desta tela que alguém pode confundir
+   com dinheiro. Roxo tracejado é a diferença visual que o separa dos cartões
+   de PnL reais do Portfólio, que são verdes e sólidos — e o selo, o sufixo
+   "(paper)" e as ressalvas dizem o resto em texto, para quem não lê cor. */
+.sombra-pnl {
+  border: 1px dashed #8b5cf6;
+  background: #17121f;
+}
+
+.sombra-selo {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid #a78bfa;
+  border-radius: 4px;
+  color: #c4b5fd;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+}
+
+.sombra-pnl-valor {
+  margin: 0.3rem 0 0.6rem;
+  font-size: 1.7rem;
+  font-variant-numeric: tabular-nums;
+  color: #ddd6fe;
+}
+
+.sombra-pnl-valor small {
+  font-size: 0.5em;
+  color: #a78bfa;
+  letter-spacing: 0.04em;
+}
+
+/* Ressalvas fixas: mesmo peso do corpo, nunca cinza-claro de rodapé. Elas não
+   são nota de rodapé — são parte do número. */
+.sombra-ressalva {
+  margin: 0.4rem 0 0;
+  color: #cbc3e3;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.sombra-aviso,
+.sombra-falha {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.sombra-aviso {
+  border: 1px solid #a78bfa;
+  background: #1b1430;
+  color: #ddd6fe;
+}
+
+.sombra-falha {
+  border: 1px solid #f87171;
+  background: #2a1414;
+  color: #fecaca;
+}
+
+.sombra-velho {
+  color: #fbbf24;
+}
+
+.sombra-transicoes td:last-child {
+  text-align: right;
+}
+
+/* A linha do valor gravado, para que a comparação tenha uma referência fixa. */
+.sombra-varredura .sombra-gravado {
+  outline: 1px solid #4ade80;
+}
+
+/* A sub-barra "abaixo da ordem mínima" fica POR CIMA da barra e mais escura:
+   ela é um pedaço do total, não um segundo total ao lado dele. */
+.sombra-varredura .sombra-sub-barra {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: #6b21a8;
+}
+
+.sombra-varredura .bar {
+  position: relative;
+}

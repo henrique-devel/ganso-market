@@ -294,11 +294,73 @@ export const MOTIVO_DECISAO: Dicionario = {
       "recusa que o modelo mais produz quando tem opinião.",
   },
   EDGE_BELOW_MIN: { rotulo: "edge abaixo do mínimo" },
+  SIZE_BELOW_MIN_ORDER: {
+    rotulo: "tamanho abaixo da ordem mínima",
+    consequencia:
+      "O edge passou, o dimensionamento não: a ordem sairia menor que o " +
+      "mínimo negociável. Na varredura da Sombra isto NÃO é ação nova — " +
+      "aceitar e não conseguir mandar dá no mesmo que recusar.",
+  },
   HOLD_NO_EXIT_SIGNAL: {
     rotulo: "manter — sem sinal de saída",
     consequencia: "Avaliou a saída e decidiu segurar.",
   },
   INSUFFICIENT_DATA: { rotulo: "sem dado bastante" },
+};
+
+// ---------------------------------------------------------------------------
+// Shadow replay (RFC-029): por que uma decisão ficou fora da amostra
+// ---------------------------------------------------------------------------
+
+/**
+ * As exclusões do modo B. Nenhuma delas é um defeito: são o preço de exigir
+ * que a comparação seja honesta. Cada verbete diz o que a exclusão custa à
+ * leitura, porque uma contagem grande aqui muda o que o funil significa.
+ */
+export const EXCLUSAO_SOMBRA: Dicionario = {
+  SHADOW_MISSING: {
+    rotulo: "sem sombra no instante",
+    consequencia:
+      "Não havia linha shadow as-of o instante da decisão, então não há o que " +
+      "trocar. É a maior exclusão por construção: a sombra cobre menos tokens " +
+      "que o log de decisões.",
+  },
+  SHADOW_STALE: {
+    rotulo: "sombra velha demais",
+    consequencia:
+      "Existia linha shadow, mas fora do TTL de atualidade. Usá-la seria " +
+      "comparar o motor com um dado que ele próprio teria recusado.",
+  },
+  BASELINE_MISMATCH: {
+    rotulo: "baseline não reproduz",
+    consequencia:
+      "Reexecutar a decisão com a config gravada não deu o resultado gravado. " +
+      "Drift do motor nunca vira sinal: a linha sai da amostra.",
+  },
+  BASELINE_ALREADY_SHADOW: {
+    rotulo: "baseline já era sombra",
+    consequencia:
+      "A decisão original já tinha usado a estimativa shadow, então a troca " +
+      "não compara nada. Contá-la inflaria a diferença com linhas idênticas.",
+  },
+  NO_REPLAY_BLOCK: {
+    rotulo: "sem bloco de replay",
+    consequencia:
+      "A decisão foi gravada sem o bloco de entradas que o replay precisa. " +
+      "Sem ele não há como reexecutar.",
+  },
+  UNSUPPORTED_KIND: {
+    rotulo: "tipo não suportado",
+    consequencia:
+      "O modo B mede terminal e barreira; famílias fora disso não têm " +
+      "decisão alcançável e ficam de fora.",
+  },
+  CONFIG_UNAVAILABLE: {
+    rotulo: "config indisponível",
+    consequencia:
+      "A versão de config que a decisão citou não está mais em " +
+      "portfolio_config_versions.",
+  },
 };
 
 export const LIMITADOR: Dicionario = {
@@ -449,6 +511,7 @@ const TODOS: readonly Dicionario[] = [
   ACAO_RESOLUCAO,
   MOTIVO_DECISAO,
   MOTIVO_GATE,
+  EXCLUSAO_SOMBRA,
   NATUREZA_BLOQUEIO,
   LIMITADOR,
   TIPO_DECISAO,
