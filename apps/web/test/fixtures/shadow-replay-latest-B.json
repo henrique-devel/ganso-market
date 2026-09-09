@@ -1,0 +1,94 @@
+{
+  "status": "ok",
+  "command": "source-replay",
+  "report": {
+    "totals": {
+      "decisionsSeen": 58451,
+      "decisionsAdmitted": 11839,
+      "decisionsReachingEstimate": 8109,
+      "marketsSeen": 368,
+      "marketsAdmitted": 100,
+      "marketsReachingEstimate": 99,
+      "exclusions": {
+        "BASELINE_MISMATCH": 0,
+        "NO_REPLAY_BLOCK": 0,
+        "SHADOW_MISSING": 46612,
+        "SHADOW_STALE": 0,
+        "BASELINE_ALREADY_SHADOW": 0,
+        "UNSUPPORTED_KIND": 0
+      },
+      "linesOutcomeChanged": 3192,
+      "marketsOutcomeChanged": 67,
+      "linesReasonChanged": 4141,
+      "marketsReasonChanged": 89,
+      "verdictTransitions": {
+        "REJECTED:PRICE_OUT_OF_BAND -> ACCEPTED:-": 505,
+        "REJECTED:LOWER_BOUND_BELOW_COSTS -> ACCEPTED:-": 2418,
+        "REJECTED:DATA_STALE -> ACCEPTED:-": 167,
+        "REJECTED:DATA_STALE -> REJECTED:PRICE_OUT_OF_BAND": 404,
+        "REJECTED:DATA_STALE -> REJECTED:LOWER_BOUND_BELOW_COSTS": 156,
+        "REJECTED:LOWER_BOUND_BELOW_COSTS -> REJECTED:EDGE_BELOW_MIN": 136,
+        "REJECTED:PRICE_OUT_OF_BAND -> REJECTED:EDGE_BELOW_MIN": 28,
+        "REJECTED:LOWER_BOUND_BELOW_COSTS -> REJECTED:PRICE_OUT_OF_BAND": 92,
+        "REJECTED:PRICE_OUT_OF_BAND -> REJECTED:LOWER_BOUND_BELOW_COSTS": 52,
+        "REJECTED:EDGE_BELOW_MIN -> REJECTED:LOWER_BOUND_BELOW_COSTS": 65,
+        "REJECTED:DATA_STALE -> REJECTED:EDGE_BELOW_MIN": 16,
+        "REJECTED:EDGE_BELOW_MIN -> ACCEPTED:-": 31,
+        "ACCEPTED:- -> REJECTED:LOWER_BOUND_BELOW_COSTS": 62,
+        "ACCEPTED:- -> REJECTED:EDGE_BELOW_MIN": 9
+      },
+      "baselineAccepted": 124,
+      "shadowAccepted": 3174,
+      "shadowOnlyAccepted": 3121,
+      "baselineOnlyAccepted": 71,
+      "coveredFrom": "2026-09-06T17:45:18.385Z",
+      "coveredTo": "2026-09-09T17:44:28.742Z",
+      "modelIds": ["crypto_updown_gbm@1.1.0"]
+    },
+    "counterfactual_pnl": {
+      "entriesConsidered": 3174,
+      "entriesSettled": 443,
+      "entriesWithoutFinalLabel": 2731,
+      "grossUsd": 1012.5069474302983,
+      "costsUsd": 0.16368776696099993,
+      "degradationUsd": 95.7025209699999,
+      "netUsd": 916.6407386933374,
+      "wins": 396,
+      "losses": 47,
+      "halves": 0
+    }
+  },
+  "provenance": {
+    "mode": "B",
+    "analysis_mode": "offline",
+    "reads": [
+      "portfolio_decisions",
+      "portfolio_config_versions",
+      "fundamental_estimates",
+      "fundamental_labels",
+      "fundamental_models"
+    ],
+    "not_an_audit": "mode B reads market tables, so its window is bounded by their retention and it does not survive the raw-data TTL the way mode A does",
+    "window_requested": {
+      "from": "2026-09-06T17:44:45.000Z",
+      "to": null
+    },
+    "decision_log_window": {
+      "oldest": "2026-09-06T17:45:18.385Z",
+      "newest": "2026-09-09T17:44:28.742Z",
+      "rows": 58777,
+      "closed_at_decision_id": 910574
+    },
+    "shadow_estimates_in_window": {
+      "rows": 53104,
+      "tokens": 276,
+      "oldest": "2026-09-06T17:44:55.953Z",
+      "newest": "2026-09-09T17:44:15.132Z",
+      "model_ids": ["crypto_updown_gbm@1.0.0", "crypto_updown_gbm@1.1.0"]
+    },
+    "any_model_promoted": false,
+    "degradation_per_share": 0.01,
+    "pnl_label": "hypothetical",
+    "gate_note": "feeds the RFC-010 promotion decision; does not replace it. No model is promoted without a gate PASS and the owner's manual action."
+  }
+}

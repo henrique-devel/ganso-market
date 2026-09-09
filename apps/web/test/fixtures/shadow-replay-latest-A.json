@@ -1,0 +1,352 @@
+{
+  "status": "ok",
+  "command": "sweep",
+  "report": {
+    "totals": {
+      "path": "costs.edgeLiqMin",
+      "recordedValue": 0.02,
+      "decisionsSeen": 137692,
+      "decisionsAdmitted": 137692,
+      "decisionsReachingArithmetic": 33905,
+      "marketsSeen": 662,
+      "marketsAdmitted": 662,
+      "marketsReachingArithmetic": 237,
+      "exclusions": {
+        "BASELINE_MISMATCH": 0,
+        "NO_REPLAY_BLOCK": 0,
+        "UNSUPPORTED_KIND": 0,
+        "CONFIG_UNAVAILABLE": 0
+      },
+      "baselineOutcomes": {
+        "REJECTED:DATA_STALE": 54585,
+        "REJECTED:BOOK_STALE": 45336,
+        "REJECTED:PRICE_OUT_OF_BAND": 15349,
+        "REJECTED:LOWER_BOUND_BELOW_COSTS": 17784,
+        "REJECTED:PORTFOLIO_CIRCUIT_BREAKER": 3809,
+        "REJECTED:EDGE_BELOW_MIN": 193,
+        "ACCEPTED:-": 568,
+        "REJECTED:RESOLUTION_VETO": 35,
+        "REJECTED:HOLD_NO_EXIT_SIGNAL": 22,
+        "REJECTED:RESOLUTION_CIRCUIT_BREAKER": 7,
+        "REJECTED:RESOLUTION_STATE_MISSING": 4
+      },
+      "candidates": [
+        {
+          "value": 0.01,
+          "linesOutcomeChanged": 141,
+          "marketsOutcomeChanged": 43,
+          "linesReasonChanged": 193,
+          "marketsReasonChanged": 53,
+          "linesSideChanged": 0,
+          "linesBindingChanged": 193,
+          "marketsBindingChanged": 53,
+          "capitalCostBecamePositive": 0,
+          "verdictTransitions": {
+            "NO/REJECTED:EDGE_BELOW_MIN -> NO/ACCEPTED:-": 81,
+            "NO/REJECTED:EDGE_BELOW_MIN -> NO/REJECTED:SIZE_BELOW_MIN_ORDER": 27,
+            "YES/REJECTED:EDGE_BELOW_MIN -> YES/REJECTED:SIZE_BELOW_MIN_ORDER": 25,
+            "YES/REJECTED:EDGE_BELOW_MIN -> YES/ACCEPTED:-": 60
+          },
+          "bindingTransitions": {
+            "NOT_SIZED -> CORRELATION_FACTOR": 138,
+            "NOT_SIZED -> MIN_ORDER_SIZE": 52,
+            "NOT_SIZED -> DEPTH_TAKE_PCT": 3
+          },
+          "medianDeltaEdgeNet": 0,
+          "p90AbsDeltaEdgeNet": 0,
+          "medianDeltaSizeShares": 0,
+          "p90AbsDeltaSizeShares": 0,
+          "maxSlackConsumed": 2499.999999999668,
+          "medianSlackConsumed": 0.25892649076927066,
+          "minAbsAcceptSlack": 0.000012999999999999123
+        },
+        {
+          "value": 0.015,
+          "linesOutcomeChanged": 91,
+          "marketsOutcomeChanged": 32,
+          "linesReasonChanged": 94,
+          "marketsReasonChanged": 33,
+          "linesSideChanged": 0,
+          "linesBindingChanged": 94,
+          "marketsBindingChanged": 33,
+          "capitalCostBecamePositive": 0,
+          "verdictTransitions": {
+            "NO/REJECTED:EDGE_BELOW_MIN -> NO/ACCEPTED:-": 46,
+            "YES/REJECTED:EDGE_BELOW_MIN -> YES/ACCEPTED:-": 45,
+            "NO/REJECTED:EDGE_BELOW_MIN -> NO/REJECTED:SIZE_BELOW_MIN_ORDER": 2,
+            "YES/REJECTED:EDGE_BELOW_MIN -> YES/REJECTED:SIZE_BELOW_MIN_ORDER": 1
+          },
+          "bindingTransitions": {
+            "NOT_SIZED -> CORRELATION_FACTOR": 89,
+            "NOT_SIZED -> MIN_ORDER_SIZE": 3,
+            "NOT_SIZED -> DEPTH_TAKE_PCT": 2
+          },
+          "medianDeltaEdgeNet": 0,
+          "p90AbsDeltaEdgeNet": 0,
+          "medianDeltaSizeShares": 0,
+          "p90AbsDeltaSizeShares": 0,
+          "maxSlackConsumed": 1249.9999999998342,
+          "medianSlackConsumed": 0.12947330260500298,
+          "minAbsAcceptSlack": 0
+        },
+        {
+          "value": 0.02,
+          "linesOutcomeChanged": 0,
+          "marketsOutcomeChanged": 0,
+          "linesReasonChanged": 0,
+          "marketsReasonChanged": 0,
+          "linesSideChanged": 0,
+          "linesBindingChanged": 0,
+          "marketsBindingChanged": 0,
+          "capitalCostBecamePositive": 0,
+          "verdictTransitions": {},
+          "bindingTransitions": {},
+          "medianDeltaEdgeNet": 0,
+          "p90AbsDeltaEdgeNet": 0,
+          "medianDeltaSizeShares": 0,
+          "p90AbsDeltaSizeShares": 0,
+          "maxSlackConsumed": 0,
+          "medianSlackConsumed": 0,
+          "minAbsAcceptSlack": 0.000004000000000000531
+        },
+        {
+          "value": 0.03,
+          "linesOutcomeChanged": 88,
+          "marketsOutcomeChanged": 35,
+          "linesReasonChanged": 88,
+          "marketsReasonChanged": 35,
+          "linesSideChanged": 0,
+          "linesBindingChanged": 88,
+          "marketsBindingChanged": 35,
+          "capitalCostBecamePositive": 0,
+          "verdictTransitions": {
+            "NO/ACCEPTED:- -> NO/REJECTED:EDGE_BELOW_MIN": 42,
+            "YES/ACCEPTED:- -> YES/REJECTED:EDGE_BELOW_MIN": 46
+          },
+          "bindingTransitions": {
+            "CORRELATION_FACTOR -> NOT_SIZED": 84,
+            "DEPTH_TAKE_PCT -> NOT_SIZED": 2,
+            "CAP_ENTRADA -> NOT_SIZED": 2
+          },
+          "medianDeltaEdgeNet": 0,
+          "p90AbsDeltaEdgeNet": 0,
+          "medianDeltaSizeShares": 0,
+          "p90AbsDeltaSizeShares": 0,
+          "maxSlackConsumed": 2499.9999999996676,
+          "medianSlackConsumed": 0.25894660521000556,
+          "minAbsAcceptSlack": 0.00008700000000000027
+        }
+      ]
+    },
+    "actionBreakevens": [
+      {
+        "decisionId": 773535,
+        "value": 0.020128609260873245,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 901362,
+        "value": 0.02019156484311889,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 909285,
+        "value": 0.02020145786318606,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 782311,
+        "value": 0.020217646441477794,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 782378,
+        "value": 0.020217646441477794,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 887231,
+        "value": 0.020218545806938444,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 880583,
+        "value": 0.02022843882700562,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 881498,
+        "value": 0.020317476007610177,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 905042,
+        "value": 0.02042000367012451,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      },
+      {
+        "decisionId": 909704,
+        "value": 0.020531524987245364,
+        "fromOutcome": "ACCEPTED",
+        "toOutcome": "REJECTED",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "action"
+      }
+    ],
+    "labelBreakevens": [
+      {
+        "decisionId": 773535,
+        "value": 0.020128609260873245,
+        "fromOutcome": "NO/ACCEPTED:-",
+        "toOutcome": "NO/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 901362,
+        "value": 0.02019156484311889,
+        "fromOutcome": "NO/ACCEPTED:-",
+        "toOutcome": "NO/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 909285,
+        "value": 0.02020145786318606,
+        "fromOutcome": "YES/ACCEPTED:-",
+        "toOutcome": "YES/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 782311,
+        "value": 0.020217646441477794,
+        "fromOutcome": "YES/ACCEPTED:-",
+        "toOutcome": "YES/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 782378,
+        "value": 0.020217646441477794,
+        "fromOutcome": "YES/ACCEPTED:-",
+        "toOutcome": "YES/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 887231,
+        "value": 0.020218545806938444,
+        "fromOutcome": "YES/ACCEPTED:-",
+        "toOutcome": "YES/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 880583,
+        "value": 0.02022843882700562,
+        "fromOutcome": "YES/ACCEPTED:-",
+        "toOutcome": "YES/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 881498,
+        "value": 0.020317476007610177,
+        "fromOutcome": "YES/ACCEPTED:-",
+        "toOutcome": "YES/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 905042,
+        "value": 0.02042000367012451,
+        "fromOutcome": "NO/ACCEPTED:-",
+        "toOutcome": "NO/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      },
+      {
+        "decisionId": 909704,
+        "value": 0.020531524987245364,
+        "fromOutcome": "NO/ACCEPTED:-",
+        "toOutcome": "NO/REJECTED:EDGE_BELOW_MIN",
+        "bracketLow": 0.02,
+        "bracketHigh": 1000,
+        "watching": "label"
+      }
+    ],
+    "breakevenSearched": 20
+  },
+  "provenance": {
+    "mode": "A",
+    "analysis_mode": "audit",
+    "reads": ["portfolio_decisions", "portfolio_config_versions"],
+    "window_requested": {
+      "from": null,
+      "to": null
+    },
+    "window_covered": {
+      "oldest": "2026-09-03T06:59:44.053Z",
+      "newest": "2026-09-09T17:47:28.793Z",
+      "rows": 137692,
+      "markets": 662,
+      "decision_id_range": [772937, 910628],
+      "closed_at_decision_id": 910628,
+      "note": "the scan is pinned to this decision_id, so rows written during the run are outside it and two runs over the same range agree"
+    },
+    "config_versions": ["1.2.0"],
+    "config_hashes": {
+      "1.2.0": "1c8a331685828c144959600831634262cf482c0099c8a44f7eb60bf876f31faf"
+    },
+    "engine_default_config_version": "1.2.0",
+    "breakeven_bracket": [0.02, 1000],
+    "shadow_rows_in_window": 224883
+  }
+}

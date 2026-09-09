@@ -17,6 +17,7 @@ import { SistemaFase1 } from "./Sistema.tsx";
 import { Mesa } from "./Mesa.tsx";
 import { PortfolioPanel, type Section } from "./Portfolio.tsx";
 import { ResolutionPanel } from "./Resolution.tsx";
+import { Sombra } from "./Sombra.tsx";
 import {
   BuildFooter,
   OverviewPanel,
@@ -212,7 +213,7 @@ export function LoginPanel({
 type Tela =
   "mesa" | "carteira" | "decisoes" | "sombra" | "resolucao" | "sistema";
 
-interface Aba {
+export interface Aba {
   readonly chave: Tela;
   readonly tecla: string;
   readonly rotulo: string;
@@ -220,17 +221,19 @@ interface Aba {
   readonly nota?: string;
 }
 
-const TELAS: readonly Aba[] = [
+/**
+ * Exportado para que a lista de abas seja verificável, e não só visível.
+ *
+ * A `4` ficou desabilitada de 2026-09-05 a 2026-09-09 esperando esta RFC, e
+ * nesse intervalo nenhum teste falhava se ela voltasse a ser desabilitada por
+ * acidente. Agora falha.
+ */
+export const TELAS: readonly Aba[] = [
   { chave: "mesa", tecla: "1", rotulo: "Mesa", disponivel: true },
   { chave: "carteira", tecla: "2", rotulo: "Carteira", disponivel: true },
   { chave: "decisoes", tecla: "3", rotulo: "Decisões", disponivel: true },
-  {
-    chave: "sombra",
-    tecla: "4",
-    rotulo: "Sombra",
-    disponivel: false,
-    nota: "reservada à tela Sombra (RFC-029); nada aqui ainda",
-  },
+  // RFC-029 D4: a tecla que a RFC-026 reservou, agora com tela atrás dela.
+  { chave: "sombra", tecla: "4", rotulo: "Sombra", disponivel: true },
   { chave: "resolucao", tecla: "5", rotulo: "Resolução", disponivel: true },
   { chave: "sistema", tecla: "6", rotulo: "Sistema", disponivel: true },
 ];
@@ -427,6 +430,14 @@ function Dashboard({
             accessToken={session.accessToken}
             onUnauthorized={onUnauthorized}
             overview={overview}
+          />
+        ) : tela === "sombra" ? (
+          // RFC-029 D4: leitura do shadow replay gravado em disco pelo job
+          // diário. Sem botão nenhum — não promove modelo, não cunha config e
+          // não dispara a rodada.
+          <Sombra
+            accessToken={session.accessToken}
+            onUnauthorized={onUnauthorized}
           />
         ) : tela === "resolucao" ? (
           // Duas colunas sem tocar em Resolution.tsx: o painel inteiro fica na
