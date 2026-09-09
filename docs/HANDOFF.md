@@ -1,5 +1,152 @@
 # Handoff do projeto Ganso Market
 
+- Última atualização: 2026-09-09 — **RFC-028 PARTE A COMPLETA: OS DOIS PRs EM PRODUÇÃO**
+  ([#142](https://github.com/henrique-devel/ganso-market/pull/142) merge `50335a3`, PR 1;
+  [#143](https://github.com/henrique-devel/ganso-market/pull/143) merge `12de5ae`, PR 2). CD verde
+  nos dois, migration **0020** aplicada (`schema_versions.foundation = 20`), `release-sha`
+  conferido: `api` `12de5ae`, `polymarket-recorder` `12de5ae` **após rebuild explícito**
+  (`--profile polymarket up --build polymarket-recorder`), com `strategy_decisions` presente no
+  `retention.js` da imagem nova (0 antes, 2 depois).
+
+  **O número da sessão: o braço de CONTROLE bateu o braço que ele controla.** O backtest
+  auditado do filtro z, sobre os 181 mercados BTC horários resolvidos com rótulo final, mede o
+  braço **A** (favorito tardio) em **−0,0401/cota, IC95 [−0,0845; +0,0007]** com N = 191, e o
+  braço **D** (lado **sorteado** com semente fixa) em **+0,0063, IC95 [−0,0432; +0,0538]** com
+  N = 175. `A − D` é negativo em **5 dos 6** instantes. Na primeira medição, o controle da D1
+  fez exatamente a coisa para a qual existe: mostrar que "comprar o favorito tardio" não se
+  distingue — para pior — de comprar um lado qualquer. Isso **confirma a D1** (o produto é N com
+  controle, não lucro) em vez de contrariá-la.
+
+  **As duas condições de parada do backtest NÃO dispararam, e nenhuma das duas é edge.** A
+  direção do braço E é **reproduzida**: **+0,0300/cota em 32 observações** varrendo as bandas e
+  **+0,0815 em 5** dentro da banda configurada, contra os +0,055 em 28 da proposta **não
+  auditada**. O IC95 não é negativo em toda a grade. Mas três números medidos dizem por que
+  isso não é lucro: (1) o braço E tem **N = 5** na banda que ele próprio declara — **26 das 32**
+  observações caem em [0,95; 1,00), banda que a config **exclui**; (2) o positivo naquela banda
+  é prêmio de favorito com cauda invisível — somando os braços, N = 189, acerto **0,9894**,
+  entrada média **0,9863**, ganho por acerto +0,0128/cota contra perda por erro −0,9863, ou
+  seja **um erro apaga 77 acertos**, e ao implícito de 98,6 % esperavam-se 2,6 erros com 2
+  ocorridos; (3) o item do controle acima. É a mesma cauda de −0,99/cota que a própria RFC já
+  media nos favoritos p ≥ 0,90.
+
+  **σ realizado, medido pela primeira vez: 4,216 bps/min (`twap30`) e 3,754 (`twap60`)**, sobre
+  ~10 100 retornos de baldes **adjacentes** (9,58 % dos baldes faltam em 7 dias, e um retorno
+  sobre um vão não é um retorno de um minuto). O σ = 5 bps/min **congelado** na 0.1.0 **não
+  muda** — a D4 manda medir e registrar, não alterar — e erra para o lado **conservador**:
+  1,19× e 1,33× o realizado, e σ maior encolhe |z|, logo o filtro é mais seletivo do que o
+  realizado justificaria. **Reversão de z: 6,6 %–10,2 %** por k — o veto do braço E quase não
+  morde, e portanto quase não explica o resultado dele. Dois caminhos de dados independentes
+  (export por `psql` e o CLI compilado rodando contra o banco) deram o mesmo σ até a terceira
+  casa.
+
+  **Duas premissas do prompt caíram, e a segunda é a que importa.** (1) "~300 mercados BTC
+  horários resolvidos" são **181**: a regex estrita casa 389, mas só **183** têm `end_ts`, e
+  `end_date_iso` é uma **DATA** (`'2026-09-09'`), não um instante — derivar o fim dela daria
+  meia-noite UTC e mediria o instante errado em 23 de 24 casos. Dos 183, 181 têm rótulo final.
+  (2) O fator limitante é a **cobertura de livro**, não o número de mercados: só **36** têm
+  cotação as-of (20 %) e **25–33 em cada instante** T−k, porque apenas **85 dos 321** tokens
+  afirmativos foram algum dia assinados. É a lacuna de descoberta que a **RFC-024** fecha.
+  Nenhuma das duas é condição de parada desta parte.
+
+  **Dependências re-medidas.** **PR-0 (liquidação) implementado e funcionando**: 8 eventos
+  `resolution` no ledger. **RFC-025 NÃO implementada**: **8** disjuntores `PARAM_CHANGE`
+  abertos, que é o sintoma que ela existe para eliminar. **Kill switch engatado**
+  (`RECORDER_STALE` desde 2026-09-09 03:42:32Z) e **ainda engatado** ao fim desta sessão — o
+  rearme é ato do proprietário (RFC-021 P2). **`taker_fee_bps` segue NULL em 1344/1344**
+  mercados updown (era 998/998), o que mantém o ramo taker da policy global inalcançável e é
+  justamente por isso que a fee 0,07 vive só na config da estratégia (D3).
+
+  **Um efeito colateral bom do rebuild: o RTDS voltou.** O feed estava parado desde
+  04:59:53Z (~4,7 h de idade na medição, abaixo das 24 h que a RFC define como parada, mas o
+  bastante para inviabilizar a janela de sombra). Depois do rebuild do recorder as amostras
+  voltaram com **0,9 s** de idade. O kill switch, esse, continua engatado: ele não se rearma
+  sozinho.
+
+  **A migration é a 0020, não a 0019** — a RFC-027 seguiu o caminho B e gastou a 0019. A P4
+  previa a bifurcação.
+
+  **O orçamento de retenção é NOVO, e o teste obrigou a re-argumentar.** `strategy_decisions`
+  não casa nenhum prefixo da reserva RFC-010..013 (`fundamental_`, `paper_`, `resolution_`,
+  `graph_`, `portfolio_`), então o 1 GiB da P4 **não cabia** nos 8 GiB — é o primeiro orçamento
+  desde a expansão que é novo em vez de vir de outra tabela. O preço: a soma declarada vai de
+  **95 para 96 GiB** e a folga de redeclaração de `polymarket_book_deltas` cai de **4 para
+  3 GiB**. **PARA O PROPRIETÁRIO:** a quota é ~**60× a volumetria modelada** — a D4 grava 96
+  linhas/dia (4 braços × 24 mercados-hora), ~0,1 MB/dia, ~**17 MB** nos 180 dias do TTL. Quem
+  governa a tabela é o TTL; a quota é um teto que não deve morder, e se morder é sinal de que o
+  worker grava algo que a D4 não previu. Se preferir devolver a diferença à folga dos deltas,
+  0,05 GiB compram a mesma janela.
+
+  **Um bug achado pelo próprio teste, e era no braço de controle.** A grade de bandas do
+  backtest começava em 0,50. O braço D sorteia o lado e compra o azarão em metade dos mercados
+  — a ~0,16 nos horários medidos —, então **metade das observações do controle era descartada
+  como "fora de banda", em silêncio**. A grade agora cobre (0, 1) inteiro; três testes reprovam
+  a anterior.
+
+  **O congelamento da 0.1.0 (P5) está feito.** SQL manual, aplicado depois do CD do PR 2:
+
+  ```sql
+  INSERT INTO fast_config_versions (version, hash, config_json, frozen_at)
+  VALUES ('0.1.0',
+          '6c02622cadc1d6e3d0dcb85ea107a08567c8caaf89dfd39b6ef2ac5d458b0406',
+          $json$<conteúdo literal de config/fast.json>$json$::jsonb,
+          now());
+  ```
+
+  Gravado em **2026-09-09 10:37:22.633357+00**. O hash é do material **canonicalizado** (chaves
+  ordenadas em toda a profundidade), não dos bytes: um arquivo reindentado tem o mesmo hash e
+  qualquer parâmetro alterado tem outro. **Verificado por re-hash**: o `config_json` lido de
+  volta da tabela e passado por `parseFastConfig` + `fastConfigHash` dá exatamente o hash da
+  coluna. sha256 dos bytes do arquivo commitado: `05f48b3f347f14893003a03a7d199752c6dc625676c8fc1a1ce1446c664b0428`.
+
+  **UMA LINHA DE SONDA FICOU EM `strategy_decisions`, E NÃO PODE SER APAGADA.** Ao verificar em
+  produção que o trigger append-only funciona, inseri uma decisão de sonda
+  (`decision_id = 1`, `condition_id = '0xsonda'`, `arm = 'C'`, `verdict = 'skip'`,
+  `reason = 'FAST_SKIPPED_KILL_SWITCH'`) e o `DELETE` foi recusado — que é exatamente o
+  comportamento correto, e é a prova. **Consequência:** a tabela entra na parte B com 1 linha
+  que não é decisão de mercado nenhum. **Os denominadores da parte B devem excluir
+  `condition_id = '0xsonda'`.** Isso foi um erro meu de sequenciamento: os dois triggers já
+  estavam provados contra o Postgres descartável (27 de 28 testes reprovando no esquema
+  anterior), e repetir a prova em produção não acrescentou garantia — só uma linha indelével.
+  Se o proprietário preferir a tabela imaculada, `TRUNCATE strategy_decisions` a devolve ao
+  estado pós-migration (o `TRUNCATE` não passa pelo trigger de linha); **não o fiz por conta
+  própria**, porque usar o `TRUNCATE` para corrigir uma linha é precisamente o que a garantia
+  append-only existe para impedir, e a decisão sobre isso é do dono do dado.
+
+  **Verificação em produção, item a item.** `\d strategy_decisions`, `\d fast_config_versions`,
+  `\d fast_wallet_state` conferidos com os três gatilhos e o índice
+  `(strategy_id, arm, decision_ts)` da D7; `paper_orders.strategy_id` presente e nulo,
+  `paper_orders_source_check` = `('manual','intent','portfolio','fast')`,
+  `paper_orders_strategy_source_check` = `(source = 'fast') = (strategy_id IS NOT NULL)`, e o
+  `paper_orders_decision_source_check` da 0015 intacto. **`SELECT count(*) FROM paper_orders
+  WHERE strategy_id IS NOT NULL` = 0** e `source = 'fast'` = 0. Os dois gatilhos de imutabilidade
+  recusaram UPDATE e DELETE **em produção**. **`polymarket_retention_log` não ganhou linha para
+  `strategy_decisions`** — e essa é a expectativa registrada: `recordAction` só grava quando há
+  poda, e uma tabela nova com TTL de 180 d não tem o que podar. Perímetro inalterado:
+  `GET /api/polymarket/data-quality` **401** sem sessão, `POST` na mesma rota **404**,
+  `POST /api/polymarket/paper/intents` **404**. A imagem da API declara `strategy_decisions` na
+  retenção (é ela que serve o bloco `storage` do `data-quality`); o `curl` autenticado do
+  endpoint continua fora do que a sessão pode fazer, pelo mesmo motivo da RFC-027 — os tokens
+  ficam hasheados em `auth_access_tokens`. **Zero erros** em `api`, `polymarket-recorder` e
+  `polymarket-paper` na janela pós-deploy; as advertências `BOOK_DIVERGENCE` do recorder são a
+  rajada de re-subscribe já documentada, não regressão.
+
+  **Testes.** `make verify` verde nos dois PRs (`1863 passed | 124 skipped`); suíte com pg
+  ligada **`1987 passed`** contra PostgreSQL 18.4 migrado até a 0020; migration **idempotente**
+  (segunda passada devolve `migration already applied`); **27 de 28** testes de
+  `faststore.pg.test.ts` vistos **falhando** no esquema anterior, e 3 testes da grade de bandas
+  vistos falhando no código anterior. Nenhum diff em `policy.ts` (zero linhas), `bridge.ts`,
+  `brokerstore.ts`, gates, disjuntores ou migration aplicada; nenhum endpoint de escrita novo.
+
+  **A PARTE B (prompt 20b) ESTÁ LIBERADA POR ESCOPO E BLOQUEADA POR ESTADO.** Todo o código de
+  que ela depende está em produção. O que falta é ambiente, e não é dela: (1) o **kill switch
+  precisa ser rearmado** — RFC-021 P2, ato do proprietário; (2) os **8 `PARAM_CHANGE` precisam
+  fechar** — RFC-025, aceita e **não implementada**; (3) o RTDS precisa **seguir** ingerindo
+  (voltou nesta sessão, mas já parou uma vez). Sem os três, o worker `fast` subiria e gravaria
+  **100 % de recusas por pré-condição**, e o aceite "braços exercitados" da RFC-028 **rejeita
+  explicitamente** isso como evidência; além disso, o critério "Janela válida" invalida e
+  reinicia a janela de 3 dias se o kill switch estiver engatado ou houver disjuntor aberto em
+  **qualquer** instante dela.
+
 - Última atualização: 2026-09-09 — **RFC-027 COMPLETA: OS DOIS PRs EM PRODUÇÃO**
   ([#139](https://github.com/henrique-devel/ganso-market/pull/139) `ffa091e` D1–D4;
   [#140](https://github.com/henrique-devel/ganso-market/pull/140) `cf88469` D5–D6). CD verde
