@@ -1751,3 +1751,76 @@ h1 {
 .serie-vazia {
   font-style: italic;
 }
+
+/* --- RFC-027: funil, último ciclo, Quase e Congeladas -------------------- */
+
+/* A linha do aceite 1: "N avaliadas -> n aceitas -> o ordens -> f fills".
+   Maior que o corpo porque é a frase que a tela existe para dizer. */
+.funil-linha {
+  margin: 0.35rem 0 0.5rem;
+  font-size: 1.02rem;
+  line-height: 1.5;
+  color: #d9e6dd;
+}
+
+.funil-linha strong {
+  color: #f2fbf5;
+  font-variant-numeric: tabular-nums;
+}
+
+.funil {
+  list-style: none;
+  margin: 0.4rem 0 0.9rem;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.funil li {
+  display: grid;
+  /* rótulo | barra | número | nota: a barra tem largura fixa para que as
+     quatro colunas fiquem alinhadas entre linhas, que é o que torna a
+     comparação visual entre degraus possível. */
+  grid-template-columns: minmax(11rem, auto) 6rem minmax(6rem, auto) 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.22rem 0.4rem;
+  border-radius: 6px;
+  background: #101a14;
+}
+
+/* A seção Quase e a Congeladas não têm barra: três colunas em vez de quatro. */
+.funil li:not(:has(.bar)) {
+  grid-template-columns: minmax(11rem, auto) minmax(6rem, auto) 1fr;
+}
+
+.funil-rot {
+  min-width: 0;
+}
+
+.funil-val {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #f2fbf5;
+}
+
+.funil-val small {
+  color: #8fa898;
+  font-size: 0.82em;
+}
+
+.funil-nota {
+  color: #8fa898;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 720px) {
+  .funil li,
+  .funil li:not(:has(.bar)) {
+    grid-template-columns: 1fr auto;
+  }
+  .funil li .bar,
+  .funil-nota {
+    grid-column: 1 / -1;
+  }
+}

@@ -297,3 +297,113 @@ describe("precisaRecarregar", () => {
     expect(precisaRecarregar("unknown", null)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC-027 D1–D3: o funil, o último ciclo e o "Quase" no cliente
+// ---------------------------------------------------------------------------
+
+const FUNNEL_BODY = {
+  ...OVERVIEW,
+  funnel_24h: {
+    source: "hourly",
+    window_from: "2026-08-31T18:00:00.000Z",
+    window_to: "2026-09-01T17:00:00.000Z",
+    steps: [
+      {
+        outcome: "REJECTED",
+        reason_code: "DATA_STALE",
+        decisions: 9177,
+        markets: 61,
+      },
+      {
+        outcome: "REJECTED",
+        reason_code: "EDGE_BELOW_MIN",
+        decisions: 71,
+        markets: 12,
+      },
+      { outcome: "ACCEPTED", reason_code: null, decisions: 74, markets: 30 },
+    ],
+  },
+  last_cycle: {
+    cycle_at: "2026-09-01T16:59:31.000Z",
+    evaluated: 62,
+    entrable: 0,
+    decisions_written: 7,
+    state: "NORMAL",
+    positions: 2,
+    open_breakers: 54,
+    stale_marks: 1,
+  },
+  near_misses_24h: [
+    {
+      reason_code: "EDGE_BELOW_MIN",
+      count: 71,
+      folga_min: "-0.009962",
+      folga_p50: null,
+    },
+  ],
+};
+
+describe("fetchOverview — funil das 24 h (RFC-027)", () => {
+  it("lê os degraus, o último ciclo e o Quase", async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve(jsonResponse(200, FUNNEL_BODY)),
+    ) as unknown as ResolutionFetcher;
+    const result = await fetchOverview("token", fetcher);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") {
+      return;
+    }
+    expect(result.value.funnel_24h?.source).toBe("hourly");
+    expect(result.value.funnel_24h?.steps).toHaveLength(3);
+    expect(result.value.last_cycle?.open_breakers).toBe(54);
+    // Folga em TEXTO: a tela formata centavos a partir dela e nunca faz
+    // aritmética de dinheiro em float.
+    expect(result.value.near_misses_24h[0]?.folga_min).toBe("-0.009962");
+    expect(typeof result.value.near_misses_24h[0]?.folga_min).toBe("string");
+    expect(result.value.near_misses_24h[0]?.folga_p50).toBeNull();
+  });
+
+  it("trata funnel_24h ausente e vazio como indisponível", async () => {
+    for (const funnel of [
+      undefined,
+      null,
+      // Um agregado que existe mas não tem degrau NÃO é um funil de zeros: é a
+      // ausência de dado, e a tela precisa poder dizer isso.
+      {
+        source: "hourly",
+        window_from: null,
+        window_to: null,
+        steps: [],
+      },
+    ]) {
+      const fetcher = vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { ...OVERVIEW, funnel_24h: funnel })),
+      ) as unknown as ResolutionFetcher;
+      const result = await fetchOverview("token", fetcher);
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") {
+        return;
+      }
+      expect(result.value.funnel_24h).toBeNull();
+    }
+  });
+
+  it("sobrevive a um corpo sem nenhum dos três blocos", async () => {
+    // O código anterior ao PR 1 não publica nenhum deles. O painel novo contra
+    // uma API antiga (a janela entre o CD e o rebuild) tem de renderizar, não
+    // ficar em branco.
+    const fetcher = vi.fn(() =>
+      Promise.resolve(jsonResponse(200, OVERVIEW)),
+    ) as unknown as ResolutionFetcher;
+    const result = await fetchOverview("token", fetcher);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") {
+      return;
+    }
+    expect(result.value.funnel_24h).toBeNull();
+    expect(result.value.last_cycle).toBeNull();
+    expect(result.value.near_misses_24h).toEqual([]);
+    expect(result.value.circuit_breakers.open).toBe(41);
+  });
+});

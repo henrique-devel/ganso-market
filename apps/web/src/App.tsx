@@ -12,6 +12,7 @@ import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
 // The explicit .tsx extension keeps module resolution unambiguous on
 // case-insensitive filesystems, where "./Resolution.js" (and Vite's
 // extension substitution) would match src/resolution.ts instead.
+import { Decisoes } from "./Decisoes.tsx";
 import { Mesa } from "./Mesa.tsx";
 import { PortfolioPanel, type Section } from "./Portfolio.tsx";
 import { ResolutionPanel } from "./Resolution.tsx";
@@ -241,7 +242,6 @@ const TELAS: readonly Aba[] = [
 // olha para saber quanto ainda cabe. A tabela de exposição por dimensão
 // continua existindo, na tela de Sistema, para quem quer a linha a linha.
 const SECOES_CARTEIRA: readonly Section[] = ["posicoes", "ordens", "estado"];
-const SECOES_DECISOES: readonly Section[] = ["decisoes", "consulta"];
 const SECOES_SISTEMA: readonly Section[] = ["gates", "exposicao"];
 
 function Dashboard({
@@ -418,11 +418,14 @@ function Dashboard({
             rotulo="Carteira"
           />
         ) : tela === "decisoes" ? (
-          <PortfolioPanel
+          // RFC-027 D1–D4: a tela abre em funil + último ciclo + Quase +
+          // Congeladas, e as 500 cruas ficam atrás do filtro. O `/overview`
+          // que esta tela já busca é a fonte dos três primeiros blocos, então
+          // o funil não custa requisição nova.
+          <Decisoes
             accessToken={session.accessToken}
             onUnauthorized={onUnauthorized}
-            sections={SECOES_DECISOES}
-            rotulo="Decisões"
+            overview={overview}
           />
         ) : tela === "resolucao" ? (
           // Duas colunas sem tocar em Resolution.tsx: o painel inteiro fica na

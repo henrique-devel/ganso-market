@@ -38,6 +38,7 @@ import {
   type DecisionProvenance,
 } from "./decisionrow.js";
 import { bookWalk, money } from "./ev.js";
+import { upsertCycleSummary, upsertDecisionHourly } from "./funnelstore.js";
 import { evaluateMarket, type EvaluationInput } from "./engine.js";
 import {
   BUFFER_DAILY_HURDLE,
@@ -1025,6 +1026,44 @@ export function createPortfolioRunner(
       open_breakers: openBreakers.length,
       stale_marks: pnl.positionsWithStaleMark,
     });
+
+    // RFC-027 D1/D2, caminho B. Os mesmos sete campos que acabaram de ir para o
+    // log, e as duas últimas horas do funil, saem daqui para duas tabelas que
+    // SÓ este worker escreve. É o que permite ao `/overview` responder o funil
+    // das 24 h lendo ~200 linhas em vez de 22 mil — a medição que reprovou a
+    // leitura direta está no cabeçalho da migration 0019.
+    //
+    // Fora do caminho de decisão de propósito: uma falha aqui não pode custar
+    // um ciclo do motor. O painel fica com o agregado da rodada anterior (e a
+    // tela diz a idade dele), que é estritamente melhor do que o motor parar
+    // para atualizar um painel.
+    try {
+      await upsertCycleSummary(deps.pool, now, {
+        evaluated: markets.length,
+        entrable,
+        decisionsWritten: written,
+        state: evaluation.next.state,
+        positions: positions.length,
+        openBreakers: openBreakers.length,
+        staleMarks: pnl.positionsWithStaleMark,
+      });
+      await upsertDecisionHourly(
+        deps.pool,
+        now,
+        // O piso de edge como o motor o carrega, convertido para texto
+        // decimal pelo mesmo caminho de ponto fixo que o resto do módulo usa.
+        // A folga do "Quase" é calculada com ELE, nunca com um literal: se a
+        // config mudar o piso, o agregado da hora seguinte já muda junto, e a
+        // coluna `config_version` diz de qual piso cada balde saiu.
+        money(fractionScaled(deps.config.costs.edgeLiqMin)),
+        deps.config.version,
+      );
+    } catch (error: unknown) {
+      logJson("error", "PORTFOLIO_FUNNEL_UPSERT_FAILED", {
+        ...errorFields(error),
+      });
+    }
+
     return { evaluated: markets.length, entrable };
   }
 

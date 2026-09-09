@@ -274,11 +274,21 @@ describe("estimate volumetry", () => {
       // The bridge's entry-provenance table joined the audit group and was
       // funded from the panel snapshots (0.56 -> 0.54), not from new budget:
       // the slice below is still exactly 2 GB.
-      quota("portfolio_position_entries");
+      quota("portfolio_position_entries") +
+      // RFC-027 D1/D2 (caminho B) joined the same group the same way: the
+      // funnel's hourly aggregate and the cycle summary were funded from the
+      // panel snapshots again (0.54 -> 0.53), so the slice is STILL exactly
+      // 2 GB and the 8 GB reserve below did not move. Measured cost of the
+      // trim, 2026-09-09: the panel writes 12.85 MB/hour, so 0.01 GiB is ~50
+      // minutes of panel history against a declared TTL of 2 days — and the
+      // table was already past its quota (733 MB physical against 580 MB), so
+      // the window it really sustains was never the declared one.
+      quota("portfolio_decision_hourly") +
+      quota("portfolio_cycle_summary");
     expect(decisions).toBeCloseTo(0.9 * GB, 0);
-    expect(panel).toBeCloseTo(0.54 * GB, 0);
+    expect(panel).toBeCloseTo(0.53 * GB, 0);
     expect(gates).toBeCloseTo(0.35 * GB, 0);
-    expect(stateAndConfig).toBeCloseTo(0.21 * GB, 0);
+    expect(stateAndConfig).toBeCloseTo(0.22 * GB, 0);
     expect(decisions + panel + gates + stateAndConfig).toBeCloseTo(2 * GB, 0);
   });
 

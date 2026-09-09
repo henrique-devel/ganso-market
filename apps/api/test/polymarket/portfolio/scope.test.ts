@@ -93,6 +93,13 @@ const WRITABLE_TABLES: readonly string[] = [
   // exit criteria survive the log's quota. Written by this module, read by this
   // module; the paper module never touches it.
   "portfolio_position_entries",
+  // RFC-027 D1/D2, caminho B: o agregado horário do funil e o resumo do último
+  // ciclo. Escritos SÓ por este módulo (`funnelstore.ts`, chamado pelo worker
+  // ao fim de cada PORTFOLIO_CYCLE) e lidos pela API, que não tem caminho de
+  // escrita para nenhum dos dois — o teste de `overview.test.ts` prova esse
+  // lado varrendo as consultas que a rota emite.
+  "portfolio_decision_hourly",
+  "portfolio_cycle_summary",
 ];
 
 async function moduleFiles(): Promise<string[]> {
