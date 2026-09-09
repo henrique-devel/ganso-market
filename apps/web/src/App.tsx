@@ -13,6 +13,7 @@ import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
 // case-insensitive filesystems, where "./Resolution.js" (and Vite's
 // extension substitution) would match src/resolution.ts instead.
 import { Decisoes } from "./Decisoes.tsx";
+import { SistemaFase1 } from "./Sistema.tsx";
 import { Mesa } from "./Mesa.tsx";
 import { PortfolioPanel, type Section } from "./Portfolio.tsx";
 import { ResolutionPanel } from "./Resolution.tsx";
@@ -466,6 +467,15 @@ function Dashboard({
               overview={overview}
               events={events}
               feedDegraded={feedDegraded}
+            />
+            {/* RFC-027 D6: os dois consumidores que faltavam. `/data-quality`
+                não tinha nenhum; de `/portfolio/limits` a RFC-026 lia só o
+                bloco `config`. Os semáforos derivam das idades que o
+                `/overview` já publica — nenhuma requisição a mais por eles. */}
+            <SistemaFase1
+              accessToken={session.accessToken}
+              onUnauthorized={onUnauthorized}
+              overview={overview}
             />
             <PortfolioPanel
               accessToken={session.accessToken}

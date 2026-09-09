@@ -468,6 +468,26 @@ export function registerPortfolioRoutes(
           ORDER BY generated_at DESC
           LIMIT 10`,
       );
+      // RFC-027 D5: o relógio do G5, que nenhuma rota publicava.
+      //
+      // O G5 aparece na tela como "sem dado bastante", igual aos outros cinco,
+      // quando na verdade ele é o único cujo desbloqueio tem DATA: um piso de
+      // 60 dias contados de `clock_start`. Essa data não está no
+      // `metrics_json` — está aqui, nesta tabela de duas linhas — e sem ela a
+      // tela não tem como distinguir "esperando o relógio" de "travado".
+      //
+      // `last_reset_reason` entra junto porque um relógio reiniciado não é o
+      // mesmo que um relógio que nunca parou: a tela precisa poder dizer
+      // "reiniciado por X" em vez de mostrar uma data mais distante sem
+      // explicar por quê. `last_reset_at` fica de fora, como a D5 escreve.
+      //
+      // Duas linhas por chave primária. Mesma rota, mesma location, sem
+      // migration.
+      const g2Clock = await pool.query(
+        `SELECT category, clock_start, regime_fingerprint, last_reset_reason
+           FROM portfolio_g2_clock
+          ORDER BY category`,
+      );
       const blocked = latest.rows.some(
         (row) => (row as { status?: unknown }).status !== "PASS",
       );
@@ -482,6 +502,9 @@ export function registerPortfolioRoutes(
         calibrated_expectation: CALIBRATED_EXPECTATION,
         gates: latest.rows,
         reports: reports.rows,
+        // Lista vazia quando o relógio nunca foi iniciado. A tela então diz
+        // "relógio não iniciado" — nunca uma data inventada.
+        g2_clock: g2Clock.rows,
       });
     }),
   );

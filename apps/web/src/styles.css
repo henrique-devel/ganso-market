@@ -1824,3 +1824,129 @@ h1 {
     grid-column: 1 / -1;
   }
 }
+
+/* --- RFC-027 D6: o detalhe do feed, em texto ----------------------------- */
+
+.feed-detalhe {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.7rem;
+  margin-top: 0.15rem;
+  font-size: 0.83rem;
+  color: #8fa898;
+}
+
+.feed-campo-rot {
+  color: #6d8577;
+  margin-right: 0.25rem;
+}
+
+.feed-campo-rot::after {
+  content: ":";
+}
+
+/* A chave que ninguém traduziu ainda: visível, e dizendo onde encontrá-la. */
+.feed-campo--cru {
+  color: #c8a24a;
+  cursor: help;
+}
+
+/* --- RFC-027 D5/D6: natureza do gate, barras e semáforos ----------------- */
+
+.gate-data {
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: #8fa898;
+  font-variant-numeric: tabular-nums;
+}
+
+.gate-barras {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.gate-barras li {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) 4rem auto;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.gate-barras .bar {
+  width: 4rem;
+}
+
+.gate-barra-rot {
+  color: #8fa898;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gate-barra-val {
+  font-variant-numeric: tabular-nums;
+  color: #d9e6dd;
+}
+
+.semaforos {
+  list-style: none;
+  margin: 0.4rem 0 0.9rem;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.semaforos li {
+  display: grid;
+  grid-template-columns: 0.7rem minmax(10rem, auto) minmax(6rem, auto) 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.22rem 0.4rem;
+  border-radius: 6px;
+  background: #101a14;
+}
+
+.semaforo-ponto {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #4d5f54;
+}
+
+.semaforos li[data-tom="ok"] .semaforo-ponto {
+  background: #57d68d;
+}
+.semaforos li[data-tom="atencao"] .semaforo-ponto {
+  background: #d9b45a;
+}
+.semaforos li[data-tom="alerta"] .semaforo-ponto {
+  background: #e2776a;
+}
+
+.semaforo-nome {
+  color: #d9e6dd;
+}
+
+.semaforo-val {
+  font-variant-numeric: tabular-nums;
+  color: #f2fbf5;
+}
+
+.semaforo-nota {
+  color: #8fa898;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 720px) {
+  .semaforos li {
+    grid-template-columns: 0.7rem 1fr auto;
+  }
+  .semaforo-nota {
+    grid-column: 2 / -1;
+  }
+}

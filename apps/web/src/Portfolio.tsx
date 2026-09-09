@@ -36,14 +36,20 @@ import {
   LIMITADOR,
   MOTIVO_DECISAO,
   MOTIVO_GATE,
+  NATUREZA_BLOQUEIO,
   RESULTADO_DECISAO,
   SITUACAO_GATE,
   STATUS_RFC009,
   TIPO_DECISAO,
   consequencia,
+  dataDoRelogio,
+  naturezaDoBloqueio,
+  progressoDoGate,
   rotulo,
+  type Progresso,
 } from "./dicionario";
 import { Badge } from "./Overview.tsx";
+import { useModoEngenheiro } from "./modo.tsx";
 import {
   fetchDecisions,
   fetchExposures,
@@ -541,6 +547,51 @@ function usePage<T>(rows: readonly T[]): {
   };
 }
 
+/**
+ * As barras "tem/precisa" de um gate (RFC-027 D5).
+ *
+ * Os pares vêm dos MESMOS caminhos de `metrics_json` que decidem a etiqueta —
+ * não há um segundo mapa que possa divergir dela. A barra é a informação que
+ * faltava para o operador distinguir "faltam 92 de 100" de "faltam 100 de 100":
+ * as duas apareciam como "sem dado bastante".
+ *
+ * O número cru fica ao lado da barra sempre. Uma barra sozinha é uma proporção
+ * sem escala, e a escala é o que se quer saber.
+ */
+function BarrasDoGate({ pares }: Readonly<{ pares: readonly Progresso[] }>) {
+  if (pares.length === 0) {
+    // Nada que conte. É o caso do G6, que não tem número nenhum — e uma barra
+    // ali seria uma proporção inventada.
+    return <span className="sem-nome">nada a contar</span>;
+  }
+  return (
+    <ul className="gate-barras">
+      {pares.map((par) => {
+        const fracao = Math.min(par.tem / par.precisa, 1);
+        return (
+          <li key={par.chave}>
+            <span className="gate-barra-rot" title={par.chave}>
+              {par.chave}
+            </span>
+            <span className="bar" aria-hidden="true">
+              <span
+                className="bar-fill"
+                style={{ width: `${String(fracao * 100)}%` }}
+              />
+            </span>
+            <span className="gate-barra-val">
+              {par.tem % 1 === 0
+                ? String(par.tem)
+                : par.tem.toFixed(1).replace(".", ",")}
+              /{String(par.precisa)}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function Pager({
   index,
   pages,
@@ -596,6 +647,7 @@ export function PortfolioPanel({
   sections?: readonly Section[];
   rotulo?: string;
 }>) {
+  const engenheiro = useModoEngenheiro();
   const primeira: Section = sections[0] ?? "exposicao";
   const [section, setSection] = useState<Section>(primeira);
   const [data, setData] = useState<Loaded>(EMPTY);
@@ -1097,35 +1149,85 @@ export function PortfolioPanel({
             />{" "}
             {data.gates?.calibratedExpectation ?? ""}
           </p>
+          {/* RFC-027 D5. A coluna "Natureza" existe porque os seis gates
+              apareciam com o mesmo rótulo — "Sem dado bastante" — por quatro
+              razões diferentes, e a diferença muda o que o operador faz: um
+              espera um relógio com data, outro espera uma correção, outro
+              espera uma decisão dele. A etiqueta é decidida pelos NÚMEROS de
+              `metrics_json`, nunca pelo nome do gate. */}
           <table className="grid">
             <caption>
               Gates G1–G6. <code>INSUFFICIENT_DATA</code> não é o mesmo que{" "}
               <code>FAIL</code>: um é &quot;ainda não medimos o bastante&quot;,
-              o outro é &quot;medimos e não funcionou&quot;.
+              o outro é &quot;medimos e não funcionou&quot;. A coluna{" "}
+              <strong>Natureza</strong> diz o que destrava cada um.
             </caption>
             <thead>
               <tr>
                 <th scope="col">Gate</th>
                 <th scope="col">Situação</th>
+                <th scope="col">Natureza</th>
+                <th scope="col">Falta</th>
                 <th scope="col">Motivo</th>
                 <th scope="col">Medido em</th>
               </tr>
             </thead>
             <tbody>
-              {(data.gates?.gates ?? []).map((gate) => (
-                <tr key={gate.gate}>
-                  <th scope="row" title={consequencia(gate.gate, GATE)}>
-                    {rotulo(gate.gate, GATE)}
-                  </th>
-                  <td>
-                    <Badge codigo={gate.status} dicionario={SITUACAO_GATE} />
-                  </td>
-                  <td title={consequencia(gate.reason_code, MOTIVO_GATE)}>
-                    {rotulo(gate.reason_code, MOTIVO_GATE)}
-                  </td>
-                  <td>{gate.measured_at ?? "—"}</td>
-                </tr>
-              ))}
+              {(data.gates?.gates ?? []).map((gate) => {
+                const g2Clock = data.gates?.g2Clock ?? [];
+                const natureza = naturezaDoBloqueio(
+                  gate.gate,
+                  gate.status,
+                  gate.metrics,
+                  g2Clock,
+                );
+                const data_ = dataDoRelogio(gate.metrics, g2Clock);
+                const reinicio = g2Clock.find(
+                  (linha) => linha.last_reset_reason !== null,
+                )?.last_reset_reason;
+                return (
+                  <tr key={gate.gate}>
+                    <th scope="row" title={consequencia(gate.gate, GATE)}>
+                      {rotulo(gate.gate, GATE)}
+                    </th>
+                    <td>
+                      <Badge codigo={gate.status} dicionario={SITUACAO_GATE} />
+                    </td>
+                    <td>
+                      {natureza === null ? (
+                        "—"
+                      ) : (
+                        <>
+                          <Badge
+                            codigo={natureza}
+                            dicionario={NATUREZA_BLOQUEIO}
+                          />
+                          {/* A data do relógio é o que separa "esperando" de
+                              "travado". Ela vem de `clock_start + required_days`,
+                              e some junto com o relógio. */}
+                          {data_ === null ? null : (
+                            <div className="gate-data">
+                              até {data_.replace("T", " ").slice(0, 19)}Z
+                              {reinicio === undefined || reinicio === null
+                                ? ""
+                                : ` · reiniciado por ${reinicio}`}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      <BarrasDoGate
+                        pares={progressoDoGate(gate.gate, gate.metrics)}
+                      />
+                    </td>
+                    <td title={consequencia(gate.reason_code, MOTIVO_GATE)}>
+                      {rotulo(gate.reason_code, MOTIVO_GATE)}
+                    </td>
+                    <td>{gate.measured_at ?? "—"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </>
@@ -1275,10 +1377,21 @@ export function PortfolioPanel({
                     {rotulo(measurement.reason_code, MOTIVO_GATE)}
                   </td>
                   <td>
-                    <details>
-                      <summary>{metricSummary(measurement.metrics)}</summary>
-                      <pre>{JSON.stringify(measurement.metrics, null, 2)}</pre>
-                    </details>
+                    {/* RFC-027 D6/aceite 5: o resumo legível fica sempre; o
+                        JSON cru passa a exigir o modo engenheiro (tecla `?`).
+                        Nada se perde — este é o espaço de consulta e a
+                        evidência continua a uma tecla de distância —, mas o
+                        padrão da tela deixa de ser um despejo de JSON. */}
+                    {engenheiro ? (
+                      <details>
+                        <summary>{metricSummary(measurement.metrics)}</summary>
+                        <pre>
+                          {JSON.stringify(measurement.metrics, null, 2)}
+                        </pre>
+                      </details>
+                    ) : (
+                      metricSummary(measurement.metrics)
+                    )}
                   </td>
                   <td>
                     {measurement.window_from ?? "—"} →{" "}

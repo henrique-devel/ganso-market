@@ -109,6 +109,77 @@ export const MOTIVO_GATE: Dicionario = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// RFC-027 D5: a natureza do bloqueio
+//
+// Os seis gates aparecem hoje com o MESMO rótulo — "Sem dado bastante" — e não
+// é o que está acontecendo. Medido em produção 2026-09-09, os seis estão em
+// `INSUFFICIENT_DATA` por quatro razões diferentes, e a diferença muda o que o
+// operador faz:
+//
+//   G5  espera um RELÓGIO com data (28/08 + 60 d = 2026-10-27 20:38:47Z);
+//   G4  está travado por um DEFEITO (0 amostras de fee com fills existindo);
+//   G6  espera uma DECISÃO do proprietário, e nada o mede;
+//   G1  depende de um MODELO PROMOVIDO (`model_forecasts = 0`).
+//
+// "Sem dado bastante" nos quatro casos faz o G6 parecer que vai destravar
+// sozinho e o G5 parecer que não vai nunca. Nenhum dos dois é verdade.
+//
+// A REGRA É DADO-DIRIGIDA, e é isso que a torna manutenível: nada aqui olha o
+// nome do gate para decidir a etiqueta. `naturezaDoBloqueio` lê as MESMAS
+// chaves de `metrics_json` que a barra "tem/precisa" já lê, e a etiqueta muda
+// sozinha quando o número muda. Foi o que aconteceu entre a RFC e esta
+// implementação: em 02/09 o G2 tinha `closed_positions = 0` e a RFC previu
+// "travado por defeito"; em 09/09 ele tem 8, e a mesma função devolve
+// "acumulando" sem uma linha de código nova. O aceite 3 prevê exatamente isso.
+// ---------------------------------------------------------------------------
+
+export const NATUREZA_BLOQUEIO: Dicionario = {
+  RELOGIO: {
+    rotulo: "relógio, com data",
+    consequencia:
+      "Um piso de tempo que já está correndo. Ninguém precisa fazer nada: " +
+      "a data em que ele vence é conhecida e está na tela.",
+    tom: "atencao",
+  },
+  RELOGIO_NAO_INICIADO: {
+    rotulo: "relógio não iniciado",
+    consequencia:
+      "O piso de tempo existe, mas nada registrou o início dele. Sem " +
+      "`clock_start` não há data — e uma data inventada seria pior que nenhuma.",
+    tom: "alerta",
+  },
+  DEFEITO: {
+    rotulo: "travado por defeito, sem data",
+    consequencia:
+      "Não é falta de tempo: a evidência que este gate mede não está sendo " +
+      "produzida. Esperar não resolve — o defeito é que tem de ser corrigido.",
+    tom: "alerta",
+  },
+  DECISAO_PROPRIETARIO: {
+    rotulo: "decisão do proprietário",
+    consequencia:
+      "Nada mede este gate e nada o destrava com o tempo. Ele fecha quando " +
+      "houver uma revisão escrita, e só então.",
+    tom: "atencao",
+  },
+  DEPENDE_DE_MODELO: {
+    rotulo: "depende de modelo promovido",
+    consequencia:
+      "O sinal em uso é a linha de base do mercado. Pontuá-lo contra o preço " +
+      "compararia o preço com ele mesmo, então não há o que medir enquanto " +
+      "nenhum modelo for promovido.",
+    tom: "atencao",
+  },
+  ACUMULANDO: {
+    rotulo: "acumulando",
+    consequencia:
+      "A evidência está sendo produzida e a contagem sobe. Não há data " +
+      "porque o ritmo é que decide, mas a barra mostra onde está.",
+    tom: "atencao",
+  },
+};
+
 export const STATUS_RFC009: Dicionario = {
   BLOCKED: {
     rotulo: "Bloqueada",
@@ -378,6 +449,7 @@ const TODOS: readonly Dicionario[] = [
   ACAO_RESOLUCAO,
   MOTIVO_DECISAO,
   MOTIVO_GATE,
+  NATUREZA_BLOQUEIO,
   LIMITADOR,
   TIPO_DECISAO,
   RESULTADO_DECISAO,
@@ -454,4 +526,339 @@ export function tom(
   dicionario?: Dicionario,
 ): "ok" | "atencao" | "alerta" | "neutro" {
   return verbete(codigo, dicionario)?.tom ?? "neutro";
+}
+
+// ---------------------------------------------------------------------------
+// RFC-027 D5: a classificação, e as barras "tem/precisa"
+// ---------------------------------------------------------------------------
+
+/** Um par tem/precisa lido de `metrics_json`, já pronto para virar barra. */
+export interface Progresso {
+  readonly chave: string;
+  readonly tem: number;
+  readonly precisa: number;
+}
+
+/** O relógio do G5, como `/polymarket/gates` o publica (D5). */
+export interface RelogioG2 {
+  readonly category: string;
+  readonly clock_start: string | null;
+  readonly regime_fingerprint: string | null;
+  readonly last_reset_reason: string | null;
+}
+
+function numero(valor: unknown): number | null {
+  if (typeof valor === "number") {
+    return Number.isFinite(valor) ? valor : null;
+  }
+  if (typeof valor === "string" && valor.trim() !== "") {
+    const convertido = Number(valor);
+    return Number.isFinite(convertido) ? convertido : null;
+  }
+  return null;
+}
+
+function objeto(valor: unknown): Record<string, unknown> {
+  return typeof valor === "object" && valor !== null && !Array.isArray(valor)
+    ? (valor as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Os pares tem/precisa de um gate, na ordem em que a tela os desenha.
+ *
+ * Lidos dos MESMOS caminhos que a etiqueta usa — não há um segundo mapa que
+ * possa divergir dela. Um par só entra quando os dois lados existem: uma barra
+ * com denominador ausente desenharia uma proporção que ninguém mediu.
+ */
+export function progressoDoGate(
+  gate: string,
+  metrics: Readonly<Record<string, unknown>>,
+): readonly Progresso[] {
+  const pares: Progresso[] = [];
+  const empurra = (chave: string, tem: unknown, precisa: unknown): void => {
+    const a = numero(tem);
+    const b = numero(precisa);
+    if (a !== null && b !== null && b > 0) {
+      pares.push({ chave, tem: a, precisa: b });
+    }
+  };
+
+  if (gate === "G1") {
+    empurra(
+      "model_resolved_markets",
+      metrics.model_resolved_markets,
+      metrics.required,
+    );
+  }
+  // G2 publica os pares já formados em `shortfalls.*`; o G3 carrega os mesmos
+  // dentro de `evidence_base`, porque a base de evidência dele É a do G2.
+  const shortfalls = objeto(
+    gate === "G3"
+      ? objeto(metrics.evidence_base).shortfalls
+      : metrics.shortfalls,
+  );
+  for (const [chave, valor] of Object.entries(shortfalls)) {
+    const par = objeto(valor);
+    empurra(chave, par.have, par.need);
+  }
+  if (gate === "G4") {
+    empurra("fee_samples", metrics.fee_samples, metrics.samples_required);
+    empurra(
+      "slippage_samples",
+      metrics.slippage_samples,
+      metrics.samples_required,
+    );
+  }
+  return pares;
+}
+
+/**
+ * A natureza do bloqueio de um gate, decidida pelos NÚMEROS.
+ *
+ * Devolve uma chave de `NATUREZA_BLOQUEIO`, ou `null` quando o gate não está
+ * bloqueado (`PASS`) — a tela então mostra a situação e mais nada.
+ *
+ * Nenhum ramo aqui existe "porque é o G2": cada um pergunta a uma chave de
+ * `metrics_json` o que ela vale. É por isso que a etiqueta do G2 já mudou de
+ * "travado por defeito" para "acumulando" entre a redação da RFC e este código,
+ * sem que uma linha fosse escrita para isso.
+ */
+export function naturezaDoBloqueio(
+  gate: string,
+  status: string | null,
+  metrics: Readonly<Record<string, unknown>>,
+  g2Clock: readonly RelogioG2[] = [],
+): string | null {
+  if (status === "PASS") {
+    return null;
+  }
+
+  // G5: um piso de tempo. A data vem do relógio, nunca do `metrics_json`.
+  if (numero(metrics.required_days) !== null) {
+    return g2Clock.some((linha) => linha.clock_start !== null)
+      ? "RELOGIO"
+      : "RELOGIO_NAO_INICIADO";
+  }
+
+  // G6: nada o mede. Reconhecido pela ausência de qualquer par tem/precisa
+  // somada à presença do identificador do relatório.
+  if ("current_report_id" in metrics) {
+    return "DECISAO_PROPRIETARIO";
+  }
+
+  // G1: enquanto nenhum modelo for promovido não há previsão de modelo para
+  // pontuar, e nenhuma quantidade de tempo muda isso.
+  const previsoesDeModelo = numero(metrics.model_forecasts);
+  if (previsoesDeModelo !== null) {
+    return previsoesDeModelo === 0 ? "DEPENDE_DE_MODELO" : "ACUMULANDO";
+  }
+
+  // G4: a reconciliação. Zero amostras COM fills existindo é defeito, não
+  // falta de tempo; qualquer amostra já é acumulação.
+  const amostrasDeFee = numero(metrics.fee_samples);
+  const amostrasDeSlippage = numero(metrics.slippage_samples);
+  if (amostrasDeFee !== null || amostrasDeSlippage !== null) {
+    return (amostrasDeFee ?? 0) === 0 && (amostrasDeSlippage ?? 0) === 0
+      ? "DEFEITO"
+      : "ACUMULANDO";
+  }
+
+  // G2 e G3: a base de evidência do paper. `closed_positions = 0` com o motor
+  // rodando há dias é o defeito da liquidação; qualquer posição fechada já é
+  // acumulação.
+  const base = gate === "G3" ? objeto(metrics.evidence_base) : metrics;
+  const posicoesFechadas = numero(base.closed_positions);
+  if (posicoesFechadas !== null) {
+    return posicoesFechadas === 0 ? "DEFEITO" : "ACUMULANDO";
+  }
+
+  return null;
+}
+
+/**
+ * A data em que o piso de tempo do G5 vence, ou `null`.
+ *
+ * `clock_start` mais tarde entre as categorias: o gate só passa quando TODAS
+ * tiverem cumprido o piso, então a data que interessa é a da última. `null`
+ * quando não há relógio — e a tela escreve "relógio não iniciado" em vez de
+ * inventar uma data.
+ */
+export function dataDoRelogio(
+  metrics: Readonly<Record<string, unknown>>,
+  g2Clock: readonly RelogioG2[],
+): string | null {
+  const dias = numero(metrics.required_days);
+  if (dias === null) {
+    return null;
+  }
+  let maisTarde: number | null = null;
+  for (const linha of g2Clock) {
+    if (linha.clock_start === null) {
+      continue;
+    }
+    const instante = new Date(linha.clock_start).getTime();
+    if (
+      !Number.isNaN(instante) &&
+      (maisTarde === null || instante > maisTarde)
+    ) {
+      maisTarde = instante;
+    }
+  }
+  if (maisTarde === null) {
+    return null;
+  }
+  return new Date(maisTarde + dias * 86_400_000).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// RFC-027 D6: o `detail` do feed vira texto
+//
+// O feed renderizava `JSON.stringify(detail, null, 2)` dentro de um `<details>`
+// — em toda linha, para todo operador, o tempo todo. JSON cru numa tela de
+// operação não é transparência: é o painel devolvendo o problema para quem
+// veio buscar resposta.
+//
+// As chaves são as que `overview.ts` publica em `EVENT_SOURCES` (oito fontes).
+// Uma chave que este mapa não conhece NÃO é escondida: ela deixa de aparecer
+// como texto e continua inteira no modo engenheiro, que imprime o JSON como
+// antes. Assim uma fonte nova nunca some da tela em silêncio — ela aparece do
+// jeito antigo até alguém traduzi-la.
+// ---------------------------------------------------------------------------
+
+export const CHAVE_DETALHE: Readonly<Record<string, string>> = {
+  from_state: "de",
+  to_state: "para",
+  reason: "motivo",
+  trigger_source: "disparado por",
+  decision_kind: "tipo",
+  condition_id: "mercado",
+  token_id: "token",
+  market_side: "lado",
+  size_shares: "cotas",
+  edge_net: "edge líq.",
+  outcome: "resultado",
+  binding_constraint: "limitador",
+  event_type: "evento",
+  order_id: "ordem",
+  kind: "tipo",
+  scope: "escopo",
+  ended_at: "encerrado em",
+  edge_key: "aresta",
+  magnitude_bps: "magnitude (bps)",
+  magnitude: "magnitude",
+  suppressed: "suprimida",
+  direction: "direção",
+  position_held: "com posição aberta",
+  category: "categoria",
+  previous_start: "início anterior",
+  new_start: "novo início",
+};
+
+/**
+ * Que dicionário traduz o VALOR de cada chave.
+ *
+ * Sem isto, "para: HALTED" seria traduzido pela metade — o rótulo em português
+ * e o valor em código. A regra do módulo continua valendo: o código volta no
+ * `title` e no modo engenheiro.
+ */
+const DICIONARIO_DO_VALOR: Readonly<Record<string, Dicionario>> = {
+  from_state: ESTADO_PORTFOLIO,
+  to_state: ESTADO_PORTFOLIO,
+  trigger_source: GATILHO_TRANSICAO,
+  decision_kind: TIPO_DECISAO,
+  market_side: LADO,
+  outcome: RESULTADO_DECISAO,
+  binding_constraint: LIMITADOR,
+  event_type: EVENTO_LEDGER,
+  kind: TIPO_DISJUNTOR,
+  direction: DIRECAO_DIVERGENCIA,
+  category: CATEGORIA,
+};
+
+export interface CampoDetalhe {
+  readonly chave: string;
+  readonly rotulo: string;
+  readonly valor: string;
+  /** O `title`: a consequência quando há, o código cru quando não. */
+  readonly titulo: string | undefined;
+}
+
+function valorLegivel(chave: string, valor: unknown): string | null {
+  if (valor === null || valor === undefined || valor === "") {
+    return null;
+  }
+  if (typeof valor === "boolean") {
+    return valor ? "sim" : "não";
+  }
+  if (typeof valor === "number") {
+    return String(valor);
+  }
+  if (typeof valor !== "string") {
+    // Objeto ou lista aninhada: não há tradução de uma linha para isso, e
+    // achatá-lo aqui reinventaria o JSON com menos informação. Fica para o
+    // modo engenheiro.
+    return null;
+  }
+  const dicionario = DICIONARIO_DO_VALOR[chave];
+  return dicionario === undefined ? valor : rotulo(valor, dicionario);
+}
+
+/**
+ * O `detail` de um evento como campos legíveis.
+ *
+ * Devolve só o que sabe traduzir, na ordem em que as chaves chegaram. Uma lista
+ * vazia quer dizer "não conheço nada disto" — e a tela então mostra o aviso que
+ * manda ligar o modo engenheiro, em vez de uma seção vazia.
+ */
+export function traduzDetalhe(
+  detail: Readonly<Record<string, unknown>>,
+): readonly CampoDetalhe[] {
+  const campos: CampoDetalhe[] = [];
+  for (const [chave, bruto] of Object.entries(detail)) {
+    const rot = CHAVE_DETALHE[chave];
+    if (rot === undefined) {
+      continue;
+    }
+    const valor = valorLegivel(chave, bruto);
+    if (valor === null) {
+      continue;
+    }
+    const dicionario = DICIONARIO_DO_VALOR[chave];
+    campos.push({
+      chave,
+      rotulo: rot,
+      valor,
+      titulo:
+        dicionario === undefined || typeof bruto !== "string"
+          ? chave
+          : consequencia(bruto, dicionario),
+    });
+  }
+  return campos;
+}
+
+/**
+ * As chaves que `traduzDetalhe` não soube traduzir. A tela as nomeia.
+ *
+ * Uma chave AUSENTE de valor — `null`, `undefined` ou `""` — não é
+ * desconhecida: é vazia, e não há o que mostrar nem o que traduzir. Contá-la
+ * aqui faria toda linha do feed anunciar "+1 sem tradução" por causa de um
+ * `ended_at` nulo, que é o normal de um disjuntor aberto.
+ */
+export function chavesDesconhecidas(
+  detail: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  return Object.keys(detail).filter((chave) => {
+    const bruto = detail[chave];
+    if (bruto === null || bruto === undefined || bruto === "") {
+      return false;
+    }
+    if (CHAVE_DETALHE[chave] === undefined) {
+      return true;
+    }
+    // Conhecida mas não representável numa linha (objeto, lista): o JSON do
+    // modo engenheiro é o lugar dela.
+    return valorLegivel(chave, bruto) === null;
+  });
 }
