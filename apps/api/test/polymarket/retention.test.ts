@@ -179,10 +179,31 @@ describe("retention config", () => {
       quotaBytes: 0.9 * 1024 ** 3,
       protected: false,
     });
+    // 0.53, not 0.54: RFC-027 D1/D2 funded the funnel's hourly aggregate and
+    // the cycle summary out of this quota rather than out of new budget, the
+    // same way the bridge's entry table was funded (0.56 -> 0.54). Measured
+    // 2026-09-09, the panel writes 12.85 MB/hour, so the 0.01 GiB it gave up is
+    // ~50 minutes of panel history — and this table is pruned by QUOTA, not by
+    // the declared TTL (733 MB physical against 580 MB of quota), so the two
+    // days above were already an intent and not a window. The 24 hours of
+    // funnel the trim buys cost ~200 rows/day; the same 24 hours in panel
+    // snapshots cost 308 MB.
     expect(byName.get("portfolio_panel_snapshots")).toMatchObject({
       ttlDays: 2,
-      quotaBytes: 0.54 * 1024 ** 3,
+      quotaBytes: 0.53 * 1024 ** 3,
       protected: false,
+    });
+    // The aggregate the trim paid for: never pruned, because it exists to
+    // outlive the decision log's ~3-day quota window.
+    expect(byName.get("portfolio_decision_hourly")).toMatchObject({
+      ttlDays: 90,
+      quotaBytes: 0.005 * 1024 ** 3,
+      protected: true,
+    });
+    expect(byName.get("portfolio_cycle_summary")).toMatchObject({
+      ttlDays: 90,
+      quotaBytes: 0.005 * 1024 ** 3,
+      protected: true,
     });
   });
 
@@ -198,8 +219,15 @@ describe("retention config", () => {
       (sum, t) => sum + t.quotaBytes,
       0,
     );
+    // `declared` did NOT move with RFC-027: the two new quotas (0.01 GiB) came
+    // out of portfolio_panel_snapshots (0.54 -> 0.53), so the sum is the same
+    // 95 GiB and the headroom argument at the bottom of this test still holds.
     expect(declared / GiB).toBeCloseTo(95, 3);
-    expect(prunable / GiB).toBeCloseTo(85.875, 3);
+    // `prunable` DID move, by exactly that 0.01 GiB, and in the safe direction:
+    // the budget moved from a table the pruner can reach to two it never
+    // touches. What the pruner can free is smaller, and what the alarm can be
+    // raised by is unchanged.
+    expect(prunable / GiB).toBeCloseTo(85.865, 3);
     expect(declared).toBeLessThan(trigger);
 
     // What the pruner can actually reach is smaller still, and that is the

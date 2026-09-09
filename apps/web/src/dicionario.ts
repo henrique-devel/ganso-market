@@ -195,7 +195,13 @@ export const MOTIVO_DECISAO: Dicionario = {
   PORTFOLIO_CIRCUIT_BREAKER: {
     rotulo: "disjuntor de portfólio aberto",
     consequencia:
-      "A recusa é do portfólio inteiro, não deste mercado. É metade do log.",
+      // "É metade do log" saiu: era um número de produção fixado em texto, e
+      // deixou de ser verdade. Medido em 02/09 era 55,9 % das avaliadas; medido
+      // em 2026-09-09, depois de a RFC-025 fazer o PARAM_CHANGE abrir em
+      // mudança real de parâmetro e não no nascimento do mercado, são 2,3 %. O
+      // funil da tela Decisões mostra a fatia medida; o verbete não a fixa.
+      "A recusa é do portfólio inteiro, não deste mercado. Quanto ela pesa no " +
+      "log está no funil da tela Decisões.",
   },
   BOOK_STALE: {
     rotulo: "livro velho",

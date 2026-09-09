@@ -44,6 +44,63 @@ export interface GateRow {
   readonly measured_at: string | null;
 }
 
+/**
+ * Um degrau do funil das 24 h (RFC-027 D1).
+ *
+ * `markets` é o MÁXIMO de mercados distintos que o degrau viu numa hora, não a
+ * soma: o servidor agrega baldes horários e um mercado avaliado em duas horas
+ * conta nos dois. O nome do campo no `/overview` diz isso; aqui a tela só o
+ * exibe com a legenda "no pico de uma hora".
+ */
+export interface FunnelStep {
+  readonly outcome: string | null;
+  readonly reason_code: string | null;
+  readonly decisions: number;
+  readonly markets: number;
+}
+
+/**
+ * O funil, ou a ausência dele.
+ *
+ * `null` no `Overview` quer dizer "não há agregado", e a tela escreve
+ * "indisponível" com o motivo. NUNCA um funil desenhado sobre a amostra de 500
+ * linhas: seriam ~23 minutos de log com título de 24 horas.
+ */
+export interface Funnel24h {
+  /** `"hourly"` (agregado do worker) ou `"log"`. Parte da leitura. */
+  readonly source: string | null;
+  readonly window_from: string | null;
+  readonly window_to: string | null;
+  readonly steps: readonly FunnelStep[];
+}
+
+/** Os sete campos do último `PORTFOLIO_CYCLE` (RFC-027 D2). */
+export interface LastCycle {
+  readonly cycle_at: string | null;
+  readonly evaluated: number;
+  readonly entrable: number;
+  readonly decisions_written: number;
+  readonly state: string | null;
+  readonly positions: number;
+  readonly open_breakers: number;
+  readonly stale_marks: number;
+}
+
+/**
+ * Um "Quase" por código (RFC-027 D3).
+ *
+ * `folga_min` chega como TEXTO decimal e fica texto: a tela formata centavos a
+ * partir dele e não faz aritmética de dinheiro em float. `folga_p50` é `null`
+ * no caminho B — uma mediana não se recompõe de medianas horárias, e o servidor
+ * prefere um `null` honesto a uma mediana de medianas.
+ */
+export interface NearMiss {
+  readonly reason_code: string;
+  readonly count: number;
+  readonly folga_min: string | null;
+  readonly folga_p50: string | null;
+}
+
 export interface Overview {
   readonly generated_at: string | null;
   readonly release_sha: string | null;
@@ -89,6 +146,12 @@ export interface Overview {
     readonly budget_used_pct: number | null;
   };
   readonly drawdown_limit: number;
+  /** RFC-027 D1. `null` = sem agregado; a tela diz "indisponível". */
+  readonly funnel_24h: Funnel24h | null;
+  /** RFC-027 D2. `null` enquanto nenhum ciclo tiver rodado desde o deploy. */
+  readonly last_cycle: LastCycle | null;
+  /** RFC-027 D3. Lista vazia = nenhum quase na janela, que não é "não sei". */
+  readonly near_misses_24h: readonly NearMiss[];
 }
 
 export interface FeedEvent {
@@ -184,6 +247,77 @@ function parseKillSwitch(raw: unknown): KillSwitchSummary | null {
   };
 }
 
+function parseFunnel(raw: unknown): Funnel24h | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const stepsRaw = raw["steps"];
+  const steps = Array.isArray(stepsRaw)
+    ? stepsRaw.flatMap((row): FunnelStep[] =>
+        isRecord(row)
+          ? [
+              {
+                outcome: asString(row["outcome"]),
+                reason_code: asString(row["reason_code"]),
+                decisions: asCount(row["decisions"]),
+                markets: asCount(row["markets"]),
+              },
+            ]
+          : [],
+      )
+    : [];
+  // Um funil sem degraus não é um funil vazio, é a ausência de agregado — e a
+  // tela tem de dizer "indisponível", não desenhar barras de zero.
+  if (steps.length === 0) {
+    return null;
+  }
+  return {
+    source: asString(raw["source"]),
+    window_from: asString(raw["window_from"]),
+    window_to: asString(raw["window_to"]),
+    steps,
+  };
+}
+
+function parseLastCycle(raw: unknown): LastCycle | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  return {
+    cycle_at: asString(raw["cycle_at"]),
+    evaluated: asCount(raw["evaluated"]),
+    entrable: asCount(raw["entrable"]),
+    decisions_written: asCount(raw["decisions_written"]),
+    state: asString(raw["state"]),
+    positions: asCount(raw["positions"]),
+    open_breakers: asCount(raw["open_breakers"]),
+    stale_marks: asCount(raw["stale_marks"]),
+  };
+}
+
+function parseNearMisses(raw: unknown): readonly NearMiss[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((row): NearMiss[] => {
+    if (!isRecord(row)) {
+      return [];
+    }
+    const reason = asString(row["reason_code"]);
+    return reason === null
+      ? []
+      : [
+          {
+            reason_code: reason,
+            count: asCount(row["count"]),
+            // Texto, não número: é dinheiro.
+            folga_min: asString(row["folga_min"]),
+            folga_p50: asString(row["folga_p50"]),
+          },
+        ];
+  });
+}
+
 function parseOverview(body: unknown): Overview | null {
   if (!isRecord(body)) {
     return null;
@@ -260,6 +394,9 @@ function parseOverview(body: unknown): Overview | null {
     // 10% is the RFC-013 halt threshold; the server publishes it so the bar's
     // end and the engine's trigger can never drift apart.
     drawdown_limit: asNumeric(limits["drawdown_limit"]) ?? 0.1,
+    funnel_24h: parseFunnel(body["funnel_24h"]),
+    last_cycle: parseLastCycle(body["last_cycle"]),
+    near_misses_24h: parseNearMisses(body["near_misses_24h"]),
   };
 }
 

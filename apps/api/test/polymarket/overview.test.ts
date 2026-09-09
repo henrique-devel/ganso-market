@@ -582,3 +582,270 @@ describe("GET /polymarket/events", () => {
     expect(response.json()).toMatchObject({ reason_code: "EVENTS_API_FAILED" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// RFC-027 D1–D3: o funil das 24 h, o último ciclo e o "Quase"
+// ---------------------------------------------------------------------------
+
+/**
+ * Baldes horários como o worker os grava.
+ *
+ * `reason_code: ""` é como a tabela codifica "sem código" — o que uma decisão
+ * ACCEPTED tem. A API tem de devolvê-lo como `null`, e é isso que o primeiro
+ * teste abaixo fixa: a forma publicada é a do log cru, não a da tabela.
+ */
+function hourlyRows(): Row[] {
+  return [
+    {
+      hour_start: "2026-09-01T15:00:00.000Z",
+      reason_code: "DATA_STALE",
+      outcome: "REJECTED",
+      decisions: "400",
+      markets: 61,
+      near_misses: 0,
+      folga_min: null,
+      config_version: "1.2.0",
+    },
+    {
+      hour_start: "2026-09-01T16:00:00.000Z",
+      reason_code: "DATA_STALE",
+      outcome: "REJECTED",
+      decisions: "377",
+      markets: 58,
+      near_misses: 0,
+      folga_min: null,
+      config_version: "1.2.0",
+    },
+    {
+      hour_start: "2026-09-01T16:00:00.000Z",
+      reason_code: "EDGE_BELOW_MIN",
+      outcome: "REJECTED",
+      decisions: "7",
+      markets: 3,
+      near_misses: 7,
+      folga_min: "-0.009962",
+      config_version: "1.2.0",
+    },
+    {
+      hour_start: "2026-09-01T15:00:00.000Z",
+      reason_code: "EDGE_BELOW_MIN",
+      outcome: "REJECTED",
+      decisions: "4",
+      markets: 2,
+      near_misses: 4,
+      folga_min: "-0.001500",
+      config_version: "1.2.0",
+    },
+    {
+      hour_start: "2026-09-01T16:00:00.000Z",
+      reason_code: "",
+      outcome: "ACCEPTED",
+      decisions: "3",
+      markets: 3,
+      near_misses: 0,
+      folga_min: null,
+      config_version: "1.2.0",
+    },
+  ];
+}
+
+const CYCLE_ROW: Row = {
+  cycle_at: "2026-09-01T16:59:31.000Z",
+  evaluated: 62,
+  entrable: 0,
+  decisions_written: 7,
+  state: "NORMAL",
+  positions: 2,
+  open_breakers: 54,
+  stale_marks: 1,
+};
+
+function funnelResponder(rows: Row[], cycle: Row | null): Responder {
+  return (text) => {
+    if (text.includes("portfolio_decision_hourly")) {
+      return rows;
+    }
+    if (text.includes("portfolio_cycle_summary")) {
+      return cycle === null ? [] : [cycle];
+    }
+    return [];
+  };
+}
+
+describe("GET /polymarket/overview — funil das 24 h (RFC-027 D1)", () => {
+  it("publica os degraus com a janela e a fonte, e traduz '' para null", async () => {
+    const { instance } = await build(funnelResponder(hourlyRows(), CYCLE_ROW));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const funnel = response.json().funnel_24h;
+    // A fonte é parte da resposta: quem lê o número tem de saber de onde veio.
+    expect(funnel.source).toBe("hourly");
+    // `window_from` é o balde mais antigo que a tabela devolveu, não
+    // "agora menos 24 h": a tela desenha a janela que TEM.
+    expect(funnel.window_from).toBe("2026-09-01T15:00:00.000Z");
+    expect(funnel.window_to).toBe(FIXED_NOW.toISOString());
+
+    const passo = (outcome: string | null, reason: string | null) =>
+      funnel.steps.find(
+        (step: { outcome: string | null; reason_code: string | null }) =>
+          step.outcome === outcome && step.reason_code === reason,
+      );
+    // Soma exata entre baldes.
+    expect(passo("REJECTED", "DATA_STALE").decisions).toBe(777);
+    expect(passo("REJECTED", "EDGE_BELOW_MIN").decisions).toBe(11);
+    // ACCEPTED não tem reason_code no log, e a tabela grava '' porque a chave
+    // primária não admite NULL. A API desfaz a codificação.
+    expect(passo("ACCEPTED", null).decisions).toBe(3);
+    // `markets` é o MÁXIMO entre baldes, não a soma: um mercado avaliado em
+    // duas horas conta duas vezes na tabela e somar diria o dobro.
+    expect(passo("REJECTED", "DATA_STALE").markets).toBe(61);
+    // Ordenado pelo volume, que é a ordem em que a tela desenha as barras.
+    expect(funnel.steps[0].reason_code).toBe("DATA_STALE");
+  });
+
+  it("devolve funnel_24h null quando não há agregado", async () => {
+    // A D1 é explícita: sem agregado a tela escreve "indisponível" e NÃO
+    // desenha barras. Um funil sobre as 500 linhas da amostra seriam ~23 min
+    // de log com título de 24 horas.
+    const { instance } = await build(funnelResponder([], null));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().funnel_24h).toBeNull();
+    expect(response.json().last_cycle).toBeNull();
+    // A chave existe e é uma lista vazia: a tela distingue "nenhum quase" de
+    // "não sei", e as duas coisas não são a mesma.
+    expect(response.json().near_misses_24h).toEqual([]);
+  });
+
+  it("lê o funil por uma janela de horas, sem varrer o log de decisões", async () => {
+    const { instance, calls } = await build(
+      funnelResponder(hourlyRows(), CYCLE_ROW),
+    );
+    await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    const funnelCall = calls.find((call) =>
+      call.text.includes("portfolio_decision_hourly"),
+    );
+    expect(funnelCall).toBeDefined();
+    expect(funnelCall?.params[1]).toBe(24);
+    // A medição de 2026-09-09 pôs a leitura direta em 3508 ms de p95 quente
+    // contra um statement_timeout de 1000 ms neste pool. Se alguém trocar o
+    // agregado pelo log, este teste é o que avisa.
+    expect(
+      calls.some(
+        (call) =>
+          call.text.includes("FROM portfolio_decisions") &&
+          call.text.includes("count(*)"),
+      ),
+    ).toBe(false);
+  });
+
+  it("não tem caminho de escrita para as tabelas do agregado", async () => {
+    // Invariante da RFC: só o worker escreve. Verificado sobre o texto de TODAS
+    // as consultas que a rota emite, não sobre a intenção de quem a escreveu.
+    const { instance, calls } = await build(
+      funnelResponder(hourlyRows(), CYCLE_ROW),
+    );
+    await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    for (const call of calls) {
+      // O verbo da instrução, não a substring: `updated_at` contém "UPDATE" e
+      // um teste que casasse substring reprovaria em toda consulta que lê essa
+      // coluna — reprovaria pelo motivo errado e seria desligado no dia
+      // seguinte.
+      expect(call.text.trimStart()).toMatch(/^(SELECT|WITH)\b/i);
+    }
+  });
+});
+
+describe("GET /polymarket/overview — último ciclo (RFC-027 D2)", () => {
+  it("publica os sete campos do PORTFOLIO_CYCLE", async () => {
+    const { instance } = await build(funnelResponder(hourlyRows(), CYCLE_ROW));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    // O aceite 2 compara exatamente estes números com o último
+    // PORTFOLIO_CYCLE do `docker logs` do worker.
+    expect(response.json().last_cycle).toEqual({
+      cycle_at: "2026-09-01T16:59:31.000Z",
+      evaluated: 62,
+      entrable: 0,
+      decisions_written: 7,
+      state: "NORMAL",
+      positions: 2,
+      open_breakers: 54,
+      stale_marks: 1,
+    });
+  });
+});
+
+describe("GET /polymarket/overview — Quase (RFC-027 D3)", () => {
+  it("agrega no servidor, soma as contagens e toma a menor folga", async () => {
+    const { instance } = await build(funnelResponder(hourlyRows(), CYCLE_ROW));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    expect(response.json().near_misses_24h).toEqual([
+      {
+        reason_code: "EDGE_BELOW_MIN",
+        count: 11,
+        // O MENOR dos dois baldes (-0,009962 < -0,001500), comparado em ponto
+        // fixo e devolvido como o texto decimal que o banco gravou. A tela
+        // formata "faltou 1,0 c" a partir daqui e não faz aritmética.
+        folga_min: "-0.009962",
+        // Uma mediana não se recompõe de medianas horárias. `null` honesto no
+        // lugar de uma mediana de medianas com cara de medição.
+        folga_p50: null,
+      },
+    ]);
+  });
+
+  it("não republica o piso de edge — a fonte dele é /portfolio/limits", async () => {
+    // D3: o limite tem UMA fonte publicada (o bloco `config` de
+    // `/portfolio/limits`, RFC-026 D6). Republicá-lo aqui criaria a segunda,
+    // e é assim que as duas divergem.
+    const { instance } = await build(funnelResponder(hourlyRows(), CYCLE_ROW));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    const body = response.json();
+    expect(body.limits).toEqual({ drawdown_limit: 0.1 });
+    expect(JSON.stringify(body)).not.toContain("edgeLiqMin");
+  });
+
+  it("omite os códigos sem nenhum quase na janela", async () => {
+    const rows = hourlyRows().filter(
+      (row) => row.reason_code !== "EDGE_BELOW_MIN",
+    );
+    const { instance } = await build(funnelResponder(rows, CYCLE_ROW));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/overview",
+      headers: AUTH,
+    });
+    // DATA_STALE tem 777 decisões e zero quase: não é um "quase" com contagem
+    // zero, é um código que não participa desta leitura.
+    expect(response.json().near_misses_24h).toEqual([]);
+  });
+});

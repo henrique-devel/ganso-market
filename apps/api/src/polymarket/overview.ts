@@ -20,6 +20,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { DatabasePool } from "../database.js";
+import { parseScaled } from "./fundamental/fixed.js";
 import { resolveGitSha } from "./fundamental/provenance.js";
 import { SIMULATION_BANNER } from "./paper/runner.js";
 import {
@@ -128,6 +129,160 @@ function iso(value: unknown): string | null {
     return value.toISOString();
   }
   return str(value);
+}
+
+// ---------------------------------------------------------------------------
+// RFC-027 D1–D3: o funil das 24 h, o último ciclo e o "Quase"
+//
+// Tudo aqui lê `portfolio_decision_hourly` e `portfolio_cycle_summary`, que só
+// o worker de portfólio escreve (`portfolio/funnelstore.ts`). A API não tem
+// caminho de escrita para nenhuma das duas, e o teste de regressão varre este
+// arquivo para provar que continua assim.
+//
+// POR QUE NÃO O LOG DIRETO. A D1 manda medir antes de escolher. Medido em
+// produção 2026-09-09 01:34Z, o agregado direto sobre `portfolio_decisions`
+// custa 706–1603 ms frio e tem p95 quente de 3508 ms sobre 22 670 linhas —
+// contra um teto de 500 ms e um `statement_timeout` de 1000 ms neste pool.
+// Não seria um `/overview` lento, seria um 57014 no `/overview`. A medição
+// inteira está no cabeçalho da migration 0019.
+//
+// O que se lê no lugar: 24 baldes de hora × ~8 combinações de código, ~200
+// linhas, por um índice em `hour_start DESC`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Quantas horas o funil cobre. 24 baldes fechados mais o corrente, parcial.
+ *
+ * O balde corrente entra de propósito: sem ele a tela ficaria até uma hora
+ * atrás do motor e o operador leria "nada aconteceu" durante uma hora inteira.
+ * O preço é que a última hora está incompleta, e é por isso que a resposta leva
+ * `window_from`/`window_to` — a tela diz a janela que desenhou, não "24 h".
+ */
+const FUNNEL_HOURS = 24;
+
+const FUNNEL_SQL = `
+  SELECT hour_start, reason_code, outcome, decisions, markets,
+         near_misses, folga_min, config_version
+    FROM portfolio_decision_hourly
+   WHERE hour_start >= date_trunc('hour', $1::timestamptz)
+                       - ($2::int - 1) * INTERVAL '1 hour'
+   ORDER BY hour_start`;
+
+const CYCLE_SUMMARY_SQL = `
+  SELECT cycle_at, evaluated, entrable, decisions_written, state, positions,
+         open_breakers, stale_marks, updated_at
+    FROM portfolio_cycle_summary
+   WHERE portfolio_id = 1`;
+
+interface FunnelStep {
+  readonly outcome: string | null;
+  readonly reason_code: string | null;
+  readonly decisions: number;
+  readonly markets: number;
+}
+
+/**
+ * Soma os baldes horários em degraus do funil.
+ *
+ * `decisions` soma exato. `markets` NÃO soma: um mercado avaliado em duas horas
+ * conta uma vez por balde e somar diria o dobro. O que se publica é o MÁXIMO
+ * entre os baldes — o maior número de mercados distintos que aquele degrau viu
+ * numa hora — e o nome do campo carrega isso (`markets_max_hora`). Somar seria
+ * mais bonito e estaria errado.
+ */
+function foldFunnel(rows: readonly Row[]): {
+  readonly steps: readonly FunnelStep[];
+  readonly windowFrom: string | null;
+} {
+  const byStep = new Map<
+    string,
+    {
+      outcome: string | null;
+      reason: string | null;
+      decisions: number;
+      markets: number;
+    }
+  >();
+  let earliest: string | null = null;
+  for (const row of rows) {
+    const hour = iso(row["hour_start"]);
+    if (hour !== null && (earliest === null || hour < earliest)) {
+      earliest = hour;
+    }
+    const outcome = str(row["outcome"]);
+    // '' é como a tabela codifica "sem reason_code" (uma decisão ACCEPTED não
+    // tem um). Volta a `null` aqui, para que a forma publicada seja a mesma do
+    // log cru e o front não precise conhecer a codificação da tabela.
+    const reason = str(row["reason_code"]);
+    const key = `${outcome ?? ""}\u0000${reason ?? ""}`;
+    const current = byStep.get(key) ?? {
+      outcome,
+      reason,
+      decisions: 0,
+      markets: 0,
+    };
+    current.decisions += int(row["decisions"]);
+    current.markets = Math.max(current.markets, int(row["markets"]));
+    byStep.set(key, current);
+  }
+  const steps = [...byStep.values()]
+    .map((step) => ({
+      outcome: step.outcome,
+      reason_code: step.reason,
+      decisions: step.decisions,
+      markets: step.markets,
+    }))
+    .sort((left, right) => right.decisions - left.decisions);
+  return { steps, windowFrom: earliest };
+}
+
+/**
+ * O "Quase" das 24 h, por código.
+ *
+ * `count` e `folga_min` agregam exato entre baldes (soma e mínimo).
+ * `folga_p50` NÃO: uma mediana não se recompõe a partir de medianas horárias, e
+ * publicar a mediana das medianas seria uma estatística de estatística com cara
+ * de medição. O campo existe na forma porque a D3 o nomeia, e vem `null` no
+ * caminho B — a tela usa `folga_min`, que é o número que ela precisa para dizer
+ * "faltou 0,4 c". Um `null` honesto é melhor do que um número plausível.
+ */
+function foldNearMisses(rows: readonly Row[]): readonly {
+  readonly reason_code: string | null;
+  readonly count: number;
+  readonly folga_min: string | null;
+  readonly folga_p50: string | null;
+}[] {
+  const byReason = new Map<string, { count: number; min: string | null }>();
+  for (const row of rows) {
+    const near = int(row["near_misses"]);
+    if (near === 0) {
+      continue;
+    }
+    const reason = str(row["reason_code"]);
+    if (reason === null) {
+      continue;
+    }
+    const current = byReason.get(reason) ?? { count: 0, min: null };
+    current.count += near;
+    // Comparação em texto decimal via ponto fixo: nenhuma folga vira float no
+    // caminho entre o banco e a tela.
+    const folga = str(row["folga_min"]);
+    const scaled = folga === null ? null : parseScaled(folga);
+    const currentScaled =
+      current.min === null ? null : parseScaled(current.min);
+    if (scaled !== null && (currentScaled === null || scaled < currentScaled)) {
+      current.min = folga;
+    }
+    byReason.set(reason, current);
+  }
+  return [...byReason.entries()]
+    .map(([reason_code, value]) => ({
+      reason_code,
+      count: value.count,
+      folga_min: value.min,
+      folga_p50: null,
+    }))
+    .sort((left, right) => right.count - left.count);
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +546,8 @@ export function registerOverviewRoutes(
           resolution,
           paper,
           sizes,
+          funnel,
+          cycle,
           sha,
         ] = await Promise.all([
           // Single row by primary key.
@@ -486,6 +643,11 @@ export function registerOverviewRoutes(
             pool,
             RETENTION_TABLES.map((config) => config.table),
           ),
+          // RFC-027 D1/D3. ~200 linhas por um índice em `hour_start DESC`, no
+          // lugar das 22 mil que a leitura direta do log varreria.
+          pool.query<Row>(FUNNEL_SQL, [now, FUNNEL_HOURS]),
+          // D2. Uma linha por chave primária.
+          pool.query<Row>(CYCLE_SUMMARY_SQL),
           gitSha(),
         ]);
 
@@ -504,6 +666,13 @@ export function registerOverviewRoutes(
         }
 
         const lastDelta = iso(collection.rows[0]?.["ultimo_delta"]);
+
+        // RFC-027 D1: sem agregado, `funnel_24h` é `null` e a tela escreve
+        // "funil indisponível" com o motivo. NUNCA um funil desenhado sobre as
+        // 500 linhas da amostra: seriam 23 minutos de log com título de 24
+        // horas, que é exatamente o erro que a D1 existe para impedir.
+        const { steps, windowFrom } = foldFunnel(funnel.rows);
+        const cycleRow = cycle.rows[0] ?? null;
         return await reply.send({
           simulation: SIMULATION_BANNER,
           generated_at: now.toISOString(),
@@ -557,6 +726,41 @@ export function registerOverviewRoutes(
             budget_used_pct:
               Math.round((liveBytes / DEFAULT_BUDGET_BYTES) * 10_000) / 100,
           },
+          // RFC-027 D1. `source` é parte da resposta, não um detalhe de
+          // implementação: quem lê o número precisa saber se ele veio do
+          // agregado horário ou do log, porque as duas coisas têm latências
+          // diferentes e o operador toma decisão com isso.
+          funnel_24h:
+            steps.length === 0
+              ? null
+              : {
+                  source: "hourly",
+                  window_from: windowFrom,
+                  window_to: now.toISOString(),
+                  steps,
+                },
+          // RFC-027 D2: os sete campos do último `PORTFOLIO_CYCLE`, fora do
+          // log. `null` enquanto o worker não tiver rodado um ciclo desde o
+          // deploy — a tela diz "ainda não medido" em vez de mostrar zeros que
+          // se leriam como "o motor não achou nada".
+          last_cycle:
+            cycleRow === null
+              ? null
+              : {
+                  cycle_at: iso(cycleRow["cycle_at"]),
+                  evaluated: int(cycleRow["evaluated"]),
+                  entrable: int(cycleRow["entrable"]),
+                  decisions_written: int(cycleRow["decisions_written"]),
+                  state: str(cycleRow["state"]),
+                  positions: int(cycleRow["positions"]),
+                  open_breakers: int(cycleRow["open_breakers"]),
+                  stale_marks: int(cycleRow["stale_marks"]),
+                },
+          // RFC-027 D3. O limite (`edgeLiqMin`) NÃO é republicado aqui: a
+          // fonte publicada dele é o bloco `config` de `/portfolio/limits`
+          // (RFC-026 D6), e duas fontes para o mesmo número é como elas
+          // divergem. O que viaja é a folga já calculada, em texto decimal.
+          near_misses_24h: foldNearMisses(funnel.rows),
           limits: { drawdown_limit: DRAWDOWN_LIMIT },
         });
       } catch (error) {

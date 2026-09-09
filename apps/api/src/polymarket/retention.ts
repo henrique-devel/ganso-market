@@ -445,7 +445,7 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
   {
     table: "portfolio_panel_snapshots",
     ttlDays: 2,
-    quotaBytes: 0.54 * GB,
+    quotaBytes: 0.53 * GB,
     timeColumn: "received_at",
     protected: false,
   },
@@ -514,6 +514,46 @@ export const RETENTION_TABLES: readonly RetentionTableConfig[] = [
     ttlDays: null,
     quotaBytes: 0.02 * GB,
     timeColumn: "at",
+    protected: true,
+  },
+  // RFC-027 D1/D2, caminho B: o agregado horário do funil e o resumo do último
+  // ciclo. `protected`, e por um motivo que não é o tamanho: estas duas tabelas
+  // existem PORQUE `portfolio_decisions` é podado por quota em ~3 dias. Podar o
+  // agregado devolveria a tela exatamente ao problema que ele resolve — o
+  // painel voltaria a não ter como contar 24 horas de funil.
+  //
+  // TTL 90 dias declarado como intenção (a RFC o fixa), sem efeito de poda
+  // enquanto `protected` for verdadeiro. 0,005 GB cada: ~8 combinações de
+  // código × 24 baldes/dia = ~200 linhas/dia, ~18 mil em 90 dias, e o resumo do
+  // ciclo é UMA linha. Cabe com três ordens de grandeza de folga.
+  //
+  // DE ONDE VEM O 0,01 GB. Não é orçamento novo: a fatia da RFC-013 estava em
+  // exatamente 2 GB e a reserva RFC-010..013 em exatamente 8 GB, as duas cheias
+  // (`fundamental/budget.test.ts`). Os 0,01 GB saem de
+  // `portfolio_panel_snapshots` (0,54 -> 0,53), pelo mesmo caminho que
+  // `portfolio_position_entries` seguiu no bridge (0,56 -> 0,54) — a fatia
+  // continua em 2 GB e a reserva em 8 GB.
+  //
+  // O que o corte custa, medido em produção 2026-09-09: o painel grava 4432
+  // linhas/hora a 2900,6 bytes/linha = 12,85 MB/hora, então 0,01 GiB são ~50
+  // minutos de história de painel, contra um TTL declarado de 2 dias — 1,7 %.
+  // E é um corte no que a quota JÁ não sustentava: a tabela está em 733 MB
+  // físicos contra uma quota de 580 MB, ou seja, é podada por quota e não por
+  // TTL desde antes desta mudança. O agregado que os 0,01 GB financiam cobre 24
+  // horas de funil em ~200 linhas/dia; as mesmas 24 horas em snapshots de painel
+  // custariam 308 MB.
+  {
+    table: "portfolio_decision_hourly",
+    ttlDays: 90,
+    quotaBytes: 0.005 * GB,
+    timeColumn: "hour_start",
+    protected: true,
+  },
+  {
+    table: "portfolio_cycle_summary",
+    ttlDays: 90,
+    quotaBytes: 0.005 * GB,
+    timeColumn: "cycle_at",
     protected: true,
   },
   // What each entry committed to believing (RFC-013 bridge). NEVER pruned, and

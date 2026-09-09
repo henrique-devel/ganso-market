@@ -11,6 +11,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { DatabasePool } from "../../database.js";
 import { parseScaled } from "../fundamental/fixed.js";
+// Importado, não recopiado: a janela do disjuntor tem UM dono
+// (`breakers.ts`), e o painel precisava dela para a contagem regressiva da
+// D3. Um `24 * 3_600_000` escrito aqui seria a segunda fonte de verdade que
+// divergiria no dia em que a janela mudasse.
+import { BREAKER_EVENT_WINDOW_MS } from "./breakers.js";
 import { CALIBRATED_EXPECTATION } from "./gates.js";
 import {
   manualHalt,
@@ -430,7 +435,16 @@ export function registerPortfolioRoutes(
         simulation: SIMULATION_BANNER,
         state: state.rows[0] ?? null,
         transitions: events.rows,
-        open_circuit_breakers: breakers.rows,
+        // RFC-027 D3, "Congeladas". `window_ms` viaja com cada disjuntor para
+        // que a contagem regressiva (`started_at + window_ms − now`) seja feita
+        // com a janela do MOTOR, e não com um 24 h fixado no front. O painel só
+        // LÊ: nenhum disjuntor é fechado, alterado ou contornado por aqui, e a
+        // única escrita desta superfície continua sendo halt/resume manual, que
+        // o perímetro não publica.
+        open_circuit_breakers: breakers.rows.map((row) => ({
+          ...row,
+          window_ms: BREAKER_EVENT_WINDOW_MS,
+        })),
       });
     }),
   );

@@ -146,6 +146,16 @@ export interface PortfolioStateSnapshot {
     readonly scope: string | null;
     readonly condition_id: string | null;
     readonly started_at: string | null;
+    /**
+     * A janela do disjuntor, vinda do MOTOR (RFC-027 D3).
+     *
+     * A contagem regressiva de "Congeladas" é `started_at + window_ms − now`, e
+     * o `window_ms` viaja na resposta justamente para que o front não fixe as
+     * 24 h: quando `BREAKER_EVENT_WINDOW_MS` mudar, a tela muda com ele. `null`
+     * quando a API não o publicou — a tela então mostra o disjuntor sem
+     * contagem, em vez de inventar um prazo.
+     */
+    readonly window_ms: number | null;
   }[];
 }
 
@@ -591,6 +601,7 @@ export function fetchPortfolioState(
                 scope: asString(row.scope),
                 condition_id: asString(row.condition_id),
                 started_at: asString(row.started_at),
+                window_ms: asNumeric(row.window_ms),
               };
         }),
       };
