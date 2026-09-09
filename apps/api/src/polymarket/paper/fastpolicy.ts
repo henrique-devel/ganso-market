@@ -394,6 +394,16 @@ export function decideFastStrategyOrder(context: FastContext): FastDecision {
   if (state.armPaused) {
     return skip(context, "FAST_ARM_PAUSED");
   }
+  // D2: a sub-carteira não abre posição em token que a carteira principal já
+  // segura. `paper_positions` é chaveada só por `token_id` (0008:86), então
+  // duas posições no mesmo token seriam UMA linha e a contabilidade das duas
+  // carteiras passaria a somar na mesma célula. Em sombra isto não ocorre
+  // (nenhuma ordem nasce), e é por isso que a recusa mora aqui e não no
+  // worker: quando o braço C emitir a primeira ordem, a regra já terá sido
+  // provada por teste.
+  if (state.mainPortfolioHoldsToken) {
+    return skip(context, "FAST_SKIPPED_MAIN_POSITION");
+  }
 
   // --- Universo: a regex ESTRITA, nunca a leniente do registry (D4). ---
   let pattern: RegExp;
@@ -437,11 +447,14 @@ export function decideFastStrategyOrder(context: FastContext): FastDecision {
   }
 
   // --- Livro: idade e spread, no lado que o braço vai olhar. ---
-  const bookAgeS =
-    (context.nowMs - Math.max(...context.books.map((b) => b.asOfMs))) / 1_000;
+  // A idade só é calculada depois de haver livro: `Math.max()` sobre um spread
+  // vazio devolve -Infinity, e computar antes de checar lê como defeito mesmo
+  // quando a ordem dos `return` salva o comportamento.
   if (context.books.length === 0) {
     return skip(context, "FAST_SKIPPED_NO_BOOK");
   }
+  const bookAgeS =
+    (context.nowMs - Math.max(...context.books.map((b) => b.asOfMs))) / 1_000;
   if (
     !Number.isFinite(bookAgeS) ||
     bookAgeS > config.preconditions.bookMaxAgeS
