@@ -8,10 +8,19 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SEMAFORO_AMBAR_MS,
+  SEMAFORO_VERDE_MS,
+  fetchDataQuality,
   fetchEvents,
   fetchOverview,
   fetchPerformance,
+  semaforo,
 } from "../src/overview.js";
+import {
+  CHAVE_DETALHE,
+  chavesDesconhecidas,
+  traduzDetalhe,
+} from "../src/dicionario.js";
 // Explicit .tsx: on a case-insensitive filesystem "../src/Overview.js" would
 // resolve to src/overview.ts, the client module next to it (same reason
 // App.tsx spells its imports out).
@@ -405,5 +414,208 @@ describe("fetchOverview — funil das 24 h (RFC-027)", () => {
     expect(result.value.last_cycle).toBeNull();
     expect(result.value.near_misses_24h).toEqual([]);
     expect(result.value.circuit_breakers.open).toBe(41);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RFC-027 D6: o detalhe do feed em texto, e os semáforos
+// ---------------------------------------------------------------------------
+
+describe("traduzDetalhe (RFC-027 D6)", () => {
+  it("traduz a chave E o valor de um evento de estado", () => {
+    // Traduzir só a chave deixaria "para: HALTED" — metade em português,
+    // metade em código.
+    const campos = traduzDetalhe({
+      from_state: "NORMAL",
+      to_state: "HALTED",
+      reason: "drawdown",
+      trigger_source: "automatic",
+    });
+    const porChave = new Map(campos.map((campo) => [campo.chave, campo]));
+    expect(porChave.get("to_state")?.rotulo).toBe("para");
+    expect(porChave.get("to_state")?.valor).toBe("Parado");
+    expect(porChave.get("from_state")?.valor).toBe("Normal");
+    // O código cru sobrevive no title: é a regra do dicionário.
+    expect(porChave.get("to_state")?.titulo).toContain("HALTED");
+    // Uma chave sem dicionário de valor passa o valor adiante como está.
+    expect(porChave.get("reason")?.valor).toBe("drawdown");
+  });
+
+  it("traduz booleanos e números em vez de imprimir 'true'", () => {
+    const campos = traduzDetalhe({
+      position_held: true,
+      suppressed: false,
+      magnitude_bps: 43,
+    });
+    const porChave = new Map(campos.map((campo) => [campo.chave, campo]));
+    expect(porChave.get("position_held")?.valor).toBe("sim");
+    expect(porChave.get("suppressed")?.valor).toBe("não");
+    expect(porChave.get("magnitude_bps")?.valor).toBe("43");
+  });
+
+  it("deixa a chave desconhecida para o modo engenheiro, sem quebrar", () => {
+    // Uma fonte de evento nova. Ela não some da tela em silêncio: `traduzDetalhe`
+    // a ignora e `chavesDesconhecidas` a nomeia, para que a tela mande ligar o
+    // modo engenheiro.
+    const detail = { to_state: "HALTED", campo_do_futuro: "algo" };
+    expect(traduzDetalhe(detail).map((campo) => campo.chave)).toEqual([
+      "to_state",
+    ]);
+    expect(chavesDesconhecidas(detail)).toEqual(["campo_do_futuro"]);
+  });
+
+  it("manda um valor aninhado para o modo engenheiro em vez de achatá-lo", () => {
+    // Achatar um objeto numa linha reinventaria o JSON com menos informação.
+    const detail = { reason: { motivo: "aninhado" } };
+    expect(traduzDetalhe(detail)).toEqual([]);
+    expect(chavesDesconhecidas(detail)).toEqual(["reason"]);
+  });
+
+  it("omite o que é nulo ou vazio, em vez de escrever '—' em toda linha", () => {
+    expect(
+      traduzDetalhe({ ended_at: null, order_id: "", kind: "PARAM_CHANGE" }),
+    ).toHaveLength(1);
+    expect(chavesDesconhecidas({ ended_at: null, order_id: "" })).toEqual([]);
+  });
+
+  it("cobre as chaves das oito fontes que o /events publica", () => {
+    // Se uma fonte nova entrar em EVENT_SOURCES com uma chave nova, ela cai no
+    // modo engenheiro — o que é o comportamento desejado — mas as que existem
+    // hoje têm de estar traduzidas, ou o feed volta a ser JSON.
+    for (const chave of [
+      "from_state",
+      "to_state",
+      "reason",
+      "trigger_source",
+      "decision_kind",
+      "condition_id",
+      "token_id",
+      "market_side",
+      "size_shares",
+      "edge_net",
+      "outcome",
+      "binding_constraint",
+      "event_type",
+      "order_id",
+      "kind",
+      "scope",
+      "ended_at",
+      "edge_key",
+      "magnitude_bps",
+      "magnitude",
+      "suppressed",
+      "direction",
+      "position_held",
+      "category",
+      "previous_start",
+      "new_start",
+    ]) {
+      expect(CHAVE_DETALHE[chave], chave).toBeTruthy();
+    }
+  });
+});
+
+describe("semaforo (RFC-027 D6)", () => {
+  it("aplica os cortes de 60 s e 5 min nas bordas", () => {
+    expect(semaforo(59_000)).toBe("ok");
+    expect(semaforo(61_000)).toBe("atencao");
+    expect(semaforo(301_000)).toBe("alerta");
+    // Exatamente no corte: 60 s já é âmbar, 5 min já é vermelho. Um limite
+    // aberto de um lado e fechado do outro é a única forma de não ter buraco.
+    expect(semaforo(SEMAFORO_VERDE_MS)).toBe("atencao");
+    expect(semaforo(SEMAFORO_AMBAR_MS)).toBe("alerta");
+  });
+
+  it("não pinta de verde o que não foi medido", () => {
+    // O heartbeat por worker é fase 2. Até lá, "não sei" é cinza — nunca verde
+    // por omissão.
+    expect(semaforo(null)).toBe("neutro");
+  });
+});
+
+describe("fetchDataQuality (RFC-027 D6)", () => {
+  const BODY = {
+    generated_at: "2026-09-09T02:00:00.000Z",
+    gaps_24h: [{ source: "book", count: 2, total_duration_ms: 45000 }],
+    ingest_lag_ms_last_hour: { p50: 120.5, p99: 890 },
+    fast_coverage: {
+      serie: "btc-up-or-down-hourly",
+      dias: [
+        {
+          dia: "2026-09-08",
+          emitidos: 24,
+          com_livro_t15_pct: 95.8,
+          catalogados_60min_pct: 100,
+          lead_mediano_min: 73,
+        },
+        // O dia degenerado da RFC-024: sem mercados emitidos, tudo `null`.
+        {
+          dia: "2026-09-09",
+          emitidos: 0,
+          com_livro_t15_pct: null,
+          catalogados_60min_pct: null,
+          lead_mediano_min: null,
+        },
+      ],
+      subscribe_book_missing_24h: { total: 1, abertas: 0 },
+    },
+    storage: {
+      budget_bytes: 118111600640,
+      total_bytes: 42000000000,
+      budget_used_pct: 35.56,
+      tables: [
+        {
+          table_name: "portfolio_decision_hourly",
+          live_bytes: 1000,
+          physical_bytes: 2000,
+          quota_bytes: 5368709,
+          protected: true,
+        },
+      ],
+    },
+  };
+
+  it("lê lacunas, lag, quota por tabela e a cobertura já calculada", async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve(jsonResponse(200, BODY)),
+    ) as unknown as ResolutionFetcher;
+    const result = await fetchDataQuality("token", fetcher);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") {
+      return;
+    }
+    expect(result.value.gaps_24h[0]?.total_duration_ms).toBe(45000);
+    expect(result.value.ingest_lag_ms_last_hour.p99).toBe(890);
+    expect(result.value.storage.tables[0]?.protected).toBe(true);
+    // A cobertura vem PRONTA da RFC-024; o cliente exibe e não recalcula.
+    expect(result.value.fast_coverage?.dias[0]?.com_livro_t15_pct).toBe(95.8);
+    // O dia degenerado continua `null` — 0/0 publicado como 100 % é a falha
+    // que aquele guarda existe para impedir, e o cliente não a reintroduz.
+    expect(result.value.fast_coverage?.dias[1]?.com_livro_t15_pct).toBeNull();
+    expect(result.value.fast_coverage?.dias[1]?.emitidos).toBe(0);
+  });
+
+  it("bate na rota que já estava publicada, sem location nova", async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve(jsonResponse(200, BODY)),
+    ) as unknown as ResolutionFetcher;
+    await fetchDataQuality("token", fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/polymarket/data-quality",
+      expect.anything(),
+    );
+  });
+
+  it("sobrevive a uma resposta sem cobertura", async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve(jsonResponse(200, { ...BODY, fast_coverage: undefined })),
+    ) as unknown as ResolutionFetcher;
+    const result = await fetchDataQuality("token", fetcher);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") {
+      return;
+    }
+    expect(result.value.fast_coverage).toBeNull();
+    expect(result.value.storage.total_bytes).toBe(42000000000);
   });
 });

@@ -16,9 +16,11 @@ import {
   MOTIVO_GATE,
   SITUACAO_GATE,
   STATUS_RFC009,
+  chavesDesconhecidas,
   consequencia,
   rotulo,
   tom,
+  traduzDetalhe,
 } from "./dicionario";
 import { useModoEngenheiro } from "./modo.tsx";
 import {
@@ -522,15 +524,60 @@ export function OverviewPanel({
                 {rotulo(event.source, FONTE_EVENTO)}
               </span>
               <span className="feed-resumo">{rotulo(event.summary)}</span>
-              <details>
-                <summary>detalhe</summary>
-                <pre>{JSON.stringify(event.detail, null, 2)}</pre>
-              </details>
+              <DetalheDoEvento detail={event.detail} />
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * O `detail` de um evento do feed (RFC-027 D6).
+ *
+ * Antes: `JSON.stringify(detail, null, 2)` dentro de um `<details>`, em toda
+ * linha. Agora: os campos que o dicionário conhece, em texto, na própria linha;
+ * o JSON cru só com o modo engenheiro ligado.
+ *
+ * Uma chave desconhecida não desaparece — ela é NOMEADA, com o convite a ligar
+ * o modo engenheiro. Uma fonte de evento nova aparece assim até alguém a
+ * traduzir, em vez de sumir da tela em silêncio.
+ */
+function DetalheDoEvento({
+  detail,
+}: Readonly<{ detail: Readonly<Record<string, unknown>> }>) {
+  const engenheiro = useModoEngenheiro();
+  const campos = traduzDetalhe(detail);
+  const desconhecidas = chavesDesconhecidas(detail);
+  if (engenheiro) {
+    return (
+      <details open>
+        <summary>detalhe</summary>
+        <pre>{JSON.stringify(detail, null, 2)}</pre>
+      </details>
+    );
+  }
+  if (campos.length === 0 && desconhecidas.length === 0) {
+    return null;
+  }
+  return (
+    <span className="feed-detalhe">
+      {campos.map((campo) => (
+        <span key={campo.chave} className="feed-campo" title={campo.titulo}>
+          <span className="feed-campo-rot">{campo.rotulo}</span>
+          {campo.valor}
+        </span>
+      ))}
+      {desconhecidas.length === 0 ? null : (
+        <span
+          className="feed-campo feed-campo--cru"
+          title={`${desconhecidas.join(", ")} — ligue o modo engenheiro (tecla ?) para ver o JSON`}
+        >
+          +{desconhecidas.length} sem tradução
+        </span>
+      )}
+    </span>
   );
 }
 

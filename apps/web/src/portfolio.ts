@@ -3,6 +3,7 @@
 // fields become null / empty arrays, rows without a usable key are dropped, and
 // nothing throws on garbage input.
 
+import type { RelogioG2 } from "./dicionario";
 import { authorizedGet } from "./resolution";
 import type { ResolutionFetcher, ResolutionGetResult } from "./resolution";
 
@@ -171,6 +172,14 @@ export interface GateSnapshot {
   readonly rfc009Status: string | null;
   readonly calibratedExpectation: string | null;
   readonly gates: readonly Gate[];
+  /**
+   * O relógio do G5 (RFC-027 D5), duas linhas por categoria.
+   *
+   * Não vem do `metrics_json`: a data que destrava o G5 mora em
+   * `portfolio_g2_clock`, e até este PR nenhuma rota a publicava. Lista vazia
+   * quer dizer "relógio não iniciado" — a tela diz isso e não inventa data.
+   */
+  readonly g2Clock: readonly RelogioG2[];
 }
 
 export interface Decision {
@@ -626,6 +635,20 @@ export function fetchGates(
       return {
         rfc009Status: asString(body.rfc_009_status),
         calibratedExpectation: asString(body.calibrated_expectation),
+        g2Clock: mapRows(body.g2_clock, (row) => {
+          if (!isRecord(row)) {
+            return null;
+          }
+          const category = asKey(row.category);
+          return category === null
+            ? null
+            : {
+                category,
+                clock_start: asString(row.clock_start),
+                regime_fingerprint: asString(row.regime_fingerprint),
+                last_reset_reason: asString(row.last_reset_reason),
+              };
+        }),
         gates: mapRows(body.gates, (row) => {
           if (!isRecord(row)) {
             return null;

@@ -496,3 +496,195 @@ export function fetchPerformance(
     signal,
   );
 }
+
+// ---------------------------------------------------------------------------
+// RFC-027 D6: `/data-quality` ganha um consumidor
+//
+// A rota está publicada no perímetro desde a RFC-015 e, até aqui, ninguém a
+// lia: `grep -rn "data-quality" apps/web/src` voltava vazio. Ela é a única
+// fonte de lacunas, lag de ingestão e uso de quota POR TABELA — o `/overview`
+// só publica o total.
+//
+// Nada aqui recalcula: a cobertura do universo rápido vem pronta da RFC-024 D4
+// e é EXIBIDA, não refeita. Um segundo cálculo do mesmo número no cliente é
+// como as duas metades divergem.
+// ---------------------------------------------------------------------------
+
+export interface DataGap {
+  readonly source: string | null;
+  readonly count: number;
+  readonly total_duration_ms: number;
+}
+
+export interface TabelaRetencao {
+  readonly table_name: string;
+  readonly live_bytes: number;
+  readonly physical_bytes: number;
+  readonly quota_bytes: number;
+  readonly protected: boolean;
+}
+
+/** Um dia da cobertura do universo rápido (RFC-024 D4). `null` = degenerado. */
+export interface CoberturaDia {
+  readonly dia: string | null;
+  readonly emitidos: number;
+  readonly com_livro_t15_pct: number | null;
+  readonly catalogados_60min_pct: number | null;
+  readonly lead_mediano_min: number | null;
+}
+
+export interface DataQuality {
+  readonly generated_at: string | null;
+  readonly gaps_24h: readonly DataGap[];
+  readonly ingest_lag_ms_last_hour: {
+    readonly p50: number | null;
+    readonly p99: number | null;
+  };
+  /** `null` quando a RFC-024 ainda não publica a cobertura nesta rota. */
+  readonly fast_coverage: {
+    readonly serie: string | null;
+    readonly dias: readonly CoberturaDia[];
+    readonly subscribe_book_missing_24h: {
+      readonly total: number;
+      readonly abertas: number;
+    };
+  } | null;
+  readonly storage: {
+    readonly budget_bytes: number;
+    readonly total_bytes: number;
+    readonly budget_used_pct: number | null;
+    readonly tables: readonly TabelaRetencao[];
+  };
+}
+
+function parseCobertura(raw: unknown): DataQuality["fast_coverage"] {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const diasRaw = raw["dias"];
+  return {
+    serie: asString(raw["serie"]),
+    dias: Array.isArray(diasRaw)
+      ? diasRaw.flatMap((row): CoberturaDia[] =>
+          isRecord(row)
+            ? [
+                {
+                  dia: asString(row["dia"]),
+                  emitidos: asCount(row["emitidos"]),
+                  // `null` é a lente de degeneração da RFC-024: com
+                  // `emitidos = 0` o dia não respondeu, e 0/0 publicado como
+                  // 100 % seria a falha que aquele guarda existe para impedir.
+                  com_livro_t15_pct: asNumeric(row["com_livro_t15_pct"]),
+                  catalogados_60min_pct: asNumeric(
+                    row["catalogados_60min_pct"],
+                  ),
+                  lead_mediano_min: asNumeric(row["lead_mediano_min"]),
+                },
+              ]
+            : [],
+        )
+      : [],
+    subscribe_book_missing_24h: {
+      total: asCount(record(raw["subscribe_book_missing_24h"])["total"]),
+      abertas: asCount(record(raw["subscribe_book_missing_24h"])["abertas"]),
+    },
+  };
+}
+
+function parseDataQuality(body: unknown): DataQuality | null {
+  if (!isRecord(body)) {
+    return null;
+  }
+  const storage = record(body["storage"]);
+  const gapsRaw = body["gaps_24h"];
+  const lag = record(body["ingest_lag_ms_last_hour"]);
+  const tablesRaw = storage["tables"];
+  return {
+    generated_at: asString(body["generated_at"]),
+    gaps_24h: Array.isArray(gapsRaw)
+      ? gapsRaw.flatMap((row): DataGap[] =>
+          isRecord(row)
+            ? [
+                {
+                  source: asString(row["source"]),
+                  count: asCount(row["count"]),
+                  total_duration_ms: asCount(row["total_duration_ms"]),
+                },
+              ]
+            : [],
+        )
+      : [],
+    ingest_lag_ms_last_hour: {
+      p50: asNumeric(lag["p50"]),
+      p99: asNumeric(lag["p99"]),
+    },
+    fast_coverage: parseCobertura(
+      storage["fast_coverage"] ?? body["fast_coverage"],
+    ),
+    storage: {
+      budget_bytes: asCount(storage["budget_bytes"]),
+      total_bytes: asCount(storage["total_bytes"]),
+      budget_used_pct: asNumeric(storage["budget_used_pct"]),
+      tables: Array.isArray(tablesRaw)
+        ? tablesRaw.flatMap((row): TabelaRetencao[] => {
+            if (!isRecord(row)) {
+              return [];
+            }
+            const nome = asString(row["table_name"]);
+            return nome === null
+              ? []
+              : [
+                  {
+                    table_name: nome,
+                    live_bytes: asCount(row["live_bytes"]),
+                    physical_bytes: asCount(row["physical_bytes"]),
+                    quota_bytes: asCount(row["quota_bytes"]),
+                    protected: row["protected"] === true,
+                  },
+                ];
+          })
+        : [],
+    },
+  };
+}
+
+export function fetchDataQuality(
+  accessToken: string,
+  fetcher: ResolutionFetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ResolutionGetResult<DataQuality>> {
+  return authorizedGet(
+    "/api/polymarket/data-quality",
+    accessToken,
+    parseDataQuality,
+    fetcher,
+    signal,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RFC-027 D6: semáforos por fonte
+// ---------------------------------------------------------------------------
+
+/** Verde abaixo de 60 s, âmbar abaixo de 5 min, vermelho acima. */
+export const SEMAFORO_VERDE_MS = 60_000;
+export const SEMAFORO_AMBAR_MS = 300_000;
+
+export type Semaforo = "ok" | "atencao" | "alerta" | "neutro";
+
+/**
+ * O semáforo de uma idade em milissegundos.
+ *
+ * `null` — a fonte não publica idade — vira `"neutro"`, e a tela escreve "não
+ * medido no painel". Um cinza honesto no lugar de um verde por omissão: o
+ * heartbeat por worker é fase 2, e até lá "não sei" não pode parecer "está bem".
+ */
+export function semaforo(idadeMs: number | null): Semaforo {
+  if (idadeMs === null) {
+    return "neutro";
+  }
+  if (idadeMs < SEMAFORO_VERDE_MS) {
+    return "ok";
+  }
+  return idadeMs < SEMAFORO_AMBAR_MS ? "atencao" : "alerta";
+}

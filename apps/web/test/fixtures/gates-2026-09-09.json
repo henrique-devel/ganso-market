@@ -1,0 +1,159 @@
+[
+  {
+    "gate": "G1",
+    "status": "INSUFFICIENT_DATA",
+    "reason_code": "G1_CALIBRATION_NOT_MET",
+    "metrics": {
+      "detail": "no promoted model: the used signal is a market baseline, and scoring it against the price would compare the price to itself",
+      "ceiling": 0.2,
+      "required": 100,
+      "forecasts": 1248,
+      "under_ceiling": true,
+      "candidate_rows": 1248,
+      "model_forecasts": 0,
+      "resolved_markets": 736,
+      "scored_forecasts": 1248,
+      "used_signal_brier": 0.023188521911134668,
+      "excluded_forecasts": {
+        "non_binary_label": 0,
+        "fifty_fifty_label": 0,
+        "no_outcome_instant": 0,
+        "no_market_probability": 0
+      },
+      "model_resolved_markets": 0,
+      "scored_model_forecasts": 0
+    }
+  },
+  {
+    "gate": "G2",
+    "status": "INSUFFICIENT_DATA",
+    "reason_code": "G2_INSUFFICIENT_PAPER",
+    "metrics": {
+      "days": 11.231456087962963,
+      "categories": 1,
+      "shortfalls": {
+        "days": {
+          "have": 11.231456087962963,
+          "need": 60
+        },
+        "categories": {
+          "have": 1,
+          "need": 2,
+          "uncategorized_positions": 0
+        },
+        "bootstrap_blocks": {
+          "have": 1,
+          "need": 10,
+          "block_size": 8
+        },
+        "closed_positions": {
+          "have": 8,
+          "need": 100,
+          "outside_window": 0
+        },
+        "distinct_markets": {
+          "have": 8,
+          "need": 30
+        },
+        "distinct_close_days": {
+          "have": 3,
+          "need": 20
+        },
+        "single_position_share": {
+          "max": 0.25,
+          "have": 0.4277105733538982
+        }
+      },
+      "bootstrap_blocks": 1,
+      "closed_positions": 8,
+      "distinct_markets": 8,
+      "distinct_close_days": 3,
+      "uncategorized_positions": 0,
+      "largest_position_pnl_share": 0.4277105733538982
+    }
+  },
+  {
+    "gate": "G3",
+    "status": "INSUFFICIENT_DATA",
+    "reason_code": "G3_RISK_BREACH",
+    "metrics": {
+      "detail": "no risk was survived: the paper book behind this gate is the same one G2 requires, and it is short",
+      "drawdown_max": 0.1,
+      "max_drawdown": 0.000287,
+      "evidence_base": {
+        "days": 11.231456087962963,
+        "categories": 1,
+        "shortfalls": {
+          "days": {
+            "have": 11.231456087962963,
+            "need": 60
+          },
+          "categories": {
+            "have": 1,
+            "need": 2,
+            "uncategorized_positions": 0
+          },
+          "closed_positions": {
+            "have": 8,
+            "need": 100,
+            "outside_window": 0
+          },
+          "distinct_markets": {
+            "have": 8,
+            "need": 30
+          },
+          "distinct_close_days": {
+            "have": 3,
+            "need": 20
+          }
+        },
+        "closed_positions": 8,
+        "distinct_markets": 8,
+        "distinct_close_days": 3
+      },
+      "breakers_missing": ["RULE_CLARIFICATION"],
+      "breakers_exercised": [
+        "DATA_STALENESS",
+        "PARAM_CHANGE",
+        "PRICE_JUMP_NO_CATALYST",
+        "UMA_PROPOSED_OR_DISPUTED"
+      ],
+      "unblocked_breaches": 0
+    }
+  },
+  {
+    "gate": "G4",
+    "status": "INSUFFICIENT_DATA",
+    "reason_code": "G4_RECONCILIATION_OFF",
+    "metrics": {
+      "detail": "not enough independently reconciled fills yet",
+      "fee_samples": 0,
+      "slippage_bias": null,
+      "fee_median_error": null,
+      "samples_required": 100,
+      "slippage_samples": 0,
+      "self_referential_fee_samples": 0,
+      "self_referential_slippage_samples": 0
+    }
+  },
+  {
+    "gate": "G5",
+    "status": "INSUFFICIENT_DATA",
+    "reason_code": "G5_REGIME_STALE",
+    "metrics": {
+      "categories": 2,
+      "required_days": 60,
+      "below_minimum_days": ["crypto", "macro"],
+      "fingerprint_mismatch": []
+    }
+  },
+  {
+    "gate": "G6",
+    "status": "INSUFFICIENT_DATA",
+    "reason_code": "G6_NOT_REVIEWED",
+    "metrics": {
+      "detail": "no written owner review on record",
+      "current_report_id": 1
+    }
+  }
+]

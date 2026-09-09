@@ -156,6 +156,23 @@ function worldPool(
       if (text.includes("FROM portfolio_gate_reports")) {
         return respond([]);
       }
+      // RFC-027 D5: as duas categorias reais de produção.
+      if (text.includes("FROM portfolio_g2_clock")) {
+        return respond([
+          {
+            category: "crypto",
+            clock_start: new Date("2026-08-28T20:38:47.230Z"),
+            regime_fingerprint: "76ff8aa1e8",
+            last_reset_reason: "regime_fingerprint_changed",
+          },
+          {
+            category: "macro",
+            clock_start: new Date("2026-08-28T20:38:47.230Z"),
+            regime_fingerprint: "566b6047e3",
+            last_reset_reason: "regime_fingerprint_changed",
+          },
+        ]);
+      }
       if (text.includes("FROM portfolio_state_events")) {
         return respond([
           {
@@ -479,6 +496,55 @@ describe("read surface", () => {
     };
     expect(body.rfc_009_status).toBe("BLOCKED");
     expect(body.calibrated_expectation).toContain("84%");
+  });
+
+  // RFC-027 D5 -------------------------------------------------------------
+
+  it("publica g2_clock com as quatro colunas que a etiqueta do G5 precisa", async () => {
+    // A data que destrava o G5 não está no `metrics_json`: está em
+    // `portfolio_g2_clock`, e até este PR nenhuma rota a publicava. Sem ela o
+    // painel mostra o G5 como "sem dado bastante", igual aos outros cinco,
+    // quando ele é o único cujo desbloqueio tem data.
+    const instance = await buildApp(worldPool({ writes: [], reads: [] }));
+    const response = await instance.inject({
+      method: "GET",
+      url: "/polymarket/gates",
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      g2_clock: {
+        category: string;
+        clock_start: string;
+        regime_fingerprint: string;
+        last_reset_reason: string;
+      }[];
+    };
+    expect(body.g2_clock).toHaveLength(2);
+    expect(body.g2_clock.map((linha) => linha.category)).toEqual([
+      "crypto",
+      "macro",
+    ]);
+    expect(body.g2_clock[0]?.clock_start).toBe("2026-08-28T20:38:47.230Z");
+    // `last_reset_reason` entra para a etiqueta "relógio reiniciado por X";
+    // `last_reset_at` fica de fora, como a D5 escreve.
+    expect(body.g2_clock[0]?.last_reset_reason).toBe(
+      "regime_fingerprint_changed",
+    );
+    expect(body.g2_clock[0]).not.toHaveProperty("last_reset_at");
+  });
+
+  it("continua sem escrever nada na rota de gates", async () => {
+    // A rota é GET; a invariante é que ela permaneça só leitura mesmo depois
+    // de ganhar uma consulta nova.
+    const journal: Journal = { writes: [], reads: [] };
+    const instance = await buildApp(worldPool(journal));
+    await instance.inject({
+      method: "GET",
+      url: "/polymarket/gates",
+      headers: AUTH,
+    });
+    expect(journal.writes).toEqual([]);
   });
 
   it("404s an unknown decision instead of returning an empty object", async () => {
