@@ -15,6 +15,7 @@ import type {
   SqlExecutor,
 } from "../src/database.js";
 import { buildApi } from "../src/server.js";
+import { DISK_ONLY_ROUTES } from "./fixtures/disk-only-routes.js";
 
 const REPO = new URL("../../../", import.meta.url).pathname;
 
@@ -214,6 +215,33 @@ describe("RFC-023 A4 — the declared budget is the one that runs", () => {
           .length,
         route,
       ).toBe(budgetSets.length);
+    }
+  });
+
+  it("runs no statement at all on the routes that read a file", async () => {
+    // RFC-029 D3, and the other half of their exemption in
+    // route-budgets.test.ts. They are excused from declaring a statement budget
+    // because they run no statements; this is where that claim is checked
+    // rather than asserted. A query added to either one shows up here as a
+    // non-empty list, which is a louder failure than a budget that quietly
+    // never applied.
+    const { instance, statements } = await build();
+
+    for (const route of DISK_ONLY_ROUTES) {
+      statements.length = 0;
+      const response = await instance.inject({
+        method: "GET",
+        // A mode the allowlist accepts, so the handler gets as far as it can:
+        // it reaches for a file, finds no directory configured, and answers
+        // 404 without ever touching the pool.
+        url: `${route}?mode=B`,
+        headers: AUTH,
+      });
+      expect(
+        (response.json() as { reason_code?: string }).reason_code,
+        `${route} is not a registered route`,
+      ).not.toBe("ROUTE_NOT_FOUND");
+      expect(statements, route).toEqual([]);
     }
   });
 
