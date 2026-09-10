@@ -1,5 +1,16 @@
 # Handoff do projeto Ganso Market
 
+> **Entrada atual — 10/09/2026:** o próximo ciclo está dividido em blocos pequenos
+> no [roadmap BTC](../prompts/roadmap/btc/README.md). Consulte o
+> [estado curto](roadmap/BTC_EXECUTION_STATE.md), a RFC e o recibo do bloco escolhido;
+> não carregue este histórico inteiro em cada sessão. As novas especificações ainda
+> não foram implementadas. A [baseline](roadmap/BASELINE-2026-09-10.md) corrige premissas:
+> RFC-022 D1–D3 presentes, D4 ausente; RFC-028 B ausente; recorder novamente sem coleta
+> na consulta de 10/09. Incluir RFC-041 de limpeza/retenção; sem migração de infraestrutura.
+> Progresso novo fica nos recibos e no estado, sem adicionar grandes blocos aqui.
+
+## Histórico anterior ao ciclo BTC
+
 - Última atualização: 2026-09-09 — **RFC-029 (prompt 21) CONCLUÍDA E VERIFICADA EM PRODUÇÃO.**
   Três PRs mais um de correção, timer instalado, uma rodada completa, runbook. Nenhuma escrita
   no banco por nenhum caminho novo, nenhuma migration, nenhum endpoint de escrita, nenhum botão.

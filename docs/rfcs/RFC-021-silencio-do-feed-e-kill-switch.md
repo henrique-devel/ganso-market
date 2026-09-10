@@ -1,5 +1,27 @@
 # RFC-021 — Silêncio do feed com conexões vivas e kill switch honesto
 
+> **Emenda de execução — 2026-09-10 (draft do desdobramento).** O diagnóstico
+> recente é evidência histórica; comparar código e versão em execução antes de
+> refazer itens. A autorização existente da D3 permanece: 15 ticks saudáveis,
+> ambas as séries frescas, sem lacuna aberta e motivo `RECORDER_STALE`. Não pedir
+> essa aprovação novamente. Esta emenda não declara implementação nem rearma o
+> servidor. Para a próxima progressão, usar os blocos pequenos
+> [OPS-01](../../prompts/roadmap/btc/ops-01-inventario-saude.md),
+> [OPS-02](../../prompts/roadmap/btc/ops-02-silencio-clob.md),
+> [OPS-03](../../prompts/roadmap/btc/ops-03-kill-switch-condicionado.md),
+> [OPS-05](../../prompts/roadmap/btc/ops-05-silencio-rtds.md),
+> [OPS-06](../../prompts/roadmap/btc/ops-06-supervisor-externo-recorder.md),
+> [OPS-07](../../prompts/roadmap/btc/ops-07-sweep-fechamento-monotonico.md) e
+> [OPS-04](../../prompts/roadmap/btc/ops-04-plano-recuperacao-soak.md), nessa ordem
+> de dependências. OPS-05 amplia detecção de silêncio para RTDS. OPS-06 propõe
+> supervisor fora do event loop, limitado ao recorder, com evidência persistente
+> além do container e recuperação com backoff; healthcheck Docker isolado não
+> provoca restart. OPS-07 cobre D4 monotônica, sem inferir resolução de closed. O histórico
+> abaixo é preservado; esta emenda supersede somente o prompt monolítico como
+> entrada para execução. Leituras mínimas, evidência e handoff seguem
+> `prompts/roadmap/btc/00-protocolo.md` e `docs/roadmap/BTC_EXECUTION_STATE.md`.
+
+
 **Status:** accepted — autorizado para implementação (2026-09-04). **A D3 (rearme automático condicionado) foi APROVADA pelo proprietário em 2026-09-05**, com `M` = 15 ticks (15 min) como proposto; ela entra no escopo desta RFC e **supersede** a cláusula de rearme manual da RFC-011 (`RFC-011-polymarket-microstructure-paper.md:266–270`). Segue com o proprietário apenas o **P2** — rearmar à mão o switch engatado hoje —, que nenhum PR executa
 **Dependências:** RFC-007 (recorder, `polymarket_data_gaps`), RFC-011 (kill switch paper, gatilho `RECORDER_STALE`), **RFC-020** (`RFC-020-deploy-sem-derrubar-o-banco.md`, `accepted` e ainda não implementada — sem ela, cada merge recria os containers, o INSERT da lacuna falha junto com o banco e o detector novo produz ruído em vez de sinal)
 **Habilita:** a próxima parada silenciosa do WebSocket do livro vira uma linha em `polymarket_data_gaps` em vez de sumir; o engate do kill switch diz qual série calou; o paper broker deixa de ficar engatado por horas com feed saudável (se o rearme condicionado for aprovado); `polymarket_markets.closed` passa a refletir a venue

@@ -2,16 +2,46 @@
 
 As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Cada uma delimita contexto, tarefas, artefatos, testes e condições de parada.
 
+## Ciclo atual — BTC, integridade econômica e capacidade (2026-09-10)
+
+O proprietário solicitou as especificações e prompts pequenos deste bloco. Novas
+RFCs estão em `draft`: nenhuma implementação, limpeza ou ativação ocorre por criar
+este índice. Comece no [roteiro BTC](../prompts/roadmap/btc/README.md) e acompanhe o
+[estado curto](roadmap/BTC_EXECUTION_STATE.md); não use status antigos como prova do runtime.
+
+| RFC | Resultado | Blocos |
+|---|---|---|
+| [030](rfcs/RFC-030-cadencia-estimador-e-ttl.md) | Cadência do estimador compatível com TTL, sem aumento indiscriminado | FRESH-01 |
+| [031](rfcs/RFC-031-frescor-livro-e-validade-ordens.md) | Prova de livro fresco e validade das ordens | FRESH-02/03 |
+| [032](rfcs/RFC-032-replay-carteira-finita-evidencia.md) | Replay de carteira finita, stress e dataset reproduzível | REPLAY-01…04 |
+| [033](rfcs/RFC-033-experimento-prospectivo-btc.md) | Controle/candidatos congelados e avaliação prospectiva | EXP-01…03 |
+| [034](rfcs/RFC-034-execucao-economica-da-ordem-final.md) | EV da ordem final, fills/fees, saídas e conciliação | EXEC-01…05 |
+| [037](rfcs/RFC-037-consultas-e-recursos-postgres.md) | Consultas eficientes e recursos medidos | DB-01…04 |
+| [038](rfcs/RFC-038-contabilidade-e-risco-por-payoff.md) | Ownership, payoff, equity, reservas e reconciliação | FIN-01…07 + QA-01 |
+| [039](rfcs/RFC-039-btc-horario-contrato-benchmark-worker.md) | Benchmark Binance, worker e integração BTC paper | BTC-01…07 |
+| [040](rfcs/RFC-040-experimento-btc-e-progressao-de-capital.md) | Mandato, prontidão e plano de microcapital sem ativação | GATE-01…03 |
+| [041](rfcs/RFC-041-limpeza-retencao-e-capacidade.md) | Limpeza verificável, preservação e retenção sustentável | DATA-01…05 |
+
+Continuação de trabalho existente: [RFC-021](rfcs/RFC-021-silencio-do-feed-e-kill-switch.md)
+via OPS-01…07; [RFC-022 D4](rfcs/RFC-022-ponte-runtime-e-saidas.md) via EXEC-04;
+[RFC-028 B](rfcs/RFC-028-estrategia-fast-btc-updown.md) via BTC/EXP. As emendas no
+topo dessas RFCs delimitam o delta; não reconstruir D1–D3 da 022 nem a parte A da 028.
+035 (macro) e 036 (outros símbolos) estão reservadas/adiadas, sem implementação ou prompts.
+
+Ordem operacional: OPS e FIN começam em paralelo; DB/DATA podem ser levantados
+independentemente; contratos e testes desbloqueiam BTC paper/replay/experimento.
+O frontmatter de cada prompt declara dependências exatas; não executar por número de RFC.
+
 ## Regra de execução
 
-- Trabalhar em uma RFC por vez.
-- Ler o PRD e o prompt mestre antes de editar.
-- Não implementar dependência ainda não concluída.
+- Trabalhar em um bloco de RFC por sessão; blocos independentes podem rodar em paralelo.
+- Ler a emenda atual do PRD, protocolo curto, RFC/seção e símbolos do bloco selecionado.
+- Confirmar dependências por código/evidência; não inferir ausência por documento desatualizado.
 - Não ampliar o escopo silenciosamente.
 - Condição de parada tem precedência sobre “terminar rápido”.
 - A IA deve registrar testes realmente executados e riscos residuais.
 
-## Sequência
+## Registro das RFCs anteriores — conferir baseline e emendas antes de reutilizar
 
 | RFC                                                        | Título                                      | Dependências               | Resultado                                                                                                                   |
 | ---------------------------------------------------------- | ------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -43,9 +73,10 @@ As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Ca
 > **2026-09-05 — RFC-020…029: todas aprovadas**, cada decisão na recomendação/padrão da
 > sua própria tabela, **incluindo a D3 da RFC-021** (rearme automático condicionado do kill
 > switch, `M` = 15 min, aprovada no mesmo dia). Registro item a item em `docs/HANDOFF.md`,
-> seção "APROVAÇÃO DAS RFC-020…029". **Aprovada ≠ implementada:** nenhuma das dez está em
-> produção — o kill switch segue engatado desde 02/09 02:21:05Z e só o clique do proprietário
-> o destrava até a D3 subir.
+> seção "APROVAÇÃO DAS RFC-020…029". **Aprovada ≠ implementada.** O estado então descrito
+> envelheceu: na baseline de 10/09, nove possuem algum código em produção; 021 falta,
+> 022 D1–D3 estão presentes e 028 B falta. Verificar cada aceite e o runtime datado,
+> não concluir que nada foi implementado a partir dos rótulos históricos da tabela.
 
 ## Descopo — 2026-08-18
 

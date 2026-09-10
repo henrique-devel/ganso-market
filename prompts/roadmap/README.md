@@ -1,5 +1,14 @@
 # Roadmap de prompts — do estado de 2026-08-31 até a execução real
 
+> **Rota atual de desenvolvimento (10/09): [blocos BTC](btc/README.md).**
+> Os prompts abaixo preservam o roteiro anterior. Para 021/022/028 use as emendas
+> no topo das RFCs e os blocos novos; não reexecute entregas já presentes em razão
+> de um status histórico. Leia [estado curto](../../docs/roadmap/BTC_EXECUTION_STATE.md)
+> e apenas o contexto mínimo do bloco. Não siga a instrução histórica de carregar
+> HANDOFF inteiro. Novas sessões escrevem recibos curtos, não ampliam esta tabela.
+
+## Registro histórico — não é a fila atual
+
 Esta pasta contém os prompts operacionais, **um por sessão de IA**, que levam o projeto do
 estado de 2026-08-31 até a execução real (RFC-009). Cada prompt é **autocontido**: carrega a
 autorização de SSH, as regras de deploy e os fatos medidos de que precisa — pode ser colado
