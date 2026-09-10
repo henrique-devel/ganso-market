@@ -1,5 +1,23 @@
 # RFC-028 — Estratégia `fast_btc_updown@0.1.0`: máquina de amostra com controle, em sub-carteira imaginária, primeiro em SOMBRA
 
+> **Emenda de planejamento — 2026-09-10.** A parte A (config/policy/backtest e migration
+> 0020) existe; a parte B (worker operacional) não foi encontrada na revisão do repositório.
+> Confirmar o estado antes de implementar. A próxima sequência é
+> [RFC-039](RFC-039-btc-horario-contrato-benchmark-worker.md), prompts `BTC-01` a `BTC-07`
+> em `prompts/roadmap/btc/`, seguida de RFC-032/033. Para essa sequência, esta emenda
+> precede instruções conflitantes do antigo prompt 20b: **validade por mercado/instante**
+> substitui reiniciar três dias globais por qualquer kill/breaker. Pesquisa em sombra
+> com dados próprios válidos pode continuar com kill de execução registrado, sem criar
+> ordens nem alterar carteira/gates; dados inválidos continuam excluídos. Binance BTC/USDT
+> do contrato horário é benchmark; TWAP60/TWAP30 são proxies. A versão 0.1.0 e os resultados
+> abaixo permanecem históricos. Os cenários novos usam US$1.000 simulados independentes
+> conforme RFC-032; isso não altera a reserva histórica de US$100 nem ativa modo paper.
+> BTC-05 prepara/observa sombra; BTC-06 implementa intent paper com ownership financeiro;
+> BTC-07 prepara/observa paper condicionado a mandato/alocação autorizados e reconciliação.
+> Recibos operacionais distinguem plano pronto de execução observada; código não ativa modos.
+> O restante desta RFC documenta o desenho e as aprovações anteriores. Não executar o
+> antigo pacote merge/deploy/monitoramento ao receber um dos novos prompts de código.
+
 **Status:** accepted — autorizado para implementação (2026-09-04); P1–P8 aprovadas como escritas (2026-09-05). **PR 1 em produção** (`#142`, 2026-09-09: `fast.json` 0.1.0 congelada, parser, policy própria e backtest auditado do filtro z); **PR 2 em produção** (`#143`: migration 0020, retenção). PRs 3–4 (sombra e API) são o prompt 20b. A primeira ordem do braço C segue **fora** desta RFC
 **Dependências:** PR-0 (b), liquidação (`prompts/roadmap/11-hotfixes-pr0-overview-settlement-sombra.md`, item b; sem ele nenhuma posição fecha e nada é rotulado); RFC-022 (`RFC-022-ponte-runtime-e-saidas.md` — ponte, runtime de resolução e saídas); RFC-025 (`RFC-025-disjuntor-de-parametro-redefinido.md` — `PARAM_CHANGE` sem contar a versão 1; sem ela todo mercado novo nasce com disjuntor aberto e a estratégia recusa tudo); RFC-011 (simulador pessimista, kill switch); RFC-016/019 (`end_ts`, abertura da janela). **RFC-024** (`RFC-024-descoberta-por-serie-e-livro-dos-rapidos.md`) é pré-condição para o braço E emitir ordem e para a cobertura do braço C — **não** para a fase sombra desta RFC. Em 04/09 a RFC-022 e a RFC-025 estão em `Status: accepted` no worktree (`RFC-022…:3`, `RFC-025…:3`) e **ainda não implementadas**; o **PR-0 está implementado e verificado em produção** (PRs #93, #94 e #96). Os prompts re-medem cada uma em produção antes do merge do PR 3.
 **Habilita:** o primeiro conjunto de regras rápidas registrado, versionado e replayável; N experimental em dias (24 mercados-hora/dia) com braço de controle, sem tocar carteira principal, gates, policy global, disjuntores ou perímetro; a evidência para decidir, depois, se algum braço emite ordem paper.

@@ -1,5 +1,16 @@
 # RFC-022 — Ponte decisão→ordem, runtime de resolução e saídas: por que 44 aceites viraram 8 ordens e 2 fills
 
+> **Emenda de 2026-09-10 — execução restante:** no HEAD consultado `d38142c`,
+> D1–D3 estão implementadas; D4-A segue pendente. Revalidar esses símbolos antes
+> de mexer e não executar novamente os PRs históricos sem regressão demonstrada.
+> A continuação é `prompts/roadmap/btc/exec-04-saidas-reduce-only.md`, depois das
+> dependências registradas no frontmatter, sob RFC-034 e RFC-038. Elas refinam
+> D4-A: SELL do inventário positivo do token real YES/NO e BUY para cobrir short
+> legado, sempre por conta/estratégia/token, com reserva concorrente e sem
+> atravessar zero. O texto histórico abaixo permanece como registro da decisão;
+> não autoriza aplicar SELL indistintamente a posições negativas.
+> Estado dos blocos: `docs/roadmap/BTC_EXECUTION_STATE.md`.
+
 **Status:** accepted — autorizado para implementação (2026-09-04); P1–P3 aprovadas na recomendação da tabela (2026-09-05)
 **Dependências:** RFC-013 (ponte e critérios de saída, código completo), RFC-012 (runtime de resolução com geração/lease), **PR-0 (b) — SATISFEITA** (PR #94, mergeado e verificado em produção em 2026-09-04): `brokerstore.ts` lia `payload_json.outcomePrices` enquanto o coletor grava `payload_json.raw.outcomePrices`, e nenhum fechamento era medível. O livro fechou a primeira posição da sua história em 2026-09-04 21:23:56.924Z
 **Habilita:** vazão de fills mensurável para o G2; saída de posição com semântica declarada (ordem ou sinal); cancelamento por runtime só quando o runtime está de fato indisponível

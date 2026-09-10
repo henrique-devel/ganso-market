@@ -5,6 +5,29 @@
 **Tipo:** ferramenta pessoal, single-user  
 **Infraestrutura-alvo:** Hetzner CPX42 — `178.105.65.251`
 
+## Emenda de planejamento — ciclo BTC e dados (2026-09-10)
+
+O proprietário aprovou a direção da análise e solicitou RFCs/prompts pequenos para
+implementação por IA, incluindo limpeza de dados antigos ou pouco utilizados.
+O pacote é documental: não registra implementação, deploy, limpeza ou ativação live.
+
+- Prioridade: operação contínua, payoff/contabilidade corretos, BTC horário com
+  benchmark contratual e experimento de carteira finita de US$1.000 simulados.
+- Mesmo repositório, banco e painel; ownership financeiro e cadência por estratégia.
+- Mais risco será comparado em cenários separados de seleção e tamanho, preservando
+  a referência paper. Não mudar silenciosamente capital/caps ou gates históricos.
+- Retenção/limpeza por manifesto, proteção de ledger/proveniência/datasets, poda
+  limitada e recuperação física do espaço medida separadamente. Sem apagar dados
+  agora nem presumir que um agregado substitui o histórico L2 necessário ao replay.
+- Sem migração de infraestrutura neste ciclo. Macro e novos símbolos ficam adiados.
+- RFC-040 especifica uma possível trilha experimental; RFC-009 e a autorização
+  expressa continuam necessárias para executor/live. Orçamento real não foi definido.
+
+Entrada atual: [blocos BTC](../prompts/roadmap/btc/README.md),
+[estado curto](roadmap/BTC_EXECUTION_STATE.md) e [baseline datada](roadmap/BASELINE-2026-09-10.md).
+Esta emenda e as revisões explícitas das RFCs 021/022/028 orientam o novo pacote;
+registros antigos abaixo preservam contexto, não comprovam estado atual de produção.
+
 ## Emenda operacional — bootstrap standalone (2026-08-14)
 
 O servidor anterior foi reconstruído. A fundação atual, que expõe apenas a UI

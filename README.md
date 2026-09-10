@@ -6,6 +6,11 @@ gates de segurança, execução maker-side limitada na Polymarket.
 Este repositório começa pelos documentos que governam o desenvolvimento. A
 implementação deve seguir o PRD e uma RFC ativa por vez.
 
+**Próximo ciclo (10/09/2026):** [RFCs e prompts em blocos pequenos](prompts/roadmap/btc/README.md)
+para operação, contabilidade, BTC horário, replay e limpeza de dados. Uma sessão
+executa um bloco; [estado curto](docs/roadmap/BTC_EXECUTION_STATE.md) substitui a
+leitura integral do HANDOFF. Novas especificações ainda não implementadas.
+
 **Decisão de escopo (2026-08-18):** o projeto segue um único caminho, a
 Polymarket. O módulo Solana foi removido do escopo e do repositório; o
 histórico permanece no git.
@@ -21,11 +26,12 @@ histórico permanece no git.
 - PostgreSQL com migrations versionadas;
 - Nginx em loopback no desenvolvimento e modo standalone direto na porta 80.
 
-O único modo aceito é `paper`. Não existem signer, wallet, estratégia, ordem
-ou execução neste código. O modelo fundamental grava estimativas e relatórios
-de calibração; nenhum modelo serve estimativa sem passar o gate de
-não-inferioridade e ser promovido manualmente
-([escopo e limites](docs/architecture/fundamental-model-scope.md)).
+O modo operacional é `paper`: há decisões, ordens simuladas, ledger, posições,
+replay e painel. Não há executor/signer de ordens reais. A estratégia fast tem
+config/policy/backtest; seu worker observacional é trabalho do próximo ciclo.
+Modelos produzem estimativas em sombra; sua promoção e influência nas decisões
+seguem os gates. Consulte a [baseline de 10/09](docs/roadmap/BASELINE-2026-09-10.md)
+para limitações verificadas, sem inferir disponibilidade atual a partir desta lista.
 
 Para reproduzir localmente:
 
