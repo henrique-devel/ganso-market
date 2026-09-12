@@ -308,13 +308,13 @@ de RAM já existente demonstrada por pico dos demais serviços. Não pressupor
 
 ## 6. Validação integrada
 
-Este roteiro não supera os gates herdados: DB-02 reprovou o gate de p95 COMMIT
-de conflitos (+173,56%); DB-03 não dispõe do ensaio de escrita/WAL, rejeitado pela
-revisão automática; Q4 continua adiado para DB-03B. Nenhum deles pode ser contado
-como aprovado por observação passiva ou pelo teste do limitador abaixo. A amostra
-passiva DB-04 com RTDS ΔINSERT=0 e OOM=0 não demonstra continuidade de ingestão nem
-aceite de carga. A aplicação de índices e tuning permanece condicionada aos gates
-e decisões especificados no restante deste plano.
+Este roteiro não supera os gates atuais: DB-02 PR163 manteve0/8 cenários
+aprovados pela regra conjunta; o ensaio de escrita RTDS executado por DB-04
+terminou com exit2 e só1/4 cenários aprovado. A autorização antiga foi respondida;
+Q4/DB-03B continua adiado por decisão aprovada. Observação passiva e o teste do
+limitador abaixo não substituem esses gates. As capturas DB-04 com RTDS ΔINSERT=0
+e OOM=0 não demonstram continuidade de ingestão nem aceite de carga. A aplicação
+de índices e tuning permanece condicionada aos gates e decisões deste plano.
 
 ### Carga e contagem
 
