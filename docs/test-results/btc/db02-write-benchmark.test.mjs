@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fixture, summary, compare } from "./db02-write-benchmark.mjs";
+import { fixture, summary, compare, exitStatus } from "./db02-write-benchmark.mjs";
 
 test("new rows include the hot market and both token identities", () => {
   const rows = Array.from({length: 2500}, (_, i) => fixture("data_api", i, "autocommit"));
@@ -59,4 +59,11 @@ test("autocommit retains the 10 percent threshold without an absolute slack", ()
 test("invalid source or empty metrics cannot silently pass", () => {
   assert.throws(() => fixture("unknown", 1, "test"));
   assert.throws(() => summary([]));
+});
+
+test("a completed measurement cannot signal approval when a gate failed", () => {
+  assert.equal(exitStatus({completed: true, allGatesPassed: false, cleanupErrors: []}), 2);
+  assert.equal(exitStatus({completed: true, allGatesPassed: true, cleanupErrors: []}), 0);
+  assert.equal(exitStatus({completed: false, allGatesPassed: true}), 1);
+  assert.equal(exitStatus({completed: true, allGatesPassed: true, cleanupErrors: ["failed"]}), 1);
 });

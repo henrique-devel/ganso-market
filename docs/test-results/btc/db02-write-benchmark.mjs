@@ -64,6 +64,11 @@ export function compare(baseline, candidate) {
       within(baseline.p95Ns, candidate.p95Ns) && within(baseline.commitP95Ns, candidate.commitP95Ns) };
 }
 
+export function exitStatus(report) {
+  if (!report.completed || report.error || report.cleanupErrors?.length) return 1;
+  return report.allGatesPassed === true ? 0 : 2;
+}
+
 function extract(source, anchor) {
   const start = source.indexOf(anchor);
   assert.ok(start >= 0, `Missing production function ${anchor}`);
@@ -306,7 +311,7 @@ async function run() {
     } finally {
       try { await client.end(); }
       catch (error) { report.cleanupErrors.push({operation: "close", code: error.code ?? error.name}); }
-      if (report.cleanupErrors.length) process.exitCode = 1;
+      process.exitCode = exitStatus(report);
       report.finishedAt = new Date().toISOString();
       report.wallMs = elapsed(start) / 1e6;
       process.stdout.write(JSON.stringify(report) + "\n");
