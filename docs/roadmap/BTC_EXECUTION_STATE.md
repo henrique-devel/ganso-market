@@ -34,7 +34,7 @@ Não ampliar o HANDOFF histórico. Nenhum bloco inicia automaticamente.
 | [DATA-04](../../prompts/roadmap/btc/data-04-poda-idempotente-limitada.md) | pending | Ainda não executado |
 | [DATA-05](../../prompts/roadmap/btc/data-05-politica-e-manutencao.md) | pending | Ainda não executado |
 | [FIN-01](../../prompts/roadmap/btc/fin-01-contrato-financeiro.md) | code-verified | [Recibo](receipts/FIN-01.md): especificação financial-v2 e seis fixtures manuais conferidas; dono/legado/precisão/UTC/reservas e esquema aditivo proposto; sem runtime/migration/SQL/aceite produtivo; FIN-02 elegível |
-| [FIN-02](../../prompts/roadmap/btc/fin-02-atribuicao-do-ledger.md) | pending | Ainda não executado |
+| [FIN-02](../../prompts/roadmap/btc/fin-02-atribuicao-do-ledger.md) | implemented | [Recibo](receipts/FIN-02.md): migration 0024 e atribuição v1 atômica por dono/token; 163 testes focados (16 PG reais), PR #172 integrado e runtime verificado; legado intacto/unknown, marcas novas atribuídas; sem fill novo/capital/fold v2; FIN-03 elegível |
 | [FIN-03](../../prompts/roadmap/btc/fin-03-pnl-e-equity.md) | pending | Ainda não executado |
 | [FIN-04](../../prompts/roadmap/btc/fin-04-exposicao-por-payoff.md) | pending | Ainda não executado |
 | [FIN-05](../../prompts/roadmap/btc/fin-05-reservas-atomicas.md) | pending | Ainda não executado |
