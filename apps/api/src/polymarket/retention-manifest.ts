@@ -295,6 +295,106 @@ export async function selectRetentionCandidates(
   };
 }
 
+// Caller must acquire retention_evidence_lock() before this catalog snapshot,
+// and keep it until commit. Shared by preservation; does not grant deletion.
+export async function readRetentionSchema(tx: SqlExecutor) {
+  const meta = await tx.query<{
+    schema: string;
+    policy: string;
+    tables: string[];
+  }>(
+    "SELECT current_schema() AS schema, retention_evidence_policy_version() AS policy, retention_evidence_tables() AS tables",
+  );
+  const metadata = meta.rows[0];
+  if (
+    !metadata ||
+    metadata.policy !== RETENTION_POLICY_VERSION ||
+    canonical([...metadata.tables].sort()) !== canonical(RETENTION_OBJECTS)
+  ) {
+    throw new Error("RETENTION_SCHEMA_POLICY_DRIFT");
+  }
+  const catalog = await tx.query<CatalogTable & Record<string, unknown>>(
+    CATALOG_SQL,
+    [[...RETENTION_OBJECTS, "retention_evidence_pins", "retention_pin_events"]],
+  );
+  for (const table of RETENTION_OBJECTS) {
+    const entry = catalog.rows.find((row) => row.name === table);
+    for (const [name, type, fn] of [
+      [
+        "retention_evidence_write_lock_trg",
+        22,
+        "retention_evidence_writer_lock",
+      ],
+      [
+        "retention_evidence_delete_guard_trg",
+        42,
+        "retention_evidence_delete_guard",
+      ],
+    ] as const) {
+      if (
+        !entry?.triggers.some(
+          (trigger) =>
+            trigger.name === name &&
+            ["O", "A"].includes(trigger.enabled) &&
+            trigger.type === type &&
+            trigger.function === fn,
+        )
+      ) {
+        throw new Error(`RETENTION_PROTECTION_NOT_APPLIED:${table}:${name}`);
+      }
+    }
+  }
+  for (const [table, name, type, fn] of [
+    [
+      "retention_evidence_pins",
+      "retention_evidence_pins_lock_trg",
+      62,
+      "retention_evidence_pins_lock",
+    ],
+    [
+      "retention_evidence_pins",
+      "retention_evidence_pins_audit_trg",
+      13,
+      "retention_evidence_pins_audit",
+    ],
+    [
+      "retention_pin_events",
+      "retention_pin_events_guard_trg",
+      58,
+      "retention_evidence_delete_guard",
+    ],
+  ] as const) {
+    const entry = catalog.rows.find((row) => row.name === table);
+    if (
+      !entry?.triggers.some(
+        (trigger) =>
+          trigger.name === name &&
+          ["O", "A"].includes(trigger.enabled) &&
+          trigger.type === type &&
+          trigger.function === fn,
+      )
+    ) {
+      throw new Error(`RETENTION_PROTECTION_NOT_APPLIED:${table}:${name}`);
+    }
+  }
+  const functions = await tx.query(
+    `SELECT p.proname, pg_get_functiondef(p.oid) AS definition FROM pg_proc p
+     JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = current_schema()
+     AND p.proname LIKE 'retention\\_%' ESCAPE '\\' ORDER BY p.proname, p.oid`,
+  );
+  const migrations = await tx.query(
+    "SELECT component, version, checksum_sha256 FROM schema_versions ORDER BY component, version",
+  );
+  if (
+    !migrations.rows.some(
+      (row) => row["component"] === "foundation" && row["version"] === 23,
+    )
+  ) {
+    throw new Error("RETENTION_MIGRATION_23_REQUIRED");
+  }
+  return { metadata, catalog, migrations, functions };
+}
+
 export async function createRetentionDryRun(
   pool: Pick<DatabasePool, "transaction">,
   request: RetentionManifestRequest,
@@ -334,106 +434,8 @@ export async function createRetentionDryRun(
     await tx.query("SET LOCAL transaction_timeout = '2s'");
     await tx.query("SET LOCAL TIME ZONE 'UTC'");
     await tx.query("SELECT retention_evidence_lock()");
-    const meta = await tx.query<{
-      schema: string;
-      policy: string;
-      tables: string[];
-    }>(
-      "SELECT current_schema() AS schema, retention_evidence_policy_version() AS policy, retention_evidence_tables() AS tables",
-    );
-    const metadata = meta.rows[0];
-    if (
-      !metadata ||
-      metadata.policy !== RETENTION_POLICY_VERSION ||
-      canonical([...metadata.tables].sort()) !== canonical(RETENTION_OBJECTS)
-    ) {
-      throw new Error("RETENTION_SCHEMA_POLICY_DRIFT");
-    }
-    const catalog = await tx.query<CatalogTable & Record<string, unknown>>(
-      CATALOG_SQL,
-      [
-        [
-          ...RETENTION_OBJECTS,
-          "retention_evidence_pins",
-          "retention_pin_events",
-        ],
-      ],
-    );
-    for (const table of RETENTION_OBJECTS) {
-      const entry = catalog.rows.find((row) => row.name === table);
-      for (const [name, type, fn] of [
-        [
-          "retention_evidence_write_lock_trg",
-          22,
-          "retention_evidence_writer_lock",
-        ],
-        [
-          "retention_evidence_delete_guard_trg",
-          42,
-          "retention_evidence_delete_guard",
-        ],
-      ] as const) {
-        if (
-          !entry?.triggers.some(
-            (trigger) =>
-              trigger.name === name &&
-              ["O", "A"].includes(trigger.enabled) &&
-              trigger.type === type &&
-              trigger.function === fn,
-          )
-        ) {
-          throw new Error(`RETENTION_PROTECTION_NOT_APPLIED:${table}:${name}`);
-        }
-      }
-    }
-    for (const [table, name, type, fn] of [
-      [
-        "retention_evidence_pins",
-        "retention_evidence_pins_lock_trg",
-        62,
-        "retention_evidence_pins_lock",
-      ],
-      [
-        "retention_evidence_pins",
-        "retention_evidence_pins_audit_trg",
-        13,
-        "retention_evidence_pins_audit",
-      ],
-      [
-        "retention_pin_events",
-        "retention_pin_events_guard_trg",
-        58,
-        "retention_evidence_delete_guard",
-      ],
-    ] as const) {
-      const entry = catalog.rows.find((row) => row.name === table);
-      if (
-        !entry?.triggers.some(
-          (trigger) =>
-            trigger.name === name &&
-            ["O", "A"].includes(trigger.enabled) &&
-            trigger.type === type &&
-            trigger.function === fn,
-        )
-      ) {
-        throw new Error(`RETENTION_PROTECTION_NOT_APPLIED:${table}:${name}`);
-      }
-    }
-    const functions = await tx.query(
-      `SELECT p.proname, pg_get_functiondef(p.oid) AS definition FROM pg_proc p
-       JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = current_schema()
-       AND p.proname LIKE 'retention\\_%' ESCAPE '\\' ORDER BY p.proname, p.oid`,
-    );
-    const migrations = await tx.query(
-      "SELECT component, version, checksum_sha256 FROM schema_versions ORDER BY component, version",
-    );
-    if (
-      !migrations.rows.some(
-        (row) => row["component"] === "foundation" && row["version"] === 23,
-      )
-    ) {
-      throw new Error("RETENTION_MIGRATION_23_REQUIRED");
-    }
+    const { metadata, catalog, migrations, functions } =
+      await readRetentionSchema(tx);
     const selections: RetentionSelection[] = [];
     for (const table of objects) {
       const entry = catalog.rows.find((row) => row.name === table);
