@@ -2,6 +2,13 @@ import type { DatabasePool } from "../database.js";
 import { comparePriceStrings } from "./book.js";
 import type { MarketSocket, MarketSocketFactory } from "./recorder.js";
 import { errorFields } from "../errors.js";
+import { createRtdsGapJournal } from "./rtdsgaps.js";
+import {
+  createRtdsSilenceMonitor,
+  rtdsSilenceMs,
+  rtdsMaxReconnects,
+  RTDS_WATCHDOG_INTERVAL_MS,
+} from "./rtdssilence.js";
 
 // RFC-007 task 8: continuous recording of Polymarket RTDS crypto feeds
 // (Chainlink TWAP 30/60 that resolves the crypto markets, plus Binance spot).
@@ -72,10 +79,10 @@ function toDecimalString(value: unknown): string | null {
 // received_at).
 function toSourceDate(value: unknown): Date | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (value >= 1e12) {
+    if (value >= 1e12 && value <= 8.64e15) {
       return new Date(value);
     }
-    if (value >= 1e9) {
+    if (value >= 1e9 && value < 1e12) {
       return new Date(value * 1_000);
     }
     return null;
@@ -172,6 +179,11 @@ export function parseRtdsFrame(
     const topic = typeof record.topic === "string" ? record.topic : null;
     const feed = topic === null ? undefined : TOPIC_TO_FEED.get(topic);
     if (feed === undefined) {
+      continue;
+    }
+    // Topic acknowledgements/heartbeats never carry a price observation.
+    if (record.type !== undefined && record.type !== "update") {
+      recognized = true;
       continue;
     }
     const payload = record.payload ?? record.data ?? record.message;
@@ -339,6 +351,10 @@ export interface RtdsRecorderDeps {
   readonly flushIntervalMs?: number;
   readonly pingIntervalMs?: number;
   readonly reconnectBaseMs?: number;
+  /** Validated arrival watchdog, 30 seconds to 1 hour; default 120 seconds. */
+  readonly silenceMs?: number;
+  /** Reconnect budget per overlapping silence episode; default 3, range 0..10. */
+  readonly recoveryMaxReconnects?: number;
   readonly buildSubscribeFrame?: (
     topics: readonly string[],
     symbols: readonly string[],
@@ -353,6 +369,15 @@ export interface RtdsRecorder {
   flushNow(): Promise<void>;
   /** Frames received that no parser recognized (diagnostic counter). */
   unknownFrames(): number;
+  health(): ReturnType<ReturnType<typeof createRtdsSilenceMonitor>["stats"]> &
+    ReturnType<ReturnType<typeof createRtdsGapJournal>["stats"]> & {
+      socketOpen: boolean;
+      pricePersistFailures: number;
+      bucketPersistFailures: number;
+      lastPricePersistMs: number | null;
+      lastPricePersistErrorMs: number | null;
+      lastBucketPersistErrorMs: number | null;
+    };
 }
 
 export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
@@ -362,41 +387,73 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
   const flushIntervalMs = deps.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
   const pingIntervalMs = deps.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
   const reconnectBaseMs = deps.reconnectBaseMs ?? DEFAULT_RECONNECT_BASE_MS;
+  const silenceMs = rtdsSilenceMs(deps.silenceMs);
+  const maxReconnects = rtdsMaxReconnects(deps.recoveryMaxReconnects);
 
-  let symbols = deps.symbols.map((symbol) => symbol.toLowerCase());
+  let symbols = [
+    ...new Set(deps.symbols.map((symbol) => symbol.toLowerCase())),
+  ];
   let running = false;
   let socketOpen = false;
   let socket: MarketSocket | null = null;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
   let flushTimer: ReturnType<typeof setInterval> | undefined;
+  let watchdogTimer: ReturnType<typeof setInterval> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectAttempt = 0;
   let disconnectedAtMs: number | null = null;
   let unknownFrameCount = 0;
   let flushing: Promise<void> = Promise.resolve();
+  let pricePersistFailures = 0;
+  let bucketPersistFailures = 0;
+  let lastPricePersistMs: number | null = null;
+  let lastPricePersistErrorMs: number | null = null;
+  let lastBucketPersistErrorMs: number | null = null;
+  let stopPromise: Promise<void> | null = null;
+  let generation = 0;
+  // Bounded recent wire identities survive reconnects. Duplicate replay is still
+  // visible as an arrival, but cannot count a second time in raw/minute buckets.
+  const recent = new Map<string, Map<string, number>>();
 
   const buffer: RtdsPriceSample[] = [];
   const closedBuckets: RtdsMinuteBucket[] = [];
   const aggregator = new RtdsMinuteAggregator();
+  const journal = createRtdsGapJournal({
+    pool: deps.pool,
+    clock,
+    log: (level, code, details) =>
+      logLine(level, code, code.toLowerCase(), details),
+  });
+  const silence = createRtdsSilenceMonitor({
+    pool: deps.pool,
+    journal,
+    clock,
+    silenceMs,
+    maxReconnects,
+    socketOpen: () => socketOpen,
+    resubscribe: () => replaceSubscriptions(symbols),
+    reconnect: () => {
+      if (reconnectTimer !== undefined) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
+      retireSocket();
+      disconnectedAtMs ??= clock();
+      connect();
+    },
+    log: (level, code, details) =>
+      logLine(level, code, code.toLowerCase(), details),
+  });
+  silence.setSymbols(symbols);
 
-  async function insertGap(
+  function insertGap(
     start: Date,
     end: Date | null,
     cause: string,
     details: Record<string, unknown>,
-  ): Promise<void> {
-    try {
-      await deps.pool.query(
-        `INSERT INTO polymarket_data_gaps (source, gap_start, gap_end, cause, details_json)
-         VALUES ('rtds', $1, $2, $3, $4::jsonb)`,
-        [start, end, cause, JSON.stringify(details)],
-      );
-    } catch (error: unknown) {
-      logLine("error", "RTDS_GAP_PERSIST_FAILED", "rtds_gap_persist_failed", {
-        ...errorFields(error),
-        cause,
-      });
-    }
+  ): void {
+    journal.record(start, end, cause, details);
+    void journal.flush();
   }
 
   async function doFlush(): Promise<void> {
@@ -430,7 +487,11 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
            VALUES ${tuples.join(",")}`,
           params,
         );
+        lastPricePersistMs = clock();
+        silence.persisted(pending);
       } catch (error: unknown) {
+        pricePersistFailures += 1;
+        lastPricePersistErrorMs = clock();
         // Never crash on persistence failures: the batch is lost, so record
         // it as a data gap and keep the socket alive.
         logLine("error", "RTDS_PERSIST_FAILED", "rtds_persist_failed", {
@@ -441,8 +502,13 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
           ...pending.map((sample) => sample.receivedAtMs),
         );
         const endMs = Math.max(...pending.map((sample) => sample.receivedAtMs));
-        await insertGap(new Date(startMs), new Date(endMs), "persist_failed", {
+        insertGap(new Date(startMs), new Date(endMs), "persist_failed", {
           dropped: pending.length,
+          series: [
+            ...new Set(
+              pending.map((sample) => `${sample.feed}|${sample.symbol}`),
+            ),
+          ],
         });
       }
     }
@@ -471,11 +537,23 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
           ],
         );
       } catch (error: unknown) {
+        bucketPersistFailures += 1;
+        lastBucketPersistErrorMs = clock();
         logLine("error", "RTDS_1M_PERSIST_FAILED", "rtds_1m_persist_failed", {
           ...errorFields(error),
           feed: bucket.feed,
           symbol: bucket.symbol,
         });
+        insertGap(
+          bucket.bucketStart,
+          new Date(bucket.bucketStart.getTime() + MINUTE_MS),
+          "persist_failed",
+          {
+            table: "polymarket_rtds_1m",
+            feed: bucket.feed,
+            symbol: bucket.symbol,
+          },
+        );
       }
     }
   }
@@ -485,15 +563,74 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
     return flushing;
   }
 
+  function clearPing(): void {
+    if (pingTimer !== undefined) clearInterval(pingTimer);
+    pingTimer = undefined;
+  }
+
+  function retireSocket(): void {
+    const previous = socket;
+    socket = null;
+    socketOpen = false;
+    clearPing();
+    // Detach before close: sync, delayed, duplicate and missing close callbacks
+    // must all have the same lifecycle semantics.
+    try {
+      previous?.close();
+    } catch {
+      /* shutdown/recovery still proceeds */
+    }
+  }
+
+  function replaceSubscriptions(next: readonly string[]): void {
+    if (socket === null || !socketOpen) return;
+    // Official client uses identical SubscriptionMessage for both actions.
+    // Unsubscribe first; another subscribe alone is not a replacement contract.
+    if (symbols.length > 0) {
+      const previous = JSON.parse(build([...RTDS_TOPICS], symbols)) as Record<
+        string,
+        unknown
+      >;
+      socket.send(JSON.stringify({ ...previous, action: "unsubscribe" }));
+    }
+    if (next.length > 0) socket.send(build([...RTDS_TOPICS], next));
+  }
+
+  function scheduleReconnect(): void {
+    if (!running || reconnectTimer !== undefined || silence.hasOpenGaps())
+      return;
+    const delay = Math.min(
+      reconnectBaseMs * 2 ** Math.min(reconnectAttempt, 30),
+      MAX_RECONNECT_DELAY_MS,
+    );
+    reconnectAttempt += 1;
+    logLine("warn", "RTDS_DISCONNECTED", "rtds_disconnected", {
+      reconnect_in_ms: delay,
+      attempt: reconnectAttempt,
+    });
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      if (running && !silence.hasOpenGaps()) connect();
+    }, delay);
+  }
+
   function connect(): void {
-    const current = deps.socketFactory(url);
+    if (!running) return;
+    let current: MarketSocket;
+    try {
+      current = deps.socketFactory(url);
+    } catch (error) {
+      logLine("error", "RTDS_CONNECT_FAILED", "rtds_connect_failed", {
+        ...errorFields(error),
+      });
+      scheduleReconnect();
+      return;
+    }
+    const currentGeneration = ++generation;
     socket = current;
     current.onOpen(() => {
-      if (!running) {
-        return;
-      }
+      if (!running || socket !== current || socketOpen) return;
       socketOpen = true;
-      reconnectAttempt = 0;
       if (disconnectedAtMs !== null) {
         const gap: RtdsGapInfo = {
           source: "rtds",
@@ -501,23 +638,40 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
           end: new Date(clock()),
         };
         disconnectedAtMs = null;
-        // No replay exists on RTDS: the hole is real, so record it.
-        void insertGap(gap.start, gap.end, "ws_disconnect", { symbols });
+        // Transport gap ends here; price-silence gaps end only on valid prices.
+        insertGap(gap.start, gap.end, "ws_disconnect", { symbols });
         deps.onGap?.(gap);
-        logLine("warn", "RTDS_GAP_RECORDED", "rtds_gap_recorded", {
-          gap_start: gap.start.toISOString(),
-          gap_end: gap.end.toISOString(),
-        });
       }
-      current.send(build([...RTDS_TOPICS], symbols));
+      try {
+        if (symbols.length > 0) current.send(build([...RTDS_TOPICS], symbols));
+        silence.subscribed();
+      } catch (error) {
+        logLine("error", "RTDS_SUBSCRIBE_FAILED", "rtds_subscribe_failed", {
+          ...errorFields(error),
+        });
+        disconnectedAtMs ??= clock();
+        retireSocket();
+        scheduleReconnect();
+        return;
+      }
       pingTimer = setInterval(() => {
-        current.send("PING");
+        if (!running || socket !== current || !socketOpen) return;
+        try {
+          current.send("PING");
+        } catch (error) {
+          logLine("error", "RTDS_PING_FAILED", "rtds_ping_failed", {
+            ...errorFields(error),
+          });
+          disconnectedAtMs ??= clock();
+          retireSocket();
+          scheduleReconnect();
+        }
       }, pingIntervalMs);
     });
     current.onMessage((raw) => {
-      if (raw === "PONG" || raw === "PING") {
-        return;
-      }
+      if (!running || socket !== current || !socketOpen) return;
+      silence.frame();
+      if (raw === "PONG" || raw === "PING") return;
       const result = parseRtdsFrame(raw, clock());
       if (!result.recognized) {
         unknownFrameCount += 1;
@@ -529,86 +683,116 @@ export function createRtdsRecorder(deps: RtdsRecorderDeps): RtdsRecorder {
         return;
       }
       for (const sample of result.samples) {
+        if (
+          sample.price.startsWith("-") ||
+          !/[1-9]/.test(sample.price) ||
+          !silence.observe(sample)
+        )
+          continue;
+        reconnectAttempt = 0;
+        if (sample.sourceTs !== null) {
+          const seriesKey = `${sample.feed}|${sample.symbol}`;
+          const identities = recent.get(seriesKey) ?? new Map<string, number>();
+          recent.set(seriesKey, identities);
+          const identity = `${sample.sourceTs.getTime()}|${sample.price}`;
+          const seenGeneration = identities.get(identity);
+          if (
+            seenGeneration !== undefined &&
+            seenGeneration !== currentGeneration
+          )
+            continue;
+          identities.set(identity, currentGeneration);
+          if (identities.size > 128) {
+            const oldest = identities.keys().next().value;
+            if (oldest !== undefined) identities.delete(oldest);
+          }
+        }
         buffer.push(sample);
         const closed = aggregator.add(sample);
-        if (closed !== null) {
-          closedBuckets.push(closed);
-        }
+        if (closed !== null) closedBuckets.push(closed);
       }
+      void journal.flush();
     });
     current.onClose(() => {
+      if (socket !== current) return;
+      socket = null;
       socketOpen = false;
-      if (pingTimer !== undefined) {
-        clearInterval(pingTimer);
-        pingTimer = undefined;
-      }
-      if (!running) {
-        return;
-      }
-      if (disconnectedAtMs === null) {
-        disconnectedAtMs = clock();
-      }
-      const delay = Math.min(
-        reconnectBaseMs * 2 ** reconnectAttempt,
-        MAX_RECONNECT_DELAY_MS,
-      );
-      reconnectAttempt += 1;
-      logLine("warn", "RTDS_DISCONNECTED", "rtds_disconnected", {
-        reconnect_in_ms: delay,
-        attempt: reconnectAttempt,
-      });
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = undefined;
-        if (running) {
-          connect();
-        }
-      }, delay);
+      clearPing();
+      if (!running) return;
+      disconnectedAtMs ??= clock();
+      scheduleReconnect();
     });
   }
 
   return {
     start(): void {
-      if (running) {
-        return;
-      }
+      if (running || stopPromise !== null) return;
       running = true;
+      void silence.restore();
       connect();
       flushTimer = setInterval(() => {
         void flushNow();
       }, flushIntervalMs);
+      watchdogTimer = setInterval(() => {
+        if (!running) return;
+        void silence.restore();
+        silence.tick();
+        void journal.flush();
+      }, RTDS_WATCHDOG_INTERVAL_MS);
     },
-    async stop(): Promise<void> {
+    stop(): Promise<void> {
+      if (stopPromise !== null) return stopPromise;
       running = false;
-      if (flushTimer !== undefined) {
-        clearInterval(flushTimer);
-        flushTimer = undefined;
-      }
-      if (reconnectTimer !== undefined) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = undefined;
-      }
-      if (socket !== null) {
-        try {
-          socket.close();
-        } catch {
-          // A close failure must not block shutdown.
-        }
-        socket = null;
-      }
+      silence.stop();
+      if (flushTimer !== undefined) clearInterval(flushTimer);
+      if (watchdogTimer !== undefined) clearInterval(watchdogTimer);
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      flushTimer = undefined;
+      watchdogTimer = undefined;
+      reconnectTimer = undefined;
+      retireSocket();
       closedBuckets.push(...aggregator.drain());
-      await flushNow();
+      stopPromise = (async () => {
+        await flushNow();
+        // Drain every final due close within the journal shutdown budget.
+        await journal.drainAndStop();
+      })();
+      return stopPromise;
     },
     setSymbols(next: readonly string[]): void {
-      symbols = next.map((symbol) => symbol.toLowerCase());
-      if (socket !== null && socketOpen) {
-        // Assumption: a new subscribe frame replaces the previous filter set
-        // (validate live; see module notes).
-        socket.send(build([...RTDS_TOPICS], symbols));
-      }
+      if (stopPromise !== null) return;
+      const normalized = [
+        ...new Set(next.map((symbol) => symbol.toLowerCase())),
+      ];
+      if (
+        normalized.length === symbols.length &&
+        normalized.every((symbol) => symbols.includes(symbol))
+      )
+        return;
+      replaceSubscriptions(normalized);
+      symbols = normalized;
+      silence.setSymbols(symbols);
+      if (socketOpen) silence.subscribed();
+      // Retire identities only for removed subscriptions, avoiding unbounded
+      // storage if the caller changes the symbol set over time.
+      recent.clear();
+      void journal.flush();
     },
     flushNow,
     unknownFrames(): number {
       return unknownFrameCount;
+    },
+    health() {
+      return {
+        socketOpen,
+        ...silence.stats(),
+        ...journal.stats(),
+        pricePersistFailures,
+        bucketPersistFailures,
+        lastPricePersistMs,
+        lastPricePersistErrorMs,
+        lastBucketPersistErrorMs,
+      };
     },
   };
 }

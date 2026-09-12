@@ -1,8 +1,8 @@
 # Estado curto — blocos BTC
 
-Atualizado em 10/09/2026: **pacote documental criado; novos blocos não executados**.
-Validação documental: 49 prompts, 10 RFCs novas, links/IDs/dependências conferidos,
-grafo sem ciclos e `git diff --check` sem erro. Código de aplicação e servidor intocados.
+Atualizado em 12/09/2026 UTC: **RFC-021 OPS-01 a OPS-07 reunidas para entrega**.
+Implementação e evidências locais conforme linhas abaixo; OPS-04 é plano operacional.
+O PR e a validação da release não substituem observação de produção nem soak.
 Ler só a linha selecionada e dependências do frontmatter. Código existente pode ser
 verificado e aproveitado; recibo ausente não significa implementação ausente.
 
@@ -17,13 +17,13 @@ Não ampliar o HANDOFF histórico. Nenhum bloco inicia automaticamente.
 
 | Bloco | Estado | SHA / evidência / bloqueio |
 |---|---|---|
-| [OPS-01](../../prompts/roadmap/btc/ops-01-inventario-saude.md) | pending | Ainda não executado |
-| [OPS-02](../../prompts/roadmap/btc/ops-02-silencio-clob.md) | pending | Ainda não executado |
-| [OPS-03](../../prompts/roadmap/btc/ops-03-kill-switch-condicionado.md) | pending | Ainda não executado |
-| [OPS-04](../../prompts/roadmap/btc/ops-04-plano-recuperacao-soak.md) | pending | Ainda não executado |
-| [OPS-05](../../prompts/roadmap/btc/ops-05-silencio-rtds.md) | pending | Ainda não executado |
-| [OPS-06](../../prompts/roadmap/btc/ops-06-supervisor-externo-recorder.md) | pending | Ainda não executado |
-| [OPS-07](../../prompts/roadmap/btc/ops-07-sweep-fechamento-monotonico.md) | pending | Ainda não executado |
+| [OPS-01](../../prompts/roadmap/btc/ops-01-inventario-saude.md) | code-verified | [Recibo](receipts/OPS-01.md): mapa local em c528d5b; D1–D3 ausentes naquela base. Identidade SSH reconciliada pelo console do proprietário em 12/09 UTC; [entrega integrada](../test-results/btc/RFC-021-release.md) |
+| [OPS-02](../../prompts/roadmap/btc/ops-02-silencio-clob.md) | code-verified | [Recibo](receipts/OPS-02.md): patch local sobre c528d5b; silêncio CLOB/controle REST/recovery limitada + migration0021; 127 testes e typecheck passaram; reason codes e contrato na evidência; sem deploy |
+| [OPS-03](../../prompts/roadmap/btc/ops-03-kill-switch-condicionado.md) | code-verified | [Recibo](receipts/OPS-03.md): D2/D3 implementadas; 15 ticks/900s com resets, auditoria e proteções; 168 testes + 8 PostgreSQL e typecheck passaram; sem deploy |
+| [OPS-04](../../prompts/roadmap/btc/ops-04-plano-recuperacao-soak.md) | code-verified | [Recibo](receipts/OPS-04.md): [plano pronto](../runbooks/btc-recovery.md), não aplicado; Q1–Q4 verificadas em PostgreSQL descartável; retomar gate §1: entregar release integrada OPS-02/03/05/06/07 e verificar telemetria; identidade SSH reconciliada em 12/09 UTC; sem janela/soak observado |
+| [OPS-05](../../prompts/roadmap/btc/ops-05-silencio-rtds.md) | code-verified | [Recibo](receipts/OPS-05.md): silêncio RTDS global/por série, 120 s configurável, gaps idempotentes e retomados após restart, recovery limitado; 66 testes verificados incluindo PG descartável + typecheck; sem deploy/soak |
+| [OPS-06](../../prompts/roadmap/btc/ops-06-supervisor-externo-recorder.md) | code-verified | [Recibo](receipts/OPS-06.md): heartbeat + supervisor externo com DB distinto, evidência no host, lock/backoff/3 tentativas por hora e instalador reversível; 56 testes verificados; [handoff OPS-04](../runbooks/recorder-watchdog.md); não instalado/ativado, sem saúde/soak atestado |
+| [OPS-07](../../prompts/roadmap/btc/ops-07-sweep-fechamento-monotonico.md) | code-verified | [Recibo](receipts/OPS-07.md): D4 ausente na base, implementada com UPDATE monotônico antes dos eventos e retry observável; 302 testes (5 PostgreSQL). Leitores: API expõe/filtra closed; estimador exclui; labels/settlement exigem resolução e outcome. Upserts preservados; sem deploy. OPS-04 valida servidor, sem inferir resolução de COUNT(closed) |
 | [DB-01](../../prompts/roadmap/btc/db-01-baseline-consultas.md) | pending | Ainda não executado |
 | [DB-02](../../prompts/roadmap/btc/db-02-ultimo-trade-por-mercado.md) | pending | Ainda não executado |
 | [DB-03](../../prompts/roadmap/btc/db-03-rtds-e-livro-asof.md) | pending | Ainda não executado |

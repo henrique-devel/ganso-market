@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryResult, SqlExecutor } from "../../../src/database.js";
+import * as brokerstore from "../../../src/polymarket/paper/brokerstore.js";
 import {
   createPaperRunner,
   SIMULATION_BANNER,
@@ -82,6 +83,7 @@ function universeResponder(): Responder {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -207,6 +209,160 @@ describe("paper runner heartbeat", () => {
     await runner.stop();
     await vi.advanceTimersByTimeAsync(3_000);
     expect(calls).toHaveLength(3);
+  });
+});
+
+describe("paper runner kill-switch scheduling", () => {
+  function pendingTick(): {
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (error: Error) => void;
+  } {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function createScheduledRunner(): {
+    runner: ReturnType<typeof createPaperRunner>;
+    lines: Record<string, unknown>[];
+  } {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const { pool } = createFakePool();
+    const { lines, sink } = createSink();
+    return {
+      lines,
+      runner: createPaperRunner({
+        pool,
+        executionMode: "paper",
+        gitSha: null,
+        heartbeatMs: 3_600_000,
+        featuresTickMs: 3_600_000,
+        brokerTickMs: 3_600_000,
+        markTickMs: 3_600_000,
+        calibrationTickMs: 3_600_000,
+        samplerTickMs: 3_600_000,
+        bridgeTickMs: 3_600_000,
+        logSink: sink,
+      }),
+    };
+  }
+
+  it("checks every minute even when settlement rejects, and catches the rejection", async () => {
+    const { runner, lines } = createScheduledRunner();
+    const settlement = vi
+      .spyOn(brokerstore, "settlementTick")
+      .mockRejectedValue(new Error("settlement unavailable"));
+    const check = vi
+      .spyOn(brokerstore, "killSwitchTriggersTick")
+      .mockResolvedValue();
+    await runner.start();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(check).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(check).toHaveBeenCalledTimes(3);
+    expect(settlement).toHaveBeenCalledTimes(3);
+    expect(
+      lines.filter(
+        (line) => line.reason_code === "PAPER_SETTLEMENT_TICK_FAILED",
+      ),
+    ).toHaveLength(3);
+    await runner.stop();
+  });
+
+  it("keeps checking while one settlement remains pending", async () => {
+    const { runner } = createScheduledRunner();
+    const pending = pendingTick();
+    const settlement = vi
+      .spyOn(brokerstore, "settlementTick")
+      .mockReturnValue(pending.promise);
+    const check = vi
+      .spyOn(brokerstore, "killSwitchTriggersTick")
+      .mockResolvedValue();
+    await runner.start();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(settlement).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(3);
+    pending.resolve();
+    await pending.promise;
+    await runner.stop();
+  });
+
+  it("does not overlap slow safety checks and resumes after a rejected query", async () => {
+    const { runner, lines } = createScheduledRunner();
+    const pending = pendingTick();
+    const settlement = vi
+      .spyOn(brokerstore, "settlementTick")
+      .mockResolvedValue();
+    const check = vi
+      .spyOn(brokerstore, "killSwitchTriggersTick")
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue();
+    await runner.start();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(settlement).toHaveBeenCalledTimes(3);
+    expect(
+      lines.filter(
+        (line) =>
+          line.reason_code === "JOB_STILL_RUNNING" &&
+          line.job === "paper_kill_switch",
+      ),
+    ).toHaveLength(2);
+    pending.reject(new Error("health query failed"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(
+      lines.filter(
+        (line) => line.reason_code === "PAPER_KILL_SWITCH_TICK_FAILED",
+      ),
+    ).toHaveLength(1);
+    await runner.stop();
+  });
+
+  it("invalidates an in-flight recovery on stop and starts with fresh state", async () => {
+    const { runner } = createScheduledRunner();
+    const pending = pendingTick();
+    vi.spyOn(brokerstore, "settlementTick").mockResolvedValue();
+    const createState = vi.spyOn(brokerstore, "createKillSwitchRecoveryState");
+    const resetState = vi.spyOn(brokerstore, "resetKillSwitchRecoveryState");
+    const check = vi
+      .spyOn(brokerstore, "killSwitchTriggersTick")
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue();
+    await runner.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const previousState = check.mock.calls[0]?.[1]?.killSwitchRecovery;
+    expect(previousState).toBeDefined();
+    expect(createState).toHaveBeenNthCalledWith(1, NOW);
+    await runner.stop();
+    expect(resetState).toHaveBeenCalledWith(
+      previousState,
+      new Date(NOW.getTime() + 60_000),
+    );
+    await vi.advanceTimersByTimeAsync(180_000);
+    await runner.start();
+    expect(createState).toHaveBeenNthCalledWith(
+      2,
+      new Date(NOW.getTime() + 240_000),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Even across stop/start, the previous query cannot overlap a new query.
+    expect(check).toHaveBeenCalledTimes(1);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(check).toHaveBeenCalledTimes(2);
+    const nextState = check.mock.calls[1]?.[1]?.killSwitchRecovery;
+    expect(nextState).toBeDefined();
+    expect(nextState).not.toBe(previousState);
+    await runner.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(check).toHaveBeenCalledTimes(2);
   });
 });
 

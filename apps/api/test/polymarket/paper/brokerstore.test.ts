@@ -4,13 +4,20 @@ import type { QueryResult, SqlExecutor } from "../../../src/database.js";
 import {
   acceptPaperOrder,
   brokerTick,
+  createKillSwitchRecoveryState,
   engageKillSwitch,
+  KILL_SWITCH_HEALTHY_TICKS,
+  KILL_SWITCH_TICK_MS,
   killSwitchTriggersTick,
   loadKillSwitch,
   markTick,
+  RECORDER_STALE_MS,
+  rearmKillSwitch,
+  resetKillSwitchRecoveryState,
   requestCancel,
   settlementTick,
   type PaperPool,
+  type BrokerDeps,
 } from "../../../src/polymarket/paper/brokerstore.js";
 
 type Row = Record<string, unknown>;
@@ -35,6 +42,8 @@ interface World {
     bids_json: unknown;
     asks_json: unknown;
   }>;
+  deltas: Array<{ received_at: Date }>;
+  gaps: Array<{ cause: string; gap_end: Date | null }>;
   params: Array<{
     condition_id: string;
     param_version_id: number;
@@ -139,6 +148,8 @@ function emptyWorld(): World {
     },
     killRowPresent: true,
     snapshots: [],
+    deltas: [],
+    gaps: [],
     params: [],
     trades: [],
     resolutions: [],
@@ -490,6 +501,17 @@ function worldPool(world: World): PaperPool {
           return [{ inserted: true }];
         }
         if (
+          text.startsWith(
+            "SELECT payload_json FROM paper_ledger_events WHERE idempotency_key",
+          )
+        ) {
+          return world.ledger.filter(
+            (event) =>
+              event["idempotency_key"] === params[0] &&
+              event["event_type"] === "kill_switch_engaged",
+          );
+        }
+        if (
           text.startsWith("SELECT idempotency_key FROM paper_ledger_events") &&
           text.includes("event_type = 'fill'")
         ) {
@@ -601,12 +623,21 @@ function worldPool(world: World): PaperPool {
           }
           world.kill["engaged"] = true;
           world.kill["reason"] = params[0];
+          world.kill["engaged_at"] = params[1];
           return [{ kill_switch_id: 1 }];
         }
         if (text.includes("SET engaged = FALSE")) {
           if (!world.killRowPresent) {
             return [];
           }
+          if (
+            text.includes("AND engaged = TRUE") &&
+            (world.kill["engaged"] !== true ||
+              world.kill["reason"] !== "RECORDER_STALE" ||
+              (world.kill["engaged_at"] as Date).getTime() !==
+                (params[1] as Date).getTime())
+          )
+            return [];
           world.kill["engaged"] = false;
           world.kill["reason"] = null;
           return [{ kill_switch_id: 1 }];
@@ -688,6 +719,26 @@ function worldPool(world: World): PaperPool {
         }
 
         // --- recorder data ---
+        if (text.startsWith("LOCK TABLE polymarket_data_gaps")) return [];
+        if (text.includes("AS snapshots_newest")) {
+          const newest = (rows: Array<{ received_at: Date }>): Date | null =>
+            rows.reduce<Date | null>(
+              (latest, row) =>
+                latest === null || row.received_at > latest
+                  ? row.received_at
+                  : latest,
+              null,
+            );
+          return [
+            {
+              snapshots_newest: newest(world.snapshots),
+              deltas_newest: newest(world.deltas),
+              stream_silent_open: world.gaps.some(
+                (gap) => gap.cause === "stream_silent" && gap.gap_end === null,
+              ),
+            },
+          ];
+        }
         if (text.includes("SELECT MAX(received_at) AS newest")) {
           const newest = world.snapshots.reduce<Date | null>(
             (acc, s) =>
@@ -3163,6 +3214,7 @@ describe("kill switch (D4)", () => {
     const world = emptyWorld();
     seedMarket(world);
     seedBook(world, -1_000, "0.48", "0.52");
+    world.deltas.push({ received_at: at(-1_000) });
     world.positions.push({
       token_id: "tok-yes",
       condition_id: "0xcond",
@@ -3198,6 +3250,7 @@ describe("kill switch (D4)", () => {
     const world = emptyWorld();
     seedMarket(world);
     seedBook(world, -1_000, "0.48", "0.52");
+    world.deltas.push({ received_at: at(-1_000) });
     world.positions.push({
       token_id: "tok-yes",
       condition_id: "0xcond",
@@ -3229,5 +3282,443 @@ describe("kill switch (D4)", () => {
       status: "rejected",
       reason: "MARKET_FROZEN_DISPUTE",
     });
+  });
+});
+
+// RFC-021 D2/D3: independent feed fixtures and wall-clock observations.
+describe("recorder kill switch and conditioned recovery (RFC-021)", () => {
+  it.each([
+    [1_000, 600_000, "deltas"],
+    [600_000, 1_000, "snapshots"],
+    [600_000, 600_000, "both"],
+    [1_000, null, "deltas"],
+    [null, 1_000, "snapshots"],
+    [null, null, "both"],
+  ] as const)(
+    "engages with snapshot age %s and delta age %s, recording %s",
+    async (snapshotAge, deltaAge, series) => {
+      const world = emptyWorld();
+      if (snapshotAge !== null) seedBook(world, -snapshotAge, "0.48", "0.52");
+      if (deltaAge !== null) world.deltas.push({ received_at: at(-deltaAge) });
+      const lines: string[] = [];
+      await killSwitchTriggersTick(worldPool(world), {
+        clock: () => at(0),
+        logSink: (line) => {
+          lines.push(line);
+        },
+      });
+      expect(world.kill).toMatchObject({
+        engaged: true,
+        reason: "RECORDER_STALE",
+      });
+      const details = {
+        mode: "auto",
+        reason: "RECORDER_STALE",
+        series,
+        snapshots_age_ms: snapshotAge,
+        deltas_age_ms: deltaAge,
+      };
+      expect(world.ledger[0]?.["payload_json"]).toEqual(details);
+      expect(lines.map((line) => JSON.parse(line) as Row)).toContainEqual(
+        expect.objectContaining({
+          reason_code: "PAPER_KILL_SWITCH_ENGAGED",
+          ...details,
+        }),
+      );
+      expect(
+        world.queries.some((query) =>
+          query.includes("polymarket_book_snapshots_full"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each([1_000, 300_000])(
+    "keeps the existing strict > 5-minute engagement boundary (%s ms)",
+    async (age) => {
+      expect(RECORDER_STALE_MS).toBe(300_000);
+      const world = emptyWorld();
+      seedBook(world, -age, "0.48", "0.52");
+      world.deltas.push({ received_at: at(-age) });
+      await killSwitchTriggersTick(worldPool(world), {
+        clock: () => at(0),
+        logSink: silentSink,
+      });
+      expect(world.kill["engaged"]).toBe(false);
+    },
+  );
+
+  async function fixture() {
+    const world = emptyWorld();
+    const base = worldPool(world);
+    let now = 0;
+    let intercept: (query: string) => void = () => undefined;
+    const pool: PaperPool = {
+      query: base.query,
+      transaction: (run) =>
+        base.transaction!((tx) =>
+          run({
+            query: (query, params) => {
+              intercept(query);
+              return tx.query(query, params);
+            },
+          }),
+        ),
+    };
+    const lines: string[] = [];
+    const deps: BrokerDeps = {
+      clock: () => at(now),
+      killSwitchRecovery: createKillSwitchRecoveryState(at(0)),
+      logSink: (line) => {
+        lines.push(line);
+      },
+    };
+    seedBook(world, -600_000, "0.48", "0.52");
+    world.deltas.push({ received_at: at(-600_000) });
+    await killSwitchTriggersTick(pool, deps);
+    async function tick(offset: number, snapshotAge = 1_000, deltaAge = 1_000) {
+      now = offset;
+      world.snapshots = [];
+      seedBook(world, now - snapshotAge, "0.48", "0.52");
+      world.deltas = [{ received_at: at(now - deltaAge) }];
+      await killSwitchTriggersTick(pool, deps);
+    }
+    async function healthy(first: number, last: number) {
+      for (let minute = first; minute <= last; minute += 1)
+        await tick(minute * 60_000);
+    }
+    return {
+      world,
+      pool,
+      deps,
+      lines,
+      tick,
+      healthy,
+      intercept: (hook: (query: string) => void) => {
+        intercept = hook;
+      },
+      advance: (ms: number) => {
+        now += ms;
+      },
+      rearmed: () =>
+        world.ledger.filter(
+          (event) => event["event_type"] === "kill_switch_rearmed",
+        ),
+    };
+  }
+
+  it("requires 15 distinct minute observations and emits one append-only auto audit", async () => {
+    const f = await fixture();
+    expect(KILL_SWITCH_HEALTHY_TICKS).toBe(15);
+    expect(KILL_SWITCH_TICK_MS).toBe(60_000);
+    const original = structuredClone(f.world.ledger);
+    await f.tick(0); // A boot-time sample earns no minute of history.
+    await f.healthy(1, 14);
+    expect(f.rearmed()).toHaveLength(0);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(14);
+    await f.tick(15 * 60_000);
+    expect(f.world.kill["engaged"]).toBe(false);
+    expect(f.rearmed()).toHaveLength(1);
+    expect(f.rearmed()[0]).toMatchObject({
+      payload_json: {
+        mode: "auto",
+        healthy_ticks: 15,
+        tick_ms: 60_000,
+        engaged_at: at(0).toISOString(),
+        healthy_since: at(0).toISOString(),
+      },
+      event_ts: at(900_000),
+    });
+    await f.tick(15 * 60_000);
+    await f.healthy(16, 20);
+    expect(f.rearmed()).toHaveLength(1);
+    expect(f.world.ledger.slice(0, original.length)).toEqual(original);
+    expect(
+      f.lines
+        .map((line) => JSON.parse(line) as Row)
+        .filter(
+          (line) => line["reason_code"] === "PAPER_KILL_SWITCH_AUTO_REARMED",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("duplicates and calls within the same slot cannot accelerate recovery", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    for (let repeat = 0; repeat < 20; repeat += 1)
+      await f.tick(14 * 60_000 + repeat * 100);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(14);
+    expect(f.rearmed()).toHaveLength(0);
+    await f.tick(15 * 60_000);
+    expect(f.rearmed()).toHaveLength(1);
+  });
+
+  it("concurrent duplicate calls on a worker count once", async () => {
+    const f = await fixture();
+    await f.healthy(1, 13);
+    await Promise.all([f.tick(14 * 60_000), f.tick(14 * 60_000)]);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(14);
+    expect(f.rearmed()).toHaveLength(0);
+  });
+
+  it.each([
+    "open gap",
+    "snapshots stale",
+    "deltas stale",
+    "threshold",
+    "future timestamp",
+  ])("%s resets fourteen healthy ticks", async (fault) => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    if (fault === "open gap")
+      f.world.gaps.push({ cause: "stream_silent", gap_end: null });
+    await f.tick(
+      900_000,
+      fault === "snapshots stale"
+        ? 300_001
+        : fault === "threshold"
+          ? 300_000
+          : fault === "future timestamp"
+            ? -1
+            : 1_000,
+      fault === "deltas stale" ? 300_001 : 1_000,
+    );
+    expect(f.rearmed()).toHaveLength(0);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+    f.world.gaps = [];
+    await f.healthy(16, 29);
+    expect(f.rearmed()).toHaveLength(0);
+    await f.tick(30 * 60_000);
+    expect(f.rearmed()).toHaveLength(1);
+  });
+
+  it("closed silence and other open gap causes do not veto recovery; market freezes survive", async () => {
+    const f = await fixture();
+    f.world.gaps = [
+      { cause: "stream_silent", gap_end: at(-1) },
+      { cause: "connection_lost", gap_end: null },
+    ];
+    f.world.kill["frozen_markets_json"] = ["disputed-market"];
+    await f.healthy(1, 15);
+    expect(f.rearmed()).toHaveLength(1);
+    expect(f.world.kill["frozen_markets_json"]).toEqual(["disputed-market"]);
+  });
+
+  it.each(["MANUAL", "DAILY_LOSS_LIMIT", "UMA_DISPUTE", "RECORDER_STALE"])(
+    "never automatically rearms a manual %s",
+    async (reason) => {
+      const f = await fixture();
+      await f.healthy(1, 14);
+      await engageKillSwitch(f.pool, reason, at(14 * 60_000 + 1), f.deps);
+      await f.healthy(15, 35);
+      expect(f.world.kill).toMatchObject({ engaged: true, reason });
+      expect(f.rearmed()).toHaveLength(0);
+    },
+  );
+
+  it("a loss reached during RECORDER_STALE becomes a persistent loss block", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    f.world.positions.push({ shares: "0", realized_pnl_usd: "-101" });
+    await f.tick(900_000);
+    expect(f.world.kill).toMatchObject({
+      engaged: true,
+      reason: "DAILY_LOSS_LIMIT",
+    });
+    await f.healthy(16, 31);
+    expect(f.rearmed()).toHaveLength(0);
+  });
+
+  it.each([
+    "FOR UPDATE",
+    "AS snapshots_newest",
+    "SUM(realized_pnl_usd",
+    "SELECT daily_anchor_date",
+    "SELECT DISTINCT r.condition_id",
+    "SELECT payload_json",
+    "LOCK TABLE polymarket_data_gaps",
+    "SET engaged = FALSE",
+    "INSERT INTO paper_ledger_events",
+  ])(
+    "query failure at %s resets recovery and rolls back any rearm",
+    async (query) => {
+      const f = await fixture();
+      await f.healthy(1, 14);
+      const ledger = structuredClone(f.world.ledger);
+      f.intercept((text) => {
+        if (text.includes(query)) throw new Error("query unavailable");
+      });
+      await expect(f.tick(900_000)).rejects.toThrow("query unavailable");
+      expect(f.world.kill["engaged"]).toBe(true);
+      expect(f.world.ledger).toEqual(ledger);
+      expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+      f.intercept(() => undefined);
+      await f.healthy(16, 29);
+      expect(f.rearmed()).toHaveLength(0);
+      await f.tick(1_800_000);
+      expect(f.rearmed()).toHaveLength(1);
+    },
+  );
+
+  it("a reboot discards fourteen ticks and starts a full new fifteen-minute observation", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    Object.assign(
+      f.deps.killSwitchRecovery!,
+      createKillSwitchRecoveryState(at(840_000)),
+    );
+    await f.healthy(15, 28);
+    expect(f.rearmed()).toHaveLength(0);
+    await f.tick(29 * 60_000);
+    expect(f.rearmed()).toHaveLength(1);
+  });
+
+  it("a missed minute resets to zero; a delayed tick cannot backfill the gap", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    await f.tick(16 * 60_000);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+    await f.healthy(17, 30);
+    expect(f.rearmed()).toHaveLength(0);
+    await f.tick(31 * 60_000);
+    expect(f.rearmed()).toHaveLength(1);
+  });
+
+  it("a backwards clock resets the streak", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    await f.tick(13 * 60_000);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+    await f.healthy(14, 27);
+    expect(f.rearmed()).toHaveLength(0);
+  });
+
+  it.each(["AS snapshots_newest", "INSERT INTO paper_ledger_events"])(
+    "an observation completing in a later slot at %s earns no credit",
+    async (query) => {
+      const f = await fixture();
+      await f.healthy(1, 14);
+      let delayed = false;
+      f.intercept((text) => {
+        if (!delayed && text.includes(query)) {
+          delayed = true;
+          f.advance(60_000);
+        }
+      });
+      if (query === "INSERT INTO paper_ledger_events")
+        await expect(f.tick(900_000)).rejects.toThrow(
+          "PAPER_KILL_SWITCH_OBSERVATION_EXPIRED",
+        );
+      else await f.tick(900_000);
+      expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+      expect(f.world.kill["engaged"]).toBe(true);
+      expect(f.rearmed()).toHaveLength(0);
+    },
+  );
+
+  it("a gap appearing on the final recheck prevents rearm", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    f.intercept((text) => {
+      if (text.startsWith("LOCK TABLE polymarket_data_gaps"))
+        f.world.gaps.push({ cause: "stream_silent", gap_end: null });
+    });
+    await f.tick(900_000);
+    expect(f.rearmed()).toHaveLength(0);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+  });
+
+  it("runner stop invalidates an observation already in flight", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    f.intercept((text) => {
+      if (text.includes("INSERT INTO paper_ledger_events"))
+        resetKillSwitchRecoveryState(f.deps.killSwitchRecovery!, at(900_000));
+    });
+    await expect(f.tick(900_000)).rejects.toThrow(
+      "PAPER_KILL_SWITCH_OBSERVATION_EXPIRED",
+    );
+    expect(f.world.kill["engaged"]).toBe(true);
+    expect(f.rearmed()).toHaveLength(0);
+  });
+
+  it("a new RECORDER_STALE engagement cannot reuse the previous engagement's ticks", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    await rearmKillSwitch(f.pool, at(840_001));
+    await f.tick(840_002, 600_000, 600_000);
+    await f.tick(900_000);
+    expect(f.deps.killSwitchRecovery?.healthyTicks).toBe(0);
+    await f.healthy(16, 29);
+    expect(f.rearmed()).toHaveLength(1); // Only the explicit manual rearm above.
+    await f.tick(1_800_000);
+    expect(f.rearmed()).toHaveLength(2);
+    expect(f.rearmed()[1]?.["payload_json"]).toMatchObject({ mode: "auto" });
+  });
+
+  it("an auto audit key collision cannot clear the switch without a new event", async () => {
+    const f = await fixture();
+    f.world.ledger.push({
+      idempotency_key: `rearm:auto:${at(0).toISOString()}`,
+      event_type: "kill_switch_rearmed",
+      payload_json: { mode: "auto" },
+    });
+    const original = structuredClone(f.world.ledger);
+    await f.healthy(1, 14);
+    await expect(f.tick(900_000)).rejects.toThrow(
+      "PAPER_KILL_SWITCH_REARM_AUDIT_CONFLICT",
+    );
+    expect(f.world.kill["engaged"]).toBe(true);
+    expect(f.world.ledger).toEqual(original);
+  });
+
+  it("preserves the existing human rearm path", async () => {
+    const f = await fixture();
+    await engageKillSwitch(f.pool, "MANUAL", at(1), f.deps);
+    f.world.gaps.push({ cause: "stream_silent", gap_end: null });
+    await rearmKillSwitch(f.pool, at(2));
+    expect(f.world.kill["engaged"]).toBe(false);
+    expect(f.rearmed()[0]?.["payload_json"]).toEqual({});
+  });
+
+  it("accepts an audited legacy RECORDER_STALE engagement without mode", async () => {
+    const f = await fixture();
+    // Seed the historical event shape, before any recovery observation.
+    f.world.ledger[0]!["payload_json"] = { reason: "RECORDER_STALE" };
+    await f.healthy(1, 15);
+    expect(f.rearmed()).toHaveLength(1);
+  });
+
+  it("missing engagement audit cannot certify an automatic recovery", async () => {
+    const f = await fixture();
+    // Model a damaged historical input fixture, not a ledger mutation by code.
+    f.world.ledger = [];
+    await f.healthy(1, 16);
+    expect(f.world.kill["engaged"]).toBe(true);
+    expect(f.rearmed()).toHaveLength(0);
+  });
+
+  it("feed freshness expiring during the write rolls back within the same minute slot", async () => {
+    const f = await fixture();
+    await f.healthy(1, 14);
+    f.intercept((query) => {
+      if (query.includes("INSERT INTO paper_ledger_events")) f.advance(1_000);
+    });
+    await expect(f.tick(900_000, 299_500, 299_500)).rejects.toThrow(
+      "PAPER_KILL_SWITCH_OBSERVATION_EXPIRED",
+    );
+    expect(f.world.kill["engaged"]).toBe(true);
+    expect(f.rearmed()).toHaveLength(0);
+  });
+
+  it("an engagement audit collision cannot silently overwrite a manual stop", async () => {
+    const f = await fixture();
+    await engageKillSwitch(f.pool, "MANUAL", at(1), f.deps);
+    const ledger = structuredClone(f.world.ledger);
+    await expect(
+      engageKillSwitch(f.pool, "DAILY_LOSS_LIMIT", at(1), f.deps),
+    ).rejects.toThrow("PAPER_KILL_SWITCH_ENGAGE_AUDIT_CONFLICT");
+    expect(f.world.kill["reason"]).toBe("MANUAL");
+    expect(f.world.ledger).toEqual(ledger);
   });
 });

@@ -1003,7 +1003,38 @@ export function createUmaStatusPoller(deps: SamplerDeps): UmaStatusPoller {
   };
 
   async function processRows(rows: readonly GammaStatusRow[]): Promise<void> {
+    const closedIds = new Set(
+      rows.filter((row) => row.closed).map((row) => row.conditionId),
+    );
+    const failedClosures = new Set<string>();
+    for (const conditionId of closedIds) {
+      try {
+        // RFC-021 D4: observe closure without taking ownership of registry
+        // metadata or inferring an outcome. Run even in steady state so a
+        // hydrated status cannot hide a closure that was never persisted.
+        await deps.pool.query(
+          `UPDATE polymarket_markets
+              SET closed = TRUE, updated_at = $2
+            WHERE condition_id = $1 AND closed IS DISTINCT FROM TRUE`,
+          [conditionId, new Date(deps.clock())],
+        );
+      } catch (error: unknown) {
+        failedClosures.add(conditionId);
+        logJson(
+          "error",
+          "UMA_CLOSED_PERSIST_FAILED",
+          "polymarket_uma_closed_persist_failed",
+          { condition_id: conditionId, ...errorFields(error) },
+        );
+      }
+    }
     for (const row of rows) {
+      // Both Gamma filters can return the same market. Persist closure before
+      // ANY of its events: a terminal event from even the open response would
+      // remove it from pendingResolutionIds and prevent retry on UPDATE failure.
+      if (failedClosures.has(row.conditionId)) {
+        continue;
+      }
       let current = normalizeUmaStatus(row.rawStatus, row.closed);
       if (current === null && row.resolved) {
         current = "resolved";

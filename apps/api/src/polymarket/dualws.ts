@@ -30,6 +30,8 @@ export interface DualSocketDeps {
   readonly tokenIds: readonly string[];
   /** Deduped frames (first copy wins; "PONG" keepalives are filtered out). */
   readonly onMessage: (raw: string) => void;
+  /** Current, open socket frames before deduped delivery; excludes PING/PONG. */
+  readonly onObservation?: (raw: string, firstCopy: boolean) => void;
   /** Both connections down at once: the caller records a clob_ws gap. */
   readonly onBothDown: (info: BothDownInfo) => void;
   readonly heartbeatMs?: number;
@@ -94,6 +96,12 @@ export interface DualMarketSocket {
    * churning the socket for it would pay the re-book cost for nothing.
    */
   resubscribe(tokenIds: readonly string[]): void;
+  /**
+   * Recover an open-but-silent feed by retiring both sockets. Reuses each
+   * slot's reconnect backoff; repeated calls never duplicate pending timers.
+   * The caller owns the silence thresholds and recovery-attempt budget.
+   */
+  reconnectSilent(): void;
   close(): void;
   stats(): DualSocketStats;
 }
@@ -218,6 +226,75 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
     }
   }
 
+  function disconnect(
+    index: number,
+    socket: ReturnType<MarketSocketFactory>,
+  ): void {
+    const slot = slots[index];
+    if (slot === undefined || slot.socket !== socket) {
+      return;
+    }
+    const wasOpen = slot.open;
+    // Invalidate every callback before close(): a silent transport can omit
+    // onClose, emit it later, or throw while closing.
+    slot.open = false;
+    slot.socket = null;
+    if (slot.heartbeat !== null) {
+      clearInterval(slot.heartbeat);
+      slot.heartbeat = null;
+    }
+    if (closed) {
+      return;
+    }
+    if (openConnections() > 0) {
+      if (wasOpen) {
+        singleConnectionDrops += 1;
+      }
+      logJson(
+        "warn",
+        "WS_SINGLE_CONNECTION_DOWN",
+        "polymarket_dualws_one_connection_down",
+        { connection: index },
+      );
+    } else if (bothDownSince === null) {
+      bothDownSince = clock();
+      bothDownEvents += 1;
+      logJson(
+        "error",
+        "WS_BOTH_CONNECTIONS_DOWN",
+        "polymarket_dualws_both_connections_down",
+        { down_since: bothDownSince },
+      );
+      deps.onBothDown({ downSince: bothDownSince });
+    }
+    if (closed || slot.reconnectTimer !== null) {
+      return;
+    }
+    const delay = slot.backoffMs;
+    slot.backoffMs = Math.min(slot.backoffMs * 2, reconnectMaxMs);
+    slot.reconnectTimer = setTimeout(() => {
+      slot.reconnectTimer = null;
+      if (closed) {
+        return;
+      }
+      slot.reconnects += 1;
+      connect(index);
+    }, delay);
+  }
+
+  function retire(index: number): void {
+    const socket = slots[index]?.socket;
+    if (socket === undefined || socket === null) {
+      return;
+    }
+    disconnect(index, socket);
+    try {
+      socket.close();
+    } catch {
+      // Recovery was scheduled before closing the transport.
+    }
+  }
+
   function connect(index: number): void {
     const slot = slots[index];
     if (slot === undefined || closed) {
@@ -228,7 +305,7 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
     slot.open = false;
 
     socket.onOpen(() => {
-      if (closed || slot.socket !== socket) {
+      if (closed || slot.socket !== socket || slot.open) {
         return;
       }
       slot.open = true;
@@ -246,10 +323,18 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
     });
 
     socket.onMessage((raw) => {
-      if (closed || raw === "PONG") {
+      if (
+        closed ||
+        slot.socket !== socket ||
+        !slot.open ||
+        raw === "PING" ||
+        raw === "PONG"
+      ) {
         return;
       }
-      if (deduper.firstCopy(raw, clock())) {
+      const firstCopy = deduper.firstCopy(raw, clock());
+      deps.onObservation?.(raw, firstCopy);
+      if (firstCopy) {
         messagesForwarded += 1;
         deps.onMessage(raw);
       } else {
@@ -258,48 +343,7 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
     });
 
     socket.onClose(() => {
-      if (slot.socket !== socket) {
-        return;
-      }
-      const wasOpen = slot.open;
-      slot.open = false;
-      slot.socket = null;
-      if (slot.heartbeat !== null) {
-        clearInterval(slot.heartbeat);
-        slot.heartbeat = null;
-      }
-      if (closed) {
-        return;
-      }
-      if (openConnections() > 0) {
-        // The twin is still delivering: redundancy lost, but no gap.
-        if (wasOpen) {
-          singleConnectionDrops += 1;
-        }
-        logJson(
-          "warn",
-          "WS_SINGLE_CONNECTION_DOWN",
-          "polymarket_dualws_one_connection_down",
-          { connection: index },
-        );
-      } else if (bothDownSince === null) {
-        bothDownSince = clock();
-        bothDownEvents += 1;
-        logJson(
-          "error",
-          "WS_BOTH_CONNECTIONS_DOWN",
-          "polymarket_dualws_both_connections_down",
-          { down_since: bothDownSince },
-        );
-        deps.onBothDown({ downSince: bothDownSince });
-      }
-      const delay = slot.backoffMs;
-      slot.backoffMs = Math.min(slot.backoffMs * 2, reconnectMaxMs);
-      slot.reconnectTimer = setTimeout(() => {
-        slot.reconnectTimer = null;
-        slot.reconnects += 1;
-        connect(index);
-      }, delay);
+      disconnect(index, socket);
     });
   }
 
@@ -308,7 +352,7 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
   }
 
   /**
-   * Cycle ONE slot: close it and let `onClose` reconnect it with the new
+   * Cycle ONE slot: retire it and reconnect it with the new
    * token list. The twin stays up throughout, so `openConnections()` never
    * reaches zero and `onBothDown` never fires because of a resubscribe.
    *
@@ -329,12 +373,7 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
     // Reset the backoff: this close is deliberate, not a failure, so the
     // reconnect must not inherit a penalty from an earlier outage.
     slot.backoffMs = reconnectBaseMs;
-    try {
-      slot.socket.close();
-    } catch {
-      // A socket the venue already closed cannot be closed again; `onClose`
-      // has either run or will, and either way the slot reconnects.
-    }
+    retire(index);
     return true;
   }
 
@@ -415,6 +454,15 @@ export function createDualMarketSocket(deps: DualSocketDeps): DualMarketSocket {
           "polymarket_dualws_rolling_resubscribe_deferred",
           { entering: entering.length, open_connections: openConnections() },
         );
+      }
+    },
+    reconnectSilent(): void {
+      if (closed) {
+        return;
+      }
+      rollingSlot = null;
+      for (let index = 0; index < CONNECTION_COUNT; index += 1) {
+        retire(index);
       }
     },
     close(): void {

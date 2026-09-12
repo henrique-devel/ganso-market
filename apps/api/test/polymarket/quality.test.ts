@@ -1,4 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type { QueryResult } from "../../src/database.js";
 import {
@@ -49,6 +60,37 @@ beforeEach(() => {
 });
 
 describe("gap writer", () => {
+  it("loads bounded open CLOB silence episodes with their original identities", async () => {
+    const details = { episode_id: "prior", control: "blind" };
+    const pool = fakePool(
+      () =>
+        ({
+          rows: [
+            {
+              token_id: "token",
+              gap_start: "2026-09-10T12:00:00Z",
+              details_json: details,
+            },
+          ],
+          rowCount: 1,
+        }) as unknown as QueryResult<never>,
+    );
+    const boot = new Date("2026-09-10T12:05:00Z");
+    expect(await createGapWriter(pool).loadOpenSilenceGaps(boot, 65)).toEqual([
+      {
+        episodeId: "prior",
+        tokenId: "token",
+        start: new Date("2026-09-10T12:00:00Z"),
+        end: null,
+        details,
+      },
+    ]);
+    expect(pool.captured[0]?.text).toContain(
+      "source = 'clob_ws' AND cause = 'stream_silent' AND gap_end IS NULL",
+    );
+    expect(pool.captured[0]?.params).toEqual([boot, 65]);
+  });
+
   it("opens a gap and returns the gap_id from RETURNING", async () => {
     const pool = fakePool((text) =>
       text.includes("RETURNING gap_id")
@@ -118,7 +160,223 @@ describe("gap writer", () => {
       null,
     ]);
   });
+
+  it("saves a complete silence snapshot with a stable episode identity", async () => {
+    const pool = fakePool();
+    const start = new Date("2026-09-10T12:00:00Z");
+    const end = new Date("2026-09-10T12:03:00Z");
+    const episodeId = "a9f5c53b-a882-4c70-8b2f-44cc060bb498";
+    await createGapWriter(pool).saveSilenceGap({
+      episodeId,
+      tokenId: "active-token",
+      start,
+      end,
+      details: { control: "blind", episode_id: "ignored" },
+    });
+
+    expect(pool.captured[0]?.params).toEqual([
+      "active-token",
+      start,
+      end,
+      JSON.stringify({ control: "blind", episode_id: episodeId }),
+    ]);
+    expect(pool.captured[0]?.text).toContain(
+      "ON CONFLICT ((details_json->>'episode_id'))",
+    );
+    expect(pool.captured[0]?.text).toContain(
+      "gap_end = COALESCE(polymarket_data_gaps.gap_end, EXCLUDED.gap_end)",
+    );
+  });
+
+  it("keeps a global silence token and unfinished end null", async () => {
+    const pool = fakePool();
+    await createGapWriter(pool).saveSilenceGap({
+      episodeId: randomUUID(),
+      start: new Date("2026-09-10T12:00:00Z"),
+      end: null,
+      details: {},
+    });
+    expect(pool.captured[0]?.params[0]).toBeNull();
+    expect(pool.captured[0]?.params[2]).toBeNull();
+  });
+
+  it("propagates silence persistence failure so the journal can retry", async () => {
+    const failure = new Error("connection lost after INSERT");
+    const pool = { query: vi.fn().mockRejectedValue(failure) };
+    await expect(
+      createGapWriter(pool).saveSilenceGap({
+        episodeId: randomUUID(),
+        start: new Date("2026-09-10T12:00:00Z"),
+        end: null,
+        details: {},
+      }),
+    ).rejects.toBe(failure);
+  });
 });
+
+// Run only against an explicitly selected, migrated disposable PostgreSQL.
+// Unit mocks cannot prove partial-index inference or concurrent UPSERTs.
+const SILENCE_TEST_DATABASE_URL = process.env.GANSO_TEST_DATABASE_URL;
+describe.skipIf(SILENCE_TEST_DATABASE_URL === undefined)(
+  "silence gap writer against PostgreSQL",
+  () => {
+    let database: pg.Pool;
+    const episodes: string[] = [];
+    const newEpisode = (): string => {
+      const id = randomUUID();
+      episodes.push(id);
+      return id;
+    };
+    beforeAll(() => {
+      database = new pg.Pool({
+        connectionString: SILENCE_TEST_DATABASE_URL,
+        max: 2,
+      });
+    });
+    afterAll(async () => {
+      try {
+        await database.query(
+          `DELETE FROM polymarket_data_gaps
+           WHERE source = 'clob_ws' AND cause = 'stream_silent'
+             AND details_json->>'episode_id' = ANY($1::text[])`,
+          [episodes],
+        );
+      } finally {
+        await database.end();
+      }
+    });
+
+    function writer(): ReturnType<typeof createGapWriter> {
+      return createGapWriter({
+        async query<R extends Record<string, unknown>>(
+          text: string,
+          params?: readonly unknown[],
+        ): Promise<QueryResult<R>> {
+          const result = await database.query<R>(
+            text,
+            params === undefined ? undefined : [...params],
+          );
+          return { rows: result.rows, rowCount: result.rowCount ?? 0 };
+        },
+      });
+    }
+
+    it("restores only pre-boot open episodes and closes their existing rows", async () => {
+      const gaps = writer();
+      const ids = [newEpisode(), newEpisode(), newEpisode()];
+      const boot = new Date("2026-09-10T12:05:00Z");
+      const start = new Date("2026-09-10T12:00:00Z");
+      await gaps.saveSilenceGap({
+        episodeId: ids[0]!,
+        tokenId: "restore-token",
+        start,
+        end: null,
+        details: { control: "blind" },
+      });
+      await gaps.saveSilenceGap({
+        episodeId: ids[1]!,
+        start,
+        end: boot,
+        details: { control: "unavailable" },
+      });
+      await gaps.saveSilenceGap({
+        episodeId: ids[2]!,
+        start: new Date(boot.getTime() + 1),
+        end: null,
+        details: {},
+      });
+      const restored = (await gaps.loadOpenSilenceGaps(boot, 65)).filter(
+        (row) => ids.includes(row.episodeId),
+      );
+      expect(restored).toHaveLength(1);
+      expect(restored[0]).toMatchObject({
+        episodeId: ids[0],
+        tokenId: "restore-token",
+        start,
+        end: null,
+      });
+      const end = new Date(boot.getTime() + 1_000);
+      await gaps.saveSilenceGap({
+        ...restored[0]!,
+        end,
+        details: { ...restored[0]!.details, closed_by: "ws_book_frame" },
+      });
+      const result = await database.query(
+        "SELECT gap_start, gap_end FROM polymarket_data_gaps WHERE details_json->>'episode_id' = $1",
+        [ids[0]],
+      );
+      expect(result.rows).toEqual([{ gap_start: start, gap_end: end }]);
+      expect(
+        (await gaps.loadOpenSilenceGaps(boot, 65)).some(
+          (row) => row.episodeId === ids[0],
+        ),
+      ).toBe(false);
+    });
+
+    it("deduplicates concurrent replay and never reopens a closed episode", async () => {
+      const episodeId = newEpisode();
+      const start = new Date("2026-09-10T12:00:00Z");
+      const end = new Date("2026-09-10T12:03:00Z");
+      const gap = {
+        episodeId,
+        start,
+        end: null,
+        details: { control: "pending" },
+      };
+      const gaps = writer();
+      await Promise.all([gaps.saveSilenceGap(gap), gaps.saveSilenceGap(gap)]);
+      await gaps.saveSilenceGap({
+        ...gap,
+        end,
+        details: { control: "blind" },
+      });
+      // Simulate a replay after the acknowledgement of the close was lost.
+      await gaps.saveSilenceGap({
+        ...gap,
+        start: new Date("2026-09-10T12:01:00Z"),
+        details: { control: "blind", attempts: 2 },
+      });
+      const result = await database.query(
+        `SELECT token_id, gap_start, gap_end, details_json
+         FROM polymarket_data_gaps WHERE details_json->>'episode_id' = $1`,
+        [episodeId],
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0]).toEqual({
+        token_id: null,
+        gap_start: start,
+        gap_end: end,
+        details_json: { episode_id: episodeId, control: "blind", attempts: 2 },
+      });
+    });
+
+    it("persists the first snapshot already closed and keeps episodes distinct", async () => {
+      const episodesForToken = [newEpisode(), newEpisode()];
+      const start = new Date("2026-09-10T12:00:00Z");
+      const end = new Date("2026-09-10T12:03:00Z");
+      const gaps = writer();
+      for (const episodeId of episodesForToken) {
+        await gaps.saveSilenceGap({
+          episodeId,
+          tokenId: "ops02-integration-token",
+          start,
+          end,
+          details: { control: "unavailable" },
+        });
+      }
+      const result = await database.query(
+        `SELECT gap_start, gap_end FROM polymarket_data_gaps
+         WHERE details_json->>'episode_id' = ANY($1::text[])`,
+        [episodesForToken],
+      );
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows).toEqual([
+        { gap_start: start, gap_end: end },
+        { gap_start: start, gap_end: end },
+      ]);
+    });
+  },
+);
 
 describe("feed health", () => {
   it("reports ~100% uptime for a continuously heartbeating source", () => {

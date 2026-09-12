@@ -204,6 +204,8 @@ services:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       GANSO_MACRO_CALENDAR_FILE: /etc/ganso/macro-calendar.json
+      GANSO_RTDS_SILENCE_MS: ${GANSO_RTDS_SILENCE_MS:-120000}
+      GANSO_RTDS_MAX_RECONNECTS: ${GANSO_RTDS_MAX_RECONNECTS:-3}
     secrets:
       - postgres_password
     volumes:

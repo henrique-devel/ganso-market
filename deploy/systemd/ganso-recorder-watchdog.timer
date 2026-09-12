@@ -1,0 +1,13 @@
+[Unit]
+Description=Supervisionar recorder fora do event loop a cada 30 s (OPS-06)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30s
+AccuracySec=1s
+RandomizedDelaySec=5s
+Persistent=false
+Unit=ganso-recorder-watchdog.service
+
+[Install]
+WantedBy=timers.target

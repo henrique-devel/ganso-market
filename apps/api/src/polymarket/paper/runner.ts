@@ -12,9 +12,12 @@
 import { bridgeTick } from "./bridge.js";
 import {
   brokerTick,
+  createKillSwitchRecoveryState,
   killSwitchTriggersTick,
   markTick,
+  resetKillSwitchRecoveryState,
   settlementTick,
+  type KillSwitchRecoveryState,
   type PaperPool,
 } from "./brokerstore.js";
 import {
@@ -164,6 +167,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
   let computing = false;
   let brokering = false;
   let settling = false;
+  let checkingKillSwitch = false;
   let marking = false;
   let calibrating = false;
   let sampling = false;
@@ -176,6 +180,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
    * rather than pretending the process is older than it is.
    */
   let bootAt: Date | null = null;
+  let killSwitchRecovery: KillSwitchRecoveryState | null = null;
 
   // Cursor of the last computed window start per token per kind. In-memory by
   // design: a restart resumes from "now" (bounded skip, logged), never from a
@@ -390,6 +395,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
         );
       }
       bootAt = clock();
+      killSwitchRecovery = createKillSwitchRecoveryState(bootAt);
       logJson("info", "PAPER_BOOT", {
         execution_mode: deps.executionMode,
         git_sha_known: deps.gitSha !== null,
@@ -405,6 +411,7 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       const brokerDeps = {
         clock,
         logSink: sink,
+        killSwitchRecovery,
         ...(deps.latencyMs === undefined ? {} : { latencyMs: deps.latencyMs }),
       };
       brokerTimer = setInterval(() => {
@@ -423,12 +430,33 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
           });
       }, deps.brokerTickMs ?? DEFAULT_BROKER_TICK_MS);
       settlementTimer = setInterval(() => {
+        // Recovery observations follow the timer, independently of settlement:
+        // a failed or slow settlement must not starve the recorder safety check.
+        // The store rejects observations that span a slot or miss a full tick.
+        if (checkingKillSwitch) {
+          logJson("warn", "JOB_STILL_RUNNING", { job: "paper_kill_switch" });
+        } else {
+          checkingKillSwitch = true;
+          void killSwitchTriggersTick(pool, brokerDeps)
+            .catch((error: unknown) => {
+              logJson("error", "PAPER_KILL_SWITCH_TICK_FAILED", {
+                ...errorFields(error),
+              });
+            })
+            .finally(() => {
+              checkingKillSwitch = false;
+            });
+        }
         if (settling) {
           return;
         }
         settling = true;
         void settlementTick(pool, brokerDeps)
-          .then(() => killSwitchTriggersTick(pool, brokerDeps))
+          .catch((error: unknown) => {
+            logJson("error", "PAPER_SETTLEMENT_TICK_FAILED", {
+              ...errorFields(error),
+            });
+          })
           .finally(() => {
             settling = false;
           });
@@ -469,6 +497,12 @@ export function createPaperRunner(deps: PaperRunnerDeps): PaperRunner {
       return Promise.resolve();
     },
     stop(): Promise<void> {
+      if (killSwitchRecovery !== null) {
+        // Invalidate a health query already in flight; a new start must earn
+        // its own consecutive observations from the new process boot instant.
+        resetKillSwitchRecoveryState(killSwitchRecovery, clock());
+        killSwitchRecovery = null;
+      }
       for (const timer of [
         heartbeatTimer,
         featuresTimer,

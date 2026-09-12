@@ -1,0 +1,37 @@
+[Unit]
+Description=Ganso Market supervisor externo do recorder (RFC-021 OPS-06)
+Documentation=file:///opt/ganso-market/docs/rfcs/RFC-021-silencio-do-feed-e-kill-switch.md
+Requires=docker.service
+After=docker.service
+ConditionPathIsDirectory=/opt/ganso-market
+ConditionPathExists=!/var/lib/ganso/recorder-watchdog/maintenance
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/ganso-market
+ExecStart=/usr/bin/python3 -I /opt/ganso-market/deploy/recorder_watchdog.py --project-dir /opt/ganso-market --state-dir /var/lib/ganso/recorder-watchdog
+UMask=0077
+TimeoutStartSec=70s
+TimeoutStopSec=5s
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no
+# Budgets bound the host observer and its Docker clients; persistence queries
+# have their own server-side timeout in the helper.
+MemoryMax=128M
+CPUQuota=10%
+TasksMax=32
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ganso/recorder-watchdog
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=1min
+LogRateLimitBurst=5
+SyslogIdentifier=ganso-recorder-watchdog

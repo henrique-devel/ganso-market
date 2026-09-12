@@ -6,6 +6,13 @@
 import type { DatabasePool } from "../database.js";
 import { createBookPipeline, type BookPipeline } from "./bookpipe.js";
 import { createDualMarketSocket, type DualMarketSocket } from "./dualws.js";
+import {
+  createClobSilenceMonitor,
+  readClobRestBook,
+  REST_RESYNC_THROTTLE_MS,
+  streamSilenceMs,
+  type ClobControlResult,
+} from "./clobsilence.js";
 import { parseMarketFrame } from "./messages.js";
 import { createCalendarSync, createReleaseCollector } from "./macro.js";
 import {
@@ -487,56 +494,79 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   let wsGapPromise: Promise<number | null> | null = null;
   let stopped = false;
   const lastRestResyncMs = new Map<string, number>();
+  const restRequests = new Set<AbortController>();
   // RFC-024 D3: the `subscribe_book_missing` gaps, one per bookless token.
   const subscribeGaps = createTokenGapTracker({ gaps, log: logJson });
 
-  async function resyncFromRest(tokenId: string): Promise<void> {
+  async function resyncFromRest(
+    tokenId: string,
+    controlOnly = false,
+  ): Promise<ClobControlResult> {
+    if (stopped) return { status: "unavailable", reason: "shutdown" };
     const now = Date.now();
     const last = lastRestResyncMs.get(tokenId);
-    if (last !== undefined && now - last < 30_000) {
-      return;
+    if (last !== undefined && now - last < REST_RESYNC_THROTTLE_MS) {
+      return { status: "throttled", retryAtMs: last + REST_RESYNC_THROTTLE_MS };
     }
     lastRestResyncMs.set(tokenId, now);
     const fetcher = deps.fetcher ?? fetch;
-    const response = await fetcher(
-      `https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`,
-      {
-        headers: {
-          accept: "application/json",
-          "user-agent": "GansoMarketRecorder/1.0 (+public-data-recorder)",
+    const controller = new AbortController();
+    restRequests.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetcher(
+        `https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`,
+        {
+          signal: controller.signal,
+          headers: {
+            accept: "application/json",
+            "user-agent": "GansoMarketRecorder/1.0 (+public-data-recorder)",
+          },
         },
-      },
-    );
-    if (!response.ok) {
+      );
+      if (!response.ok) {
+        logJson("warn", "BOOK_REST_RESYNC_FAILED", {
+          token_id: tokenId,
+          status: response.status,
+        });
+        return { status: "unavailable", reason: `http_${response.status}` };
+      }
+      const book = readClobRestBook(await response.json(), tokenId);
+      if (stopped || controller.signal.aborted)
+        return { status: "unavailable", reason: "aborted" };
+      if (book === null)
+        return { status: "unavailable", reason: "invalid_book" };
+      // The control observes HTTP directly; it must neither seed the cache nor
+      // wait for the DB queue, and it never renews the WS observation clock.
+      if (!controlOnly) {
+        await pipeline.seedBook(tokenId, book.bids, book.asks, null);
+        logJson("info", "BOOK_REST_RESYNC_DONE", { token_id: tokenId });
+      }
+      return { status: "ok", fingerprint: book.fingerprint };
+    } catch (error) {
       logJson("warn", "BOOK_REST_RESYNC_FAILED", {
         token_id: tokenId,
-        status: response.status,
+        ...errorFields(error),
       });
-      return;
+      return {
+        status: "unavailable",
+        reason: controller.signal.aborted ? "aborted" : "request_failed",
+      };
+    } finally {
+      clearTimeout(timeout);
+      restRequests.delete(controller);
     }
-    const body = (await response.json()) as {
-      bids?: unknown;
-      asks?: unknown;
-    } | null;
-    const levels = (raw: unknown): { price: string; size: string }[] =>
-      Array.isArray(raw)
-        ? raw.flatMap((item) => {
-            const record = item as { price?: unknown; size?: unknown } | null;
-            return record !== null &&
-              typeof record.price === "string" &&
-              typeof record.size === "string"
-              ? [{ price: record.price, size: record.size }]
-              : [];
-          })
-        : [];
-    await pipeline.seedBook(
-      tokenId,
-      levels(body?.bids),
-      levels(body?.asks),
-      null,
-    );
-    logJson("info", "BOOK_REST_RESYNC_DONE", { token_id: tokenId });
   }
+
+  const silence = createClobSilenceMonitor({
+    gaps,
+    openConnections: () => dual?.stats().openConnections ?? 0,
+    resubscribe: () => dual?.resubscribe(tokenIds),
+    reconnect: () => dual?.reconnectSilent(),
+    control: (tokenId) => resyncFromRest(tokenId, true),
+    silenceMs: streamSilenceMs(process.env.GANSO_CLOB_SILENCE_MS),
+    log: logJson,
+  });
 
   const pipeline: BookPipeline = createBookPipeline({
     pool,
@@ -618,6 +648,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     socketFactory,
     symbols: [...RTDS_SYMBOLS],
     clock: Date.now,
+    ...(process.env.GANSO_RTDS_SILENCE_MS !== undefined
+      ? { silenceMs: Number(process.env.GANSO_RTDS_SILENCE_MS) }
+      : {}),
+    ...(process.env.GANSO_RTDS_MAX_RECONNECTS !== undefined
+      ? { recoveryMaxReconnects: Number(process.env.GANSO_RTDS_MAX_RECONNECTS) }
+      : {}),
   });
   const macroReleases = createReleaseCollector({
     pool,
@@ -628,19 +664,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     return universe.map((member) => member.conditionId);
   }
 
-  function handleWsFrame(raw: string): void {
+  function observeWsFrame(raw: string, firstCopy: boolean): void {
+    let valid = false;
+    for (const message of parseMarketFrame(raw)) {
+      valid = silence.observe(message, firstCopy) || valid;
+    }
+    if (!valid) return;
     feedHealth.heartbeat("clob_ws");
     if (wsGapPromise !== null) {
       const pending = wsGapPromise;
       wsGapPromise = null;
+      const receivedAt = new Date();
       void pending
         .then((gapId) =>
-          gapId === null ? undefined : gaps.closeGap(gapId, new Date()),
+          gapId === null ? undefined : gaps.closeGap(gapId, receivedAt),
         )
         .catch(() => {
           logJson("error", "GAP_PERSIST_FAILED", { cause: "close_ws_gap" });
         });
     }
+  }
+
+  function handleWsFrame(raw: string): void {
     for (const message of parseMarketFrame(raw)) {
       if (
         message.event_type === "book" ||
@@ -694,6 +739,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       nextTokenIds.length !== tokenIds.length ||
       nextTokenIds.some((id, index) => id !== tokenIds[index]);
     tokenIds = nextTokenIds;
+    silence.setUniverse(tokenIds);
     if (result.entered.length > 0 || result.exited.length > 0) {
       logJson("info", "UNIVERSE_CHANGED", {
         entered: result.entered.length,
@@ -713,6 +759,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     const exitedTokens = previousTokenIds.filter((id) => !nextSet.has(id));
     if (exitedTokens.length > 0) {
       pipeline.cancelSubscribeWatch(exitedTokens);
+      for (const id of exitedTokens) lastRestResyncMs.delete(id);
     }
     if (enteredTokens.length > 0) {
       pipeline.armSubscribeWatch(enteredTokens);
@@ -743,6 +790,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       dual = createDualMarketSocket({
         socketFactory,
         tokenIds,
+        onObservation: observeWsFrame,
         onMessage: handleWsFrame,
         onBothDown: (info) => {
           const prior = wsGapPromise;
@@ -787,7 +835,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       universe_markets: universe.length,
       universe_tokens: tokenIds.length,
       ws: dual?.stats() ?? null,
+      clob_silence: silence.stats(),
       pipeline: pipe,
+      rtds: rtds.health(),
       rtds_unknown_frames: rtds.unknownFrames(),
       feeds: feedHealth.snapshot(),
     });
@@ -803,9 +853,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...errorFields(error),
         });
       });
+      void silence.restore();
       rtds.start();
 
       const schedule = createJobScheduler(timers);
+
+      schedule("clob_silence", 1_000, async () => {
+        silence.tick();
+      });
 
       schedule("gamma", intervals.gammaMs ?? 600_000, gammaCycle);
       schedule("params", intervals.paramsMs ?? 3_600_000, async () => {
@@ -889,10 +944,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return;
       }
       stopped = true;
+      const silenceStopped = silence.stop();
+      for (const request of restRequests) request.abort();
       for (const timer of timers) {
         clearInterval(timer);
       }
       dual?.close();
+      await silenceStopped;
       await rtds.stop().catch(() => undefined);
       await pipeline.flushDeltas().catch(() => undefined);
       await pipeline.flushMinute().catch(() => undefined);
