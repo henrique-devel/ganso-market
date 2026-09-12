@@ -1,7 +1,7 @@
 Bloco: DATA-01 | RFC: RFC-041 | Retomada: 12/09/2026 UTC.
 Estado: production-verified da instalação e primeira amostra; série de sete dias ainda em andamento.
 Código: branch codex/data-01-growth-series, head99d1275; [PR #166](https://github.com/henrique-devel/ganso-market/pull/166), merge97c2787 sobre basec8b7367.
-Evidência operacional: branch codex/data-01-growth-evidence; complemento documental publicado no PR desta revisão.
+Evidência operacional:48dc2ad,branch codex/data-01-growth-evidence; [PR #167](https://github.com/henrique-devel/ganso-market/pull/167); checks/classificação documental registrados no PR.
 Histórico preservado: [inventário PR #160](../../test-results/btc/DATA-01.md), janela04:36–04:39 UTC; sem reescrever suas medidas.
 Entrega: [relatório suplementar](../../test-results/btc/DATA-01-growth-series.md), [operação](../../test-results/btc/data01-growth-operation.json) e amostra byte-idêntica ao host.
 CI: PR/run34706586883 e main/run34706830333 com source/Compose aprovados; deploy do merge skipped em manutenção, não “só texto”.

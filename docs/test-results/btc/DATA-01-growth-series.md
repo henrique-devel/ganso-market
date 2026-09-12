@@ -283,3 +283,6 @@ MemoryMax 128 MiB, CPUQuota 10%, TimeoutStart 70 s. Seus eventos mantiveram
 `reason=persistence_stale`, `action=observe`: sucesso da série **não comprova
 saúde do feed ou soak**. Nenhum rollback foi necessário. HOLD/dados, gates de
 índices e escopo dos demais blocos não foram alterados por esta entrega.
+
+A publicação desta evidência usa o [PR #167](https://github.com/henrique-devel/ganso-market/pull/167),
+com verificação e classificação do deploy documental registradas no próprio PR.
