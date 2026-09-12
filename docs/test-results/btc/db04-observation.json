@@ -1,0 +1,929 @@
+{
+  "start_utc": "2026-09-12T04:00:25.334605+00:00",
+  "end_utc": "2026-09-12T04:01:05.009656+00:00",
+  "host": "ubuntu-16gb-fsn1-2-bot",
+  "cpus": 8,
+  "meminfo": {
+    "MemTotal": "15983060 kB",
+    "MemAvailable": "14114232 kB",
+    "SwapTotal": "0 kB"
+  },
+  "disk": {
+    "total_bytes": 322302373888,
+    "available_bytes": 200373207040
+  },
+  "checkout_release": "1878bf2a3f18d8e7379e7c9b609d9c6d8b52e982",
+  "containers": [
+    {
+      "id": "4815354ec9a2914134e7b059409dabceacf72657a9ff06e85e90b3fcd8632a6d",
+      "service": "api",
+      "image_id": "sha256:ce7467466a5e1782fc92cc19f79ad3007dc2ce50ad75a93481b1cd75b350509a",
+      "memory_limit": 402653184,
+      "nano_cpus": 750000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-12T03:49:50.616055734Z",
+      "release": "1878bf2a3f18d8e7379e7c9b609d9c6d8b52e982"
+    },
+    {
+      "id": "450fadfb1c64935ad428790a011174f8d39133bd4bb9ee4973ca191c85191e8c",
+      "service": "market-engine",
+      "image_id": "sha256:4d5616467bfb83c5ad36e40adc6f4481031c133413b6446fc502b8ba0bc74d6c",
+      "memory_limit": 536870912,
+      "nano_cpus": 1000000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-12T03:49:50.588296229Z",
+      "release": ""
+    },
+    {
+      "id": "71b6a4843c45e78797d86f051285428a8914dbd71943c5779916f394ed8d1b7d",
+      "service": "nginx",
+      "image_id": "sha256:6e01bfae6f7971512a5765fe2f52ca4267a4773c7f8b357a2d39e5300787cece",
+      "memory_limit": 134217728,
+      "nano_cpus": 250000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-12T03:49:56.357334308Z",
+      "release": ""
+    },
+    {
+      "id": "4b44db0491565ebd6ed2b6b49c30921cb7a40b5bb297935154d219601b559cdc",
+      "service": "polymarket-estimator",
+      "image_id": "sha256:dd11e54719d5da42ff83e59ae3696a8de9fac0fb92b5d5f64924e81001ea1980",
+      "memory_limit": 201326592,
+      "nano_cpus": 500000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-08T03:36:31.550768758Z",
+      "release": "da6d56037604ade22182e40d2dd78256078be2b3"
+    },
+    {
+      "id": "73567058e00be3e36bbea87127abafdcb8edaf27a6f35cc502963275e54ab990",
+      "service": "polymarket-paper",
+      "image_id": "sha256:2989379c1562b44987870da5214a706557e1808b911447d9138fa3803fe264ec",
+      "memory_limit": 268435456,
+      "nano_cpus": 500000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-12T01:30:12.830429855Z",
+      "release": "dcfd52b7371dc426ebaa4fbce2391cf6e2f531ac"
+    },
+    {
+      "id": "c910c3b7896e69538848c2f3af61a394ced442332f1223927a548c593e0662b7",
+      "service": "polymarket-portfolio",
+      "image_id": "sha256:bfd0e77834f265e920809efad011cd68acb16d34ddb02482d611890424b805af",
+      "memory_limit": 201326592,
+      "nano_cpus": 500000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-09T02:11:20.435239779Z",
+      "release": "ffa091e6a5afdd6d9633eaa97a964003a5f5edb2"
+    },
+    {
+      "id": "00dd5765c31e89eaef327a738e2b1bb15371268b7a51ee77db43eeb98a8df809",
+      "service": "polymarket-recorder",
+      "image_id": "sha256:377672417f8b205f9b018ebbbca89e05f2830fd969d8dda4dfa0f1931546ef8e",
+      "memory_limit": 872415232,
+      "nano_cpus": 500000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-12T01:24:15.033686642Z",
+      "release": "dcfd52b7371dc426ebaa4fbce2391cf6e2f531ac"
+    },
+    {
+      "id": "c248cd4cd34dfbc4eb58d51d3ab861a740b61c9d00a6d1eccd22e49a470bcec4",
+      "service": "polymarket-resolution",
+      "image_id": "sha256:c43d19d6fe972f20cb6c4310a2e6fc23bcc4cb4c41312656dd0eb870c7ca1613",
+      "memory_limit": 201326592,
+      "nano_cpus": 500000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-08T03:36:31.597640789Z",
+      "release": "da6d56037604ade22182e40d2dd78256078be2b3"
+    },
+    {
+      "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+      "service": "postgres",
+      "image_id": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+      "memory_limit": 1073741824,
+      "nano_cpus": 1000000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-07T22:59:17.153994357Z",
+      "release": ""
+    },
+    {
+      "id": "c04b9b6466b69f9334a4419654113ad53c0e9c6e6e92ed78e0003cb013992573",
+      "service": "web",
+      "image_id": "sha256:2a80d90d5e737a8b60258c8396a96c71111092f3632bb2ace411c3a65aae2330",
+      "memory_limit": 134217728,
+      "nano_cpus": 250000000,
+      "oom_killed": false,
+      "restart_count": 0,
+      "started_at": "2026-09-12T03:49:50.598472136Z",
+      "release": ""
+    }
+  ],
+  "settings": [
+    {
+      "name": "autovacuum_max_workers",
+      "setting": "3",
+      "unit": null,
+      "source": "default",
+      "context": "sighup",
+      "pending_restart": false
+    },
+    {
+      "name": "autovacuum_work_mem",
+      "setting": "-1",
+      "unit": "kB",
+      "source": "default",
+      "context": "sighup",
+      "pending_restart": false
+    },
+    {
+      "name": "effective_cache_size",
+      "setting": "524288",
+      "unit": "8kB",
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    },
+    {
+      "name": "hash_mem_multiplier",
+      "setting": "2",
+      "unit": null,
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    },
+    {
+      "name": "maintenance_work_mem",
+      "setting": "65536",
+      "unit": "kB",
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    },
+    {
+      "name": "max_connections",
+      "setting": "40",
+      "unit": null,
+      "source": "command line",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "max_parallel_maintenance_workers",
+      "setting": "2",
+      "unit": null,
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    },
+    {
+      "name": "max_parallel_workers",
+      "setting": "8",
+      "unit": null,
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    },
+    {
+      "name": "max_parallel_workers_per_gather",
+      "setting": "2",
+      "unit": null,
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    },
+    {
+      "name": "max_worker_processes",
+      "setting": "8",
+      "unit": null,
+      "source": "default",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "reserved_connections",
+      "setting": "0",
+      "unit": null,
+      "source": "default",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "shared_buffers",
+      "setting": "16384",
+      "unit": "8kB",
+      "source": "configuration file",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "shared_memory_size",
+      "setting": "145",
+      "unit": "MB",
+      "source": "default",
+      "context": "internal",
+      "pending_restart": false
+    },
+    {
+      "name": "shared_preload_libraries",
+      "setting": "",
+      "unit": null,
+      "source": "default",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "superuser_reserved_connections",
+      "setting": "3",
+      "unit": null,
+      "source": "default",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "track_io_timing",
+      "setting": "off",
+      "unit": null,
+      "source": "default",
+      "context": "superuser",
+      "pending_restart": false
+    },
+    {
+      "name": "track_wal_io_timing",
+      "setting": "off",
+      "unit": null,
+      "source": "default",
+      "context": "superuser",
+      "pending_restart": false
+    },
+    {
+      "name": "wal_buffers",
+      "setting": "512",
+      "unit": "8kB",
+      "source": "default",
+      "context": "postmaster",
+      "pending_restart": false
+    },
+    {
+      "name": "work_mem",
+      "setting": "4096",
+      "unit": "kB",
+      "source": "default",
+      "context": "user",
+      "pending_restart": false
+    }
+  ],
+  "catalog": [
+    {
+      "table_name": "polymarket_book_snapshots",
+      "reltuples": 7207210.0,
+      "table_bytes": 8710750208,
+      "index_name": "polymarket_book_snapshots_pkey",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": true,
+      "index_bytes": 210386944,
+      "definition": "CREATE UNIQUE INDEX polymarket_book_snapshots_pkey ON public.polymarket_book_snapshots USING btree (snapshot_id)"
+    },
+    {
+      "table_name": "polymarket_book_snapshots",
+      "reltuples": 7207210.0,
+      "table_bytes": 8710750208,
+      "index_name": "polymarket_book_snapshots_received_at_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 210468864,
+      "definition": "CREATE INDEX polymarket_book_snapshots_received_at_idx ON public.polymarket_book_snapshots USING btree (received_at)"
+    },
+    {
+      "table_name": "polymarket_book_snapshots",
+      "reltuples": 7207210.0,
+      "table_bytes": 8710750208,
+      "index_name": "polymarket_book_snapshots_token_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 1693884416,
+      "definition": "CREATE INDEX polymarket_book_snapshots_token_idx ON public.polymarket_book_snapshots USING btree (token_id, received_at DESC)"
+    },
+    {
+      "table_name": "polymarket_rtds_prices",
+      "reltuples": 3092333.0,
+      "table_bytes": 318038016,
+      "index_name": "polymarket_rtds_prices_feed_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 175136768,
+      "definition": "CREATE INDEX polymarket_rtds_prices_feed_idx ON public.polymarket_rtds_prices USING btree (feed, symbol, received_at)"
+    },
+    {
+      "table_name": "polymarket_rtds_prices",
+      "reltuples": 3092333.0,
+      "table_bytes": 318038016,
+      "index_name": "polymarket_rtds_prices_pkey",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": true,
+      "index_bytes": 69754880,
+      "definition": "CREATE UNIQUE INDEX polymarket_rtds_prices_pkey ON public.polymarket_rtds_prices USING btree (rtds_price_id)"
+    },
+    {
+      "table_name": "polymarket_rtds_prices",
+      "reltuples": 3092333.0,
+      "table_bytes": 318038016,
+      "index_name": "polymarket_rtds_prices_received_at_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 69107712,
+      "definition": "CREATE INDEX polymarket_rtds_prices_received_at_idx ON public.polymarket_rtds_prices USING btree (received_at)"
+    },
+    {
+      "table_name": "polymarket_trades",
+      "reltuples": 2357572.0,
+      "table_bytes": 1366818816,
+      "index_name": "polymarket_trades_external_uidx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": true,
+      "index_bytes": 878329856,
+      "definition": "CREATE UNIQUE INDEX polymarket_trades_external_uidx ON public.polymarket_trades USING btree (provenance, external_id) WHERE (external_id IS NOT NULL)"
+    },
+    {
+      "table_name": "polymarket_trades",
+      "reltuples": 2357572.0,
+      "table_bytes": 1366818816,
+      "index_name": "polymarket_trades_pkey",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": true,
+      "index_bytes": 70434816,
+      "definition": "CREATE UNIQUE INDEX polymarket_trades_pkey ON public.polymarket_trades USING btree (trade_id)"
+    },
+    {
+      "table_name": "polymarket_trades",
+      "reltuples": 2357572.0,
+      "table_bytes": 1366818816,
+      "index_name": "polymarket_trades_received_at_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 57794560,
+      "definition": "CREATE INDEX polymarket_trades_received_at_idx ON public.polymarket_trades USING btree (received_at)"
+    },
+    {
+      "table_name": "polymarket_trades",
+      "reltuples": 2357572.0,
+      "table_bytes": 1366818816,
+      "index_name": "polymarket_trades_token_effective_ts_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 365559808,
+      "definition": "CREATE INDEX polymarket_trades_token_effective_ts_idx ON public.polymarket_trades USING btree (token_id, COALESCE(trade_ts, received_at))"
+    },
+    {
+      "table_name": "polymarket_trades",
+      "reltuples": 2357572.0,
+      "table_bytes": 1366818816,
+      "index_name": "polymarket_trades_token_ts_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": false,
+      "index_bytes": 340148224,
+      "definition": "CREATE INDEX polymarket_trades_token_ts_idx ON public.polymarket_trades USING btree (token_id, trade_ts)"
+    },
+    {
+      "table_name": "polymarket_trades",
+      "reltuples": 2357572.0,
+      "table_bytes": 1366818816,
+      "index_name": "polymarket_trades_ws_uidx",
+      "indisvalid": true,
+      "indisready": true,
+      "indislive": true,
+      "indisunique": true,
+      "index_bytes": 87171072,
+      "definition": "CREATE UNIQUE INDEX polymarket_trades_ws_uidx ON public.polymarket_trades USING btree (token_id, transaction_hash, price, side) WHERE ((provenance = 'ws'::text) AND (transaction_hash IS NOT NULL))"
+    }
+  ],
+  "a": {
+    "utc": "2026-09-12T04:00:25.334645+00:00",
+    "pg": {
+      "cpu.stat": "usage_usec 290489820927\nuser_usec 196771506945\nsystem_usec 93718313981\ncore_sched.force_idle_usec 0\nnr_periods 3258033\nnr_throttled 2851030\nthrottled_usec 1121823310235\nnr_bursts 0\nburst_usec 0",
+      "memory.current": "1072439296",
+      "memory.events": "low 0\nhigh 0\nmax 168696313\noom 0\noom_kill 0\noom_group_kill 0",
+      "io.stat": "8:0 rbytes=15925232730112 wbytes=11754206494720 rios=258970377 wios=54817041 dbytes=0 dios=0"
+    },
+    "recorder": {
+      "cpu.stat": "usage_usec 702454955\nuser_usec 569016326\nsystem_usec 133438628\ncore_sched.force_idle_usec 0\nnr_periods 92728\nnr_throttled 1847\nthrottled_usec 237025907\nnr_bursts 0\nburst_usec 0",
+      "memory.current": "201109504",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+      "io.stat": "8:0 rbytes=172032 wbytes=3842048 rios=15 wios=938 dbytes=0 dios=0"
+    },
+    "db": {
+      "utc": "2026-09-12T04:00:26.435368+00:00",
+      "xact_commit": 1431631499,
+      "xact_rollback": 1888,
+      "blks_read": 65912798540,
+      "blks_hit": 29253353449,
+      "temp_files": 285575,
+      "temp_bytes": 39704918550701,
+      "deadlocks": 0,
+      "stats_reset": null
+    },
+    "wal": {
+      "utc": "2026-09-12T04:00:26.732038+00:00",
+      "wal_records": 3318213660,
+      "wal_fpi": 266156971,
+      "wal_bytes": 1927633085408,
+      "stats_reset": "2026-08-17T22:17:04.734133+00:00"
+    },
+    "tables": [
+      {
+        "utc": "2026-09-12T04:00:27.127467+00:00",
+        "relname": "polymarket_book_snapshots",
+        "n_tup_ins": 31140572,
+        "n_tup_upd": 0,
+        "n_tup_del": 23874053,
+        "n_live_tup": 7284006,
+        "n_dead_tup": 6484,
+        "last_autovacuum": "2026-09-11T23:59:25.8635+00:00"
+      },
+      {
+        "utc": "2026-09-12T04:00:27.127498+00:00",
+        "relname": "polymarket_book_deltas",
+        "n_tup_ins": 588313799,
+        "n_tup_upd": 0,
+        "n_tup_del": 426812886,
+        "n_live_tup": 161432111,
+        "n_dead_tup": 15307113,
+        "last_autovacuum": "2026-09-11T22:25:39.328376+00:00"
+      },
+      {
+        "utc": "2026-09-12T04:00:27.127502+00:00",
+        "relname": "polymarket_trades",
+        "n_tup_ins": 4114027,
+        "n_tup_upd": 0,
+        "n_tup_del": 1525389,
+        "n_live_tup": 2585767,
+        "n_dead_tup": 351185,
+        "last_autovacuum": "2026-09-11T05:23:40.930002+00:00"
+      },
+      {
+        "utc": "2026-09-12T04:00:27.127505+00:00",
+        "relname": "polymarket_rtds_prices",
+        "n_tup_ins": 3104549,
+        "n_tup_upd": 0,
+        "n_tup_del": 0,
+        "n_live_tup": 3103498,
+        "n_dead_tup": 0,
+        "last_autovacuum": "2026-09-09T18:21:26.222587+00:00"
+      }
+    ],
+    "activity": [
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-estimator",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "BuffileWrite",
+        "n": 1,
+        "max_query_age_s": 5.378963
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-paper",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 2,
+        "max_query_age_s": 14.204069
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-portfolio",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 4,
+        "max_query_age_s": 16.80007
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "active",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 1,
+        "max_query_age_s": 0.00228
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "active",
+        "wait_event_type": null,
+        "wait_event": null,
+        "n": 1,
+        "max_query_age_s": 4.19826
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 1,
+        "max_query_age_s": 0.5072
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "idle",
+        "wait_event_type": null,
+        "wait_event": null,
+        "n": 1,
+        "max_query_age_s": 0.00081
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-resolution",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 3,
+        "max_query_age_s": 28.00716
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "psql",
+        "state": "active",
+        "wait_event_type": null,
+        "wait_event": null,
+        "n": 1,
+        "max_query_age_s": 0.005723
+      },
+      {
+        "backend_type": "parallel worker",
+        "application_name": "ganso-market-polymarket-estimator",
+        "state": "active",
+        "wait_event_type": null,
+        "wait_event": null,
+        "n": 2,
+        "max_query_age_s": 5.379023
+      }
+    ],
+    "builds": []
+  },
+  "b": {
+    "utc": "2026-09-12T04:00:57.933618+00:00",
+    "pg": {
+      "cpu.stat": "usage_usec 290521344863\nuser_usec 196790806957\nsystem_usec 93730537905\ncore_sched.force_idle_usec 0\nnr_periods 3258359\nnr_throttled 2851329\nthrottled_usec 1121953085155\nnr_bursts 0\nburst_usec 0",
+      "memory.current": "1072963584",
+      "memory.events": "low 0\nhigh 0\nmax 168719141\noom 0\noom_kill 0\noom_group_kill 0",
+      "io.stat": "8:0 rbytes=15925754589184 wbytes=11754619473920 rios=258994723 wios=54822115 dbytes=0 dios=0"
+    },
+    "recorder": {
+      "cpu.stat": "usage_usec 704665089\nuser_usec 570806255\nsystem_usec 133858833\ncore_sched.force_idle_usec 0\nnr_periods 93052\nnr_throttled 1850\nthrottled_usec 237895737\nnr_bursts 0\nburst_usec 0",
+      "memory.current": "206516224",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+      "io.stat": "8:0 rbytes=172032 wbytes=3854336 rios=15 wios=941 dbytes=0 dios=0"
+    },
+    "db": {
+      "utc": "2026-09-12T04:00:58.924005+00:00",
+      "xact_commit": 1431644499,
+      "xact_rollback": 1888,
+      "blks_read": 65913930818,
+      "blks_hit": 29253675239,
+      "temp_files": 285578,
+      "temp_bytes": 39705173911725,
+      "deadlocks": 0,
+      "stats_reset": null
+    },
+    "wal": {
+      "utc": "2026-09-12T04:00:59.325184+00:00",
+      "wal_records": 3318287110,
+      "wal_fpi": 266170589,
+      "wal_bytes": 1927658118301,
+      "stats_reset": "2026-08-17T22:17:04.734133+00:00"
+    },
+    "tables": [
+      {
+        "utc": "2026-09-12T04:00:59.730537+00:00",
+        "relname": "polymarket_book_snapshots",
+        "n_tup_ins": 31141192,
+        "n_tup_upd": 0,
+        "n_tup_del": 23874053,
+        "n_live_tup": 7284626,
+        "n_dead_tup": 6484,
+        "last_autovacuum": "2026-09-11T23:59:25.8635+00:00"
+      },
+      {
+        "utc": "2026-09-12T04:00:59.730564+00:00",
+        "relname": "polymarket_book_deltas",
+        "n_tup_ins": 588319453,
+        "n_tup_upd": 0,
+        "n_tup_del": 426857886,
+        "n_live_tup": 161392765,
+        "n_dead_tup": 15352113,
+        "last_autovacuum": "2026-09-11T22:25:39.328376+00:00"
+      },
+      {
+        "utc": "2026-09-12T04:00:59.730568+00:00",
+        "relname": "polymarket_trades",
+        "n_tup_ins": 4114035,
+        "n_tup_upd": 0,
+        "n_tup_del": 1525389,
+        "n_live_tup": 2585775,
+        "n_dead_tup": 351185,
+        "last_autovacuum": "2026-09-11T05:23:40.930002+00:00"
+      },
+      {
+        "utc": "2026-09-12T04:00:59.730571+00:00",
+        "relname": "polymarket_rtds_prices",
+        "n_tup_ins": 3104549,
+        "n_tup_upd": 0,
+        "n_tup_del": 0,
+        "n_live_tup": 3103498,
+        "n_dead_tup": 0,
+        "last_autovacuum": "2026-09-09T18:21:26.222587+00:00"
+      }
+    ],
+    "activity": [
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-estimator",
+        "state": "active",
+        "wait_event_type": null,
+        "wait_event": null,
+        "n": 1,
+        "max_query_age_s": 16.097664
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-paper",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 1,
+        "max_query_age_s": 1.16225
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-portfolio",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "AioIoCompletion",
+        "n": 1,
+        "max_query_age_s": 20.201025
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-portfolio",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 3,
+        "max_query_age_s": 19.199909
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "AioIoCompletion",
+        "n": 2,
+        "max_query_age_s": 7.798498
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "DataFileRead",
+        "n": 1,
+        "max_query_age_s": 0.000256
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 2,
+        "max_query_age_s": 8.801022
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-resolution",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "AioIoCompletion",
+        "n": 1,
+        "max_query_age_s": 0.000597
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-resolution",
+        "state": "active",
+        "wait_event_type": "Lock",
+        "wait_event": "transactionid",
+        "n": 1,
+        "max_query_age_s": 0.693821
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "ganso-market-polymarket-resolution",
+        "state": "idle",
+        "wait_event_type": "Client",
+        "wait_event": "ClientRead",
+        "n": 1,
+        "max_query_age_s": 0.588521
+      },
+      {
+        "backend_type": "client backend",
+        "application_name": "psql",
+        "state": "active",
+        "wait_event_type": null,
+        "wait_event": null,
+        "n": 1,
+        "max_query_age_s": 0.004086
+      },
+      {
+        "backend_type": "parallel worker",
+        "application_name": "ganso-market-polymarket-estimator",
+        "state": "active",
+        "wait_event_type": "IPC",
+        "wait_event": "MessageQueueSend",
+        "n": 2,
+        "max_query_age_s": 16.097714
+      },
+      {
+        "backend_type": "parallel worker",
+        "application_name": "ganso-market-polymarket-portfolio",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "AioIoCompletion",
+        "n": 2,
+        "max_query_age_s": 20.201046
+      },
+      {
+        "backend_type": "parallel worker",
+        "application_name": "ganso-market-polymarket-recorder",
+        "state": "active",
+        "wait_event_type": "IO",
+        "wait_event": "AioIoCompletion",
+        "n": 2,
+        "max_query_age_s": 1.500802
+      }
+    ],
+    "builds": []
+  },
+  "stats": [
+    {
+      "name": "ganso-market-api-1",
+      "memory": "29.34MiB / 384MiB",
+      "cpu": "0.00%",
+      "pids": "11"
+    },
+    {
+      "name": "ganso-market-market-engine-1",
+      "memory": "892KiB / 512MiB",
+      "cpu": "0.00%",
+      "pids": "2"
+    },
+    {
+      "name": "ganso-market-nginx-1",
+      "memory": "2.785MiB / 128MiB",
+      "cpu": "0.00%",
+      "pids": "2"
+    },
+    {
+      "name": "ganso-market-polymarket-estimator-1",
+      "memory": "42.53MiB / 192MiB",
+      "cpu": "0.36%",
+      "pids": "11"
+    },
+    {
+      "name": "ganso-market-polymarket-paper-1",
+      "memory": "31.56MiB / 256MiB",
+      "cpu": "0.00%",
+      "pids": "11"
+    },
+    {
+      "name": "ganso-market-polymarket-portfolio-1",
+      "memory": "42.9MiB / 192MiB",
+      "cpu": "0.00%",
+      "pids": "11"
+    },
+    {
+      "name": "ganso-market-polymarket-recorder-1",
+      "memory": "196.3MiB / 832MiB",
+      "cpu": "11.72%",
+      "pids": "11"
+    },
+    {
+      "name": "ganso-market-polymarket-resolution-1",
+      "memory": "126.4MiB / 192MiB",
+      "cpu": "0.01%",
+      "pids": "11"
+    },
+    {
+      "name": "ganso-market-postgres-1",
+      "memory": "930.4MiB / 1GiB",
+      "cpu": "100.86%",
+      "pids": "29"
+    },
+    {
+      "name": "ganso-market-web-1",
+      "memory": "2.277MiB / 128MiB",
+      "cpu": "0.00%",
+      "pids": "2"
+    }
+  ],
+  "logs": {
+    "api": {
+      "lines": 8,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {
+        "request_completed": 7
+      },
+      "reasons": {}
+    },
+    "polymarket-estimator": {
+      "lines": 4,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {},
+      "reasons": {}
+    },
+    "polymarket-paper": {
+      "lines": 11,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {},
+      "reasons": {}
+    },
+    "polymarket-portfolio": {
+      "lines": 2,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {},
+      "reasons": {}
+    },
+    "polymarket-recorder": {
+      "lines": 2,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {
+        "polymarket_trades_window_overflow": 1
+      },
+      "reasons": {}
+    },
+    "polymarket-resolution": {
+      "lines": 4,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {},
+      "reasons": {}
+    },
+    "postgres": {
+      "lines": 1,
+      "cap": 1000,
+      "timeout_mentions": 0,
+      "messages": {},
+      "reasons": {}
+    }
+  },
+  "checks": {
+    "scripts/check_compose_policy.py": {
+      "exit": 0,
+      "stdout": "compose policy passed; aggregate memory limit=4261412864 bytes",
+      "stderr_lines": 0
+    },
+    "scripts/check_runtime_memory.py": {
+      "exit": 0,
+      "stdout": "runtime memory check passed: 10 containers, aggregate=1420991493 bytes",
+      "stderr_lines": 0
+    }
+  }
+}
