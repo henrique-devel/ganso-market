@@ -25,7 +25,7 @@ Não ampliar o HANDOFF histórico. Nenhum bloco inicia automaticamente.
 | [OPS-06](../../prompts/roadmap/btc/ops-06-supervisor-externo-recorder.md) | code-verified | [Recibo](receipts/OPS-06.md): heartbeat + supervisor externo com DB distinto, evidência no host, lock/backoff/3 tentativas por hora e instalador reversível; 56 testes verificados; [handoff OPS-04](../runbooks/recorder-watchdog.md); não instalado/ativado, sem saúde/soak atestado |
 | [OPS-07](../../prompts/roadmap/btc/ops-07-sweep-fechamento-monotonico.md) | code-verified | [Recibo](receipts/OPS-07.md): D4 ausente na base, implementada com UPDATE monotônico antes dos eventos e retry observável; 302 testes (5 PostgreSQL). Leitores: API expõe/filtra closed; estimador exclui; labels/settlement exigem resolução e outcome. Upserts preservados; sem deploy. OPS-04 valida servidor, sem inferir resolução de COUNT(closed) |
 | [DB-01](../../prompts/roadmap/btc/db-01-baseline-consultas.md) | pending | Ainda não executado |
-| [DB-02](../../prompts/roadmap/btc/db-02-ultimo-trade-por-mercado.md) | pending | Ainda não executado |
+| [DB-02](../../prompts/roadmap/btc/db-02-ultimo-trade-por-mercado.md) | code-verified | [Recibo](receipts/DB-02.md): PR #157; índice parcial data_api validado em PG18.4, 100k→1 linha/4 buffers; 22 testes; SQL/backfill inalterados; gate p95 COMMIT conflitos não atingido, promoção/ensaio DB-04 pendentes; sem aplicação do índice em produção |
 | [DB-03](../../prompts/roadmap/btc/db-03-rtds-e-livro-asof.md) | pending | Ainda não executado |
 | [DB-04](../../prompts/roadmap/btc/db-04-plano-recursos-e-validacao.md) | pending | Ainda não executado |
 | [DATA-01](../../prompts/roadmap/btc/data-01-inventario-capacidade.md) | pending | Ainda não executado |
