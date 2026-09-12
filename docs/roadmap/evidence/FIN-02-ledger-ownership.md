@@ -98,58 +98,16 @@ código `3e05396d675b82072d90023d2e235449aec61500`, merge normal
 [CI do PR](https://github.com/henrique-devel/ganso-market/actions/runs/34721519934):
 Verify source e Verify Compose runtime passaram.
 [CI/CD de main](https://github.com/henrique-devel/ganso-market/actions/runs/34721746299):
-source, Compose e Deploy production passaram; migration 0024 aplicada em
-`2026-09-12T22:09:43.005177Z` com o mesmo checksum testado.
+source, Compose e o job Deploy production passaram.
 A suíte nova usa PostgreSQL real exclusivamente por `GANSO_TEST_DATABASE_URL`,
 schema próprio com todas as migrations e fixtures históricas inseridas antes da
 0024. Não desabilita guards nem apaga linhas; o container descartável é exclusivo.
 
-Baseline de produção em 2026-09-12 21:49 UTC, consultas read-only com timeout:
-foundation 23, ledger append-only/HOLD ativos, zero ordens abertas; kill switch
-`RECORDER_STALE` engatado. Último fill em 11/09, marcas novas em 12/09. PostgreSQL
-ID `983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889`, Created
-`2026-09-07T00:11:02.045025319Z`, postmaster desde `2026-09-07T22:59:17.372734Z`.
-API/portfolio em `8132cd357ffb47340e39af278a65dc06469edb0f`, paper em
-`dcfd52b7371dc426ebaa4fbce2391cf6e2f531ac`. Watchdog ativo; série DATA-01 preservada.
-Implantação concluída: API pelo CD; paper/portfolio recriados às 22:12:22 UTC
-após lock exclusivo `.deploy/deploy.lock` e validação das versões/checksums 1–24.
-Os três reportaram `/etc/ganso/release-sha` igual a `4787b17…`; o healthcheck do
-núcleo passou e ambos os perfis permaneceram sem restart espontâneo observado.
-Imagens anteriores preservadas em tags `ganso-fin02-rollback/<serviço>:before-4787b17…`
-e metadados em `.deploy/fin02-4787b171e5e4f77cfd24a05c98f2c3151379b840/`.
-A primeira chamada complementar apenas guardou as imagens/consultou schema:
-stdin do Compose consumiu o restante do script. A confirmação mostrou SHAs
-antigos; redirecionar stdin permitiu retomar sem repetir uma recriação já feita.
-
-Pós-flight read-only às **22:12:56 e 22:14:15 UTC** (statement timeout 3 s):
-
-- Quatro marcas após a migration, zero sem associação; todas em `legacy_unattributed/unknown`, sem
-  inferir titularidade histórica. A marca **71932**, recebida às **22:13:22.644929Z**,
-  foi gravada após o boot do paper atualizado (22:12:22.588Z), provando escrita
-  persistente do runtime novo. Não houve ordem/fill novo nem novo dono prospectivo.
-- Comparação das **32.151 linhas até event_id 71920**: MD5 do conjunto ordenado
-  `7aa3b790c5a2383162b076b2bb91ca54` idêntico antes/depois. É prova de igualdade
-  desta janela histórica, não substituto dos guards append-only.
-- PostgreSQL manteve ID/Created/image/config-hash/RestartCount e início do
-  postmaster. Todos os guards antigos/novos estavam habilitados; recusa de
-  UPDATE/DELETE/TRUNCATE foi exercitada somente no PostgreSQL descartável.
-- Um dono legado com capital NULL; zero capital criado, zero order-owner
-  prospectivo e zero linhas no cache v2. Membership encontrou um token aberto;
-  EXPLAIN ANALYZE da leitura levou 8,523 ms e 12,880 ms nas duas amostras.
-- Configs portfolio/fast/runtime mantiveram seus hashes; recorder permaneceu no
-  SHA anterior, watchdog ativo/success e série DATA-01 com o mesmo hash
-  `7b5259c744124afdbe545dd9a177b7510f809cfb93ffaa4ce9e96911df12efb9`.
-- Kill switch continuou `RECORDER_STALE`; gates financeiros existentes foram
-  observados BLOCKED. Logs mostraram `PORTFOLIO_REPLAY_OK` 50/50 e backlog de
-  features em alguns tokens. Isso **não** demonstra saúde do feed, novos fills,
-  reconciliação financial-v2, rearme ou soak amplo. Nenhum desses gates foi relaxado.
-
-Espaço/memória antes do deploy: ~202 GB disponíveis, ~1,81 GB de memória usada
-segundo `free`; limites/configs não mudaram. O container local `ganso-fin02-pg`
-e seu volume foram descartados após os testes; logs permaneceram em `/private/tmp`.
-O encerramento documental publica este resultado e o recibo, com a dispensa de
-deploy por texto da RFC-020. FIN-03 está elegível para consumir o contrato; sua
-ativação financeira não foi antecipada.
+A verificação operacional do escopo foi executada. O relatório detalhado foi
+entregue ao coordenador como artefato local, separado deste contrato público.
+A publicação final do recibo contém referências de código/checks e não exporta
+o inventário operacional. Isso não amplia o aceite financeiro dos blocos seguintes.
+FIN-03 está elegível para consumir a atribuição; sua implementação não foi antecipada.
 
 Contexto ampliado somente para os produtores, guards DATA-02, harness PostgreSQL,
 parser decimal e runbooks/CI indispensáveis à atomicidade e entrega. São cinco
