@@ -125,7 +125,7 @@ describe("estimate volumetry", () => {
     );
     expect(estimates).toBeDefined();
     expect(estimates?.ttlDays).toBe(90);
-    expect(estimates?.protected).toBe(false);
+    expect(estimates?.protected).toBe(true);
     // The RFC-007 budget reserves 6 GB in total for the RFC-010..013 tables.
     // Owner decision of 2026-08-24 (RFC-012): the estimates quota is 2 GB —
     // the 1 GB it gave up funds the resolution-risk and graph tables.
@@ -209,23 +209,38 @@ describe("estimate volumetry", () => {
   });
 
   it("keeps the whole module inside the RFC-007 budget (110 GB after the 2026-08-25 amendment)", () => {
-    // The protected polymarket_* metadata tables SHARE one 0.5 GB monitored
-    // quota (RFC-007's retention table has a single line for the whole group);
-    // retention.ts stamps that same 0.5 GB on each member, so a naive sum
-    // counts it eleven times. Count the group once, everything else per table.
-    const metadataGroup = RETENTION_TABLES.filter(
-      (table) => table.protected && table.table.startsWith("polymarket_"),
+    // Historical shared metadata allocation is independent of DATA-02 holds.
+    // Raw tables are now protected too; that must not fold their own quotas
+    // into the metadata group's single allocation.
+    const metadataNames = new Set([
+      "polymarket_markets",
+      "polymarket_events",
+      "polymarket_event_markets",
+      "polymarket_rule_versions",
+      "polymarket_param_versions",
+      "polymarket_market_metadata_versions",
+      "polymarket_resolution_input_changes",
+      "polymarket_resolution_events",
+      "polymarket_data_gaps",
+      "polymarket_universe_log",
+      "polymarket_macro_calendar",
+      "polymarket_macro_releases",
+      "polymarket_retention_log",
+    ]);
+    const metadataGroup = RETENTION_TABLES.filter((table) =>
+      metadataNames.has(table.table),
     );
+    expect(metadataGroup).toHaveLength(metadataNames.size);
     const metadataShared = Math.max(
       ...metadataGroup.map((table) => table.quotaBytes),
     );
     const individual = RETENTION_TABLES.filter(
-      (table) => !(table.protected && table.table.startsWith("polymarket_")),
+      (table) => !metadataNames.has(table.table),
     ).reduce((sum, table) => sum + table.quotaBytes, 0);
     // The owner raised the global budget from 40 to 110 GB on 2026-08-25 after
     // production showed the recorded L2 stream is ~15.3 GB/day, not the ~1
     // GB/day the original quotas assumed. Assert against the constant the
-    // pruning actually uses so the two can never drift.
+    // monitoring uses so the two can never drift.
     expect(individual + metadataShared).toBeLessThan(DEFAULT_BUDGET_BYTES);
     expect(DEFAULT_BUDGET_BYTES).toBe(110 * GB);
     // And the sum must still leave real headroom, not merely fit: the alarm
@@ -266,7 +281,7 @@ describe("estimate volumetry", () => {
     expect(strategyDecisions).toBeDefined();
     expect(strategyDecisions?.quotaBytes).toBe(1 * GB);
     expect(strategyDecisions?.ttlDays).toBe(180);
-    expect(strategyDecisions?.protected).toBe(false);
+    expect(strategyDecisions?.protected).toBe(true);
     expect(reserve + (strategyDecisions?.quotaBytes ?? 0)).toBeGreaterThan(
       8 * GB,
     );

@@ -973,48 +973,137 @@ describe.skipIf(DATABASE_URL === undefined)(
     // The three jobs, driven against the real schema.
     // -----------------------------------------------------------------------
 
-    it("deletes the exposure rows the current book no longer produces", async () => {
-      // The upsert alone leaves orphans behind, and they are not cosmetic:
-      // loadRiskSurvival counts `utilization > 1` over EVERY row, so an orphan
-      // above its cap would report an unblocked breach for the rest of the
-      // system's life and pin G3 at FAIL on a position nobody holds.
-      //
-      // Observed in production 2026-09-02 01:14:48Z, when RFC-018 D2 changed
-      // the key of the resolution_source dimension: the two adapter-keyed rows
-      // froze there while the clause-family rows advanced.
-      await pool().query(
+    it("preserves an abandoned bucket and clears its obsolete breach exactly once", async () => {
+      const key = `orphan-${RUN}`;
+      const before = await pool().query<{ exposure_id: string }>(
         `INSERT INTO portfolio_exposures
            (dimension, dimension_key, worst_case_usd, cap_usd, utilization,
-            position_count, computed_at, updated_at)
+            position_count, unwind_cost_usd, detail_json, computed_at, updated_at)
          VALUES ('resolution_source', $1, '900.000000', '250.000000',
-                 '3.600000', 1, $2, $2)
-         ON CONFLICT (dimension, dimension_key) DO NOTHING`,
-        [`orphan-${RUN}`, new Date(NOW.getTime() - 3_600_000)],
+                 '3.600000', 1, NULL, '{"fixture":"former-adapter"}', $2, $2)
+         RETURNING exposure_id`,
+        [key, new Date(NOW.getTime() - 3_600_000)],
       );
-
-      await createPortfolioRunner({
+      let clock = NOW;
+      const engine = createPortfolioRunner({
         pool: pool(),
         config: CONFIG,
         factorMap: DEFAULT_FACTOR_MAP,
         lexicon: DEFAULT_RESOLUTION_LEXICON,
         executionMode: "paper",
-        clock: () => NOW,
-      }).tickOnce("panel");
-
-      const orphan = await pool().query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM portfolio_exposures
-          WHERE dimension_key = $1`,
-        [`orphan-${RUN}`],
-      );
-      expect(orphan.rows[0]?.n).toBe("0");
-
-      // ...and the cycle's own rows survived, so the delete is not a truncate.
+        clock: () => clock,
+      });
+      const readBucket = () =>
+        pool().query<{
+          exposure_id: string;
+          dimension: string;
+          dimension_key: string;
+          worst_case_usd: string;
+          cap_usd: string;
+          utilization: string;
+          position_count: number;
+          unwind_cost_usd: string;
+          detail_json: unknown;
+          computed_at: Date;
+          updated_at: Date;
+          breach: boolean;
+        }>(
+          `SELECT *, utilization::numeric > 1 AS breach FROM portfolio_exposures
+           WHERE dimension = 'resolution_source' AND dimension_key = $1`,
+          [key],
+        );
+      expect((await readBucket()).rows[0]?.breach).toBe(true);
+      await engine.tickOnce("panel");
+      const zeroed = await readBucket();
+      expect(zeroed.rows).toHaveLength(1);
+      expect(zeroed.rows[0]).toMatchObject({
+        exposure_id: before.rows[0]?.exposure_id,
+        dimension: "resolution_source",
+        dimension_key: key,
+        worst_case_usd: "0.000000",
+        cap_usd: "250.000000",
+        utilization: "0.000000",
+        position_count: 0,
+        unwind_cost_usd: "0.000000",
+        detail_json: { fixture: "former-adapter" },
+        computed_at: NOW,
+        breach: false,
+      });
+      clock = new Date(NOW.getTime() + 1);
+      await engine.tickOnce("panel");
+      // No repeated orphan UPDATE/WAL or artificial fresher timestamp.
+      expect((await readBucket()).rows).toEqual(zeroed.rows);
       const live = await pool().query<{ n: string }>(
         `SELECT count(*)::text AS n FROM portfolio_exposures
-          WHERE computed_at = $1`,
-        [NOW],
+          WHERE computed_at = $1 AND position_count > 0`,
+        [clock],
       );
       expect(Number(live.rows[0]?.n)).toBeGreaterThanOrEqual(7);
+    });
+
+    it("zeros the market bucket when its last position closes and keeps it zero next cycle", async () => {
+      let clock = NOW;
+      const engine = createPortfolioRunner({
+        pool: pool(),
+        config: CONFIG,
+        factorMap: DEFAULT_FACTOR_MAP,
+        lexicon: DEFAULT_RESOLUTION_LEXICON,
+        executionMode: "paper",
+        clock: () => clock,
+      });
+      const readBucket = () =>
+        pool().query<{
+          exposure_id: string;
+          worst_case_usd: string;
+          cap_usd: string;
+          utilization: string;
+          position_count: number;
+          unwind_cost_usd: string;
+          computed_at: Date;
+          updated_at: Date;
+        }>(
+          `SELECT exposure_id, worst_case_usd, cap_usd, utilization, position_count,
+                 unwind_cost_usd, computed_at, updated_at FROM portfolio_exposures
+           WHERE dimension = 'market' AND dimension_key = $1`,
+          [CONDITION],
+        );
+      await engine.tickOnce("panel");
+      const held = (await readBucket()).rows[0];
+      expect(held?.worst_case_usd).toBe("50.000000");
+      expect(held?.position_count).toBe(1);
+      const position = (
+        await pool().query<{ shares: string; resolved_at: Date | null }>(
+          `SELECT shares, resolved_at FROM paper_positions WHERE token_id = $1`,
+          [TOKEN],
+        )
+      ).rows[0];
+      try {
+        await pool().query(
+          `UPDATE paper_positions SET shares = '0', resolved_at = $2 WHERE token_id = $1`,
+          [TOKEN, NOW],
+        );
+        clock = new Date(NOW.getTime() + 1);
+        await engine.tickOnce("panel");
+        const closed = await readBucket();
+        expect(closed.rows).toHaveLength(1);
+        expect(closed.rows[0]).toMatchObject({
+          exposure_id: held?.exposure_id,
+          cap_usd: held?.cap_usd,
+          worst_case_usd: "0.000000",
+          utilization: "0.000000",
+          position_count: 0,
+          unwind_cost_usd: "0.000000",
+          computed_at: clock,
+        });
+        clock = new Date(NOW.getTime() + 2);
+        await engine.tickOnce("panel");
+        expect((await readBucket()).rows).toEqual(closed.rows);
+      } finally {
+        await pool().query(
+          `UPDATE paper_positions SET shares = $2, resolved_at = $3 WHERE token_id = $1`,
+          [TOKEN, position?.shares, position?.resolved_at],
+        );
+      }
     });
 
     it("opens UMA_PROPOSED_OR_DISPUTED on a live proposal over a held position", async () => {
@@ -1246,7 +1335,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(report?.overallStatus).toBe("BLOCKED");
     });
 
-    it("stamps a bridged order and keeps the entry's thesis after the log is pruned", async () => {
+    it("stamps a bridged order and preserves its decision and thesis against pruning", async () => {
       // The whole point of portfolio_position_entries, exercised end to end
       // against the real schema. A distinct token, so the other fixtures in this
       // file cannot supply the provenance by accident.
@@ -1343,22 +1432,24 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(before?.invalidationProbLowerBelowScaled).toBe(621_000_000n);
       expect(before?.rulePrecisionScaled).toBe(900_000_000n);
 
-      // THE regression. This is what the quota does to the decision log after
-      // about three days, and what used to take four of the seven exit criteria
-      // with it: with the entry gone, invalidation, model-move, source-change
-      // and precision-downgrade all defaulted to "we do not know that it moved"
-      // and could never fire again for this position.
-      await pool().query(
-        `DELETE FROM portfolio_decisions WHERE decision_id = $1`,
+      // DATA-02 protects the full logical chain, including the decision that
+      // has no order FK. The independent entry thesis remains available too.
+      await expect(
+        pool().query(`DELETE FROM portfolio_decisions WHERE decision_id = $1`, [
+          decisionId,
+        ]),
+      ).rejects.toThrow(/DATA02_EVIDENCE_HOLD/);
+      const preserved = await entryProvenanceFor(pool(), token);
+      expect(preserved).toEqual(before);
+      const decision = await pool().query<{
+        decision_id: string;
+        paper_order_id: string;
+      }>(
+        `SELECT decision_id, paper_order_id FROM portfolio_decisions WHERE decision_id = $1`,
         [decisionId],
       );
-      const afterPrune = await entryProvenanceFor(pool(), token);
-      expect(afterPrune).not.toBeNull();
-      expect(afterPrune?.qLo).toBe("0.750000");
-      expect(afterPrune?.invalidationProbLowerBelowScaled).toBe(621_000_000n);
-      expect(afterPrune?.rulePrecisionScaled).toBe(900_000_000n);
-      expect(afterPrune?.resolutionSource).toBe("UMA:0xadapter");
-      expect(afterPrune?.ruleVersion).toBe(1);
+      expect(decision.rows).toHaveLength(1);
+      expect(decision.rows[0]?.paper_order_id).toBe(orderId);
     });
 
     it("refuses to rewrite an entry's recorded thesis", async () => {

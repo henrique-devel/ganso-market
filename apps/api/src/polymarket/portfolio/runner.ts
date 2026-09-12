@@ -445,25 +445,11 @@ export function createPortfolioRunner(
   }
 
   /**
-   * Write every exposure the current book produces, and DELETE the rows it no
-   * longer produces.
-   *
-   * The upsert alone leaves orphans. A bucket stops being computed whenever the
-   * last position in it closes, a market leaves the universe, or — as RFC-018
-   * D2 did in one cycle — the KEY of a dimension changes: the old rows simply
-   * stop being refreshed and stay behind at their last value forever.
-   *
-   * That is not cosmetic. `loadRiskSurvival` counts `utilization > 1` over
-   * every row in this table, so an orphan left above its cap would report an
-   * unblocked breach for the rest of the system's life and pin G3 at FAIL on a
-   * position nobody holds. `GET /polymarket/portfolio/exposure` would show it
-   * too, as exposure that does not exist.
-   *
-   * Observed in production on 2026-09-02 01:14:48Z: the two adapter-keyed rows
-   * from before the clause-family key froze there while the new ones advanced.
-   *
-   * Sizing was never affected — `capHeadroomFor` reads the rows computed in
-   * memory this cycle, never the table.
+   * Recompute current exposure and zero buckets whose last position disappeared.
+   * DATA-02 preserves their identity/cap/provenance; no row is deleted.
+   * An old utilization above 1 must not remain a false G3 breach after closing.
+   * The exposure API can show the preserved zero row; limits exclude zero usage.
+   * Sizing reads the current in-memory calculation, never these stored rows.
    */
   async function persistExposures(
     rows: readonly ExposureRow[],
@@ -499,14 +485,24 @@ export function createPortfolioRunner(
     // itself (the supervisor skips a tick still running), so "not written this
     // cycle" is exactly "no longer an exposure".
     await deps.pool.query(
-      `DELETE FROM portfolio_exposures e
+      `UPDATE portfolio_exposures e
+          SET worst_case_usd = '0.000000',
+              utilization = '0.000000',
+              position_count = 0,
+              unwind_cost_usd = '0.000000',
+              computed_at = $3,
+              updated_at = CURRENT_TIMESTAMP
         WHERE NOT EXISTS (
           SELECT 1 FROM unnest($1::text[], $2::text[])
                  AS live(dimension, dimension_key)
            WHERE live.dimension = e.dimension
              AND live.dimension_key = e.dimension_key
-        )`,
-      [rows.map((row) => row.dimension), rows.map((row) => row.key)],
+        )
+          AND (e.worst_case_usd <> '0.000000'
+            OR e.utilization <> '0.000000'
+            OR e.position_count <> 0
+            OR e.unwind_cost_usd IS DISTINCT FROM '0.000000')`,
+      [rows.map((row) => row.dimension), rows.map((row) => row.key), now],
     );
   }
 

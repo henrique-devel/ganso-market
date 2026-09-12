@@ -42,11 +42,13 @@ interface World {
   readonly pool: PortfolioPool;
   readonly inserts: { table: string; params: readonly unknown[] }[];
   readonly queries: string[];
+  readonly exposureUpdates: { text: string; params: readonly unknown[] }[];
 }
 
 function world(options: WorldOptions = {}): World {
   const inserts: { table: string; params: readonly unknown[] }[] = [];
   const queries: string[] = [];
+  const exposureUpdates: { text: string; params: readonly unknown[] }[] = [];
   const bids = options.bids ?? [
     { price: "0.61", size: "500" },
     { price: "0.60", size: "500" },
@@ -71,6 +73,10 @@ function world(options: WorldOptions = {}): World {
         if (table === "portfolio_decisions") {
           return respond([{ decision_id: 101 }]);
         }
+        return respond([]);
+      }
+      if (text.startsWith("UPDATE portfolio_exposures")) {
+        exposureUpdates.push({ text, params });
         return respond([]);
       }
       if (text.startsWith("UPDATE ") || text.includes("UPDATE portfolio")) {
@@ -258,7 +264,7 @@ function world(options: WorldOptions = {}): World {
       return respond([]);
     },
   };
-  return { pool, inserts, queries };
+  return { pool, inserts, queries, exposureUpdates };
 }
 
 function runner(pool: PortfolioPool) {
@@ -410,6 +416,33 @@ describe("the exposure bucket key (RFC-018 D2)", () => {
       .map((row) => String(row.params[1]));
     expect(keys).toEqual(["OBJETIVA_UNICA:binance"]);
     expect(keys).not.toContain("UMA:0xadapter");
+  });
+});
+
+describe("DATA-02 exposure lifecycle protection", () => {
+  it("keeps active keys out of zeroing and never requests an exposure deletion", async () => {
+    const scene = world({ eligibleMarkets: [MARKET] });
+    await runner(scene.pool).tickOnce("panel");
+    expect(
+      scene.queries.some((query) =>
+        /DELETE FROM portfolio_exposures/.test(query),
+      ),
+    ).toBe(false);
+    expect(scene.exposureUpdates).toHaveLength(1);
+    const update = scene.exposureUpdates[0];
+    const dimensions = update?.params[0] as string[];
+    const keys = update?.params[1] as string[];
+    expect(
+      dimensions.map((dimension, index) => [dimension, keys[index]]),
+    ).toContainEqual(["market", "0xa"]);
+    expect(update?.params[2]).toEqual(NOW);
+    expect(update?.text).toContain("WHERE NOT EXISTS");
+    expect(update?.text).toContain(
+      "unwind_cost_usd IS DISTINCT FROM '0.000000'",
+    );
+    expect(update?.text).not.toMatch(
+      /SET\s+(?:dimension|dimension_key|exposure_id|cap_usd)/,
+    );
   });
 });
 
