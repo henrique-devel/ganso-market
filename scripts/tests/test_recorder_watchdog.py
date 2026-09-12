@@ -739,5 +739,107 @@ class CommandDeadlineTests(unittest.TestCase):
             )
 
 
+class CapacityHookTests(unittest.TestCase):
+    def setUp(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("watchdog_capacity_test", HELPER)
+        self.helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.helper)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name).resolve()
+        (self.project / "deploy").mkdir()
+        self.observer = self.project / "deploy/capacity_series.py"
+        self.observer.write_text("# fixture\n")
+        self.observer.chmod(0o600)
+
+    def test_hook_is_bounded_and_adds_no_watchdog_probe(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(self.helper, "command", return_value=(0, b'{"reason":"not_due"}')) as run,
+            patch.object(self.helper.time, "monotonic", return_value=100),
+        ):
+            self.assertEqual(self.helper.capacity_tick(self.project, 100), "not_due")
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], [sys.executable, "-I", str(self.observer), "--due"])
+        self.assertEqual(args[1], 12)
+        self.assertEqual(kwargs, {"limit": 4096})
+
+    def test_long_supervision_reserves_without_probe_in_one_second(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(self.helper, "command", return_value=(0, b'{"reason":"captured"}')) as run,
+            patch.object(self.helper.time, "monotonic", return_value=146),
+        ):
+            self.assertEqual(self.helper.capacity_tick(self.project, 100), "captured")
+        self.assertEqual(run.call_args.args[0][-1], "--skip-probe")
+        self.assertEqual(run.call_args.args[1], 1)
+
+    def test_observer_failure_never_escapes_into_recovery(self):
+        from unittest.mock import patch
+
+        with patch.object(self.helper, "command", side_effect=RuntimeError(SECRET)):
+            self.assertEqual(
+                self.helper.capacity_tick(self.project, time.monotonic()), "observer_failed"
+            )
+
+    def test_unsafe_helper_not_executed(self):
+        from unittest.mock import patch
+
+        self.observer.chmod(0o666)
+        with patch.object(self.helper, "command") as run:
+            self.assertEqual(
+                self.helper.capacity_tick(self.project, time.monotonic()), "helper_unsafe"
+            )
+            run.assert_not_called()
+
+    def test_supervisor_refusal_records_inhibited_attempt_without_changing_exit(self):
+        from unittest.mock import Mock, patch
+
+        with (
+            patch.object(self.helper, "Docker", return_value=Mock()),
+            patch.object(self.helper, "supervise", side_effect=self.helper.Refused("HEADROOM_LOW")),
+            patch.object(self.helper, "capacity_tick", return_value="captured") as tick,
+            patch.object(sys, "argv", ["watchdog"]),
+            patch("builtins.print") as printed,
+        ):
+            self.assertEqual(self.helper.main(), 1)
+            self.assertTrue(tick.call_args.kwargs["inhibited"])
+            self.assertEqual(json.loads(printed.call_args.args[0])["reason"], "HEADROOM_LOW")
+
+    def test_check_target_does_not_collect_or_write_capacity(self):
+        from unittest.mock import Mock, patch
+
+        docker = Mock()
+        docker.target.return_value = {"state": "running", "id": CONTAINER}
+        docker.probe.return_value = {"heartbeat": {}, "sha": SHA}
+        with (
+            patch.object(self.helper, "Docker", return_value=docker),
+            patch.object(self.helper, "capacity_tick") as tick,
+            patch.object(sys, "argv", ["watchdog", "--check-target"]),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(self.helper.main(), 0)
+            tick.assert_not_called()
+
+    def test_noncanonical_project_never_executes_optional_helper(self):
+        from unittest.mock import Mock, patch
+
+        with (
+            patch.object(self.helper, "Docker", return_value=Mock()),
+            patch.object(
+                self.helper, "supervise", side_effect=self.helper.Refused("TARGET_REFUSED")
+            ),
+            patch.object(self.helper, "capacity_tick") as tick,
+            patch.object(sys, "argv", ["watchdog", "--project-dir", "/untrusted"]),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(self.helper.main(), 1)
+            tick.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
