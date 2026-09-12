@@ -19,6 +19,14 @@ retenção por received_at. Nenhum começa por condition_id: não remover ou dup
 esses índices. O parcial evita entradas de WS e timestamps nulos; tamanho, WAL e
 custo de INSERT medidos constam em [DB-02](../test-results/btc/DB-02.md).
 
+Retomada de 12/09/2026: [ensaio individual com schema 0023](../test-results/btc/DB-02-write-recheck.md)
+concluído em 58,857 s; 3/8 agregados e 15/32 rodadas reprovados. Manter candidato
+suspenso. O [runner](../test-results/btc/db02-write-benchmark.mjs) e seu JSON separam
+autocommit e COMMIT explícito, fontes, conflitos e WAL por backend; resultado
+favorável isolado não autoriza promoção. A nova autorização de ensaio/publicação
+está em [DEVELOPMENT_AUTHORIZATION](DEVELOPMENT_AUTHORIZATION.md); não falta nova
+permissão do proprietário, mas os gates técnicos ainda não foram satisfeitos.
+
 ## Sequência para DB-04
 
 1. Confirmar a identidade SSH atual de [SERVER_ACCESS](SERVER_ACCESS.md), o SHA,
@@ -50,7 +58,7 @@ custo de INSERT medidos constam em [DB-02](../test-results/btc/DB-02.md).
    estreita após confirmar Limit/Index Scan e usar o orçamento original. Conferir
    resultado, buffers, gravação/dedupe e ensaio DB-04, sem alegar soak por build.
 7. Só então preparar migration numerada pelo próximo slot realmente livre
-   (`0023` estava livre em 12/09/2026; **não reservado** por este bloco). Para banco
+   (`0023` já foi ocupada pela proteção de evidência; **nenhum slot reservado**). Para banco
    vazio pode usar CREATE INDEX transacional. Em banco populado, exigir prebuild
    concorrente e validar definição/validade **antes** do IF NOT EXISTS; abortar se
    faltar o índice. Não deixar uma migration disparar build bloqueante no deploy.

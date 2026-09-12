@@ -71,3 +71,41 @@ Esta é a referência vigente para autorização das entregas. Menções antigas
 registro e do escopo atual; recibos históricos continuam sendo evidência de sua data.
 Restrições técnicas ou decisões específicas de produto não são revogadas por essa
 leitura. Registrar aqui qualquer alteração futura expressa pelo proprietário.
+
+## Retomada das recomendações BTC — 12/09/2026
+
+O registro do coordenador `BTC-recomendacoes-autorizacao.md`, de
+`2026-09-12T14:28:42.527173+00:00`, preserva a pergunta apresentada imediatamente
+antes da resposta do proprietário (espaçamento normalizado abaixo):
+
+> autoriza publicar as entregas DATA-03/04/05 — revisão conjunta de 28 arquivos, base e9d6960..8c8418d — no repositório público henrique-devel/ganso-market e realizar o ensaio limitado de escrita/WAL em PostgreSQL descartável?
+
+Resposta exata do proprietário:
+
+> Perfeito vamos fazer a publicação e sobre as recomendações sugeridas no documento Resultado da sequência BTC — DB-02 a DATA-05
+>
+> Pode executar e começar a fazer agora, para cada bloco fazer a recomendação em sessões separadas respeitando a sequencia no final traga o consolidado
+
+A resposta autoriza a publicação das entregas indicadas, com revisão, checks,
+merge e implantação aplicáveis, e a execução das recomendações do consolidado em
+sessões separadas, um bloco por vez, na sequência DB-02 → DB-03 → DB-04 → DATA-01 →
+DATA-02 → DATA-03 → DATA-04 → DATA-05, com consolidado ao final. O ensaio limitado
+de escrita/WAL em PostgreSQL descartável está aprovado: 10 mil inserts, mil
+upserts/deletes e VACUUM conforme o plano conferido. A execução deve preservar os
+limites do ensaio e os critérios técnicos; não autoriza relaxar gates ou tratar
+fixtures como evidência de produção, soak ou preservação real.
+
+As restrições temporárias de publicação apenas local foram superadas por essa
+resposta. Recusas e pedidos antigos sem resposta permanecem como histórico, sem
+constituir aprovação atual pendente para as ações agora cobertas. Uma nova recusa
+efetiva de ferramenta continua sendo uma restrição: informar a ação e a causa,
+concluir o trabalho independente e não contornar a recusa.
+
+Permanecem HOLD, imagens, backups e rollback preservados, Q4 e compactação adiados,
+infraestrutura caseira existente e custo externo adicional zero. A autorização
+não permite limpeza ou poda genérica de produção, apagar dados produtivos,
+reescrever ledger ou migrations aplicadas, mudar Q4 sem contrato, alterar
+capital/caps/live/signer/perímetro, comprar infraestrutura nem executar compactação
+sem os critérios e a autorização aplicáveis. A promoção do índice candidato de
+último trade continua dependente dos gates técnicos e da validação operacional;
+essa resposta não equivale a índice aplicado ou gate aprovado.
