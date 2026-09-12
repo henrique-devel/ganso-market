@@ -5,9 +5,20 @@ operacional do índice RTDS e seu ensaio de escrita/espaço/WAL pertencem ao DB-
 Esta entrega mantém a infraestrutura existente e não acrescenta migration
 automática. **O SQL da aplicação foi preservado:** no ensaio sem candidato,
 os buffers do cenário de dois símbolos subiram de 1.364 para 6.408. O candidato
-com índice passou na triagem de leitura; escrita/WAL continuam não verificados
-por bloqueio da revisão automática. Resultados no
+com índice passou na triagem de leitura. A autorização específica de escrita/WAL
+foi confirmada na retomada de 12/09; a execução definitiva ficou atribuída ao
+DB-04, ainda não medida aqui. Recusas antigas são apenas histórico. Resultados no
 [relatório DB-03](../test-results/btc/DB-03.md).
+
+## Retomada autorizada: preparação para DB-04
+
+Seguir o [protocolo exclusivo de escrita](../test-results/btc/DB-03-write-preparation.md)
+e seu novo runner; não usar `db03-benchmark.mjs --with-writes` na validação atual.
+O runner histórico omite HOLD 0023 e repete a leitura. A nova preparação preserva
+HOLD: DELETE de até mil alvos deve ser recusado, sem medição de poda nem bypass.
+Autorização está [registrada](DEVELOPMENT_AUTHORIZATION.md); não é necessário
+pedir novamente a aprovação já concedida. Índices/runtime seguem suspensos até
+os gates técnicos e a validação aplicável. Nenhuma leitura aprovada foi repetida.
 
 ## RTDS: seleção preservada e caminho candidato
 
@@ -70,7 +81,8 @@ apenas com o ganho medido na variante que já possui o índice.
 Antes da promoção do índice, medir os 10.000 inserts RTDS e o custo de persistência
 exigido pelo DB-01, com zero erros/perdas, regressão de throughput/p95 de commit
 <=10%, bytes adicionais declarados e WAL marginal comparável. Verificar também
-os 1.000 upserts agregados e 1.000 deletes previstos no ensaio. Resultados de
+os 1.000 upserts agregados. Sob HOLD 0023, o controle de até 1.000 alvos de DELETE
+exige recusa e zero perda; seu throughput permanece indisponível. Resultados de
 fixture não substituem tamanho, duração de construção ou pressão de coleta no
 servidor; o ensaio e a decisão operacional permanecem com DB-04.
 
@@ -149,13 +161,13 @@ mid histórico utilizado pelo jump breaker. Um novo plano pode escolher outra
 linha empatada mesmo sem mudar o texto do ORDER BY; não alegar equivalência
 determinística com base em uma execução que escolheu o mesmo empate.
 
-| Opção para revisão | Impacto e custo |
+| Opção registrada | Impacto e custo |
 | --- | --- |
 | Manter Q3/Q4 e abrir DB-03B com contrato independente | Sem custo adicional de índice/infra; preserva comportamento atual, mas mantém o trabalho de Q4 evidenciado pelo baseline. |
 | Definir desempate e política de source_ts, depois reescrever Q4 | Pode permitir N buscas LIMIT 1, mas muda o resultado em empates/source futuro; exige revisão dos efeitos no jump breaker, fixture e nova medição. Índice adicional só se justificado por plano/escrita. |
 
-**Recomendação:** manter Q3/Q4 neste bloco e registrar DB-03B como contrato
-independente para revisão posterior. Primeiro tornar explícita a regra temporal
+**Decisão conservadora aprovada em 12/09/2026:** manter Q3/Q4 neste bloco e
+DB-03B adiado, com contrato independente para revisão posterior. Primeiro tornar explícita a regra temporal
 e de desempate; então comparar `LATERAL LIMIT 1` com o índice de token/received
 existente. A fixture DB-03B deve ter 100.000 snapshots, lotes de 1/10/100 tokens,
 ausentes/duplicados, empates, source futuro, último livro inválido, arrays vazios
@@ -165,5 +177,5 @@ tokens, >=50% menos linhas/buffers; Q3 p95 <=50 ms e regressão tolerada
 
 DB-04 pode começar com os candidatos e este adiamento mensurável documentados
 no estado; seu fechamento deve distinguir o acesso RTDS efetivamente promovido
-da decisão pendente de Q4. Nem este adiamento nem um deploy comprovam resolução
+do adiamento aprovado de Q4. Nem este adiamento nem um deploy comprovam resolução
 operacional de Q2/Q4 ou estabilidade de sete dias.
