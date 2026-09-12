@@ -106,14 +106,14 @@ Datas/horas abaixo são UTC, 2026; o JSON preserva precisão e todos os timestam
 | `paper_fill_samples` — dataset calibração | 0.177956 / 0.092243 | H 28/08–11/09 | Labels de fill; book/trades+sample_id | 0 amostra; baixa |
 | `paper_ledger_events` — econômico protegido | 0.024277 / 0.018768 | P 26/08 05:28–12/09 04:36 | Reconciliação/replay/gates; order/token+idempotency | 0 amostra; baixa |
 | `paper_orders` — econômico protegido | 0.001175 / 0.000099 | amostra completa133:28/08–11/09 | Ledger/entries/saídas; order/decision/strategy | 0 amostra; baixa |
-| `domain_events`, `event_quarantine`, `bonding_curve_state`, `pumpswap_pool_state` — Solana residual | 0,000122 físico conjunto; fallback físico, não bytes de dados vivos | EXISTS false em04:39; idade de linhas não aplicável | Nenhum consumidor encontrado fora migrations0003; preservar schema | 0 inserts amostra; existência vazia confirmada só no instante |
+| `domain_events`, `event_quarantine`, `bonding_curve_state`, `pumpswap_pool_state` — Solana residual | 0,0001068125 físico conjunto; fallback físico, não bytes de dados vivos | EXISTS false em04:39; idade de linhas não aplicável | Nenhum consumidor encontrado fora migrations0003; preservar schema | 0 inserts amostra; existência vazia confirmada só no instante |
 
 Não existem tabelas `market_context` ou `fundamental_predictions` neste catálogo;
 busca por esses identificadores no código também não encontrou consumidor.
 Isso não autoriza classificar outro objeto por similaridade de nome.
 As quatro tabelas Solana foram verificadas por `EXISTS(... LIMIT 1)` e não tinham
 linhas naquele snapshot, além de contadores zerados. `domain_events` soma 56 KiB
-físicos e as outras três 24 KiB cada: ganho de dados residuais não demonstrado.
+físicos; event_quarantine 24 KiB e as duas projeções 16 KiB cada: ganho de dados residuais não demonstrado.
 O primeiro coletor pulou endpoint de domain_events porque sua allowlist tinha
 `event_id`, enquanto a PK real é `domain_event_id`; o complemento EXISTS resolve
 somente existência. Schemas/migrations/código legado permanecem.
