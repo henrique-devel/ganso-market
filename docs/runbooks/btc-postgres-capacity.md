@@ -81,13 +81,17 @@ impede entrada. Não transformar RAM livre do host em RAM disponível ao cgroup.
 
 ### Memória PostgreSQL por operação e simultaneidade
 
-Modelo em MiB: `145 + (C + P) × (S × 4 + H × 4 × 2) + A × 64 + M × 64
+Modelo em MiB:
 
-- B + R`, onde C=clientes pesados simultâneos, P=workers de planos (máximo global
-  8), S/H=nós sort/hash simultâneos por participante, A≤3 autovacuums, M≤1 build
-  manual, B=memória privada de backends/background e R=cache/temp buffers/outros.
-  Não multiplicar cada sessão por três ignorando teto global8; manutenção paralela
-  usa o orçamento por comando, sem multiplicar seus 64 MiB por worker.
+```text
+145 + (C + P) × (S × 4 + H × 4 × 2) + A × 64 + M × 64 + B + R
+```
+
+Onde C=clientes pesados simultâneos, P=workers de planos (máximo global8),
+S/H=nós sort/hash simultâneos por participante, A≤3 autovacuums, M≤1 build manual,
+B=memória privada de backends/background e R=cache/temp buffers/outros.
+Não multiplicar cada sessão por três ignorando teto global8; manutenção paralela
+usa o orçamento por comando, sem multiplicar seus 64 MiB por worker.
 
 | Cenário proposto, não garantia                                      | Conta MiB                          | Resultado                                                                  |
 | ------------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------- |
