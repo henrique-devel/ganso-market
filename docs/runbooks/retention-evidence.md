@@ -57,7 +57,8 @@ commit e reutilizar `selectRetentionCandidates`, revalidando todos os gates.
 `createRetentionDryRun` abre READ ONLY / READ COMMITTED, obtém lock e só então lê
 dados. Tem deadline de transação 2 s, statement 500 ms, lock 100 ms, sem retry.
 Valida catálogo/guards de todos os objetos, inclusive controle/auditoria de pins,
-e versão/checksums das migrations. Não programar varredura recorrente em produção.
+e versão da política/migration23; registra checksums no hash sem compará-los aos
+arquivos locais. Não programar varredura recorrente em produção.
 
 Cada manifesto fixa formato, SHA do código, schema/hash, política/hash, objetos
 allowlist (1–4), cutoff UTC, geração, expiração (máximo 15 min), chave estável,
@@ -105,8 +106,10 @@ por catálogo, nunca por DELETE/TRUNCATE de teste em produção.
 
 O deploy padrão atualiza o núcleo; reconstruir/recriar também os profiles afetados
 `polymarket-recorder` e `polymarket-portfolio` com o SHA integrado. O portfolio
-anterior usa DELETE de exposição e é incompatível com0023: atualizar o profile
-imediatamente, antes de declarar conclusão. Conferir SHA embutido, logs dos ciclos,
+anterior usa DELETE de exposição e é incompatível com0023: suspender brevemente
+somente esse profile antes da aplicação, retomar com o código compatível após a
+migration e registrar a pausa. Recorder e demais escritores não precisam parar.
+Conferir SHA embutido, logs dos ciclos,
 persistência limitada e saúde. O rollback não deve reinstalar esse runner antigo
 nem retirar guard; corrigir para frente mantendo HOLD ou conservar o runner
 compatível. Se o deploy automático voltar ao código anterior após a migration,

@@ -83,7 +83,8 @@ interface CatalogTable {
 }
 
 // Catalog-only: no COUNT over live evidence and no relation-size/reltuples
-// estimates in the schema hash. ANALYZE cannot change a manifest's identity.
+// estimates in the schema hash. ANALYZE can change estimated counts in the full
+// manifest body, but cannot change schemaHash by itself.
 const CATALOG_SQL = `SELECT c.relname AS name,
   COALESCE((SELECT array_agg(a.attname::text ORDER BY k.ordinality)
     FROM pg_constraint p CROSS JOIN LATERAL unnest(p.conkey) WITH ORDINALITY k(attnum, ordinality)
