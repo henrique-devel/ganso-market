@@ -19,6 +19,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -591,18 +592,59 @@ def supervise_locked(docker: Docker, directory: Path, now: float) -> dict:
     return {"reason": reason, "action": evidence["action"]}
 
 
+def capacity_tick(project: Path, started: float, *, inhibited: bool = False) -> str:
+    """DATA-01 optional daily observer; never change a recovery result.
+
+    No extra PostgreSQL client except when an explicitly started daily series
+    is due. Leave at least 13s inside the existing 70s service budget; a long
+    supervisor round/refusal consumes the due sample with a static error without SQL.
+    """
+    helper = project / "deploy/capacity_series.py"
+    try:
+        if not helper.exists():
+            return "disabled"
+        info = helper.lstat()
+        if (
+            helper.resolve() != helper
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o022
+        ):
+            return "helper_unsafe"
+        argv = [sys.executable, "-I", str(helper), "--due"]
+        long_round = inhibited or time.monotonic() - started > 45
+        if long_round:
+            argv.append("--skip-probe")
+        code, data = command(argv, 1 if long_round else 12, limit=4096)
+        if code:
+            return "observer_failed"
+        value = json.loads(data)
+        reason = value.get("reason")
+        return (
+            reason
+            if reason in {"disabled", "locked", "captured", "not_due", "window_closed"}
+            else "observer_failed"
+        )
+    except Exception:
+        return "observer_failed"
+
+
 def main() -> int:
+    started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-dir", type=Path, default=Path("/opt/ganso-market"))
     parser.add_argument("--state-dir", type=Path, default=Path("/var/lib/ganso/recorder-watchdog"))
     parser.add_argument("--check-target", action="store_true")
     args = parser.parse_args()
+    valid_project = False
+    exit_code = 0
     try:
         # One canonical production state/lock location even for manual runs.
         # Tests exercise supervise() in isolated directories, not another daemon.
         if args.state_dir != Path("/var/lib/ganso/recorder-watchdog"):
             raise Refused("STATE_PATH_NOT_CANONICAL")
         docker = Docker(args.project_dir)
+        valid_project = args.project_dir == Path("/opt/ganso-market")
         if args.check_target:
             target = docker.target()
             if target["state"] != "running":
@@ -613,15 +655,17 @@ def main() -> int:
             result = {"reason": "target_verified", "sha": probe["sha"], "id": target["id"]}
         else:
             result = supervise(docker, args.state_dir)
-        print(json.dumps(result, sort_keys=True))
-        return 0
     except Refused as exc:
-        print(json.dumps({"reason": str(exc), "action": "inhibited"}))
-        return 1
+        result = {"reason": str(exc), "action": "inhibited"}
+        exit_code = 1
     except Exception:
         # No repr/traceback: subprocess errors can contain credentials/log text.
-        print('{"reason":"WATCHDOG_FAILED","action":"inhibited"}')
-        return 1
+        result = {"reason": "WATCHDOG_FAILED", "action": "inhibited"}
+        exit_code = 1
+    if valid_project and not args.check_target:
+        result["capacity"] = capacity_tick(args.project_dir, started, inhibited=exit_code != 0)
+    print(json.dumps(result, sort_keys=True))
+    return exit_code
 
 
 if __name__ == "__main__":

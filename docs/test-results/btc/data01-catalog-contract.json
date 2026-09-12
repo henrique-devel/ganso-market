@@ -1,0 +1,41 @@
+{
+  "utc": "2026-09-12T16:37:32.476083+00:00",
+  "purpose": "catalog SQL contract only; empty disposable cluster; no application dataset or write assay",
+  "result": "passed",
+  "observed": {
+    "utc": "2026-09-12T16:37:38.576931+00:00",
+    "data_directory": "/var/lib/postgresql/18/docker",
+    "system_identifier": "7684688864049889324",
+    "postmaster_start": "2026-09-12T16:37:36.251103+00:00",
+    "database": "ganso_market",
+    "database_bytes": 7845567,
+    "tablespaces": [
+      {
+        "oid": "1663",
+        "spcname": "pg_default",
+        "location": ""
+      },
+      {
+        "oid": "1664",
+        "spcname": "pg_global",
+        "location": ""
+      }
+    ],
+    "wal": {
+      "wal_bytes": "12055362",
+      "wal_records": 25630,
+      "stats_reset": "2026-09-12T16:37:34.664797+00:00"
+    },
+    "db_stats": {
+      "temp_bytes": 0,
+      "stats_reset": null
+    },
+    "budgets": {
+      "read_only": "on",
+      "statement_timeout": "1500ms",
+      "lock_timeout": "250ms"
+    }
+  },
+  "temporary_container_removed": true,
+  "python_storage_validation": "passed after explicit OID text/integer normalization"
+}
