@@ -1,0 +1,126 @@
+{
+  "backups": [
+    "20260909T184242Z.c9K8sa",
+    "20260912T012203Z.88fBdM",
+    "20260912T031455Z.PznJQ1",
+    "20260912T034942Z.XmBJ1w",
+    "20260912T084845Z.6486kQ"
+  ],
+  "ci_result": {
+    "Deploy production": "skipped",
+    "Verify Compose runtime": "success",
+    "Verify source": "success"
+  },
+  "deploy_enabled": {
+    "before": "true",
+    "during": "false",
+    "restoration_verified_before_utc": "2026-09-12T17:05:58.056478+00:00",
+    "restored": "true"
+  },
+  "deployment": "automatic deploy job suspended for this merge; manual installation of two host files from reviewed revision",
+  "first_sample_file": "data01-growth-first-sample.json",
+  "installation": {
+    "before_watchdog_sha256": "8b9233bedbf835de75ed7f7f59ff94aa6d5d998a97f2375b11c6266075029b4e",
+    "files": {
+      "capacity_series.py": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+      "recorder_watchdog.py": "2760313b958d1ba074da6456f3dc55fc60d40858f3f1baf5ae7d6f25b292c999"
+    },
+    "revision": "97c2787f3c4b81ed4ed4ad113459a123191ab1c1",
+    "scope": "two host files; no Docker, systemd, backup pruning or application deployment"
+  },
+  "limits": {
+    "comparable_daily_intervals": 0,
+    "feed_health_demonstrated": false,
+    "observed_samples": 1,
+    "seven_days_observed": false,
+    "sustained_growth_demonstrated": false
+  },
+  "main_checks_run": 34706830333,
+  "manual_capacity_sql_attempts_after_sample": 0,
+  "manual_supervisor_invocations": 0,
+  "postflight_utc": "2026-09-12T17:05:14.417351+00:00",
+  "pr_checks_run": 34706586883,
+  "preflight_utc": "2026-09-12T16:48:24.197719+00:00",
+  "preservation": {
+    "backups": {
+      "after_sha256": "91cec4b5a08e1187e44b733a424f84bd532a07d8cec16e57cca5d44e0c30ec01",
+      "before_sha256": "91cec4b5a08e1187e44b733a424f84bd532a07d8cec16e57cca5d44e0c30ec01",
+      "count": 5,
+      "equal": true
+    },
+    "containers": {
+      "after_sha256": "cf7d18273f385a89577e5213716803030fda5706c0386d76bab5d46a2fc4dcfb",
+      "before_sha256": "cf7d18273f385a89577e5213716803030fda5706c0386d76bab5d46a2fc4dcfb",
+      "count": 11,
+      "equal": true
+    },
+    "images": {
+      "after_sha256": "718f2bd89af0ca73f1c96caf3cd8b8b7c3b0b559b6a13cb6d64ecaa3f36324a6",
+      "before_sha256": "718f2bd89af0ca73f1c96caf3cd8b8b7c3b0b559b6a13cb6d64ecaa3f36324a6",
+      "count": 230,
+      "equal": true
+    },
+    "units": {
+      "after_sha256": "635970b3e6bc78d7da901f0314b9bd2ce33d6ad10f9c896ffcaaccf92edfb870",
+      "before_sha256": "635970b3e6bc78d7da901f0314b9bd2ce33d6ad10f9c896ffcaaccf92edfb870",
+      "count": 2,
+      "equal": true
+    }
+  },
+  "pull_request": 166,
+  "saved_watchdog_sha256": "8b9233bedbf835de75ed7f7f59ff94aa6d5d998a97f2375b11c6266075029b4e",
+  "scope": "DATA-01 finite host series installation and first sample; not seven days observed",
+  "series": {
+    "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+    "grace_seconds": 3600,
+    "last_slot_due_utc": "2026-09-19T17:03:34.182494+00:00",
+    "period_seconds": 86400,
+    "slots": 8,
+    "start_epoch": 1789232614.182494,
+    "start_utc": "2026-09-12T17:03:34.182494+00:00",
+    "version": 1,
+    "window_end_utc": "2026-09-19T18:03:34.182494+00:00"
+  },
+  "series_files": {
+    "sample-00.json": {
+      "bytes": 5160,
+      "mode": "0o600",
+      "sha256": "a0766e9afe0dbfaf61fb7c3cf20cab71be8c0c48d665a88df9f441e9e608bc9b"
+    },
+    "series.json": {
+      "bytes": 357,
+      "mode": "0o600",
+      "sha256": "7b5259c744124afdbe545dd9a177b7510f809cfb93ffaa4ce9e96911df12efb9"
+    },
+    "series.lock": {
+      "bytes": 0,
+      "mode": "0o600",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "service": "TimeoutStartUSec=1min 10s\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=100ms\nMemoryMax=134217728\nActiveState=inactive",
+  "source_revision": "97c2787f3c4b81ed4ed4ad113459a123191ab1c1",
+  "timer": "Unit=ganso-recorder-watchdog.service\nActiveState=active",
+  "unit_hashes": {
+    "/etc/systemd/system/ganso-recorder-watchdog.service": "3616791f89a61738cecd705db8642f8ebaf88a24d36fee0ab6a0363b1162e151",
+    "/etc/systemd/system/ganso-recorder-watchdog.timer": "c683dacbda616272b45464e1b5d13634f30e942be0141386771f924474996931"
+  },
+  "version": 1,
+  "watchdog_events": [
+    {
+      "action": "observe",
+      "capacity": "captured",
+      "reason": "persistence_stale"
+    },
+    {
+      "action": "observe",
+      "capacity": "not_due",
+      "reason": "persistence_stale"
+    },
+    {
+      "action": "observe",
+      "capacity": "not_due",
+      "reason": "persistence_stale"
+    }
+  ]
+}
