@@ -19,7 +19,11 @@ não implementou código, fez deploy, limpou produção ou habilitou dinheiro re
 
 - Ao receber um prompt como pedido de execução, trabalhe no bloco selecionado.
   Seu `draft` documental não exige uma segunda confirmação para a tarefa solicitada.
-- `code`: implementação/testes locais. `read-only`: inspeção/medição e evidência,
+- `code`: implementação/testes locais, seguidos de PR, merge e implantação aplicável
+  sob a [autorização contínua](../../../docs/ops/DEVELOPMENT_AUTHORIZATION.md), após
+  os checks obrigatórios e sem nova confirmação por etapa. Um pedido mais restrito
+  prevalece; a autorização não seleciona o próximo bloco.
+- `read-only`: inspeção/medição e evidência,
   permitindo escrever o relatório local e rodar testes em banco descartável.
   `operation-plan`: produzir plano executável e verificável; atuar em produção
   somente se a ação concreta estiver coberta por autorização vigente.

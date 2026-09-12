@@ -51,8 +51,12 @@ Para um Ubuntu dedicado reconstruído, sem TLS ou serviços extras, consulte
 reduzido é `sudo ./deploy/install-docker-ubuntu.sh` e `make server-up`.
 
 O workflow [CI/CD](.github/workflows/ci-cd.yml) executa a verificação completa
-e o smoke do Compose em pull requests e pushes. Todo push em `main` atualiza o
-servidor automaticamente e valida a saúde do gateway do lado do servidor.
+e o smoke do Compose em pull requests e pushes. Após os checks em `main`, mudanças
+de runtime seguem para deploy e verificação de saúde no servidor; mudanças somente
+de texto podem dispensar deploy conforme a RFC-020.
+
+O proprietário concedeu [autorização contínua para código local → PR → merge → produção](docs/ops/DEVELOPMENT_AUTHORIZATION.md)
+nas tarefas solicitadas, respeitando os gates e o escopo de cada entrega.
 
 ## Decisões já fechadas
 
@@ -77,6 +81,7 @@ servidor automaticamente e valida a saúde do gateway do lado do servidor.
 - [Estudo: direção e roadmap dos bots](docs/research/direcao-e-roadmap-bots.md)
 - [Índice e ordem das RFCs](docs/RFC_INDEX.md)
 - [Prompt mestre da IA de desenvolvimento](prompts/AI_DEVELOPER_SYSTEM_PROMPT.md)
+- [Autorização contínua de desenvolvimento e entrega](docs/ops/DEVELOPMENT_AUTHORIZATION.md)
 - [Registro do servidor e acesso SSH](docs/ops/SERVER_ACCESS.md)
 - [Arquitetura da fundação](docs/architecture/foundation.md)
 - [Runbook de desenvolvimento](docs/runbooks/development.md)
