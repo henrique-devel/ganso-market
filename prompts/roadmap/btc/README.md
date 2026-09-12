@@ -94,7 +94,9 @@ Alvo por sessão: até 1.500 palavras de contexto documental inicial; um resulta
 até 6 arquivos de lógica e uma migration. Dividir se o contrato mínimo exigir mais,
 sem ativar stub. Não executar o próximo prompt automaticamente.
 
-`code` implementa/testa localmente; `read-only` inspeciona e escreve evidência local;
+`code` implementa/testa e conclui PR, merge e implantação aplicável conforme a
+[autorização contínua](../../../docs/ops/DEVELOPMENT_AUTHORIZATION.md), respeitando
+os checks e eventuais limites do pedido. `read-only` inspeciona e escreve evidência local;
 `operation-plan` prepara operação concreta e só aplica quando coberta pela autorização
 vigente. Plano pronto não significa aplicado/observado, limpeza feita ou soak completo.
 A criação deste pacote não autoriza execução real ou DELETE em produção.

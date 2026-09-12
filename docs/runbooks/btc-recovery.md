@@ -5,7 +5,8 @@ Plano reconciliado com os artefatos locais OPS-01 a OPS-07 em **2026-09-12**;
 o [recibo original OPS-04](../roadmap/receipts/OPS-04.md) preserva a avaliação anterior.
 **Plano pronto; não aplicado; nenhuma janela de produção observada; soak pendente.**
 Este documento prepara a operação da [RFC-021](../rfcs/RFC-021-silencio-do-feed-e-kill-switch.md).
-Executar etapas de escrita somente dentro da autorização operacional concreta vigente.
+Executar etapas de escrita dentro da [autorização contínua de entrega](../ops/DEVELOPMENT_AUTHORIZATION.md)
+e do escopo operacional concreto da tarefa; não pedir novamente autorização para etapas cobertas.
 D3 já aprovada em 05/09: isso permite seu código condicionado, não um rearme forçado.
 Não houve SSH nesta tarefa. Não habilitar live/signer nem apagar dados/gaps/ledger.
 

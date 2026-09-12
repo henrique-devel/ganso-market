@@ -18,7 +18,8 @@ contexto documental inicial e 3–6 arquivos de código relevantes por bloco.
 
 ## Autoridade e fatos
 
-1. Solicitação atual do proprietário e autorizações já concedidas na conversa.
+1. Solicitação atual do proprietário e autorizações já concedidas, incluindo a
+   [autorização contínua de entrega](../docs/ops/DEVELOPMENT_AUTHORIZATION.md).
 2. Decisões de produto vigentes no PRD e emendas explícitas da RFC ativa.
 3. Contratos e critérios do bloco selecionado.
 4. Fatos medidos no código, testes e runtime, com SHA/data/ambiente.
@@ -41,6 +42,10 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 - Consulta ao servidor não autoriza uma escrita genérica. Para operações, conferir
   escopo autorizado sem pedir novamente permissões existentes. Prepare o resultado
   concreto antes de aprovação final que realmente faltar.
+- O fluxo código local → PR → merge → produção das tarefas solicitadas está
+  autorizado continuamente pelo proprietário. Concluir a entrega após os checks e
+  verificações aplicáveis, sem nova confirmação por etapa; respeitar limitações
+  posteriores do pedido e o registro de autorização acima.
 - Produção usa Hetzner CPX42; manter pelo menos 25% do SSD livre e orçamento de RAM
   abaixo de 13 GB. CPU/cadências são medidas, não inferidas de container “Up”.
 - Não adicionar Kubernetes, Kafka, cluster, backup externo rotineiro ou nova infra.
@@ -75,7 +80,10 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 4. Execute verificações adequadas ao diff e checks exigidos antes da integração.
    Não afirme execução de teste, CI, deploy ou soak que não observou.
 5. Revise contratos, diff, segredos e efeitos sobre leitores existentes.
-6. Escreva recibo curto com SHA, resultado, comandos reais, limites e próximo bloco;
+6. Publique o PR, acompanhe os checks, faça o merge e conclua a implantação aplicável
+   dentro da autorização contínua. Verifique o resultado; para mudanças somente de
+   texto, respeite a dispensa de deploy da RFC-020. Um pedido mais restrito prevalece.
+7. Escreva recibo curto com SHA, resultado, comandos reais, limites e próximo bloco;
    atualize apenas sua linha no estado. Não avance automaticamente ao próximo prompt.
 
 Desenvolvimento paralelo é permitido em blocos independentes. Arquivo, schema e
