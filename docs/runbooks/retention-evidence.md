@@ -116,10 +116,14 @@ compatível. Se o deploy automático voltar ao código anterior após a migratio
 tratar a compatibilidade do portfolio como gate pendente até recuperação.
 
 Aplicação técnica não encerra soak/capacidade. HOLD pode aumentar ocupação; SSD
-deve manter piso25%, sem alterar RAM/CPU/caps/paper/perímetro. Decisão posterior:
-manter HOLD (recomendação enquanto fecho desconhecido; custo externo0, cresce
-armazenamento) ou aprovar horizontes/pins exatos com âncoras/continuidade e provas
-de preservação (trabalho adicional, sem custo externo obrigatório). Não liberar
+deve manter piso25%, sem alterar RAM/CPU/caps/paper/perímetro. Conforme a
+[autorização vigente](../ops/DEVELOPMENT_AUTHORIZATION.md), a decisão aprovada é
+**manter HOLD integral**. Novos dados e experimentos ficam condicionados a
+orçamento demonstrável e ao fecho de evidência com proteção e preservação.
+Esta atualização é documental: não implementa admissão ou limpeza, nem constitui
+nova certificação de produção. A implementação de arquivos/admissão será tratada
+no DATA-05. Horizontes/pins exatos continuam dependentes de âncoras/continuidade e
+provas de preservação, sem custo externo adicional. Não liberar
 raw só porque há agregado/modelo. DATA-03 pode preparar preservação usando este
 contrato; poda continua proibida. Gates DB-02/03, Q4 e headroom DB-04 seguem
 pendentes; ensaio DB-03 rejeitado não foi executado nem reencaminhado.

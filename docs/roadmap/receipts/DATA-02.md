@@ -19,7 +19,7 @@ Revisão automática: recusa inicial do artefato local resolvida com isolamento/
 Produção:checksum0023fcc5b882… confirmado;146/146guards habilitados +ledger/strategy/pins; recorder/portfolio SHA8132cd3; health local passou.
 Observação:3panel/5exit cycles; inserts avançaram e deletes não nos4contadores;16gapsRTDS/8divergências observados; pausa ocorreu apósdeploy, ver horários/limite no relatório.
 Manifesto produção08:51:26.576Z:[JSON](../../test-results/btc/DATA-02-manifest.json), hashadbc6738…; orders/deltasHOLD0inspecionadas/0candidatos, expira09:06:26.576Z; sem poda/export/restauração.
-Decisão posterior: manterHOLD(recomendado enquanto desconhecido,custo externo0) ou definir horizontes/pins com prova de preservação.
+Decisão aprovada: manter HOLD integral; novos dados/experimentos exigem orçamento demonstrável e fecho protegido/preservado; delta documental, sem nova admissão/limpeza/certificação produtiva; arquivos/admissão serão DATA-05.
 Herdados: DB-02/03,Q4 e headroom DB-04 pendentes; ensaioDB-03 rejeitado não executado/reencaminhado; caps/paper/perímetro mantidos.
 Preservação: Git externo, quatro artefatosDB-01/BTC-04 e linhas locais alheias intocados; entrega em worktree do Git interno.
 Próximo: DATA-03 pode começar preparação com contrato/proteções aplicados; horizontes/pins finos/âncoras e gates herdados pendentes; nenhum outro bloco iniciado.
