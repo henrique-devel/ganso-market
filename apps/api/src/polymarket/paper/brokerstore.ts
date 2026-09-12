@@ -34,6 +34,7 @@ import {
   type LedgerEventType,
 } from "./ledger.js";
 import { validateOrder, type OrderDraft } from "./validator.js";
+import { loadOpenOwnerTokens } from "./ownership.js";
 import type { ResolutionAction } from "../resolution/types.js";
 import { errorFields } from "../../errors.js";
 
@@ -2732,16 +2733,16 @@ export async function settlementTick(
     return;
   }
 
-  const holdings = await pool.query(
-    "SELECT p.token_id, p.condition_id FROM paper_positions p " +
-      "WHERE p.shares::numeric <> 0 AND p.condition_id IS NOT NULL",
-  );
-  for (const row of holdings.rows) {
-    const tokenId = asString(row["token_id"]);
-    const conditionId = asString(row["condition_id"]);
-    if (tokenId === null || conditionId === null) {
+  // One global settlement event remains compatible with ledger-v1. Discovery
+  // uses owner balances so a long and a short cannot hide each other at net 0.
+  const holdings = await loadOpenOwnerTokens(pool);
+  const seenTokens = new Set<string>();
+  for (const holding of holdings) {
+    const { tokenId, conditionId } = holding;
+    if (conditionId === null || seenTokens.has(tokenId)) {
       continue;
     }
+    seenTokens.add(tokenId);
     try {
       const resolutionError = await pool.transaction(
         async (tx: SqlExecutor): Promise<string | null> => {
@@ -2803,8 +2804,8 @@ export async function settlementTick(
 
           // The advisory key protects fills and settlement. Re-read the
           // canonical ledger under it: paper_positions is discovery/cache only.
-          const positionShares = await loadPositionShares(tx, tokenId);
-          if (positionShares === 0n) {
+          const openOwners = await loadOpenOwnerTokens(tx, tokenId);
+          if (openOwners.length === 0) {
             return null;
           }
           const payload =

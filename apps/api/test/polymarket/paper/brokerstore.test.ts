@@ -20,6 +20,11 @@ import {
   type BrokerDeps,
 } from "../../../src/polymarket/paper/brokerstore.js";
 
+import {
+  replayLedger,
+  type LedgerEventRecord,
+} from "../../../src/polymarket/paper/ledger.js";
+
 type Row = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
@@ -556,14 +561,34 @@ function worldPool(world: World): PaperPool {
           }
           return [];
         }
-        if (
-          text.startsWith(
-            "SELECT p.token_id, p.condition_id FROM paper_positions p",
-          )
-        ) {
-          return world.positions.filter(
-            (p) => num(p["shares"]) !== 0 && p["condition_id"] !== null,
-          );
+        if (text.includes("FROM paper_open_owner_tokens()")) {
+          if (world.ledgerReadError !== null) throw world.ledgerReadError;
+          const events = world.ledger.map((row): LedgerEventRecord => ({
+            idempotencyKey: row["idempotency_key"] as string,
+            eventType: row["event_type"] as LedgerEventRecord["eventType"],
+            orderId: row["order_id"] as string | null,
+            tokenId: row["token_id"] as string | null,
+            conditionId: row["condition_id"] as string | null,
+            payload: row["payload_json"] as Record<string, unknown>,
+            eventTs: row["event_ts"] as Date,
+          }));
+          // Existing unit scenarios have one owner; real SQL isolation and
+          // opposing owners are tested by ownership.pg.test.ts.
+          return [...replayLedger(events).positions.entries()]
+            .filter(
+              ([token, position]) =>
+                num(position.shares) !== 0 &&
+                (params[0] === null || token === params[0]),
+            )
+            .map(([token, position]) => ({
+              account_id: "paper",
+              strategy_id: "main",
+              token_id: token,
+              condition_id:
+                events.find((event) => event.tokenId === token)?.conditionId ??
+                null,
+              shares: position.shares,
+            }));
         }
         if (
           text.startsWith(
@@ -1205,9 +1230,7 @@ describe("acceptance", () => {
       query.startsWith("LOCK TABLE polymarket_resolution_input_changes"),
     );
     const settlementStart = world.queries.findIndex((query) =>
-      query.startsWith(
-        "SELECT p.token_id, p.condition_id FROM paper_positions p",
-      ),
+      query.includes("FROM paper_open_owner_tokens()"),
     );
     const terminalRead = world.queries.findIndex(
       (query, index) =>
@@ -2930,8 +2953,7 @@ describe("settlement (C5)", () => {
     );
     const ledgerRead = world.queries.findIndex(
       (query, index) =>
-        index > advisory &&
-        query.includes("FROM paper_ledger_events WHERE token_id = $1"),
+        index > advisory && query.includes("FROM paper_open_owner_tokens()"),
     );
     const resolutionAppend = world.queries.findIndex(
       (query, index) =>
