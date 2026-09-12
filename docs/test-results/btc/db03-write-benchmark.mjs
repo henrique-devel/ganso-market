@@ -3,6 +3,7 @@
 // node docs/test-results/btc/db03-write-benchmark.mjs --execute > result.json
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
@@ -17,6 +18,36 @@ const INDEX = "polymarket_rtds_prices_asof_idx";
 const BASE_MS = Date.parse("2026-09-12T02:30:00Z");
 const TABLES = ["polymarket_rtds_prices", "polymarket_rtds_1m"];
 const VARIANTS = ["baseline", "candidate"];
+
+// Keep the deadline alive through cleanup, including a stalled client.end().
+// The synchronous report precedes exit: no pg internals or extra SQL are needed.
+export function installDeadlineWatchdog({report, ownSchemas, createdSchemas, elapsedMs,
+  schedule = setTimeout, cancel = clearTimeout, nowIso = () => new Date().toISOString(),
+  write = (text) => writeSync(1, text), terminate = (code) => process.exit(code)}) {
+  let active = true;
+  const timer = schedule(() => {
+    if (!active) return;
+    active = false;
+    report.completed = false;
+    report.promotionAllowed = false;
+    report.finalBudgetExceeded = true;
+    report.finishedAt = nowIso();
+    report.wallMs = elapsedMs();
+    report.deadlineError = {name: "Error", code: "DB03_GLOBAL_BUDGET_EXCEEDED",
+      message: "Hard global deadline 600s reached including cleanup"};
+    // Retain an earlier SQL/integrity error as well as the deadline failure.
+    report.error ??= report.deadlineError;
+    report.cleanedSchemas ??= [];
+    report.cleanupErrors ??= [];
+    report.cleanupErrors.push({operation: "hard deadline cleanup incomplete",
+      code: report.deadlineError.code, createdSchemas: [...createdSchemas],
+      possibleRemainingOwnSchemas: ownSchemas.filter((schema) => !report.cleanedSchemas.includes(schema)),
+      message: "Rollback, own-schema cleanup and connection closure were not all verified; inspect/remove the verified disposable container"});
+    try { write(JSON.stringify(report) + "\n"); }
+    finally { terminate(1); }
+  }, Math.max(0, 600000 - elapsedMs()));
+  return () => { active = false; cancel(timer); };
+}
 
 export function validateTarget(rawUrl) {
   assert.ok(typeof rawUrl === "string", "Disposable database URL required");
@@ -146,6 +177,9 @@ async function run() {
       resourceLimits: "DB-04 must capture dedicated Docker 1 CPU/1 GiB/max_connections 10 identity and cgroup before/after; runner does not infer host exclusivity",
       limitations: "Synthetic fixture, single connection, no as-of read measurement, production query, collector cadence, concurrency, retention throughput, capacity or soak evidence"},
     setup: {}, scenarios: [], after: {}, cleanupErrors: []};
+  const stopDeadlineWatchdog = installDeadlineWatchdog({report,
+    ownSchemas: Object.values(schemas), createdSchemas: created,
+    elapsedMs: () => elapsed(started) / 1e6});
   function budget(scenarioStart = started) {
     assert.ok(elapsed(started) <= 600e9, "Global budget 600s exceeded");
     assert.ok(elapsed(scenarioStart) <= 120e9, "Scenario budget 120s exceeded");
@@ -426,6 +460,7 @@ async function run() {
         message: "Global budget 600s exceeded including cleanup"};
       report.completed = false;
     }
+    stopDeadlineWatchdog();
     process.exitCode = exitStatus(report);
     process.stdout.write(JSON.stringify(report) + "\n");
   }
