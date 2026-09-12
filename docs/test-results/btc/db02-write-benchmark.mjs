@@ -94,6 +94,7 @@ async function run() {
   const source = await read("apps/api/src/polymarket/trades.ts");
   const indexSql = await read("docs/ops/sql/db02-trades-last-recorded-index.sql");
   const protocol = await read("docs/test-results/btc/DB-02-write-recheck.md");
+  const harnessSha256 = hash(await readFile(new URL(import.meta.url), "utf8"));
   const sql = { data_api: extract(source, "async function insertTrade"),
     ws: extract(source, "export async function handleLastTrade") };
   assert.match(sql.ws, /'ws',NULL/);
@@ -113,7 +114,7 @@ async function run() {
   const start = tick();
   let connected = false;
   const report = { block: "DB-02", protocol: "write-recheck-v1", startedAt: new Date().toISOString(),
-    protocolSha256: hash(protocol), sourceSha256: hash(source), indexSha256: hash(indexSql),
+    protocolSha256: hash(protocol), harnessSha256, sourceSha256: hash(source), indexSha256: hash(indexSql),
     migrations: migrations.map(({text: _text, ...meta}) => meta),
     method: { connectionCount: 1, statementTimeoutMs: 5000, lockTimeoutMs: 500,
       scenarioBudgetSeconds: 120, globalBudgetSeconds: 600, rounds: 4, samplesPerRound: ROUND,
@@ -281,6 +282,7 @@ async function run() {
     assert.equal(equality, true);
     report.persistedRowsEqual = equality;
     report.allGatesPassed = report.scenarios.every((scenario) => scenario.passed);
+    assert.ok(elapsed(start) <= 600e9, "Global budget 600s exceeded after integrity verification");
     report.completed = true;
   } catch (error) {
     report.error = { name: error.name, code: error.code ?? null, message: error.message };
