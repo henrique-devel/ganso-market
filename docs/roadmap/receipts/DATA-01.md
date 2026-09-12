@@ -1,6 +1,6 @@
 Bloco: DATA-01 | RFC: RFC-041 | Retomada: 2026-09-12 UTC.
 Estado: code-verified da série diária; instalação e primeira captura ainda pendentes nesta revisão.
-Base: c8b73677f863cb491c902e606c2dcc0ce2aaf5bf; branch codex/data-01-growth-series; entrega registrada no PR desta revisão.
+Base: c8b73677f863cb491c902e606c2dcc0ce2aaf5bf; branch codex/data-01-growth-series; código89c70da; [PR #166](https://github.com/henrique-devel/ganso-market/pull/166).
 Histórico preservado: [inventário PR #160](../../test-results/btc/DATA-01.md), medido04:36–04:39 UTC; não representa o instante atual.
 Complemento: [série de capacidade](../../test-results/btc/DATA-01-growth-series.md), contrato SQL e verificações operacionais.
 Implementação: capacity_series.py, hook opcional no watchdog existente e instalador host com hashes/backup.
