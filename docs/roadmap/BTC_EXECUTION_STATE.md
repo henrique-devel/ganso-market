@@ -33,7 +33,7 @@ Não ampliar o HANDOFF histórico. Nenhum bloco inicia automaticamente.
 | [DATA-03](../../prompts/roadmap/btc/data-03-export-e-restore-isolado.md) | code-verified | [Recibo](receipts/DATA-03.md): retomada autorizada PR163 sobre973a7cc;codigo056b1e3 identico,2338source atuais/211skipped e43PG historicos;fixtures/certificados expirados preservados;NOVA recusa de push pela revisao automatica,sem PR/CI remoto/merge/deploy;DEPLOY_ENABLED true intacto;HOLD mantido;DATA-04 tem contrato local,publicacao pendente |
 | [DATA-04](../../prompts/roadmap/btc/data-04-poda-idempotente-limitada.md) | pending | Ainda não executado |
 | [DATA-05](../../prompts/roadmap/btc/data-05-politica-e-manutencao.md) | pending | Ainda não executado |
-| [FIN-01](../../prompts/roadmap/btc/fin-01-contrato-financeiro.md) | pending | Ainda não executado |
+| [FIN-01](../../prompts/roadmap/btc/fin-01-contrato-financeiro.md) | code-verified | [Recibo](receipts/FIN-01.md): especificação financial-v2 e seis fixtures manuais conferidas; dono/legado/precisão/UTC/reservas e esquema aditivo proposto; sem runtime/migration/SQL/aceite produtivo; FIN-02 elegível |
 | [FIN-02](../../prompts/roadmap/btc/fin-02-atribuicao-do-ledger.md) | pending | Ainda não executado |
 | [FIN-03](../../prompts/roadmap/btc/fin-03-pnl-e-equity.md) | pending | Ainda não executado |
 | [FIN-04](../../prompts/roadmap/btc/fin-04-exposicao-por-payoff.md) | pending | Ainda não executado |
