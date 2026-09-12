@@ -76,6 +76,15 @@ export interface InstantGapInput {
   readonly at: Date;
 }
 
+export interface SilenceGapInput {
+  /** Stable UUID for one episode, retained across persistence retries. */
+  readonly episodeId: string;
+  readonly tokenId?: string;
+  readonly start: Date;
+  readonly end: Date | null;
+  readonly details: Record<string, unknown>;
+}
+
 export interface GapWriter {
   /** Insert an open gap ([start, null)); returns the new gap_id. */
   openGap(input: OpenGapInput): Promise<number>;
@@ -83,10 +92,46 @@ export interface GapWriter {
   closeGap(gapId: number, end: Date): Promise<void>;
   /** Record a point-in-time gap event (start = end); returns the gap_id. */
   recordInstantGap(input: InstantGapInput): Promise<number>;
+  /** Persist the latest silence episode snapshot, including a close that
+   * arrived before the initial INSERT completed. Replays cannot reopen it. */
+  saveSilenceGap(input: SilenceGapInput): Promise<void>;
+  /** Bounded recovery of CLOB episodes opened before this recorder started. */
+  loadOpenSilenceGaps(before: Date, limit: number): Promise<SilenceGapInput[]>;
 }
 
 export function createGapWriter(pool: QueryPool): GapWriter {
   return {
+    async loadOpenSilenceGaps(before, limit): Promise<SilenceGapInput[]> {
+      const result = await pool.query<{
+        token_id: string | null;
+        gap_start: Date | string;
+        details_json: Record<string, unknown>;
+      }>(
+        `SELECT token_id, gap_start, details_json FROM polymarket_data_gaps
+         WHERE source = 'clob_ws' AND cause = 'stream_silent' AND gap_end IS NULL
+           AND gap_start <= $1 AND details_json ? 'episode_id'
+         ORDER BY gap_start, gap_id LIMIT $2`,
+        [before, limit],
+      );
+      return result.rows.map((row) => {
+        const episodeId = row.details_json?.episode_id;
+        const start = new Date(row.gap_start);
+        if (
+          typeof episodeId !== "string" ||
+          episodeId.length === 0 ||
+          !Number.isFinite(start.getTime()) ||
+          (row.token_id !== null && typeof row.token_id !== "string")
+        )
+          throw new Error("WS_SILENCE_RESTORE_INVALID_EPISODE");
+        return {
+          episodeId,
+          ...(row.token_id === null ? {} : { tokenId: row.token_id }),
+          start,
+          end: null,
+          details: row.details_json,
+        };
+      });
+    },
     async openGap(input: OpenGapInput): Promise<number> {
       const result = await pool.query<{ gap_id: number | string }>(
         `INSERT INTO polymarket_data_gaps
@@ -124,6 +169,25 @@ export function createGapWriter(pool: QueryPool): GapWriter {
         ],
       );
       return Number(result.rows[0]?.gap_id ?? 0);
+    },
+    async saveSilenceGap(input: SilenceGapInput): Promise<void> {
+      await pool.query(
+        `INSERT INTO polymarket_data_gaps
+           (source, token_id, gap_start, gap_end, cause, details_json)
+         VALUES ('clob_ws', $1, $2, $3, 'stream_silent', $4::jsonb)
+         ON CONFLICT ((details_json->>'episode_id'))
+           WHERE source = 'clob_ws' AND cause = 'stream_silent'
+             AND details_json ? 'episode_id'
+         DO UPDATE SET
+           gap_end = COALESCE(polymarket_data_gaps.gap_end, EXCLUDED.gap_end),
+           details_json = EXCLUDED.details_json`,
+        [
+          input.tokenId ?? null,
+          input.start,
+          input.end,
+          JSON.stringify({ ...input.details, episode_id: input.episodeId }),
+        ],
+      );
     },
   };
 }

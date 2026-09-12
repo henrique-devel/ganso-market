@@ -628,6 +628,172 @@ describe("uma status poller records the outcome, not only the status", () => {
 });
 
 describe("resolution follow-up after a market leaves the universe", () => {
+  it("persists closure even when the hydrated UMA status has not changed", async () => {
+    const { calls, executor } = createFakeExecutor((text) => {
+      if (text.includes("WITH membership")) {
+        return { rows: [{ condition_id: "0xgone" }] };
+      }
+      if (text.includes("SELECT DISTINCT ON")) {
+        return {
+          rows: [
+            {
+              condition_id: "0xgone",
+              event_type: "proposed",
+              payload_json: { to: "proposed" },
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    const now = Date.parse("2026-09-11T12:00:00Z");
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      clock: () => now,
+      fetcher: (url) =>
+        Promise.resolve(
+          jsonResponse(
+            url.includes("closed=true")
+              ? [
+                  {
+                    conditionId: "0xgone",
+                    umaResolutionStatus: "proposed",
+                    closed: true,
+                  },
+                ]
+              : [],
+          ),
+        ),
+    });
+
+    await poller.pollPendingOnce();
+
+    const update = calls.find((call) =>
+      call.text.includes("UPDATE polymarket_markets"),
+    );
+    expect(update?.params).toEqual(["0xgone", new Date(now)]);
+    expect(
+      calls.filter((call) =>
+        call.text.includes("INSERT INTO polymarket_resolution_events"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("requires an explicit boolean true even in the closed=true response", async () => {
+    const { calls, executor } = createFakeExecutor((text) =>
+      text.includes("WITH membership")
+        ? { rows: [{ condition_id: "0xgone" }] }
+        : undefined,
+    );
+    const observations: unknown[] = [false, undefined, null, "true", true];
+    let observed: unknown;
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      clock: () => 0,
+      fetcher: (url) =>
+        Promise.resolve(
+          jsonResponse(
+            url.includes("closed=true")
+              ? [{ conditionId: "0xgone", closed: observed }]
+              : [],
+          ),
+        ),
+    });
+    for (observed of observations) {
+      await poller.pollPendingOnce();
+    }
+
+    expect(
+      calls.filter((call) => call.text.includes("UPDATE polymarket_markets")),
+    ).toHaveLength(1);
+    const events = calls.filter((call) =>
+      call.text.includes("INSERT INTO polymarket_resolution_events"),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.params[1]).toBe("closed");
+    expect(JSON.parse(String(events[0]?.params[2]))).toMatchObject({
+      to: "closed",
+      raw: {
+        closed: true,
+        resolved: false,
+        outcomePrices: null,
+        outcomes: null,
+      },
+    });
+  });
+
+  it("logs a closure write failure, keeps its event retryable, and continues other markets", async () => {
+    let fail = true;
+    const { calls, executor } = createFakeExecutor((text, params) => {
+      if (text.includes("WITH membership")) {
+        return {
+          rows: [{ condition_id: "0xgone" }, { condition_id: "0xother" }],
+        };
+      }
+      if (
+        text.includes("UPDATE polymarket_markets") &&
+        params[0] === "0xgone" &&
+        fail
+      ) {
+        throw new Error("closure update unavailable");
+      }
+      return undefined;
+    });
+    const poller = createUmaStatusPoller({
+      pool: executor,
+      clock: () => 0,
+      fetcher: (url) =>
+        Promise.resolve(
+          jsonResponse(
+            url.includes("closed=true")
+              ? ["0xgone", "0xother"].map((conditionId) => ({
+                  conditionId,
+                  closed: true,
+                  umaResolutionStatus: "resolved",
+                  outcomePrices: ["1", "0"],
+                }))
+              : [
+                  {
+                    // The open response must not commit this terminal event
+                    // before persistence of the later closed observation.
+                    conditionId: "0xgone",
+                    closed: false,
+                    umaResolutionStatus: "resolved",
+                    outcomePrices: ["1", "0"],
+                  },
+                ],
+          ),
+        ),
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      await expect(poller.pollPendingOnce()).resolves.toBeUndefined();
+      const eventIds = () =>
+        calls
+          .filter((call) =>
+            call.text.includes("INSERT INTO polymarket_resolution_events"),
+          )
+          .map((call) => call.params[0]);
+      expect(eventIds()).toEqual(["0xother"]);
+      expect(
+        stderr.mock.calls.some(([line]) => {
+          const log = JSON.parse(String(line)) as Record<string, unknown>;
+          return (
+            log["reason_code"] === "UMA_CLOSED_PERSIST_FAILED" &&
+            log["condition_id"] === "0xgone"
+          );
+        }),
+      ).toBe(true);
+
+      fail = false;
+      await poller.pollPendingOnce();
+      await poller.pollPendingOnce();
+      expect(eventIds()).toEqual(["0xother", "0xgone"]);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it("asks Gamma with closed=true, without which a resolved market is invisible", async () => {
     // Verified against the live API: /markets defaults to closed=false, so the
     // same condition_id returns 0 results without the filter and the resolved

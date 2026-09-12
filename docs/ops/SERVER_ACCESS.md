@@ -3,7 +3,16 @@
 Este arquivo registra somente metadados operacionais. Senha, chave privada SSH,
 seed, private key da wallet e tokens de provedor não pertencem ao repositório.
 
-## Estado atual verificado após o rebuild
+## Identidade SSH reconciliada em 12/09/2026 UTC
+
+O proprietário executou no console web da Hetzner do servidor `178.105.65.251`
+o comando `ssh-keygen -E sha256 -lf /etc/ssh/ssh_host_ed25519_key.pub` e informou:
+`256 SHA256:u6gqFKW4wplj8HZSAI6UjF1Bt00FRNf1unAoWOVEO2k root@ubuntu-16gb-fsn1-2-bot (ED25519)`.
+O fingerprint corresponde à chave obtida pela rede e à entrada local de known_hosts.
+Esta confirmação independente supersede somente a host key da tabela histórica
+abaixo e resolve a divergência registrada em OPS-01. Usar `StrictHostKeyChecking=yes`.
+
+## Estado histórico verificado após o rebuild
 
 | Campo                      | Valor                                                           |
 | -------------------------- | --------------------------------------------------------------- |

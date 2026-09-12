@@ -21,6 +21,7 @@ const frames = JSON.parse(
 class FakeSocket implements MarketSocket {
   public readonly sent: string[] = [];
   public closedByClient = false;
+  public closeMode: "callback" | "silent" | "throw" = "callback";
   #openHandler: (() => void) | null = null;
   #messageHandler: ((raw: string) => void) | null = null;
   #closeHandler: (() => void) | null = null;
@@ -43,7 +44,12 @@ class FakeSocket implements MarketSocket {
 
   public close(): void {
     this.closedByClient = true;
-    this.#closeHandler?.();
+    if (this.closeMode === "throw") {
+      throw new Error("transport close failed");
+    }
+    if (this.closeMode === "callback") {
+      this.#closeHandler?.();
+    }
   }
 
   public emitOpen(): void {
@@ -62,6 +68,7 @@ class FakeSocket implements MarketSocket {
 interface Harness {
   readonly sockets: FakeSocket[];
   readonly received: string[];
+  readonly observations: { raw: string; firstCopy: boolean }[];
   readonly bothDown: number[];
   readonly dual: DualMarketSocket;
   now: number;
@@ -74,6 +81,7 @@ function makeHarness(options?: {
 }): Harness {
   const sockets: FakeSocket[] = [];
   const received: string[] = [];
+  const observations: { raw: string; firstCopy: boolean }[] = [];
   const bothDown: number[] = [];
   const state = { now: 0 };
   const dual = createDualMarketSocket({
@@ -85,6 +93,9 @@ function makeHarness(options?: {
     tokenIds: options?.tokenIds ?? ["token-a", "token-b"],
     onMessage: (raw) => {
       received.push(raw);
+    },
+    onObservation: (raw, firstCopy) => {
+      observations.push({ raw, firstCopy });
     },
     onBothDown: (info) => {
       bothDown.push(info.downSince);
@@ -100,6 +111,7 @@ function makeHarness(options?: {
   return {
     sockets,
     received,
+    observations,
     bothDown,
     dual,
     get now(): number {
@@ -279,6 +291,139 @@ describe("dual market socket: reconnection and gap signalling", () => {
     vi.advanceTimersByTime(120_000);
     expect(h.sockets).toHaveLength(2);
     expect(h.dual.stats().openConnections).toBe(0);
+  });
+});
+
+describe("OPS-02 — silent feed recovery", () => {
+  it("observes duplicates on open sockets without forwarding or counting keepalives", () => {
+    const h = makeHarness();
+    h.sockets[0]?.emitMessage(frames.book); // Still connecting: not an observation.
+    h.sockets[0]?.emitOpen();
+    h.sockets[1]?.emitOpen();
+    h.sockets[0]?.emitMessage("PING");
+    h.sockets[1]?.emitMessage("PONG");
+    h.sockets[0]?.emitMessage(frames.book);
+    h.sockets[1]?.emitMessage(frames.book);
+    expect(h.observations).toEqual([
+      { raw: frames.book, firstCopy: true },
+      { raw: frames.book, firstCopy: false },
+    ]);
+    expect(h.received).toEqual([frames.book]);
+    expect(h.dual.stats().duplicatesDropped).toBe(1);
+    h.dual.close();
+    h.sockets[0]?.emitMessage(frames.priceChange);
+    expect(h.observations).toHaveLength(2);
+  });
+
+  it("retires both silent sockets and reconnects once per slot after backoff", () => {
+    const h = makeHarness();
+    h.sockets[0]?.emitOpen();
+    h.sockets[1]?.emitOpen();
+    h.now = 42_000;
+
+    h.dual.reconnectSilent();
+    h.dual.reconnectSilent();
+
+    expect(h.sockets.slice(0, 2).every((socket) => socket.closedByClient)).toBe(
+      true,
+    );
+    expect(h.dual.stats().openConnections).toBe(0);
+    expect(h.bothDown).toEqual([42_000]);
+    expect(vi.getTimerCount()).toBe(2);
+    vi.advanceTimersByTime(999);
+    expect(h.sockets).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(h.sockets).toHaveLength(4);
+    for (const socket of h.sockets.slice(2)) {
+      socket.emitOpen();
+      expect(socket.sent).toEqual([subscribeMessage(["token-a", "token-b"])]);
+    }
+    expect(h.dual.stats().reconnects).toEqual([1, 1]);
+    expect(h.dual.stats().rollingResubscribes).toBe(0);
+    h.dual.close();
+  });
+
+  it.each(["silent", "throw"] as const)(
+    "recovers when close is %s and ignores every retired-socket callback",
+    (closeMode) => {
+      const h = makeHarness();
+      const [first, second] = h.sockets as [FakeSocket, FakeSocket];
+      first.emitOpen();
+      second.emitOpen();
+      first.closeMode = closeMode;
+      second.closeMode = closeMode;
+
+      expect(() => h.dual.reconnectSilent()).not.toThrow();
+      first.emitMessage(frames.book);
+      first.emitOpen();
+      first.emitClose();
+      expect(h.received).toEqual([]);
+      expect(h.observations).toEqual([]);
+      expect(vi.getTimerCount()).toBe(2);
+      vi.advanceTimersByTime(1_000);
+      const replacement = h.sockets[2] as FakeSocket;
+      replacement.emitOpen();
+      first.emitClose();
+      first.emitMessage(frames.priceChange);
+      first.emitOpen();
+      replacement.emitMessage(frames.book);
+      expect(h.received).toEqual([frames.book]);
+      expect(h.observations).toEqual([{ raw: frames.book, firstCopy: true }]);
+      expect(h.dual.stats().openConnections).toBe(1);
+      expect(h.bothDown).toHaveLength(1);
+      h.dual.close();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("preserves pending timers and increases backoff when handshakes stay silent", () => {
+    const h = makeHarness();
+    h.sockets[0]?.emitOpen();
+    h.sockets[1]?.emitOpen();
+    h.sockets[0]?.emitClose();
+    vi.advanceTimersByTime(500);
+    h.dual.reconnectSilent();
+    vi.advanceTimersByTime(500);
+    // Slot 0 keeps its original deadline; recovery never postpones it.
+    expect(h.sockets).toHaveLength(3);
+    vi.advanceTimersByTime(500);
+    expect(h.sockets).toHaveLength(4);
+    h.dual.reconnectSilent();
+    h.dual.reconnectSilent();
+    expect(vi.getTimerCount()).toBe(2);
+    vi.advanceTimersByTime(1_999);
+    expect(h.sockets).toHaveLength(4);
+    vi.advanceTimersByTime(1);
+    expect(h.sockets).toHaveLength(6);
+    expect(h.bothDown).toHaveLength(1);
+    h.dual.close();
+  });
+
+  it("cancels recovery during shutdown and never creates another socket", () => {
+    const h = makeHarness();
+    h.sockets[0]?.emitOpen();
+    h.sockets[1]?.emitOpen();
+    h.dual.reconnectSilent();
+    h.dual.close();
+    h.dual.reconnectSilent();
+    h.sockets[0]?.emitOpen();
+    h.sockets[0]?.emitClose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(120_000);
+    expect(h.sockets).toHaveLength(2);
+    expect(h.dual.stats().openConnections).toBe(0);
+  });
+
+  it("does not duplicate heartbeat timers if open is delivered twice", () => {
+    const h = makeHarness();
+    h.sockets[0]?.emitOpen();
+    h.sockets[0]?.emitOpen();
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(10_000);
+    expect(h.sockets[0]?.sent.filter((frame) => frame === "PING")).toHaveLength(
+      1,
+    );
+    h.dual.close();
   });
 });
 

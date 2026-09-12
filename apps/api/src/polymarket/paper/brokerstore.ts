@@ -46,6 +46,49 @@ export const MARK_MAX_BOOK_AGE_MS = 30_000;
 /** Recorder silence beyond this engages the kill switch (D4). */
 export const RECORDER_STALE_MS = 5 * 60_000;
 
+/** RFC-021 D3: fifteen observed one-minute intervals, never elapsed downtime. */
+export const KILL_SWITCH_HEALTHY_TICKS = 15;
+export const KILL_SWITCH_TICK_MS = 60_000;
+
+export interface KillSwitchRecoveryState {
+  startedAtMs: number;
+  lastSlot: number;
+  healthyTicks: number;
+  engagedAtMs: number | null;
+  revision: number;
+  checking: boolean;
+}
+
+/** Process-local evidence. A runner start always creates a new baseline. */
+export function createKillSwitchRecoveryState(
+  startedAt: Date,
+): KillSwitchRecoveryState {
+  return {
+    startedAtMs: startedAt.getTime(),
+    lastSlot: 0,
+    healthyTicks: 0,
+    engagedAtMs: null,
+    revision: 0,
+    checking: false,
+  };
+}
+
+export function resetKillSwitchRecoveryState(
+  state: KillSwitchRecoveryState,
+  now: Date,
+): void {
+  state.startedAtMs = now.getTime();
+  state.lastSlot = 0;
+  state.healthyTicks = 0;
+  state.engagedAtMs = null;
+  state.revision += 1;
+}
+
+const processKillSwitchRecovery = new WeakMap<
+  PaperPool,
+  KillSwitchRecoveryState
+>();
+
 /** A competing tick may reclaim a broker claim only after this gap. */
 export const RESOLUTION_RISK_CLAIM_STALE_MS = 5_000;
 /**
@@ -203,6 +246,7 @@ export interface BrokerDeps {
    * own, which is the point: the anchor must be this worker's observation.
    */
   readonly runtimeGraceAnchors?: RuntimeGraceAnchors;
+  readonly killSwitchRecovery?: KillSwitchRecoveryState;
 }
 
 function makeLog(
@@ -402,51 +446,62 @@ export async function engageKillSwitch(
   if (!hasTransaction(pool)) {
     throw new Error("PAPER_BROKER_TRANSACTION_UNAVAILABLE");
   }
-  const ordersCanceled = await pool.transaction(async (tx: SqlExecutor) => {
-    // Lock order shared with acceptance/fill: kill -> orders. Holding the kill
-    // row until every audit and cancellation commits makes engage linearizable
-    // with both rearm and a concurrent acceptance.
-    const engaged = await tx.query(
-      "UPDATE paper_kill_switch SET engaged = TRUE, reason = $1, engaged_at = $2, updated_at = $2 WHERE kill_switch_id = 1",
-      [reason, now],
-    );
-    if (engaged.rowCount !== 1) {
-      throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
-    }
-    await appendLedgerEvent(tx, {
-      idempotencyKey: `kill:${now.getTime()}`,
-      eventType: "kill_switch_engaged",
-      payload: { reason },
-      eventTs: now,
-    });
-    const open = await tx.query(
-      "SELECT order_id, token_id, condition_id FROM paper_orders WHERE status = 'open' FOR UPDATE",
-    );
-    for (const row of open.rows) {
-      const orderId = asString(row["order_id"]);
-      if (orderId === null) {
-        continue;
-      }
-      await appendLedgerEvent(tx, {
-        idempotencyKey: `${orderId}:cancel_effective`,
-        eventType: "cancel_effective",
-        orderId,
-        tokenId: asString(row["token_id"]),
-        conditionId: asString(row["condition_id"]),
-        payload: { reason: "KILL_SWITCH" },
-        eventTs: now,
-      });
-      await tx.query(
-        "UPDATE paper_orders SET status = 'canceled', cancel_requested_at = COALESCE(cancel_requested_at, $2), cancel_effective_at = $2, closed_at = $2 WHERE order_id = $1 AND status = 'open'",
-        [orderId, now],
-      );
-    }
-    return open.rows.length;
-  });
+  const ordersCanceled = await pool.transaction((tx) =>
+    engageKillSwitchInTransaction(tx, reason, now, { mode: "manual" }),
+  );
   log("error", "PAPER_KILL_SWITCH_ENGAGED", {
+    mode: "manual",
     reason,
     orders_canceled: ordersCanceled,
   });
+}
+
+async function engageKillSwitchInTransaction(
+  tx: SqlExecutor,
+  reason: string,
+  now: Date,
+  details: Record<string, unknown> = {},
+): Promise<number> {
+  // Lock order shared with acceptance/fill: kill -> orders. Holding the kill
+  // row until every audit and cancellation commits makes engage linearizable
+  // with both rearm and a concurrent acceptance.
+  const engaged = await tx.query(
+    "UPDATE paper_kill_switch SET engaged = TRUE, reason = $1, engaged_at = $2, updated_at = $2 WHERE kill_switch_id = 1",
+    [reason, now],
+  );
+  if (engaged.rowCount !== 1) {
+    throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
+  }
+  const appended = await appendLedgerEvent(tx, {
+    idempotencyKey: `kill:${now.getTime()}`,
+    eventType: "kill_switch_engaged",
+    payload: { mode: "auto", ...details, reason },
+    eventTs: now,
+  });
+  if (!appended) throw new Error("PAPER_KILL_SWITCH_ENGAGE_AUDIT_CONFLICT");
+  const open = await tx.query(
+    "SELECT order_id, token_id, condition_id FROM paper_orders WHERE status = 'open' FOR UPDATE",
+  );
+  for (const row of open.rows) {
+    const orderId = asString(row["order_id"]);
+    if (orderId === null) {
+      continue;
+    }
+    await appendLedgerEvent(tx, {
+      idempotencyKey: `${orderId}:cancel_effective`,
+      eventType: "cancel_effective",
+      orderId,
+      tokenId: asString(row["token_id"]),
+      conditionId: asString(row["condition_id"]),
+      payload: { reason: "KILL_SWITCH" },
+      eventTs: now,
+    });
+    await tx.query(
+      "UPDATE paper_orders SET status = 'canceled', cancel_requested_at = COALESCE(cancel_requested_at, $2), cancel_effective_at = $2, closed_at = $2 WHERE order_id = $1 AND status = 'open'",
+      [orderId, now],
+    );
+  }
+  return open.rows.length;
 }
 
 export async function rearmKillSwitch(
@@ -456,21 +511,50 @@ export async function rearmKillSwitch(
   if (!hasTransaction(pool)) {
     throw new Error("PAPER_BROKER_TRANSACTION_UNAVAILABLE");
   }
-  await pool.transaction(async (tx: SqlExecutor) => {
-    const rearmed = await tx.query(
-      "UPDATE paper_kill_switch SET engaged = FALSE, reason = NULL, rearmed_at = $1, updated_at = $1 WHERE kill_switch_id = 1",
-      [now],
+  await pool.transaction((tx) => rearmKillSwitchInTransaction(tx, now));
+}
+
+/** Shared write path: state and its immutable audit commit or roll back together. */
+async function rearmKillSwitchInTransaction(
+  tx: SqlExecutor,
+  now: Date,
+  automatic?: { engagedAt: Date; startedAt: Date },
+): Promise<void> {
+  const rearmed = await tx.query(
+    "UPDATE paper_kill_switch SET engaged = FALSE, reason = NULL, rearmed_at = $1, updated_at = $1 WHERE kill_switch_id = 1" +
+      (automatic === undefined
+        ? ""
+        : " AND engaged = TRUE AND reason = 'RECORDER_STALE' AND engaged_at = $2"),
+    automatic === undefined ? [now] : [now, automatic.engagedAt],
+  );
+  if (rearmed.rowCount !== 1) {
+    throw new Error(
+      automatic === undefined
+        ? "PAPER_KILL_SWITCH_STATE_MISSING"
+        : "PAPER_KILL_SWITCH_STATE_CHANGED",
     );
-    if (rearmed.rowCount !== 1) {
-      throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
-    }
-    await appendLedgerEvent(tx, {
-      idempotencyKey: `rearm:${now.getTime()}`,
-      eventType: "kill_switch_rearmed",
-      payload: {},
-      eventTs: now,
-    });
+  }
+  const appended = await appendLedgerEvent(tx, {
+    idempotencyKey:
+      automatic === undefined
+        ? `rearm:${now.getTime()}`
+        : `rearm:auto:${automatic.engagedAt.toISOString()}`,
+    eventType: "kill_switch_rearmed",
+    payload:
+      automatic === undefined
+        ? {}
+        : {
+            mode: "auto",
+            healthy_ticks: KILL_SWITCH_HEALTHY_TICKS,
+            engaged_at: automatic.engagedAt.toISOString(),
+            healthy_since: automatic.startedAt.toISOString(),
+            tick_ms: KILL_SWITCH_TICK_MS,
+          },
+    eventTs: now,
   });
+  if (automatic !== undefined && !appended) {
+    throw new Error("PAPER_KILL_SWITCH_REARM_AUDIT_CONFLICT");
+  }
 }
 
 export async function freezeMarket(
@@ -2874,6 +2958,80 @@ export async function markTick(
 // ---------------------------------------------------------------------------
 // Kill-switch automatic triggers (D4).
 
+interface RecorderHealth {
+  observedAtMs: number;
+  snapshots_age_ms: number | null;
+  deltas_age_ms: number | null;
+  streamSilentOpen: boolean;
+}
+
+async function recorderHealth(
+  tx: SqlExecutor,
+  clock: () => Date,
+): Promise<RecorderHealth> {
+  const result = await tx.query(
+    "SELECT (SELECT MAX(received_at) FROM polymarket_book_snapshots) AS snapshots_newest, " +
+      "(SELECT MAX(received_at) FROM polymarket_book_deltas) AS deltas_newest, " +
+      "EXISTS (SELECT 1 FROM polymarket_data_gaps WHERE cause = 'stream_silent' AND gap_end IS NULL) AS stream_silent_open",
+  );
+  const now = clock();
+  const row = result.rows[0];
+  const age = (value: unknown): number | null => {
+    const timestamp = toDate(value)?.getTime();
+    return timestamp === undefined || !Number.isFinite(timestamp)
+      ? null
+      : now.getTime() - timestamp;
+  };
+  return {
+    observedAtMs: now.getTime(),
+    snapshots_age_ms: age(row?.["snapshots_newest"]),
+    deltas_age_ms: age(row?.["deltas_newest"]),
+    // Missing/malformed query evidence never certifies the absence of a gap.
+    streamSilentOpen: row?.["stream_silent_open"] !== false,
+  };
+}
+
+function recorderHealthy(health: RecorderHealth, now: Date): boolean {
+  const elapsed = now.getTime() - health.observedAtMs;
+  return (
+    elapsed >= 0 &&
+    !health.streamSilentOpen &&
+    [health.snapshots_age_ms, health.deltas_age_ms].every(
+      (age) => age !== null && age >= 0 && age + elapsed < RECORDER_STALE_MS,
+    )
+  );
+}
+
+/**
+ * Slots are 60s windows anchored at boot/reset. Slot zero earns no credit;
+ * slots 1..15 are fifteen minutes of observations. Jitter inside a slot is
+ * allowed, repeats earn nothing, and a missed slot or backwards clock resets
+ * to zero at the new observation. No catch-up ticks or persisted boot credit.
+ */
+function observeHealthyRecovery(
+  state: KillSwitchRecoveryState,
+  now: Date,
+  engagedAt: Date,
+): void {
+  const engagement = engagedAt.getTime();
+  if (
+    state.engagedAtMs !== engagement &&
+    (state.engagedAtMs !== null || engagement > state.startedAtMs)
+  ) {
+    resetKillSwitchRecoveryState(state, now);
+  }
+  const slot = Math.floor(
+    (now.getTime() - state.startedAtMs) / KILL_SWITCH_TICK_MS,
+  );
+  if (slot < state.lastSlot || slot > state.lastSlot + 1) {
+    resetKillSwitchRecoveryState(state, now);
+  } else if (slot === state.lastSlot + 1) {
+    state.lastSlot = slot;
+    state.healthyTicks += 1;
+  }
+  state.engagedAtMs = engagement;
+}
+
 export async function killSwitchTriggersTick(
   pool: PaperPool,
   deps: BrokerDeps = {},
@@ -2881,74 +3039,222 @@ export async function killSwitchTriggersTick(
   const log = makeLog(deps.logSink);
   const clock = deps.clock ?? ((): Date => new Date());
   const now = clock();
-  const state = await loadKillSwitch(pool);
-
-  // 1. Global recorder staleness: without fresh books the simulator is blind.
-  const newest = await pool.query(
-    "SELECT MAX(received_at) AS newest FROM polymarket_book_snapshots",
-  );
-  const newestAt = toDate(newest.rows[0]?.["newest"]);
-  if (
-    !state.engaged &&
-    newestAt !== null &&
-    now.getTime() - newestAt.getTime() > RECORDER_STALE_MS
-  ) {
-    await engageKillSwitch(pool, "RECORDER_STALE", now, deps);
-    return;
+  let recovery = deps.killSwitchRecovery ?? processKillSwitchRecovery.get(pool);
+  if (recovery === undefined) {
+    recovery = createKillSwitchRecoveryState(now);
+    processKillSwitchRecovery.set(pool, recovery);
   }
+  if (recovery.checking) return;
+  recovery.checking = true;
+  const revision = recovery.revision;
+  const slot = Math.floor(
+    (now.getTime() - recovery.startedAtMs) / KILL_SWITCH_TICK_MS,
+  );
+  const currentObservation = (): boolean =>
+    recovery.revision === revision &&
+    clock().getTime() >= now.getTime() &&
+    Math.floor(
+      (clock().getTime() - recovery.startedAtMs) / KILL_SWITCH_TICK_MS,
+    ) === slot;
+  const next = { ...recovery };
+  const logs: Array<
+    ["info" | "warn" | "error", string, Record<string, unknown>]
+  > = [];
+  try {
+    if (!hasTransaction(pool))
+      throw new Error("PAPER_BROKER_TRANSACTION_UNAVAILABLE");
+    await pool.transaction(async (tx) => {
+      // Serialize with manual engage/rearm and acceptance. Never overwrite a
+      // manual stop from an earlier, unlocked snapshot of the singleton.
+      const locked = await tx.query(
+        "SELECT engaged, reason, frozen_markets_json, engaged_at FROM paper_kill_switch WHERE kill_switch_id = 1 FOR UPDATE",
+      );
+      if (locked.rows.length !== 1)
+        throw new Error("PAPER_KILL_SWITCH_STATE_MISSING");
+      const state = parseKillSwitchState(locked.rows[0]);
+      const engagedAt = toDate(locked.rows[0]?.["engaged_at"]);
+      const health = await recorderHealth(tx, clock);
+      const stale = (age: number | null): boolean =>
+        age === null || age > RECORDER_STALE_MS;
+      const snapshotsStale = stale(health.snapshots_age_ms);
+      const deltasStale = stale(health.deltas_age_ms);
+      if (!state.engaged && (snapshotsStale || deltasStale)) {
+        const details = {
+          series:
+            snapshotsStale && deltasStale
+              ? "both"
+              : snapshotsStale
+                ? "snapshots"
+                : "deltas",
+          snapshots_age_ms: health.snapshots_age_ms,
+          deltas_age_ms: health.deltas_age_ms,
+        };
+        const ordersCanceled = await engageKillSwitchInTransaction(
+          tx,
+          "RECORDER_STALE",
+          now,
+          details,
+        );
+        logs.push([
+          "error",
+          "PAPER_KILL_SWITCH_ENGAGED",
+          {
+            ...details,
+            mode: "auto",
+            reason: "RECORDER_STALE",
+            orders_canceled: ordersCanceled,
+          },
+        ]);
+        resetKillSwitchRecoveryState(next, now);
+        return;
+      }
+      // 2. Daily paper loss above the limit (equity vs the UTC-day anchor).
+      const totals = await tx.query(
+        "SELECT COALESCE(SUM(realized_pnl_usd::numeric), 0)::text AS realized, " +
+          "COALESCE(SUM(CASE " +
+          "WHEN shares::numeric > 0 THEN COALESCE(mark_value_usd::numeric, cost_usd::numeric) - cost_usd::numeric " +
+          "WHEN shares::numeric < 0 THEN cost_usd::numeric - COALESCE(mark_value_usd::numeric, cost_usd::numeric) " +
+          "ELSE 0 END), 0)::text AS unrealized " +
+          "FROM paper_positions",
+      );
+      const realized =
+        parseScaled(asString(totals.rows[0]?.["realized"]) ?? "0") ?? 0n;
+      const unrealized =
+        parseScaled(asString(totals.rows[0]?.["unrealized"]) ?? "0") ?? 0n;
+      const equity = realized + unrealized;
+      const today = now.toISOString().slice(0, 10);
+      const anchorRow = await tx.query(
+        "SELECT daily_anchor_date, daily_anchor_equity_usd FROM paper_kill_switch WHERE kill_switch_id = 1",
+      );
+      const anchorDateRaw = anchorRow.rows[0]?.["daily_anchor_date"];
+      const anchorDate =
+        anchorDateRaw instanceof Date
+          ? anchorDateRaw.toISOString().slice(0, 10)
+          : (asString(anchorDateRaw)?.slice(0, 10) ?? null);
+      const anchorEquity = parseScaled(
+        asString(anchorRow.rows[0]?.["daily_anchor_equity_usd"]) ?? "",
+      );
+      if (anchorDate !== today || anchorEquity === null) {
+        await tx.query(
+          "UPDATE paper_kill_switch SET daily_anchor_date = $1, daily_anchor_equity_usd = $2, updated_at = $3 WHERE kill_switch_id = 1",
+          [today, formatScaled(equity, 6), now],
+        );
+      } else {
+        const limit =
+          parseScaled(deps.dailyLossLimitUsd ?? DEFAULT_DAILY_LOSS_LIMIT_USD) ??
+          0n;
+        if (limit > 0n && anchorEquity - equity > limit) {
+          if (!state.engaged || state.reason === "RECORDER_STALE") {
+            const ordersCanceled = await engageKillSwitchInTransaction(
+              tx,
+              "DAILY_LOSS_LIMIT",
+              now,
+            );
+            logs.push([
+              "error",
+              "PAPER_KILL_SWITCH_ENGAGED",
+              {
+                reason: "DAILY_LOSS_LIMIT",
+                orders_canceled: ordersCanceled,
+              },
+            ]);
+          }
+          resetKillSwitchRecoveryState(next, now);
+          return;
+        }
+      }
 
-  // 2. Daily paper loss above the limit (equity vs the UTC-day anchor).
-  const totals = await pool.query(
-    "SELECT COALESCE(SUM(realized_pnl_usd::numeric), 0)::text AS realized, " +
-      "COALESCE(SUM(CASE " +
-      "WHEN shares::numeric > 0 THEN COALESCE(mark_value_usd::numeric, cost_usd::numeric) - cost_usd::numeric " +
-      "WHEN shares::numeric < 0 THEN cost_usd::numeric - COALESCE(mark_value_usd::numeric, cost_usd::numeric) " +
-      "ELSE 0 END), 0)::text AS unrealized " +
-      "FROM paper_positions",
-  );
-  const realized =
-    parseScaled(asString(totals.rows[0]?.["realized"]) ?? "0") ?? 0n;
-  const unrealized =
-    parseScaled(asString(totals.rows[0]?.["unrealized"]) ?? "0") ?? 0n;
-  const equity = realized + unrealized;
-  const today = now.toISOString().slice(0, 10);
-  const anchorRow = await pool.query(
-    "SELECT daily_anchor_date, daily_anchor_equity_usd FROM paper_kill_switch WHERE kill_switch_id = 1",
-  );
-  const anchorDateRaw = anchorRow.rows[0]?.["daily_anchor_date"];
-  const anchorDate =
-    anchorDateRaw instanceof Date
-      ? anchorDateRaw.toISOString().slice(0, 10)
-      : (asString(anchorDateRaw)?.slice(0, 10) ?? null);
-  const anchorEquity = parseScaled(
-    asString(anchorRow.rows[0]?.["daily_anchor_equity_usd"]) ?? "",
-  );
-  if (anchorDate !== today || anchorEquity === null) {
-    await pool.query(
-      "UPDATE paper_kill_switch SET daily_anchor_date = $1, daily_anchor_equity_usd = $2, updated_at = $3 WHERE kill_switch_id = 1",
-      [today, formatScaled(equity, 6), now],
-    );
-  } else if (!state.engaged) {
-    const limit =
-      parseScaled(deps.dailyLossLimitUsd ?? DEFAULT_DAILY_LOSS_LIMIT_USD) ?? 0n;
-    if (limit > 0n && anchorEquity - equity > limit) {
-      await engageKillSwitch(pool, "DAILY_LOSS_LIMIT", now, deps);
-      return;
-    }
-  }
+      // 3. A UMA dispute on a market we hold freezes entries in THAT market.
+      const disputes = await tx.query(
+        "SELECT DISTINCT r.condition_id FROM polymarket_resolution_events r " +
+          "JOIN paper_positions p ON p.condition_id = r.condition_id " +
+          "WHERE r.event_type = 'disputed' AND p.shares::numeric <> 0",
+      );
+      for (const row of disputes.rows) {
+        const conditionId = asString(row["condition_id"]);
+        if (
+          conditionId !== null &&
+          !state.frozenMarkets.includes(conditionId)
+        ) {
+          await freezeMarket(tx, conditionId, now);
+          logs.push([
+            "warn",
+            "PAPER_MARKET_FROZEN_DISPUTE",
+            { condition_id: conditionId },
+          ]);
+        }
+      }
+      if (
+        !state.engaged ||
+        state.reason !== "RECORDER_STALE" ||
+        engagedAt === null ||
+        !Number.isFinite(engagedAt.getTime()) ||
+        !recorderHealthy(health, clock())
+      ) {
+        resetKillSwitchRecoveryState(next, now);
+        return;
+      }
+      // The human endpoint accepts a free-form reason, including RECORDER_STALE.
+      // Preserve that stop by origin. Historical events without mode remain
+      // eligible under the existing D3 approval; missing audit is not evidence.
+      const engagement = await tx.query(
+        "SELECT payload_json FROM paper_ledger_events WHERE idempotency_key = $1 AND event_type = 'kill_switch_engaged'",
+        [`kill:${engagedAt.getTime()}`],
+      );
+      const payload = engagement.rows[0]?.["payload_json"] as
+        Record<string, unknown> | undefined;
+      if (
+        payload?.["reason"] !== "RECORDER_STALE" ||
+        payload["mode"] === "manual"
+      ) {
+        resetKillSwitchRecoveryState(next, now);
+        return;
+      }
+      observeHealthyRecovery(next, now, engagedAt);
+      if (!currentObservation()) {
+        resetKillSwitchRecoveryState(next, clock());
+        return;
+      }
+      if (next.healthyTicks < KILL_SWITCH_HEALTHY_TICKS) return;
 
-  // 3. A UMA dispute on a market we hold freezes entries in THAT market.
-  const disputes = await pool.query(
-    "SELECT DISTINCT r.condition_id FROM polymarket_resolution_events r " +
-      "JOIN paper_positions p ON p.condition_id = r.condition_id " +
-      "WHERE r.event_type = 'disputed' AND p.shares::numeric <> 0",
-  );
-  for (const row of disputes.rows) {
-    const conditionId = asString(row["condition_id"]);
-    if (conditionId !== null && !state.frozenMarkets.includes(conditionId)) {
-      await freezeMarket(pool, conditionId, now);
-      log("warn", "PAPER_MARKET_FROZEN_DISPUTE", { condition_id: conditionId });
-    }
+      // Only on the fifteenth observation: exclude a concurrent gap INSERT
+      // until commit, then re-read both series and gaps under that lock.
+      await tx.query("LOCK TABLE polymarket_data_gaps IN SHARE MODE");
+      const rechecked = await recorderHealth(tx, clock);
+      const checkedAt = clock();
+      if (!recorderHealthy(rechecked, checkedAt) || !currentObservation()) {
+        resetKillSwitchRecoveryState(next, clock());
+        return;
+      }
+      await rearmKillSwitchInTransaction(tx, checkedAt, {
+        engagedAt,
+        startedAt: new Date(next.startedAtMs),
+      });
+      // Last authorization check before COMMIT: expire slow writes or a stop
+      // observed here. A COMMIT already authorized cannot be revoked by stop.
+      // The in-memory counter advances only after commit acknowledgement.
+      if (!currentObservation() || !recorderHealthy(rechecked, clock()))
+        throw new Error("PAPER_KILL_SWITCH_OBSERVATION_EXPIRED");
+      logs.push([
+        "info",
+        "PAPER_KILL_SWITCH_AUTO_REARMED",
+        {
+          mode: "auto",
+          healthy_ticks: KILL_SWITCH_HEALTHY_TICKS,
+          engaged_at: engagedAt.toISOString(),
+          healthy_since: new Date(next.startedAtMs).toISOString(),
+        },
+      ]);
+      resetKillSwitchRecoveryState(next, checkedAt);
+    });
+    if (currentObservation()) Object.assign(recovery, next);
+    else resetKillSwitchRecoveryState(recovery, clock());
+    for (const [level, code, details] of logs) log(level, code, details);
+  } catch (error) {
+    resetKillSwitchRecoveryState(recovery, clock());
+    throw error;
+  } finally {
+    recovery.checking = false;
   }
 }
 
