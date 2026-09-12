@@ -1,0 +1,20 @@
+{
+  "testedAtUtc": "2026-09-12T04:10:53.889Z",
+  "source": "docs/runbooks/btc-postgres-capacity.md",
+  "environment": "Node VM, six simulated same-origin pages; in-memory fetch only; no network/PostgreSQL",
+  "passed": 12,
+  "checks": [
+    "six roles, body completion, privacy, no autonomous requests",
+    "all six quota boundaries total 2200 and no 2201st fetch",
+    "response returned at headers while duration waits for full body",
+    "missing role aborts before network",
+    "duplicate role aborts all pages",
+    "POST blocked before underlying fetch",
+    "HTTP 500 broadcasts stop",
+    "body failure broadcasts stop without storing body",
+    "5-second fetch timeout aborts and broadcasts",
+    "normal deadline blocks further fetches",
+    "inflight failure after normal deadline remains a propagated failure",
+    "explicit operator abort propagates"
+  ]
+}
