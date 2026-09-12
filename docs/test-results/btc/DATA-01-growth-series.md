@@ -107,19 +107,18 @@ regredindo fica explícita; não interpolar os dias faltantes.
 
 ## Instalação manual restrita e acompanhamento
 
-Após checks/merge, usar fontes da revisão aprovada em diretório root privado,
-conferir hashes com a revisão local e registrar SHA256 do watchdog efetivo.
-Os valores `<...>` abaixo dependem da evidência real da operação.
+Após checks/merge, os fontes da revisão aprovada foram extraídos em diretório
+root privado, com hashes conferidos. Este dry-run passou antes da instalação:
 
 ```sh
-sudo /usr/bin/python3 -I <stage-root>/install_capacity_series.py \
-  --source-dir <stage-root> --revision <sha-40-da-revisao> \
-  --before-watchdog-sha256 <sha256-watchdog-atual> \
-  --collector-sha256 <sha256-coletor-revisado> \
-  --watchdog-sha256 <sha256-watchdog-revisado> --dry-run
+sudo /usr/bin/python3 -I /var/lib/ganso/capacity-install-97c2787f3c4b81ed4ed4ad113459a123191ab1c1/install_capacity_series.py \
+  --source-dir /var/lib/ganso/capacity-install-97c2787f3c4b81ed4ed4ad113459a123191ab1c1 --revision 97c2787f3c4b81ed4ed4ad113459a123191ab1c1 \
+  --before-watchdog-sha256 8b9233bedbf835de75ed7f7f59ff94aa6d5d998a97f2375b11c6266075029b4e \
+  --collector-sha256 de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3 \
+  --watchdog-sha256 2760313b958d1ba074da6456f3dc55fc60d40858f3f1baf5ae7d6f25b292c999 --dry-run
 ```
 
-Executar uma vez sem `--dry-run` após conferir o preflight: propriedade,
+O mesmo comando passou sem `--dry-run`, após conferir o preflight: propriedade,
 permissões, links, fontes ≤64 KiB, hashes, sintaxe, watchdog, backup e manifesto
 são validados antes da escrita. Instala coletor antes do hook; conserva original em
 `/var/lib/ganso/recorder-watchdog/capacity-series-install/before-recorder_watchdog.py`
@@ -218,17 +217,69 @@ Esta série não implementa admissão, catálogo de arquivos/pins, reservas nova
 rotação nem poda. HOLD, Q4/DB-03B, índices suspensos e compactação adiada continuam
 decisões vigentes; ausência de erro na série não remove nenhum desses gates.
 
-## Operação — pendente de evidência real
+## Operação verificada em 12/09/2026 UTC
 
-Esta implementação é código: `deploy_paths` classifica deploy como `true`; não
-registrar `deploy pulado: só texto`. A operação prevê manutenção temporária da
-variável `DEPLOY_ENABLED`: `true → false → true`, para inibir somente o job de
-deploy geral durante a entrega manual restrita. Os checks continuam ativos.
-Registrar os valores efetivamente observados, o resultado literal do job e a
-restauração de `true` antes do fecho; a alteração não prova instalação concluída.
+O [PR #166](https://github.com/henrique-devel/ganso-market/pull/166), head
+`99d1275a7ff126248e9f97569d750ee07bbafe42`, foi integrado às 16:58:34 UTC em
+`97c2787f3c4b81ed4ed4ad113459a123191ab1c1`. Verify source e Verify Compose runtime
+passaram no [PR](https://github.com/henrique-devel/ganso-market/actions/runs/34706586883)
+e no [merge](https://github.com/henrique-devel/ganso-market/actions/runs/34706830333).
+O job Deploy production do merge ficou literalmente **skipped**: manutenção
+operacional `DEPLOY_ENABLED=true → false → true`, já restaurada e conferida.
+Este diff contém código e não recebeu a classificação “deploy pulado: só texto”.
+Não houve dispatch de deploy geral, poda de backups ou recriação da aplicação.
 
-**Instalação, primeira amostra e período observado ainda não afirmados.**
-Completar antes do fecho: revisão/branch/PR/merge/checks, resultado literal de
-deploy/instalação, hashes antes/depois, timer efetivo, primeira tentativa e
-medidas/erros, UTC de início, último vencimento e fim. Datas devem vir do estado
-instalado. Até a primeira captura válida, os números acima são herdados de DB-04.
+O dry-run e a instalação manual passaram, usando os três fontes extraídos do
+merge aprovado em `/var/lib/ganso/capacity-install-97c2787f3c4b81ed4ed4ad113459a123191ab1c1`.
+O instalador substituiu somente os dois arquivos host e iniciou o calendário.
+[Metadados e comparações antes/depois](data01-growth-operation.json) registram
+revisão, hashes, units, limites, timer, backups e identidade dos containers/imagens.
+O SHA das aplicações/checkout produtivo não foi promovido para esse merge.
+
+| Arquivo                     | SHA256 produtivo verificado                                        |
+| --------------------------- | ------------------------------------------------------------------ |
+| `capacity_series.py`        | `de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3` |
+| `recorder_watchdog.py`      | `2760313b958d1ba074da6456f3dc55fc60d40858f3f1baf5ae7d6f25b292c999` |
+| Backup do watchdog anterior | `8b9233bedbf835de75ed7f7f59ff94aa6d5d998a97f2375b11c6266075029b4e` |
+
+O timer existente fez a primeira tentativa às **17:03:55.666555 UTC**, slot 0,
+`ok`/`complete=true`, em **1,392270 s**. A [amostra publicada](data01-growth-first-sample.json)
+é byte a byte igual ao arquivo host de 5.160 B, SHA256
+`a0766e9afe0dbfaf61fb7c3cf20cab71be8c0c48d665a88df9f441e9e608bc9b`.
+O manifesto tem 357 B, lock 0 B, todos modo 0600. Nenhum `--due`/supervisor foi
+invocado manualmente; as duas execuções naturais seguintes reportaram `not_due`.
+
+| Medida da primeira amostra        | Resultado                                                                         |
+| --------------------------------- | --------------------------------------------------------------------------------- |
+| Banco físico (`pg_database_size`) | 98.537.690.815 B / 91,770376 GiB                                                  |
+| Filesystem real, uma vez          | `8:1`, ext4, `/dev/sda1`, mount `/`, total 322.302.373.888 B                      |
+| Disponível sem reserva root       | 201.990.098.944 B / 188,117939 GiB / **62,670993%**                               |
+| Margem instantânea sobre piso 25% | 113,076070 GiB; não é orçamento admitido para export                              |
+| WAL presente                      | 8 segmentos, 134.217.728 B / 128 MiB lógicos e alocados                           |
+| WAL acumulado do cluster          | 2.015.163.165.713 B; reset 17/08/2026 22:17:04.734133 UTC                         |
+| SQL                               | read-only `on`, statement `1500ms`, lock `250ms`; horário SQL 17:03:56.928776 UTC |
+
+Os quatro caminhos foram resolvidos para o volume `ganso-market_postgres_data`,
+raiz host `/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker`.
+WAL, `base` e `global` são subdiretórios dessa raiz; os dois tablespaces padrão
+foram confirmados pelo catálogo. Filesystem do checkout não foi usado como atalho.
+
+| Marco UTC fixado pelo `--start`       | Data e hora                |
+| ------------------------------------- | -------------------------- |
+| Início / slot 0 devido                | 12/09/2026 17:03:34.182494 |
+| Próxima tentativa / slot 1 devido     | 13/09/2026 17:03:34.182494 |
+| Última tentativa / slot 7 devido      | 19/09/2026 17:03:34.182494 |
+| Encerramento da janela, após carência | 19/09/2026 18:03:34.182494 |
+
+Há **uma amostra completa e zero intervalos diários comparáveis**; o delta do
+baseline é `PREVIOUS_UNAVAILABLE`. Ainda não há sete dias observados nem taxa de
+crescimento sustentado. Falhas futuras permanecem resultados da série, sem retry.
+O comando `--status` acima permite acompanhamento sem SQL e sem intervenção diária.
+
+No pós-check às 17:05:14 UTC, os 230 IDs de imagem, os 11 containers com imagens e
+horários de início, os cinco nomes de backup e os hashes das units coincidiram
+com o preflight às 16:48:24 UTC. Timer ativo; watchdog `Result=success`, exit 0,
+MemoryMax 128 MiB, CPUQuota 10%, TimeoutStart 70 s. Seus eventos mantiveram
+`reason=persistence_stale`, `action=observe`: sucesso da série **não comprova
+saúde do feed ou soak**. Nenhum rollback foi necessário. HOLD/dados, gates de
+índices e escopo dos demais blocos não foram alterados por esta entrega.
