@@ -54,8 +54,12 @@ const INSERT_EVENT_SQL =
 
 /**
  * Append one event; returns true when the event was NEW. A duplicate key is
- * absorbed silently (idempotent replays), and the caller must only apply
- * state changes when the append reports true.
+ * absorbed on an identical retry, and the caller must only apply state
+ * changes when the append reports true. Migration 0024 attributes the event
+ * in this same INSERT (including bare-pool callers); failed ownership rolls
+ * the statement back. Its guard rejects divergent financial payload/identity.
+ * Financial retries also preserve their economic timestamp; divergent times
+ * are refused. Diagnostic minute marks remain first-write.
  */
 export async function appendLedgerEvent(
   pool: SqlExecutor,
