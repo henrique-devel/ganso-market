@@ -1,29 +1,40 @@
 # DB-04 — Capacidade PostgreSQL e aplicação condicionada
 
-**RFC-037; plano verificado em 12/09/2026, sem aplicação de índice/tuning ou
-aceite integrado.** Base `1878bf2`; observação passiva 04:00:25–04:01:05 UTC,
-[relatório e limites](../test-results/btc/DB-04.md). Manter CPX42 existente,
-paper, custos, capital, pools, timeouts e perímetro. Este documento não executa
-DB-03B, FRESH-01 ou limpeza da RFC-041.
+**RFC-037; retomada autorizada concluída em12/09/2026, sem aplicação de índice,
+tuning ou aceite integrado.** Base `fb1e22a`; ensaio único RTDS15:50:17–15:50:37 UTC
+e capacidade passiva15:52:55–15:53:31 UTC, no
+[relatório da retomada](../test-results/btc/DB-04-write-capacity.md).
+O [relatório original](../test-results/btc/DB-04.md), base `1878bf2` e observação
+04:00:25–04:01:05 UTC, permanece evidência histórica intacta.
+Manter CPX42 existente, paper, custos, capital, pools, timeouts e perímetro.
+Este documento não executa DB-03B, FRESH-01 ou limpeza da RFC-041.
 
 ## 1. Decisão de entrada e dependências
 
-| Dependência                | Evidência herdada                                                                                           | Consequência operacional                                                                                                                        |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| DB-01                      | Baseline local production-verified; quatro planos; pools 28/40; throttling 96,1%; hashes no relatório DB-04 | Evidência local conferida, não incorporada a este PR. Frequência/p95/p99 SQL continuam incompletos.                                             |
-| DB-02, PR #157 / `a6c5303` | 100 mil → 1 linha; p95 COMMIT conflitos +173,56% (+1,769 ms), gate ≤10% reprovado                           | Não promover o índice de trades nem aceitar a regressão por ser pequena em ms.                                                                  |
-| DB-03, PR #158 / `1878bf2` | RTDS 120 mil → 2–4 linhas; p95 ≤1,42 ms na fixture com índice; sem índice buffers até 4,70×                 | Runtime preservado. Escrita/WAL indisponíveis; não promover índice ou rewrite.                                                                  |
-| Q4 / DB-03B                | 31,299 s **ativo**, 68.333 linhas estimadas; received-only/empates pendentes                                | Contrato pode mudar mid/jump breaker. Manter Q3/Q4; opções em [DB-03](../ops/DB-03-asof-plan.md#db-03b-snapshots-em-lote-adiados-por-contrato). |
+| Dependência                  | Evidência                                                                                                                                                   | Consequência operacional                                                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| DB-01                        | Baseline local production-verified; quatro planos; pools28/40; hashes no relatório original DB-04                                                           | Evidência local conferida e preservada. Frequência/p95/p99 SQL produtivo continuam incompletos.              |
+| DB-02, PR163                 | Reavaliação única com guards0023:3/8 agregados e15/32 rodadas reprovados;0/8 cenários passam pela regra conjunta; WAL adicional768.212 B                    | Índice trades suspenso; ruído não prova causalidade nem dispensa≤10%. Histórico PR157 preservado.            |
+| DB-03, PR164; execução DB-04 | Leitura histórica PR158 preservada; escrita12.000 amostras em20,008 s:1/4 agregado e8/16 rodadas reprovados, só1/4 cenários passa; WAL adicional1.303.328 B | Índice RTDS suspenso, promotionAllowed=false; runtime preservado.                                            |
+| Q4 / DB-03B                  | Contrato source/received/empates e impacto em mid/jump breaker; adiamento aprovado                                                                          | Manter Q3/Q4. [Opções de contrato](../ops/DB-03-asof-plan.md#db-03b-snapshots-em-lote-adiados-por-contrato). |
 
-**Bloqueio herdado:** a revisão automática rejeitou duas vezes o ensaio descartável
-DB-03 de 10 mil inserts, mil upserts/deletes e VACUUM, por entendê-lo como DB-04,
-mesmo com prova do destino local. A aprovação adicional solicitada não chegou.
-Não repetir nesta sessão, nem sob outro nome/destino. O trabalho independente
-foi concluído; requisitos concretos para revisão posterior estão na seção 7.
+**Autorização respondida:** as duas recusas automáticas antigas foram respondidas
+pela [autorização de retomada](../ops/DEVELOPMENT_AUTHORIZATION.md#retomada-das-recomendações-btc--12092026).
+Não são aprovação pendente. O protocolo limitado preparado em PR164 foi fixado
+antes da coleta em `56d1ae2` e executado uma vez em destino novo local1CPU/1GiB,
+com HOLD intacto, zero perda e descarte verificado. Nenhuma nova recusa ocorreu.
 
-O estado do bloco é `code-verified` **somente para a especificação**. Aplicação,
-ensaio com seis abas e soak permanecem pendentes. Nem checks verdes nem uma
-janela sem menções de timeout substituem esses aceites.
+**Impedimento técnico atual:** gates de escrita falhos e reserva sustentada de
+memória/CPU não comprovada. A coleta atual confirmou PG1CPU/1GiB, throttling307/307,
+memória1.023,855→888,984 MiB e pressão de cache. PGDATA, WAL, pg_default/pg_global
+e checkout foram mapeados ao mesmo `/dev/sda1`, mínimo62,592384% disponível;
+o piso de disco passa nessa captura, sem dispensar os demais gates.
+
+O bloco permanece `code-verified`: especificação, runner com watchdog efetivo,
+fixture de escrita/WAL e observação passiva verificados. Aplicação, seis abas e
+soak não ocorreram. Os valores da seção2 são da observação histórica; para a
+janela atual, decomposição de memória/CPU/temp/conexões, releases e filesystem,
+usar o relatório da retomada. Budgets/configuração não foram alterados.
 
 ## 2. Capacidade real e orçamento completo
 
@@ -297,13 +308,13 @@ de RAM já existente demonstrada por pico dos demais serviços. Não pressupor
 
 ## 6. Validação integrada
 
-Este roteiro não supera os gates herdados: DB-02 reprovou o gate de p95 COMMIT
-de conflitos (+173,56%); DB-03 não dispõe do ensaio de escrita/WAL, rejeitado pela
-revisão automática; Q4 continua adiado para DB-03B. Nenhum deles pode ser contado
-como aprovado por observação passiva ou pelo teste do limitador abaixo. A amostra
-passiva DB-04 com RTDS ΔINSERT=0 e OOM=0 não demonstra continuidade de ingestão nem
-aceite de carga. A aplicação de índices e tuning permanece condicionada aos gates
-e decisões especificados no restante deste plano.
+Este roteiro não supera os gates atuais: DB-02 PR163 manteve0/8 cenários
+aprovados pela regra conjunta; o ensaio de escrita RTDS executado por DB-04
+terminou com exit2 e só1/4 cenários aprovado. A autorização antiga foi respondida;
+Q4/DB-03B continua adiado por decisão aprovada. Observação passiva e o teste do
+limitador abaixo não substituem esses gates. As capturas DB-04 com RTDS ΔINSERT=0
+e OOM=0 não demonstram continuidade de ingestão nem aceite de carga. A aplicação
+de índices e tuning permanece condicionada aos gates e decisões deste plano.
 
 ### Carga e contagem
 
@@ -669,35 +680,32 @@ Fontes de implementação: `config/runtime.json:15`, `apps/api/src/server.ts:65,
 `Portfolio.tsx:709`, `Resolution.tsx:65`, `resolution.ts:252`,
 `apps/api/src/polymarket/readapi.ts:1256` e `orchestrator.ts:832,937`.
 
-## 7. Decisões concretas para revisão posterior e handoff
+## 7. Decisões atuais e handoff
 
-| Decisão / dado faltante | Opções, impacto/custo e recomendação                                                                                                                                                                                           |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Ensaio rejeitado DB-03  | Autorizar explicitamente o ensaio isolado e limitado abaixo, ou manter candidato sem promoção. Sem nova infra/custo; recomendação é revisão explícita antes de qualquer nova tentativa. A nova sessão não vale como aprovação. |
-| DB-02 escrita +173,56%  | Repetir avaliação representativa e concorrente dentro do escopo realmente autorizado, ou abandonar/retrabalhar o candidato. Manter ≤10%; não aceitar piora por soma de ganho de leitura.                                       |
-| Q4 DB-03B               | Manter comportamento atual, ou decidir regra source/received e empate antes de rewrite. Impacto no mid/jump breaker; recomendação segundo caminho em bloco separado decidido pelo coordenador.                                 |
-| Recursos                | Manter existentes agora; depois avaliar redução de trabalho/paralelismo e redistribuição interna com picos medidos. Não contratar serviço, aumentar orçamento/caps ou enfraquecer policy.                                      |
-| Observabilidade         | Obter latência por SQL/commit, contadores de gaps recebidos e lag/fila durante carga. Browser mede HTTP; pg_stat/logs atuais não preenchem os campos ausentes. Sem extensão automática.                                        |
+| Decisão / dado faltante | Resultado e próximo passo condicionado                                                                                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Escrita RTDS autorizada | Executada uma vez pelo protocolo PR164/commit56d1ae2, sem nova recusa. Gates falhos: manter candidato suspenso; não repetir a coleta para selecionar resultado favorável.                              |
+| DB-02 escrita           | Reavaliação PR163 mantém0/8 cenários aprovados pela regra conjunta. Manter≤10%, sem compensar escrita com leitura; candidato segue suspenso.                                                           |
+| Q4/DB-03B e compactação | Adiamento aprovado. Manter comportamento atual; revisão futura do contrato deve considerar mid/jump breaker. Nenhuma limpeza autorizada por este relatório.                                            |
+| Recursos                | Manter existentes. Medir série/picos e trabalho SQL antes de propor redistribuição/paralelismo; pressão de cache e1CPU saturada não justificam tuning por uma janela curta. Sem nova infra/custo/caps. |
+| Observabilidade         | Continuam ausentes latência produtiva por SQL/commit, lag/gaps/fila e validação integrada. Browser mede HTTP; catálogo e WAL global não preenchem esses campos.                                        |
+| Filesystem              | Lacuna resolvida: dados/WAL/tablespaces mapeados ao volume e device reais, piso25% atendido na captura. Série de crescimento/cobertura continua handoff independente DATA-01.                          |
 
-Proposta **não executada** para a aprovação pendente: PostgreSQL18.4 descartável,
-1 CPU/1 GiB, armazenamento efêmero separado e `GANSO_TEST_DATABASE_URL` apontando
-somente ao destino local confirmado; fixture sintética, nenhum dado/volume de
-produção. Um candidato por vez, baseline/variante alternados; 10k inserts RTDS,
-1k upserts agregados e 1k deletes; VACUUM apenas se incluído na aprovação explícita
-do mesmo conjunto. A variante trades deve reproduzir também 10k conflitos; snapshots
-10k apenas para baseline de persistência, sem reescrever Q4. Teto30 min total,
-5 s/statement e120 s por cenário; batches e concorrências1/4/8 usando o mesmo
-conjunto e seed. Não omitir fase bloqueada para converter gate null em passed.
-Registrar N≥100 commits por tipo/cenário/variante, throughput, p95, erros/perdas,
-WAL marginal, tamanho antes/depois, build e cancelamento; cada tipo deve cumprir
-regressão≤10%, zero erros/perdas, bytes declarados e equivalência. Separar inserts,
-conflitos e upserts; não mascarar pior caso com percentil agregado. p99 só com
-N≥100 e tamanho da amostra explícito. Fixture não substitui operação real.
+O ensaio único durou20,008 s no limite global600 s incluindo cleanup,5 s/statement,
+120 s/cenário e uma conexão. Protocolo, identidades, SQL/hashes, todas as amostras,
+WAL, integridade, controle DELETE/HOLD, VACUUM comum e descarte constam no
+[relatório da retomada](../test-results/btc/DB-04-write-capacity.md).
+Ele substitui a proposta histórica de30 min/concorrências1/4/8 desta seção;
+essa retomada não houve A/A nem escrita concorrente. A dispersão em agregados
+com índices/dados/WAL iguais limita a atribuição causal da latência, sem liberar
+gates. DELETE permaneceu bloqueado por HOLD; throughput de poda continua null.
 
-FRESH-01 recebe capacidade **medida** (1 CPU/1 GiB, saturação, pools28/40), sem
-promessa de cadência/p95/saúde. DATA-01 pode iniciar inventário independente;
-isto não aprova limpeza nem desbloqueia os gates operacionais DB-04. Nenhum outro
-prompt, tarefa ou automação é executado aqui.
+FRESH-01 recebe capacidade medida com limites (PG1CPU/1GiB, saturação, pools28/40
+como referência de código), sem promessa de cadência/p95/saúde. DATA-01 recebe
+handoff independente de crescimento/capacidade; isto não aprova limpeza nem
+desbloqueia gates operacionais DB-04. Nenhum outro prompt, tarefa ou automação
+é executado aqui. Publicação documental segue PR/checks/merge e RFC-020, com
+classificação real do deploy registrada no PR; sem forçar rebuild/recriação.
 
 Semântica conferida em 12/09/2026: [recursos PG18](https://www.postgresql.org/docs/18/runtime-config-resource.html),
 [context/source de settings](https://www.postgresql.org/docs/18/view-pg-settings.html),

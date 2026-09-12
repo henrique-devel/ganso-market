@@ -5,10 +5,95 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   validateTarget, extractWriterSql, rawValues, aggregateValues, assertServerIdentity, assertGuardRows,
+  installDeadlineWatchdog,
 } from "./db03-write-benchmark.mjs";
 import { summary, compare, exitStatus } from "./db02-write-benchmark.mjs";
 
 const source = await readFile(new URL("../../../apps/api/src/polymarket/rtds.ts", import.meta.url), "utf8");
+
+test("hard deadline preserves partial samples and earlier failures, and identifies incomplete cleanup", () => {
+  let elapsedMs = 25;
+  let callback;
+  let delay;
+  let output;
+  let status;
+  const earlierError = {code: "57014", message: "statement timeout"};
+  const report = {completed: true, promotionAllowed: false, error: earlierError,
+    scenarios: [{rounds: [{baseline: {samples: [[123, null], [456, 78]]}}]}],
+    cleanedSchemas: ["own_b"], cleanupErrors: [{operation: "rollback", code: "08006"}]};
+  const created = ["own_b"];
+  installDeadlineWatchdog({report, ownSchemas: ["own_b", "own_c"], createdSchemas: created,
+    elapsedMs: () => elapsedMs, nowIso: () => "2026-09-12T16:10:00.000Z",
+    schedule: (fn, ms) => { callback = fn; delay = ms; return 42; },
+    cancel: () => assert.fail("deadline must stay active through stalled cleanup"),
+    write: (text) => { output = text; }, terminate: (code) => { status = code; }});
+  assert.equal(delay, 599975);
+  created.push("own_c");
+  elapsedMs = 600001;
+  callback();
+  assert.equal(status, 1);
+  const partial = JSON.parse(output);
+  assert.equal(partial.completed, false);
+  assert.equal(partial.promotionAllowed, false);
+  assert.equal(partial.finalBudgetExceeded, true);
+  assert.equal(partial.wallMs, 600001);
+  assert.equal(partial.finishedAt, "2026-09-12T16:10:00.000Z");
+  assert.deepEqual(partial.error, earlierError);
+  assert.equal(partial.deadlineError.code, "DB03_GLOBAL_BUDGET_EXCEEDED");
+  assert.deepEqual(partial.scenarios, report.scenarios);
+  assert.deepEqual(partial.cleanupErrors[0], {operation: "rollback", code: "08006"});
+  assert.deepEqual(partial.cleanupErrors[1].createdSchemas, ["own_b", "own_c"]);
+  assert.deepEqual(partial.cleanupErrors[1].possibleRemainingOwnSchemas, ["own_c"]);
+  assert.equal(exitStatus(partial), 1);
+});
+
+test("normal cleanup clears the watchdog and prevents a stale callback from writing or exiting", () => {
+  let callback;
+  let cleared;
+  const report = {completed: true, promotionAllowed: false, cleanupErrors: []};
+  const stop = installDeadlineWatchdog({report, ownSchemas: [], createdSchemas: [], elapsedMs: () => 0,
+    schedule: (fn, ms) => { callback = fn; assert.equal(ms, 600000); return 42; },
+    cancel: (id) => { cleared = id; },
+    write: () => assert.fail("normal completion must not write a timeout report"),
+    terminate: () => assert.fail("normal completion must not force exit")});
+  stop();
+  assert.equal(cleared, 42);
+  callback();
+  assert.equal(report.completed, true);
+  assert.equal(report.deadlineError, undefined);
+});
+
+test("deadline exits with failure even when its output sink fails", () => {
+  let callback;
+  let status;
+  installDeadlineWatchdog({report: {}, ownSchemas: ["own_c"], createdSchemas: [], elapsedMs: () => 600000,
+    schedule: (fn) => { callback = fn; return 42; }, cancel: () => {},
+    write: () => { throw new Error("output unavailable"); }, terminate: (code) => { status = code; }});
+  assert.throws(() => callback(), /output unavailable/);
+  assert.equal(status, 1);
+});
+
+test("deadline flushes a complete partial JSON before terminating an otherwise stalled process", () => {
+  const moduleUrl = new URL("./db03-write-benchmark.mjs", import.meta.url).href;
+  const script = `import { installDeadlineWatchdog } from ${JSON.stringify(moduleUrl)};
+    const report = {completed: false, promotionAllowed: false, cleanupErrors: [],
+      scenarios: [{samples: Array.from({length: 10000}, (_, i) => [i, null])}]};
+    installDeadlineWatchdog({report, ownSchemas: ['own_b'], createdSchemas: ['own_b'],
+      elapsedMs: () => 600001});
+    await new Promise(() => {});`;
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script],
+    {encoding: "utf8", timeout: 5000});
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.equal(result.signal, null);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.completed, false);
+  assert.equal(report.promotionAllowed, false);
+  assert.equal(report.error.code, "DB03_GLOBAL_BUDGET_EXCEEDED");
+  assert.equal(report.scenarios[0].samples.length, 10000);
+  assert.deepEqual(report.scenarios[0].samples.at(-1), [9999, null]);
+  assert.deepEqual(report.cleanupErrors[0].possibleRemainingOwnSchemas, ["own_b"]);
+});
 
 test("destination rejects remote, implicit, redirected and wrong database identities", () => {
   const accepted = "postgres://postgres@127.0.0.1:54607/ganso_db03_write_disposable";
