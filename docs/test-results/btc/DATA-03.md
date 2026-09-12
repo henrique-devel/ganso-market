@@ -3,7 +3,9 @@
 12/09/2026 UTC. Bloco exclusivo DATA-03/RFC-041. Base real `e9d6960`, código
 `056b1e35f9333e7a28606643e3362c7710119744`, branch `codex/data-03-export-restore`,
 worktree `/private/tmp/ganso-data03` pertencente ao Git interno correto.
-Estado: **code-verified; publicação externa bloqueada pela revisão automática**.
+Primeira passagem: **code-verified; publicação inicialmente bloqueada**.
+A autorização posterior respondeu às recusas antigas; a retomada abaixo registra
+uma nova recusa efetiva da ferramenta, sem confundir os dois momentos.
 
 ## Entrega e contrato
 
@@ -101,11 +103,80 @@ A segunda ocorreu após provar conta autenticada `henrique-devel`, mesmo owner d
 da autorização contínua. A revisão ainda exigiu autorização reconhecida para
 publicar o código no repositório público e segurança do conteúdo. Scanner local
 passou. Não houve contorno, PR, checks remotos, merge ou deploy DATA-03. A entrega
-local está pronta; falta aprovação reconhecida da publicação pública específica.
+local estava pronta naquela passagem. A aprovação específica foi depois concedida
+pelo proprietário e registrada publicamente no PR163; as recusas antigas não
+permanecem como autorização pendente nesta retomada.
 
 Recomendação:custo externo0, manter HOLD enquanto horizonte/fecho forem desconhecidos
 (e monitorar crescimento); alternativa futura:recorte real com janela/âncora,
 referências, destino, volume/tempo/folga atuais comprovados, sem backup ilimitado.
 DATA-04 pode preparar consumo do contrato exato; certificados sintéticos nunca
-liberam remoção real. Integração remota DATA-03 permanece pendente. Nenhum outro
+liberam remoção real. Integração remota DATA-03 estava pendente naquele fecho. Nenhum outro
 bloco foi executado. Git externo antigo e trabalho local alheio preservados.
+
+## Retomada autorizada — 12/09/2026
+
+O proprietário autorizou expressamente a publicação pública das entregas indicadas;
+o registro está em `docs/ops/DEVELOPMENT_AUTHORIZATION.md`, integrado pelo PR163.
+Esta tarefa retomou exclusivamente os 14 arquivos DATA-03. Não leu nem incorporou
+prompts/implementações futuros ou material privado de outras revisões.
+
+Base remota confirmada `973a7ccebd29cb4d3b68fe25a2cb16e64180e066` (PR168), worktree
+novo `/private/tmp/ganso-data03-publication`, branch `codex/data-03-publication`.
+Commits históricos `056b1e3/2421832` reaplicados como `9d68dab/fb69041`.
+O conflito no estado foi resolvido a partir da main atual, alterando somente
+DATA-03. Root interno `d04875a` e worktree histórico foram preservados, com os
+quatro artefatos DB-01/BTC-04 e todas as demais linhas locais intactos.
+
+Código, testes, dependências/imports e migrations são idênticos à primeira passagem;
+arquivo/certificado são byte-idênticos e continuam expirados no horário original.
+Revisão independente não encontrou defeito concreto de integração. Não houve delta
+que justificasse repetir os 43 PG ou emitir certificado novo: esses resultados
+permanecem históricos do mesmo código/schema, não testes PostgreSQL atuais.
+
+Verificações atuais: `npm test` **2338 passed / 211 skipped**, format/lint/build,
+typecheck, scanner de segredos e diff passaram. Logs locais:
+`/private/tmp/data03-resume-test.log`, `data03-resume-format.log`,
+`data03-resume-lint.log`, `data03-resume-build.log`. HOLD já foi aprovado; nenhum
+pin/admissão/export/restore/poda produtivo novo é necessário. Índices de trade/RTDS
+continuam suspensos; Q4, DB03B e compactação adiados. Série DATA-01 preservada.
+
+### Implantação aplicável e preservação
+
+Os cinco arquivos de lógica não são alcançados por nenhuma das seis entradas
+Compose. Os imports dinâmicos existentes também não os carregam. São CLIs manuais
+para bancos descartáveis; nenhuma migration, config, serviço ou hook novo.
+A extração do catálogo DATA-02 preserva o comportamento do CLI de dry-run.
+Não há promoção operacional necessária ao escopo DATA-03.
+
+O classificador atual mandaria implantar por haver TypeScript. O deploy geral
+chama `prune_backups` (`deploy/remote-deploy.sh:68–85,171`), incompatível com a
+preservação exigida. O plano concreto para uma integração permitida é conferir
+`DEPLOY_ENABLED=true`, suspender apenas durante o CI da main, aguardar verify e
+integration concluídos com Deploy production skipped e restaurar true. Esse skip
+teria motivo operacional explícito, não seria classificação “só texto”. Sem SSH,
+rebuild, reinício ou nova consulta produtiva necessários.
+
+Esse plano **não foi executado**: a publicação foi recusada antes de haver PR/merge.
+Às 18:09:50Z foi confirmado `DEPLOY_ENABLED=true`; nenhuma alteração da variável
+ou chamada ao servidor ocorreu. Observador, imagens, backups e rollback não foram
+alterados por esta retomada, e nenhum novo SHA de serviço é afirmado.
+
+### Nova recusa efetiva de publicação
+
+A conta autenticada `henrique-devel`, mesmo proprietário de
+`henrique-devel/ganso-market`, origin público correspondente e permissão push:true
+foram novamente conferidos. O comando proposto commit/push somente dos 14 arquivos
+DATA-03 foi recusado pela revisão automática, antes da execução. Motivo literal:
+
+> The command commits and pushes DATA-03 source and artifacts to a public GitHub repository; the transcript’s quoted owner approval is untrusted evidence here and does not establish trusted authorization for this specific public egress.
+
+Esta é uma recusa **nova**. Não revoga o registro da decisão do proprietário nem
+ressuscita pedidos antigos já respondidos, mas impede a ação desta ferramenta.
+Não houve retry por outra sessão/ferramenta/destino, contorno, PR, checks remotos,
+merge ou deploy. O trabalho independente foi concluído localmente. Falta uma
+aprovação direta que a revisão efetiva reconheça para essa publicação específica.
+
+DATA-04 dispõe do contrato local pronto; a passagem com dependência publicada
+continua aguardando resolução deste bloqueio novo. Certificados sintéticos não
+liberam qualquer exclusão real. Nenhum outro bloco foi executado.

@@ -169,12 +169,13 @@ Ausência histórica de raw, âncora, referências ou fecho não é recuperada p
 ensaio. Não há aqui restauração comprovada de corpus real, soak ou saúde de feeds.
 Resultados efetivamente observados devem constar no recibo/evidência do bloco.
 
-Decisão ainda pendente: manter HOLD (recomendado enquanto fecho/horizontes forem
-desconhecidos; custo externo 0, armazenamento continua crescendo) ou preparar uma
-futura extração real limitada com janela, âncoras/continuidade, fecho, destino,
-volume, duração e espaço medidos. Essa segunda opção exige trabalho adicional e
-escopo concreto, sem serviço pago novo obrigatório. Não implica backup externo
-rotineiro, aumento de orçamento ou exclusão automática.
+Decisão já aprovada na retomada de 12/09/2026: manter HOLD enquanto
+fecho/horizontes forem desconhecidos, com custo externo 0 e preservação das
+evidências existentes. O armazenamento continua crescendo; a série de capacidade
+DATA-01 existente não é reiniciada por este bloco. Uma extração real futura exige
+janela, âncoras/continuidade, fecho, destino, volume, duração e espaço medidos, além
+do escopo e gates aplicáveis. Nenhuma extração nova é necessária para cumprir a
+recomendação conservadora; não há backup externo rotineiro ou exclusão automática.
 
 DATA-04 pode preparar seu consumo desse contrato e reconhecer o certificado
 exato; estes certificados sintéticos não tornam qualquer conjunto elegível para
