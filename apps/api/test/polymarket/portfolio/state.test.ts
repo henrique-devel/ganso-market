@@ -317,3 +317,91 @@ describe("cap arithmetic", () => {
     expect(capUtilization(0n, s("1000"), 0n)).toBe(0n);
   });
 });
+
+describe("FIN-03 selected owner financial state", () => {
+  it("uses signed short equity and never charges the reported fee twice", () => {
+    const result = evaluateState({
+      ...CLEAN,
+      current: NORMAL,
+      realizedPnlTotalScaled: s("-0.1"),
+      openMarkScaled: s("-5"),
+      openCostScaled: s("-4"),
+      financial: {
+        accountId: "paper",
+        strategyId: "main",
+        initialCashScaled: s("1000"),
+        equityScaled: s("998.9"),
+        unrealizedScaled: s("-1"),
+      },
+    });
+    expect(result.next.equityScaled).toBe(s("998.9"));
+    expect(result.next.bankrollScaled).toBe(s("999.9"));
+  });
+
+  it.each(["capital", "mark"])(
+    "does not release capacity with unavailable %s",
+    (missing) => {
+      const current = {
+        ...NORMAL,
+        state: "REDUCE_ONLY" as const,
+        reason: "perda_diaria_max",
+        reduceOnlyUntil: new Date(NOW.getTime() - 1),
+      };
+      const result = evaluateState({
+        ...CLEAN,
+        current,
+        // Contrived compatibility numbers cannot substitute missing evidence.
+        openMarkScaled: s("99999"),
+        financial: {
+          accountId: "paper",
+          strategyId: "main",
+          initialCashScaled: missing === "capital" ? null : s("1000"),
+          equityScaled: null,
+          unrealizedScaled: missing === "mark" ? null : 0n,
+        },
+      });
+      expect(result.next.state).toBe("REDUCE_ONLY");
+      expect(result.next.reason).toBe("financial_data_unavailable");
+      expect(result.next.equityScaled).toBe(NORMAL.equityScaled);
+      expect(result.next.highWaterMarkScaled).toBe(NORMAL.highWaterMarkScaled);
+      expect(canIncreaseExposure(result.next.state)).toBe(false);
+    },
+  );
+
+  it("retains the loader's new UTC day/week losses when the persisted bucket is old", () => {
+    const result = evaluateState({
+      ...CLEAN,
+      current: { ...NORMAL, dayBucket: "2026-08-23", weekStart: "2026-08-17" },
+      realizedPnlTotalScaled: s("-40"),
+      realizedPnlDayScaled: s("-40"),
+      realizedPnlWeekScaled: s("-40"),
+      financial: {
+        accountId: "paper",
+        strategyId: "main",
+        initialCashScaled: s("1000"),
+        equityScaled: s("960"),
+        unrealizedScaled: 0n,
+      },
+    });
+    expect(result.next.realizedPnlDayScaled).toBe(s("-40"));
+    expect(result.next.realizedPnlWeekScaled).toBe(s("-40"));
+    expect(result.next.state).toBe("REDUCE_ONLY");
+    expect(result.transition?.triggerSource).toBe("daily_loss");
+  });
+
+  it("never clears an existing halt when financial inputs are unavailable", () => {
+    const result = evaluateState({
+      ...CLEAN,
+      current: { ...NORMAL, state: "HALTED" },
+      financial: {
+        accountId: "paper",
+        strategyId: "main",
+        initialCashScaled: null,
+        equityScaled: null,
+        unrealizedScaled: null,
+      },
+    });
+    expect(result.next.state).toBe("HALTED");
+    expect(result.transition).toBeNull();
+  });
+});

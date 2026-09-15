@@ -20,6 +20,8 @@ import { DEFAULT_RESOLUTION_LEXICON } from "../../../src/polymarket/resolution/l
 import { createPortfolioRunner } from "../../../src/polymarket/portfolio/runner.js";
 import type { PortfolioPool } from "../../../src/polymarket/portfolio/types.js";
 
+import type { FinancialPool } from "../../../src/polymarket/paper/financialstore.js";
+
 type Row = Record<string, unknown>;
 
 const NOW = new Date("2026-08-26T12:00:00Z");
@@ -54,7 +56,10 @@ function world(options: WorldOptions = {}): World {
     { price: "0.60", size: "500" },
   ];
 
-  const pool: PortfolioPool = {
+  const pool: FinancialPool = {
+    async transaction(run) {
+      return run(pool);
+    },
     query<R extends Row>(
       text: string,
       params: readonly unknown[] = [],
@@ -84,6 +89,16 @@ function world(options: WorldOptions = {}): World {
         return respond([]);
       }
 
+      if (text.includes("FROM paper_attributed_ledger_v1")) return respond([]);
+      if (text.includes("FROM paper_financial_owners")) {
+        // Synthetic capital fixture, never a production seed.
+        return respond([
+          {
+            initial_cash_usd: "1000.000000000",
+            capital_source_ref: "fixture:runner",
+          },
+        ]);
+      }
       // ---- reads, most specific first ------------------------------------
       // The eligible universe. It has to be matched FIRST: its lateral joins
       // name polymarket_param_versions and polymarket_universe_log, so a

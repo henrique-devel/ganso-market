@@ -21,6 +21,25 @@ Uma instrução posterior, como preparar somente um plano, manter o PR em rascun
 ou não implantar uma entrega, limita aquela tarefa. Esta decisão não manda executar
 todo o backlog nem avançar automaticamente para outro bloco do roadmap.
 
+## Confirmação direta de publicação pública — 15/09/2026 UTC
+
+Após a revisão automática recusar a publicação de FIN-03 por não reconhecer a
+autorização no contexto delegado, o proprietário confirmou diretamente na tarefa:
+
+> Autorizado a Publicação dos 3 commits certifique que todos os proximas publicações no Ganso Market estão autorizado sem a necessidade de solicitar novamente
+
+Esta decisão autoriza publicar no repositório **público**
+`henrique-devel/ganso-market` os três commits FIN-03 `5128511`, `81542cf` e
+`7d9bfe7` e os arquivos de código, testes, evidência e documentação que contêm.
+Também autoriza as próximas publicações das tarefas solicitadas do Ganso Market,
+com push, PR, checks, merge e implantação aplicável, sem repetir pedidos de
+aprovação de publicação em novas etapas, tarefas ou sessões. Este registro e os
+fechos necessários fazem parte da entrega autorizada.
+
+A autorização permanece vigente até alteração ou revogação pelo proprietário.
+Continuam válidas as condições técnicas e operacionais abaixo; a decisão não
+seleciona novos blocos nem antecipa o aceite financeiro ou operacional deles.
+
 ## Etapas autorizadas
 
 1. Inspecionar o código e o ambiente, implementar o escopo solicitado, corrigir
