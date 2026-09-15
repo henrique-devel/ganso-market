@@ -73,11 +73,31 @@ comprova novos fills, reconciliação histórica, ganho de latência ou soak.
 
 Em 15/09/2026 UTC, a revisão automática recusou a tentativa de push e abertura de
 PR público: não reconheceu a autorização de publicação contida no contexto
-delegado. Os commits permanecem locais; não houve PR, merge ou deploy FIN-03.
+delegado. Naquele momento, os commits permaneceram locais; ainda não havia PR, merge ou deploy FIN-03.
 A confirmação direta exigida foi solicitada, sem tentar outro destino/método.
-O gate local passou; CI/CD remoto e verificação da release dependem da publicação.
+O gate local já havia passado; a publicação foi retomada após a resposta abaixo.
 
 A recusa acima foi respondida diretamente pelo proprietário na mesma tarefa em
 15/09/2026 UTC: autorizou os três commits e as próximas publicações do Ganso
 Market, sem nova confirmação para etapas cobertas. O registro persistente está
 em `docs/ops/DEVELOPMENT_AUTHORIZATION.md`; a entrega foi retomada.
+
+## Entrega e verificação da release
+
+O [PR #175](https://github.com/henrique-devel/ganso-market/pull/175) foi integrado
+normalmente em `9a9461c0ceaa0fe832ffea8628b5999aae5b6d26`. Os checks source e
+Compose passaram no PR e em main; o job de deploy também passou. A versão
+carregada pelo núcleo e pelo perfil afetado foi conferida separadamente do CD.
+A atualização respeitou o runbook, incluindo o perfil que já estava ativo.
+Saúde e preservação das proteções operacionais foram verificadas, sem alterar
+capital, caps, modo ou migrations e sem reescrever o ledger. Nenhum inventário operacional é publicado.
+
+A consulta produtiva read-only para comparar replay/cache e registrar metadados
+financeiros derivados em arquivo local foi recusada pela revisão automática
+antes de executar: exigiu aprovação específica do conteúdo e destino. Essa
+aprovação foi solicitada; não se tentou outro método para obter o mesmo dado.
+Portanto a observação de produção não comprova reconciliação financeira ou
+persistência de novos fills. A prova financeira desta entrega continua sendo a
+suíte de fixtures e PostgreSQL descartável: 95 testes focados passaram, incluindo
+8 SQL reais, zero skipped nos cinco arquivos. O gate completo local passou;
+seus testes PG não selecionados permanecem discriminados como skipped.
