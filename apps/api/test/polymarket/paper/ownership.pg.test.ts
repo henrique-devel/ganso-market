@@ -218,6 +218,70 @@ describe.skipIf(DATABASE_URL === undefined)(
       await admin?.end();
     });
 
+    it("matches unfiltered membership across tokens with default cutoffs and net-zero owners", async () => {
+      const token = `filtered-${RUN}`;
+      const other = `other-filtered-${RUN}`;
+      const long = `filtered-long-${RUN}`;
+      const short = `filtered-short-${RUN}`;
+      const otherOrder = `filtered-other-${RUN}`;
+      await order(raw, long, token, long);
+      await order(raw, short, token, short, "SELL");
+      await order(raw, otherOrder, other, null);
+      for (const [id, tokenId, side, size] of [
+        [long, token, "BUY", "5"],
+        [short, token, "SELL", "5"],
+        [otherOrder, other, "BUY", "3"],
+      ] as const) {
+        await appendLedgerEvent(
+          wrap(raw),
+          fill(`${id}:fill`, id, tokenId, {
+            side,
+            price: "0.4",
+            size,
+            fee: "0",
+          }),
+        );
+      }
+      const original = async () =>
+        (
+          await raw.query(
+            `SELECT account_id AS "accountId", strategy_id AS "strategyId",
+                  token_id AS "tokenId", condition_id AS "conditionId", shares::text
+             FROM paper_open_owner_tokens()
+            ORDER BY token_id, account_id, strategy_id`,
+          )
+        ).rows;
+      const all = await original();
+      expect(await loadOpenOwnerTokens(wrap(raw))).toEqual(all);
+      for (const tokenId of [token, other, `missing-${RUN}`]) {
+        expect(await loadOpenOwnerTokens(wrap(raw), tokenId)).toEqual(
+          all.filter((row) => row["tokenId"] === tokenId),
+        );
+      }
+      expect(
+        all
+          .filter((row) => row["tokenId"] === token)
+          .map((row) => [row["strategyId"], decimal(row["shares"] as string)]),
+      ).toEqual([
+        [long, "5"],
+        [short, "-5"],
+      ]);
+      expect(
+        all
+          .filter((row) => row["tokenId"] === other)
+          .map((row) => decimal(row["shares"] as string)),
+      ).toEqual(["3"]);
+      await appendLedgerEvent(
+        wrap(raw),
+        resolution(token, `filtered-resolution-${RUN}`),
+      );
+      expect(await loadOpenOwnerTokens(wrap(raw), token)).toEqual([]);
+      expect(await loadOpenOwnerTokens(wrap(raw))).toEqual(await original());
+      expect(await loadOpenOwnerTokens(wrap(raw), other)).toEqual(
+        all.filter((row) => row["tokenId"] === other),
+      );
+    });
+
     it("assigns new manual and fast orders explicitly, without creating capital", async () => {
       const token = `identity-${RUN}`;
       const strategy = `identity-${RUN}`;

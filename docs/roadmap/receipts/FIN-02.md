@@ -18,3 +18,8 @@ Evidência pública: [contrato e testes](../evidence/FIN-02-ledger-ownership.md)
 Evidência operacional local: FIN-02-production-evidence.md, entregue com o fecho ao coordenador.
 Worktree: /private/tmp/ganso-fin02; branches codex/fin-02-ledger-ownership e codex/fin-02-receipt.
 Próximo elegível: FIN-03; menor lista de leitura na evidência; nenhum prompt posterior/QA executado.
+Ajuste 15/09 UTC: filtro por token dentro da função SQL existente; defaults e migration preservados.
+Validação do ajuste: 2 casos PostgreSQL passed; 15 fora do filtro, não contados como passed.
+Cobertura do ajuste: equivalência multitoken, ausência de token, token inexistente e resolução net-zero.
+Limite do ajuste: sem benchmark de latência em produção.
+Gates do ajuste: make verify e secret scan passaram; branch codex/fin-02-token-filter.
