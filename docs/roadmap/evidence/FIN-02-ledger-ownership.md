@@ -92,20 +92,22 @@ a última edição. Suítes PG de outros blocos ficam skipped no gate sem URL;
 não foram convertidas em passed nem usadas como prova desta entrega.
 Checksum SQL testado: `773fdce27553a50c7ea85e573817d8dfec00a33ca4d921836a43090b29a9b199`.
 Revisão independente conferiu produtores, locks, resolução, legado e payloads.
-Checks GitHub, merge e observação produtiva serão registrados após a entrega.
+Publicação: [PR #172](https://github.com/henrique-devel/ganso-market/pull/172),
+código `3e05396d675b82072d90023d2e235449aec61500`, merge normal
+`4787b171e5e4f77cfd24a05c98f2c3151379b840` em 22:04:58 UTC, sem bypass.
+[CI do PR](https://github.com/henrique-devel/ganso-market/actions/runs/34721519934):
+Verify source e Verify Compose runtime passaram.
+[CI/CD de main](https://github.com/henrique-devel/ganso-market/actions/runs/34721746299):
+source, Compose e o job Deploy production passaram.
 A suíte nova usa PostgreSQL real exclusivamente por `GANSO_TEST_DATABASE_URL`,
 schema próprio com todas as migrations e fixtures históricas inseridas antes da
 0024. Não desabilita guards nem apaga linhas; o container descartável é exclusivo.
 
-Baseline de produção em 2026-09-12 21:49 UTC, consultas read-only com timeout:
-foundation 23, ledger append-only/HOLD ativos, zero ordens abertas; kill switch
-`RECORDER_STALE` engatado. Último fill em 11/09, marcas novas em 12/09. PostgreSQL
-ID `983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889`, Created
-`2026-09-07T00:11:02.045025319Z`, postmaster desde `2026-09-07T22:59:17.372734Z`.
-API/portfolio em `8132cd357ffb47340e39af278a65dc06469edb0f`, paper em
-`dcfd52b7371dc426ebaa4fbce2391cf6e2f531ac`. Watchdog ativo; série DATA-01 preservada.
-Implantação desta mudança exige API pelo CD e atualização limitada de paper e
-portfolio após o CD, com lock de deploy e conferência do SHA dentro dos serviços.
+A verificação operacional do escopo foi executada. O relatório detalhado foi
+entregue ao coordenador como artefato local, separado deste contrato público.
+A publicação final do recibo contém referências de código/checks e não exporta
+o inventário operacional. Isso não amplia o aceite financeiro dos blocos seguintes.
+FIN-03 está elegível para consumir a atribuição; sua implementação não foi antecipada.
 
 Contexto ampliado somente para os produtores, guards DATA-02, harness PostgreSQL,
 parser decimal e runbooks/CI indispensáveis à atomicidade e entrega. São cinco
