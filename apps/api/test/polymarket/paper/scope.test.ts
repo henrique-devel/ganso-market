@@ -62,6 +62,8 @@ const WRITABLE_TABLES: readonly string[] = [
   "paper_orders",
   "paper_ledger_events",
   "paper_positions",
+  // FIN-03: rebuildable per-owner cache created by migration 0024.
+  "paper_owner_positions",
   "paper_kill_switch",
   "paper_markouts",
   "paper_fill_samples",

@@ -16,6 +16,17 @@ import type {
   OpenBreakerRow,
 } from "./breakers.js";
 import { money } from "./ev.js";
+import {
+  loadOwnerFinancialState,
+  type FinancialPool,
+  type OwnerSelection,
+} from "../paper/financialstore.js";
+import { financialOwnerKey } from "../paper/financial.js";
+import {
+  utcDayBucket,
+  utcWeekStart,
+  type FinancialStateInput,
+} from "./state.js";
 import type { BreakerKind, MarketSide, PortfolioPool } from "./types.js";
 import { BREAKER_KINDS } from "./types.js";
 
@@ -139,6 +150,8 @@ export async function loadOpenPositions(
 
 /** Realized and unrealized PnL of the paper book, for the state machine. */
 export interface PaperPnl {
+  /** Present only for the explicit financial-v2 owner selection. */
+  readonly financial?: FinancialStateInput;
   /** Realized PnL over the whole book, exact: the ledger's own total. */
   readonly realizedTotalScaled: bigint;
   /** Realized PnL attributed to the current UTC day. */
@@ -157,7 +170,9 @@ export interface PaperPnl {
 }
 
 /**
- * The PnL the state machine measures its limits against.
+ * Explicit owner selection uses financial-v2 below: atomic replay/cache,
+ * signed executable marks, economic UTC buckets and nullable absolute equity.
+ * Omitted selection preserves the following ledger-v1 compatibility contract.
  *
  * The total is exact — `realized_pnl_usd` is what the RFC-011 ledger derived.
  * The DAY and WEEK figures attribute each position's realized total to its
@@ -173,7 +188,58 @@ export interface PaperPnl {
  * one's; `updated_at` is not a substitute, because a mark refresh moves it and
  * would re-attribute an old loss to today on every cycle.
  */
-export async function loadPaperPnl(pool: PortfolioPool): Promise<PaperPnl> {
+export async function loadPaperPnl(
+  pool: FinancialPool,
+  selection?: OwnerSelection & { readonly now: Date },
+): Promise<PaperPnl> {
+  if (selection !== undefined) {
+    const result = await loadOwnerFinancialState(
+      pool,
+      selection,
+      selection.now,
+    );
+    const owner = result.owners.get(
+      financialOwnerKey(selection.accountId, selection.strategyId),
+    )!;
+    const scaled = (value: string): bigint => parseScaled(value)!;
+    let signedBasis = 0n;
+    let signedMark = 0n;
+    let stale = 0;
+    for (const position of owner.positions.values()) {
+      const shares = scaled(position.shares);
+      if (shares === 0n) continue;
+      signedBasis += (shares < 0n ? -1n : 1n) * scaled(position.costBasisUsd);
+      if (position.markStale || position.markValueSignedUsd === null)
+        stale += 1;
+      else signedMark += scaled(position.markValueSignedUsd);
+    }
+    return {
+      realizedTotalScaled: scaled(owner.realizedPnlUsd),
+      realizedDayScaled: scaled(
+        owner.dailyRealizedPnlUsd.get(utcDayBucket(selection.now)) ?? "0",
+      ),
+      realizedWeekScaled: scaled(
+        owner.weeklyRealizedPnlUsd.get(utcWeekStart(selection.now)) ?? "0",
+      ),
+      openCostScaled: signedBasis,
+      // Compatibility numbers are never used to assert availability: financial
+      // carries NULL when any mark is absent, and the state refuses new risk.
+      openMarkScaled: signedMark,
+      positionsWithStaleMark: stale,
+      financial: {
+        accountId: selection.accountId,
+        strategyId: selection.strategyId,
+        initialCashScaled:
+          owner.initialCashUsd === null ? null : scaled(owner.initialCashUsd),
+        equityScaled: owner.equityUsd === null ? null : scaled(owner.equityUsd),
+        unrealizedScaled:
+          owner.unrealizedPnlUsd === null
+            ? null
+            : scaled(owner.unrealizedPnlUsd),
+      },
+    };
+  }
+  // ledger-v1 compatibility only. New runtime callers select an owner above.
   const result = await pool.query<Record<string, unknown>>(
     `SELECT
        COALESCE(sum(realized_pnl_usd::numeric), 0) AS realized_total,

@@ -780,7 +780,11 @@ export function createPortfolioRunner(
 
     // 2. State machine over the paper book's realized and marked PnL.
     const current = await loadState(now);
-    const pnl = await loadPaperPnl(deps.pool);
+    const pnl = await loadPaperPnl(deps.pool, {
+      accountId: "paper",
+      strategyId: "main",
+      now,
+    });
     const evaluation = evaluateState({
       now,
       current,
@@ -795,6 +799,7 @@ export function createPortfolioRunner(
         reduceOnlyWeekDays: deps.config.lossLimits.reduceOnlyWeekDays,
       },
       bankrollBaseScaled: fractionScaled(deps.config.bankrollUsd),
+      financial: pnl.financial,
       realizedPnlTotalScaled: pnl.realizedTotalScaled,
       realizedPnlDayScaled: pnl.realizedDayScaled,
       realizedPnlWeekScaled: pnl.realizedWeekScaled,
@@ -818,7 +823,7 @@ export function createPortfolioRunner(
     await persistExposures(exposures, now);
     const alarm = unwindAlarm(
       exposures,
-      pnl.openMarkScaled - pnl.openCostScaled,
+      pnl.financial?.unrealizedScaled ?? 0n,
       fractionScaled(deps.config.exits.unwindAlarmPctOpenPnl),
     );
     if (alarm.triggered) {

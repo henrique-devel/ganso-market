@@ -50,7 +50,17 @@ export interface StateLimits {
   readonly reduceOnlyWeekDays: number;
 }
 
+export interface FinancialStateInput {
+  readonly accountId: string;
+  readonly strategyId: string;
+  readonly initialCashScaled: bigint | null;
+  readonly equityScaled: bigint | null;
+  readonly unrealizedScaled: bigint | null;
+}
+
 export interface StateEvaluationInput {
+  /** Explicit owner/version selection. Absent keeps ledger-v1 compatibility. */
+  readonly financial?: FinancialStateInput | undefined;
   readonly now: Date;
   readonly current: PortfolioStateSnapshot;
   readonly limits: StateLimits;
@@ -121,10 +131,21 @@ function lossFraction(pnlScaled: bigint, bankrollScaled: bigint): bigint {
 export function evaluateState(input: StateEvaluationInput): StateEvaluation {
   const { current, limits, now } = input;
 
+  const financial = input.financial;
+  const unavailable =
+    financial !== undefined &&
+    (financial.initialCashScaled === null ||
+      financial.equityScaled === null ||
+      financial.unrealizedScaled === null);
   const bankrollScaled =
-    input.bankrollBaseScaled + input.realizedPnlTotalScaled;
-  const equityScaled =
-    bankrollScaled + input.openMarkScaled - input.openCostScaled;
+    financial?.initialCashScaled === null
+      ? current.bankrollScaled
+      : (financial?.initialCashScaled ?? input.bankrollBaseScaled) +
+        input.realizedPnlTotalScaled;
+  const equityScaled = unavailable
+    ? current.equityScaled
+    : (financial?.equityScaled ??
+      bankrollScaled + input.openMarkScaled - input.openCostScaled);
   const highWaterMarkScaled =
     equityScaled > current.highWaterMarkScaled
       ? equityScaled
@@ -139,9 +160,13 @@ export function evaluateState(input: StateEvaluationInput): StateEvaluation {
   const dayBucket = utcDayBucket(now);
   const weekStart = utcWeekStart(now);
   const realizedPnlDayScaled =
-    dayBucket === current.dayBucket ? input.realizedPnlDayScaled : 0n;
+    financial !== undefined || dayBucket === current.dayBucket
+      ? input.realizedPnlDayScaled
+      : 0n;
   const realizedPnlWeekScaled =
-    weekStart === current.weekStart ? input.realizedPnlWeekScaled : 0n;
+    financial !== undefined || weekStart === current.weekStart
+      ? input.realizedPnlWeekScaled
+      : 0n;
 
   const base: PortfolioStateSnapshot = {
     ...current,
@@ -240,6 +265,32 @@ export function evaluateState(input: StateEvaluationInput): StateEvaluation {
           until: until.toISOString(),
         },
       },
+    };
+  }
+
+  // Unknown capital or a missing executable mark cannot release a throttle or
+  // create capacity. Keep the last numeric equity/HWM for legacy persistence;
+  // the reason explicitly says it is unavailable, never a fresh valuation.
+  if (unavailable) {
+    const reason = "financial_data_unavailable";
+    return {
+      next: { ...base, state: "REDUCE_ONLY", reason },
+      transition:
+        current.state === "REDUCE_ONLY"
+          ? null
+          : {
+              from: current.state,
+              to: "REDUCE_ONLY",
+              reason,
+              triggerSource: "boot",
+              detail: {
+                accounting_version: "financial-v2",
+                account_id: financial.accountId,
+                strategy_id: financial.strategyId,
+                capital_known: financial.initialCashScaled !== null,
+                marks_available: financial.unrealizedScaled !== null,
+              },
+            },
     };
   }
 
