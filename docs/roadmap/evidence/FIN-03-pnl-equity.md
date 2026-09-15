@@ -76,3 +76,8 @@ PR público: não reconheceu a autorização de publicação contida no contexto
 delegado. Os commits permanecem locais; não houve PR, merge ou deploy FIN-03.
 A confirmação direta exigida foi solicitada, sem tentar outro destino/método.
 O gate local passou; CI/CD remoto e verificação da release dependem da publicação.
+
+A recusa acima foi respondida diretamente pelo proprietário na mesma tarefa em
+15/09/2026 UTC: autorizou os três commits e as próximas publicações do Ganso
+Market, sem nova confirmação para etapas cobertas. O registro persistente está
+em `docs/ops/DEVELOPMENT_AUTHORIZATION.md`; a entrega foi retomada.

@@ -19,6 +19,6 @@ Evidência: [contrato, cobertura e limites](../evidence/FIN-03-pnl-equity.md).
 Produção: sem publicação, PR, merge ou deploy FIN-03; somente baseline read-only local anterior à recusa.
 Limites: sem novos fills, ganho de latência, reconciliação histórica/integrada ou soak comprovados.
 Autorização: DEVELOPMENT_AUTHORIZATION.md e autorização direta da sequência FIN; sem custo externo adicional.
-Publicação: push/PR recusados pela revisão automática; autorização do contexto delegado não foi reconhecida.
-Pendência: confirmação direta de publicação solicitada; nenhum método/destino alternativo tentado.
+Publicação: recusa histórica de push/PR respondida por confirmação direta do proprietário em 15/09 UTC.
+Autorização pública: três commits e futuras publicações confirmados; registro em DEVELOPMENT_AUTHORIZATION.md.
 Continuidade: FIN-04 aguarda publicação/fecho FIN-03; nenhum prompt posterior executado.
