@@ -68,3 +68,11 @@ Revisão independente identificou as duas regressões de cutoff corrigidas acima
 Contagens executadas, gates e entrega constam no recibo; skipped não é passed.
 Produção e fixtures constituem evidências diferentes; nenhuma observação breve
 comprova novos fills, reconciliação histórica, ganho de latência ou soak.
+
+## Situação da entrega
+
+Em 15/09/2026 UTC, a revisão automática recusou a tentativa de push e abertura de
+PR público: não reconheceu a autorização de publicação contida no contexto
+delegado. Os commits permanecem locais; não houve PR, merge ou deploy FIN-03.
+A confirmação direta exigida foi solicitada, sem tentar outro destino/método.
+O gate local passou; CI/CD remoto e verificação da release dependem da publicação.

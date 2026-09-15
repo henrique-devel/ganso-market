@@ -16,7 +16,9 @@ Comando: GANSO_TEST_DATABASE_URL=<descartável> npm test --workspace @ganso-mark
 Gate local: make verify VENV=<venv existente> passou; 2379 testes JS passed/236 skipped separados, Rust/Python/build/Compose aprovados.
 Revisão independente, TypeScript, Prettier, diff e secret scan passaram; scope allowlist inclui somente o cache 0024.
 Evidência: [contrato, cobertura e limites](../evidence/FIN-03-pnl-equity.md).
-Produção: implantação/verificação pós-merge ainda não executadas neste registro inicial.
+Produção: sem publicação, PR, merge ou deploy FIN-03; somente baseline read-only local anterior à recusa.
 Limites: sem novos fills, ganho de latência, reconciliação histórica/integrada ou soak comprovados.
 Autorização: DEVELOPMENT_AUTHORIZATION.md e autorização direta da sequência FIN; sem custo externo adicional.
-Próximo elegível: FIN-04 após fecho desta entrega; nenhum prompt posterior executado.
+Publicação: push/PR recusados pela revisão automática; autorização do contexto delegado não foi reconhecida.
+Pendência: confirmação direta de publicação solicitada; nenhum método/destino alternativo tentado.
+Continuidade: FIN-04 aguarda publicação/fecho FIN-03; nenhum prompt posterior executado.
