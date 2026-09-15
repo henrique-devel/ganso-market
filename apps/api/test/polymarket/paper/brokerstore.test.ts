@@ -561,7 +561,7 @@ function worldPool(world: World): PaperPool {
           }
           return [];
         }
-        if (text.includes("FROM paper_open_owner_tokens()")) {
+        if (text.includes("FROM paper_open_owner_tokens(")) {
           if (world.ledgerReadError !== null) throw world.ledgerReadError;
           const events = world.ledger.map((row): LedgerEventRecord => ({
             idempotencyKey: row["idempotency_key"] as string,
@@ -1230,7 +1230,7 @@ describe("acceptance", () => {
       query.startsWith("LOCK TABLE polymarket_resolution_input_changes"),
     );
     const settlementStart = world.queries.findIndex((query) =>
-      query.includes("FROM paper_open_owner_tokens()"),
+      query.includes("FROM paper_open_owner_tokens("),
     );
     const terminalRead = world.queries.findIndex(
       (query, index) =>
@@ -2953,7 +2953,7 @@ describe("settlement (C5)", () => {
     );
     const ledgerRead = world.queries.findIndex(
       (query, index) =>
-        index > advisory && query.includes("FROM paper_open_owner_tokens()"),
+        index > advisory && query.includes("FROM paper_open_owner_tokens("),
     );
     const resolutionAppend = world.queries.findIndex(
       (query, index) =>

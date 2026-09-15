@@ -100,8 +100,7 @@ Verify source e Verify Compose runtime passaram.
 [CI/CD de main](https://github.com/henrique-devel/ganso-market/actions/runs/34721746299):
 source, Compose e o job Deploy production passaram.
 A suíte nova usa PostgreSQL real exclusivamente por `GANSO_TEST_DATABASE_URL`,
-schema próprio com todas as migrations e fixtures históricas inseridas antes da
-0024. Não desabilita guards nem apaga linhas; o container descartável é exclusivo.
+schema próprio com todas as migrations e fixtures históricas inseridas antes da 0024. Não desabilita guards nem apaga linhas; o container descartável é exclusivo.
 
 A verificação operacional do escopo foi executada. O relatório detalhado foi
 entregue ao coordenador como artefato local, separado deste contrato público.
@@ -112,3 +111,19 @@ FIN-03 está elegível para consumir a atribuição; sua implementação não fo
 Contexto ampliado somente para os produtores, guards DATA-02, harness PostgreSQL,
 parser decimal e runbooks/CI indispensáveis à atomicidade e entrega. São cinco
 arquivos TS (incluindo testes) e uma migration; sem refatoração do broker.
+
+## Ajuste do filtro por token — 15/09/2026 UTC
+
+`loadOpenOwnerTokens` passa o token por `for_token_id => $1::text` à função
+existente, filtrando os eventos antes da materialização. Os três parâmetros de
+cutoff conservam seus defaults; ausência de token continua lendo todos os donos.
+A migration 0024 permanece intacta. O mock do broker aceita a chamada parametrizada.
+
+PostgreSQL descartável: dois casos passaram; os outros 15 foram excluídos pelo
+filtro de testes, não contados como aprovados. O caso novo compara a leitura sem
+filtro da função original com a API, com dois tokens, token inexistente, donos
+opostos net-zero e resolução de apenas um token. O segundo caso exercita o
+`settlementTick` real com donos opostos. Comando: `GANSO_TEST_DATABASE_URL=<banco descartável> npm test --workspace @ganso-market/api -- test/polymarket/paper/ownership.pg.test.ts -t 'matches unfiltered membership|keeps opposing owners' --no-file-parallelism`.
+A equivalência é funcional; não foi medido ganho de latência em produção.
+O gate local `make verify VENV=/Users/kovi/Desktop/henrique/ganso-market/ganso-market/.venv`
+passou no ajuste, incluindo secret scan. A validação completa adicional é a do CI obrigatório.

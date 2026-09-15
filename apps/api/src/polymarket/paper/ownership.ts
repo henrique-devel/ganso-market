@@ -92,8 +92,7 @@ export async function loadOpenOwnerTokens(
 ): Promise<OpenOwnerToken[]> {
   const result = await pool.query(
     `SELECT account_id, strategy_id, token_id, condition_id, shares::text
-       FROM paper_open_owner_tokens()
-      WHERE ($1::text IS NULL OR token_id = $1)
+       FROM paper_open_owner_tokens(for_token_id => $1::text)
       ORDER BY token_id, account_id, strategy_id`,
     [tokenId ?? null],
   );
