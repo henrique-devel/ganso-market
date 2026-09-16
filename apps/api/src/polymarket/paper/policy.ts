@@ -21,7 +21,7 @@ import {
 } from "../fundamental/fixed.js";
 import type { OrderSide, OrderType } from "./validator.js";
 
-export const POLICY_VERSION = "1.0.0";
+export const POLICY_VERSION = "1.0.1";
 
 /** Marketable orders in crypto/finance suffer this match delay (B5). */
 export const TAKER_DELAY_MS = 250;
@@ -97,7 +97,13 @@ function walkForSize(
   for (const level of levels) {
     const price = parseScaled(level.price);
     const size = parseScaled(level.size);
-    if (price === null || size === null || price <= 0n || size < 0n) {
+    if (
+      price === null ||
+      size === null ||
+      price <= 0n ||
+      price >= SCALE ||
+      size < 0n
+    ) {
       return null;
     }
     if (remaining <= 0n) {
@@ -210,6 +216,8 @@ export function decideOrderType(context: PolicyContext): PolicyResult {
     const walk = walkForSize(opposing, size);
     if (walk !== null && walk.filled) {
       const worst = walk.worstScaled;
+      // USD/share at 1e9. This policy uses the conservative worst price,
+      // not VWAP, and never subtracts walk slippage a second time.
       const fee = takerFeePerShare(rate, worst);
       const margin =
         parseScaled(context.takerMargin ?? DEFAULT_TAKER_MARGIN) ?? 0n;
@@ -248,7 +256,7 @@ export function decideOrderType(context: PolicyContext): PolicyResult {
       ttlS,
       expectedTakerDelayMs: 0,
       policyReason:
-        context.takerFeeRate === null
+        rate === null || rate < 0n
           ? "DEFAULT_PASSIVE_TAKER_FEE_UNKNOWN"
           : "DEFAULT_PASSIVE_MAKER_FEE_ZERO",
     },

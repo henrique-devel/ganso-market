@@ -3,13 +3,13 @@
 //
 //   EV_yes = q - ask_exec_yes - costs
 //   EV_no  = (1 - q) - ask_exec_no - costs
-//   costs  = expected_fee + bookwalk_slippage + capital_cost + resolution_buffer
+//   costs  = expected_fee + capital_cost + resolution_buffer + maker_adverse_selection
 //
 // All money math is scaled bigint (fundamental/fixed.ts), never float: a
 // half-cent rounding error is a quarter of the RFC's minimum net edge.
 //
-// The executable price is ALWAYS a book-walk over the recorded raw book for the
-// candidate size. Never a midpoint: the interface switches to the last trade
+// Taker price is a book-walk; an explicit maker quote uses its limit price.
+// The legacy candidate calculation retains its book-walk price proxy. Never a midpoint: the interface switches to the last trade
 // when the spread exceeds $0.10, so a mid-derived price is not a price anyone
 // could have traded at.
 
@@ -25,6 +25,9 @@ import type { BookLevel, MarketSide } from "./types.js";
 /** One day, in seconds — the unit E[lockup] arrives in. */
 const DAY_S = 86_400;
 const YEAR_DAYS = 365n;
+
+/** v2 excludes diagnostic slippage from costsTotalScaled (USD/share, 1e9). */
+export const EV_MODEL_VERSION = "ev-costs-v2";
 
 export interface BookWalk {
   /** Volume-weighted average price actually paid for the walked size. */
@@ -58,7 +61,13 @@ export function bookWalk(
   for (const level of levels) {
     const price = parseScaled(level.price);
     const size = parseScaled(level.size);
-    if (price === null || size === null || price <= 0n || size < 0n) {
+    if (
+      price === null ||
+      size === null ||
+      price <= 0n ||
+      price >= SCALE ||
+      size < 0n
+    ) {
       return null;
     }
     if (best === 0n) {
@@ -102,7 +111,13 @@ export function depthUpTo(
   for (const level of levels) {
     const price = parseScaled(level.price);
     const size = parseScaled(level.size);
-    if (price === null || size === null || price <= 0n || size < 0n) {
+    if (
+      price === null ||
+      size === null ||
+      price <= 0n ||
+      price >= SCALE ||
+      size < 0n
+    ) {
       return total;
     }
     const withinLimit =
@@ -132,7 +147,7 @@ export interface CapitalCostInput {
   readonly priceScaled: bigint;
   /** Expected lockup, seconds, from the RFC-012 bimodal model. */
   readonly expectedLockupS: number;
-  /** Annual cost of capital, scaled. */
+  /** Annual cost of capital, dimensionless fraction/year, scaled by 1e9. */
   readonly annualRateScaled: bigint;
   /**
    * Per-day capital hurdle the RFC-012 resolution buffer ALREADY charges. The
@@ -169,19 +184,35 @@ export interface EvInput {
   readonly walk: BookWalk;
   /** Venue taker fee rate for the category, scaled; null = unknown. */
   readonly takerFeeRateScaled: bigint | null;
-  /** True when the intent is a passive post-only quote (fee is zero). */
+  /** True for a passive post-only quote; legacy candidate fee defaults to zero. */
   readonly maker: boolean;
+  /** Maker limit in USD/share, 1e9. Absent = legacy candidate VWAP proxy. */
+  readonly makerLimitPriceScaled?: bigint;
+  /** Explicit maker fee in USD/share, 1e9; no rebate is assumed. */
+  readonly makerFeeScaled?: bigint;
+  /** Conditional-on-fill adverse selection cost, USD/share, 1e9. */
+  readonly makerAdverseSelectionScaled?: bigint;
+  /** Expected remaining lockup in seconds. */
   readonly expectedLockupS: number;
+  /** Dimensionless annual fraction, 1e9. */
   readonly capitalAnnualRateScaled: bigint;
+  /** USD/share/day already included in resolutionBufferScaled, 1e9. */
   readonly bufferDailyHurdleScaled: bigint;
-  /** RFC-012 resolution buffer at this entry price, scaled. */
+  /** RFC-012 resolution buffer at this entry price, USD/share, 1e9. */
   readonly resolutionBufferScaled: bigint;
-  /** Safety margin floor and edge fraction, scaled. */
+  /** Safety margin floor, USD/share, 1e9; compared separately, not a cost. */
   readonly safetyMarginMinScaled: bigint;
+  /** Dimensionless fraction of conservative gross edge, 1e9. */
   readonly safetyMarginEdgeFractionScaled: bigint;
 }
 
+/** Monetary fields are USD/share scaled by 1e9, probabilities dimensionless. */
 export interface EvBreakdown {
+  readonly modelVersion: typeof EV_MODEL_VERSION;
+  readonly priceBasis: "taker-vwap" | "maker-limit" | "candidate-vwap";
+  /** False means feeScaled=0 is only an unavailable-cost placeholder. */
+  readonly feeKnown: boolean;
+  readonly bookComplete: boolean;
   /** The probability the side is paid on: q for YES, 1 - q for NO. */
   readonly probScaled: bigint;
   /** The CONSERVATIVE probability the entry gate uses. */
@@ -190,9 +221,12 @@ export interface EvBreakdown {
   readonly worstPriceScaled: bigint;
   readonly bestPriceScaled: bigint;
   readonly feeScaled: bigint;
+  /** Walk VWAP minus best ask: diagnostic only, even for a maker quote. */
   readonly slippageScaled: bigint;
+  readonly makerAdverseSelectionScaled: bigint;
   readonly capitalCostScaled: bigint;
   readonly resolutionBufferScaled: bigint;
+  /** v2: fee + capital excess + resolution buffer + maker adverse selection. */
   readonly costsTotalScaled: bigint;
   readonly safetyMarginScaled: bigint;
   /** Gross edge on the point estimate — reporting only. */
@@ -217,18 +251,27 @@ export function computeEv(input: EvInput): EvBreakdown {
   const probLowerScaled =
     input.side === "YES" ? input.qLoScaled : complement(input.qHiScaled);
 
-  const execPriceScaled = input.walk.vwapScaled;
-  // Slippage is what the walk cost beyond the best level — the real cost of
-  // taking size, measured on the recorded book rather than assumed.
+  const execPriceScaled = input.maker
+    ? (input.makerLimitPriceScaled ?? input.walk.vwapScaled)
+    : input.walk.vwapScaled;
+  // Preserve the walk diagnostic. VWAP already includes this price impact;
+  // adding it to costs would charge it twice. It is not a maker fill forecast.
   const slippageScaled =
-    execPriceScaled > input.walk.bestScaled
-      ? execPriceScaled - input.walk.bestScaled
+    input.walk.vwapScaled > input.walk.bestScaled
+      ? input.walk.vwapScaled - input.walk.bestScaled
       : 0n;
 
-  const feeScaled =
-    input.maker || input.takerFeeRateScaled === null
-      ? 0n
-      : takerFeePerShare(input.takerFeeRateScaled, execPriceScaled);
+  const feeKnown = input.maker
+    ? (input.makerFeeScaled ?? 0n) >= 0n
+    : input.takerFeeRateScaled !== null && input.takerFeeRateScaled >= 0n;
+  const feeScaled = input.maker
+    ? (input.makerFeeScaled ?? 0n)
+    : feeKnown
+      ? takerFeePerShare(input.takerFeeRateScaled!, execPriceScaled)
+      : 0n;
+  const makerAdverseSelectionScaled = input.maker
+    ? (input.makerAdverseSelectionScaled ?? 0n)
+    : 0n;
 
   const capitalCostScaled = capitalCostPerShare({
     priceScaled: execPriceScaled,
@@ -239,9 +282,9 @@ export function computeEv(input: EvInput): EvBreakdown {
 
   const costsTotalScaled =
     feeScaled +
-    slippageScaled +
     capitalCostScaled +
-    input.resolutionBufferScaled;
+    input.resolutionBufferScaled +
+    makerAdverseSelectionScaled;
 
   const edgeGrossScaled = probScaled - execPriceScaled;
   // The margin is a fraction of the gross edge on the LOWER bound, floored at
@@ -260,6 +303,14 @@ export function computeEv(input: EvInput): EvBreakdown {
   const edgeNetScaled = lowerGross - costsTotalScaled;
 
   return {
+    modelVersion: EV_MODEL_VERSION,
+    priceBasis: input.maker
+      ? input.makerLimitPriceScaled === undefined
+        ? "candidate-vwap"
+        : "maker-limit"
+      : "taker-vwap",
+    feeKnown,
+    bookComplete: input.walk.complete,
     probScaled,
     probLowerScaled,
     execPriceScaled,
@@ -267,6 +318,7 @@ export function computeEv(input: EvInput): EvBreakdown {
     bestPriceScaled: input.walk.bestScaled,
     feeScaled,
     slippageScaled,
+    makerAdverseSelectionScaled,
     capitalCostScaled,
     resolutionBufferScaled: input.resolutionBufferScaled,
     costsTotalScaled,
@@ -279,17 +331,87 @@ export function computeEv(input: EvInput): EvBreakdown {
 /**
  * The entry criterion (task 2), stated exactly as the RFC states it:
  *
- *   q_lo - executable_price > fees + slippage + capital_cost + safety_margin
+ *   conservative_payoff - price > fee + capital_excess + buffer
+ *                                 + maker_adverse_selection + safety_margin
  *
- * `edgeNetScaled` already carries the left side minus the first three costs, so
+ * `edgeNetScaled` already carries the left side minus the additional costs, so
  * what remains is the margin. Returned separately from computeEv because the
  * panel shows near-misses and the log records why each one missed.
  */
 export function clearsEntryCriterion(ev: EvBreakdown): boolean {
-  return ev.edgeNetScaled > ev.safetyMarginScaled;
+  return (
+    ev.feeKnown && ev.bookComplete && ev.edgeNetScaled > ev.safetyMarginScaled
+  );
 }
 
 /** Format a scaled value as the canonical 6-decimal string the tables store. */
 export function money(scaled: bigint): string {
   return formatScaled(scaled, 6);
+}
+
+export type ExecutionEvResult =
+  | { readonly ok: true; readonly value: EvBreakdown }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * EXEC-02's pure cost contract; no broker/sizing integration here.
+ * Taker requires a complete BUY-side walk and a known fee rate. Maker requires
+ * explicit limit/fee/adverse-selection evidence; EV is CONDITIONAL on fill,
+ * not a fill probability or permission to aggress. The supplied walk remains
+ * a diagnostic reference, not evidence that a maker quote will fill.
+ * Fee provenance/age and matching the final order remain the caller's duty.
+ */
+export function computeExecutionEv(input: EvInput): ExecutionEvResult {
+  const validPrice = (price: bigint): boolean => price > 0n && price < SCALE;
+  if (
+    input.qLoScaled < 0n ||
+    input.qHiScaled > SCALE ||
+    input.qLoScaled > input.qScaled ||
+    input.qScaled > input.qHiScaled ||
+    !Number.isFinite(input.expectedLockupS) ||
+    input.expectedLockupS < 0 ||
+    input.capitalAnnualRateScaled < 0n ||
+    input.bufferDailyHurdleScaled < 0n ||
+    input.resolutionBufferScaled < 0n ||
+    input.safetyMarginMinScaled < 0n ||
+    input.safetyMarginEdgeFractionScaled < 0n
+  ) {
+    return { ok: false, reason: "INVALID_EV_INPUT" };
+  }
+  if (
+    !validPrice(input.walk.vwapScaled) ||
+    !validPrice(input.walk.bestScaled) ||
+    !validPrice(input.walk.worstScaled) ||
+    input.walk.bestScaled > input.walk.vwapScaled ||
+    input.walk.vwapScaled > input.walk.worstScaled ||
+    input.walk.filledScaled <= 0n
+  ) {
+    return { ok: false, reason: "INVALID_BUY_WALK" };
+  }
+  if (input.maker) {
+    if (
+      input.makerLimitPriceScaled === undefined ||
+      !validPrice(input.makerLimitPriceScaled) ||
+      input.makerLimitPriceScaled >= input.walk.bestScaled
+    ) {
+      return { ok: false, reason: "INVALID_MAKER_LIMIT" };
+    }
+    if (input.makerFeeScaled === undefined || input.makerFeeScaled < 0n) {
+      return { ok: false, reason: "MAKER_FEE_UNKNOWN" };
+    }
+    if (
+      input.makerAdverseSelectionScaled === undefined ||
+      input.makerAdverseSelectionScaled < 0n
+    ) {
+      return { ok: false, reason: "MAKER_SELECTION_COST_UNKNOWN" };
+    }
+  } else {
+    if (!input.walk.complete) {
+      return { ok: false, reason: "BOOK_WALK_INCOMPLETE" };
+    }
+    if (input.takerFeeRateScaled === null || input.takerFeeRateScaled < 0n) {
+      return { ok: false, reason: "TAKER_FEE_UNKNOWN" };
+    }
+  }
+  return { ok: true, value: computeEv(input) };
 }

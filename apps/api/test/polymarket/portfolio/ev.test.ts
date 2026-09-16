@@ -9,6 +9,8 @@ import {
   capitalCostPerShare,
   clearsEntryCriterion,
   computeEv,
+  computeExecutionEv,
+  type EvInput,
   depthUpTo,
   money,
   takerFeePerShare,
@@ -140,7 +142,7 @@ describe("EV per share", () => {
     safetyMarginEdgeFractionScaled: s("0.25"),
   };
 
-  it("decomposes a maker YES entry: no fee, slippage from the walk", () => {
+  it("preserves the legacy maker candidate proxy and walk diagnostic", () => {
     const walk = bookWalk(ASKS, s("250"))!;
     const ev = computeEv({ ...base, side: "YES", walk, maker: true });
 
@@ -149,11 +151,13 @@ describe("EV per share", () => {
     // VWAP 0.412 against a best of 0.40.
     expect(money(ev.slippageScaled)).toBe("0.012000");
     expect(money(ev.capitalCostScaled)).toBe("0.000000");
-    expect(money(ev.costsTotalScaled)).toBe("0.012000");
+    expect(money(ev.costsTotalScaled)).toBe("0.000000");
     // Gross edge uses the POINT estimate: 0.60 - 0.412
     expect(money(ev.edgeGrossScaled)).toBe("0.188000");
-    // Net edge uses the LOWER BOUND: 0.55 - 0.412 - 0.012
-    expect(money(ev.edgeNetScaled)).toBe("0.126000");
+    // Net edge uses the LOWER BOUND: 0.55 - 0.412; slippage is already paid.
+    expect(money(ev.edgeNetScaled)).toBe("0.138000");
+    expect(ev.priceBasis).toBe("candidate-vwap");
+    expect(ev.modelVersion).toBe("ev-costs-v2");
   });
 
   it("charges the taker fee when the intent is marketable", () => {
@@ -161,9 +165,12 @@ describe("EV per share", () => {
     const maker = computeEv({ ...base, side: "YES", walk, maker: true });
     const taker = computeEv({ ...base, side: "YES", walk, maker: false });
 
-    expect(money(taker.feeScaled)).toBe("0.016957");
-    expect(taker.costsTotalScaled > maker.costsTotalScaled).toBe(true);
-    expect(taker.edgeNetScaled < maker.edgeNetScaled).toBe(true);
+    // .07 x .412 x .588 = .016957920; .55 - .412 - fee = .121042080.
+    expect(taker.feeScaled).toBe(16_957_920n);
+    expect(taker.costsTotalScaled).toBe(16_957_920n);
+    expect(taker.edgeNetScaled).toBe(121_042_080n);
+    expect(maker.costsTotalScaled).toBe(0n);
+    expect(maker.edgeNetScaled).toBe(138_000_000n);
   });
 
   it("treats an unknown fee rate as maker-only rather than assuming zero cost", () => {
@@ -178,6 +185,8 @@ describe("EV per share", () => {
       takerFeeRateScaled: null,
     });
     expect(ev.feeScaled).toBe(0n);
+    expect(ev.feeKnown).toBe(false);
+    expect(clearsEntryCriterion(ev)).toBe(false);
   });
 
   it("uses 1 - q_hi for a NO entry, never 1 - q_lo", () => {
@@ -204,7 +213,8 @@ describe("EV per share", () => {
       maker: true,
       resolutionBufferScaled: s("0.05"),
     });
-    expect(risky.edgeNetScaled).toBe(clean.edgeNetScaled - s("0.05"));
+    expect(clean.edgeNetScaled).toBe(138_000_000n);
+    expect(risky.edgeNetScaled).toBe(88_000_000n);
   });
 
   it("charges more capital cost for the disputed tail than the base case", () => {
@@ -301,4 +311,209 @@ describe("entry criterion", () => {
     expect(money(rejected.safetyMarginScaled)).toBe("0.010000");
     expect(clearsEntryCriterion(rejected)).toBe(false);
   });
+});
+
+// EXEC-01: all economic expectations below are hand-calculated constants.
+// Rates/costs are synthetic evidence, never a venue fee schedule.
+describe("EXEC-01 one cost, one incidence", () => {
+  const input: EvInput = {
+    side: "YES",
+    qScaled: s("0.65"),
+    qLoScaled: s("0.65"),
+    qHiScaled: s("0.75"),
+    // 50 x .50 + 50 x .60 = 55 USD / 100 shares = .55 USD/share.
+    walk: bookWalk(
+      [
+        { price: "0.50", size: "50" },
+        { price: "0.60", size: "50" },
+      ],
+      s("100"),
+    )!,
+    maker: false,
+    takerFeeRateScaled: 0n,
+    expectedLockupS: 0,
+    capitalAnnualRateScaled: 0n,
+    bufferDailyHurdleScaled: 0n,
+    resolutionBufferScaled: 0n,
+    safetyMarginMinScaled: 0n,
+    safetyMarginEdgeFractionScaled: 0n,
+  };
+
+  it(".65 payoff minus .55 VWAP is .10, with .05 diagnostic only", () => {
+    const ev = computeEv(input);
+    expect(ev.execPriceScaled).toBe(550_000_000n);
+    expect(ev.slippageScaled).toBe(50_000_000n);
+    expect(ev.costsTotalScaled).toBe(0n);
+    expect(ev.edgeNetScaled).toBe(100_000_000n);
+    expect(computeExecutionEv(input).ok).toBe(true);
+  });
+
+  it("known fee is the only extra debit: .04 x .55 x .45 = .0099", () => {
+    const ev = computeEv({ ...input, takerFeeRateScaled: s("0.04") });
+    expect(ev.feeScaled).toBe(9_900_000n);
+    expect(ev.costsTotalScaled).toBe(9_900_000n);
+    expect(ev.edgeNetScaled).toBe(90_100_000n);
+    expect(ev.slippageScaled).toBe(50_000_000n);
+  });
+
+  it("charges capital excess and buffer once; compares margin separately", () => {
+    // One year: capital=.20 x .55=.11; buffer already includes
+    // .0001 x 365=.0365. Excess=.0735; buffer=.04, fee=.0099.
+    // EV=.65-.55-.0735-.04-.0099=-.0234; margin=.25 x .10=.025.
+    const ev = computeEv({
+      ...input,
+      takerFeeRateScaled: s("0.04"),
+      expectedLockupS: 365 * DAY_S,
+      capitalAnnualRateScaled: s("0.20"),
+      bufferDailyHurdleScaled: s("0.0001"),
+      resolutionBufferScaled: s("0.04"),
+      safetyMarginMinScaled: s("0.01"),
+      safetyMarginEdgeFractionScaled: s("0.25"),
+    });
+    expect(ev.capitalCostScaled).toBe(73_500_000n);
+    expect(ev.costsTotalScaled).toBe(123_400_000n);
+    expect(ev.edgeNetScaled).toBe(-23_400_000n);
+    expect(ev.safetyMarginScaled).toBe(25_000_000n);
+    expect(clearsEntryCriterion(ev)).toBe(false);
+  });
+
+  it("maker uses its limit and explicit conditional costs, without taker fees", () => {
+    // Maker .48, fee .002, selection .003 => .65-.48-.002-.003=.165.
+    const result = computeExecutionEv({
+      ...input,
+      maker: true,
+      takerFeeRateScaled: null,
+      makerLimitPriceScaled: s("0.48"),
+      makerFeeScaled: s("0.002"),
+      makerAdverseSelectionScaled: s("0.003"),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.value.priceBasis).toBe("maker-limit");
+    expect(result.value.execPriceScaled).toBe(480_000_000n);
+    expect(result.value.feeScaled).toBe(2_000_000n);
+    expect(result.value.costsTotalScaled).toBe(5_000_000n);
+    expect(result.value.edgeNetScaled).toBe(165_000_000n);
+    expect(result.value.slippageScaled).toBe(50_000_000n);
+  });
+
+  it("known zero maker fee stays explicit; capital is charged on the limit", () => {
+    // Conditional fill at .48; one-year capital .10*.48=.048.
+    // EV=.65-.48-.048=.122; no taker fee or assumed rebate.
+    const result = computeExecutionEv({
+      ...input,
+      maker: true,
+      makerLimitPriceScaled: s("0.48"),
+      makerFeeScaled: 0n,
+      makerAdverseSelectionScaled: 0n,
+      takerFeeRateScaled: s("0.04"),
+      expectedLockupS: 365 * DAY_S,
+      capitalAnnualRateScaled: s("0.10"),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.value.feeScaled).toBe(0n);
+    expect(result.value.capitalCostScaled).toBe(48_000_000n);
+    expect(result.value.edgeNetScaled).toBe(122_000_000n);
+  });
+
+  it.each([
+    { qLoScaled: s("0.90") },
+    { qHiScaled: s("1.01") },
+    { resolutionBufferScaled: -1n },
+    { expectedLockupS: NaN },
+  ])("rejects invalid cost/probability evidence %s", (overrides) => {
+    expect(computeExecutionEv({ ...input, ...overrides })).toEqual({
+      ok: false,
+      reason: "INVALID_EV_INPUT",
+    });
+  });
+
+  it("does not treat a candidate VWAP as maker execution evidence", () => {
+    expect(computeExecutionEv({ ...input, maker: true })).toEqual({
+      ok: false,
+      reason: "INVALID_MAKER_LIMIT",
+    });
+    expect(
+      computeExecutionEv({
+        ...input,
+        maker: true,
+        makerLimitPriceScaled: s("0.48"),
+      }),
+    ).toEqual({ ok: false, reason: "MAKER_FEE_UNKNOWN" });
+    expect(
+      computeExecutionEv({
+        ...input,
+        maker: true,
+        makerLimitPriceScaled: s("0.48"),
+        makerFeeScaled: 0n,
+      }),
+    ).toEqual({ ok: false, reason: "MAKER_SELECTION_COST_UNKNOWN" });
+    expect(
+      computeExecutionEv({
+        ...input,
+        maker: true,
+        makerLimitPriceScaled: s("0.50"),
+        makerFeeScaled: 0n,
+        makerAdverseSelectionScaled: 0n,
+      }),
+    ).toEqual({ ok: false, reason: "INVALID_MAKER_LIMIT" });
+  });
+
+  it.each([null, -1n])(
+    "unknown/invalid taker fee %s never clears aggression",
+    (rate) => {
+      const candidate = { ...input, takerFeeRateScaled: rate };
+      expect(computeExecutionEv(candidate)).toEqual({
+        ok: false,
+        reason: "TAKER_FEE_UNKNOWN",
+      });
+      expect(clearsEntryCriterion(computeEv(candidate))).toBe(false);
+    },
+  );
+
+  it("NO uses 1-qHi=.65, not 1-qLo=.75, and pays the fee once", () => {
+    const ev = computeEv({
+      ...input,
+      side: "NO",
+      qScaled: s("0.30"),
+      qLoScaled: s("0.25"),
+      qHiScaled: s("0.35"),
+      takerFeeRateScaled: s("0.04"),
+    });
+    expect(ev.probLowerScaled).toBe(650_000_000n);
+    expect(ev.edgeGrossScaled).toBe(150_000_000n);
+    expect(ev.edgeNetScaled).toBe(90_100_000n);
+  });
+
+  it("incomplete bookwalk remains diagnostic and cannot approve an entry", () => {
+    const candidate = {
+      ...input,
+      walk: bookWalk(
+        [
+          { price: "0.50", size: "50" },
+          { price: "0.60", size: "50" },
+        ],
+        s("101"),
+      )!,
+    };
+    expect(computeExecutionEv(candidate)).toEqual({
+      ok: false,
+      reason: "BOOK_WALK_INCOMPLETE",
+    });
+    expect(clearsEntryCriterion(computeEv(candidate))).toBe(false);
+  });
+
+  it.each(["0", "1", "1.01", "-0.1"])(
+    "rejects invalid binary execution price %s",
+    (price) => {
+      expect(bookWalk([{ price, size: "100" }], s("100"))).toBeNull();
+      expect(
+        computeExecutionEv({
+          ...input,
+          walk: { ...input.walk, vwapScaled: s(price) },
+        }),
+      ).toEqual({ ok: false, reason: "INVALID_BUY_WALK" });
+    },
+  );
 });
