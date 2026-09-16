@@ -17,6 +17,7 @@ function s(value: string): bigint {
 
 /** A market that should be entrable: cheap ask, confident lower bound. */
 const GOOD: EvaluationInput = {
+  entryContractVersion: 1,
   now: new Date("2026-08-26T12:00:00Z"),
   config: DEFAULT_PORTFOLIO_CONFIG,
   conditionId: "0xa",
@@ -298,5 +299,63 @@ describe("sizing refusals", () => {
     });
     // 15% of 40 shares of executable depth = 6 shares.
     expect(result.sizing?.sizeScaled).toBeLessThanOrEqual(s("6"));
+  });
+});
+
+describe("FIN-06 real token entries", () => {
+  const real: EvaluationInput = {
+    ...GOOD,
+    entryContractVersion: 2,
+    noTokenId: "no-real",
+    q: "0.3",
+    qLo: "0.25",
+    qHi: "0.35",
+    // Synthetic complement would cost .51; the real NO costs .40 and has 10 shares.
+    noBook: {
+      bids: [{ price: "0.39", size: "9" }],
+      asks: [{ price: "0.40", size: "10" }],
+      ageMs: 1000,
+    },
+    minOrderSize: "0.01",
+  };
+  it("buys NO at its own price with its own depth and conservative bound", () => {
+    const result = evaluateMarket(real);
+    expect(result.entrable).toBe(true);
+    expect(result.best).toMatchObject({
+      side: "NO",
+      orderSide: "BUY",
+      tokenId: "no-real",
+    });
+    expect(result.best?.ev.execPriceScaled).toBe(s("0.40"));
+    expect(result.best?.ev.probLowerScaled).toBe(s("0.65"));
+    expect(result.sizing!.sizeScaled).toBeLessThanOrEqual(s("10"));
+    const deep = evaluateMarket({
+      ...real,
+      noBook: { ...real.noBook!, asks: [{ price: "0.40", size: "1000" }] },
+    });
+    expect(deep.sizing!.sizeScaled).toBeGreaterThan(result.sizing!.sizeScaled);
+    expect(result.panel.book.asks).toEqual(real.noBook!.asks);
+  });
+  it("does not fabricate an absent or stale NO book from YES bids", () => {
+    for (const noBook of [
+      null,
+      { bids: [], asks: [], ageMs: 0 },
+      { ...real.noBook!, ageMs: 999999 },
+    ]) {
+      expect(evaluateMarket({ ...real, noBook }).panel.entry_reason).toBe(
+        "FIN06_NO_TOKEN_BOOK_UNAVAILABLE",
+      );
+    }
+  });
+  it("refuses missing or ambiguous token metadata", () => {
+    for (const noTokenId of [null, real.tokenId])
+      expect(evaluateMarket({ ...real, noTokenId }).panel.entry_reason).toBe(
+        "FIN06_TOKEN_MAPPING_INVALID",
+      );
+  });
+  it("keeps synthetic SELL YES exclusively in legacy replay", () => {
+    const legacy = evaluateMarket({ ...real, entryContractVersion: 1 });
+    expect(legacy.best?.orderSide).toBe("SELL");
+    expect(legacy.best?.tokenId).toBeUndefined();
   });
 });

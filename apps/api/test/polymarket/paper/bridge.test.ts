@@ -19,7 +19,7 @@
 // The pool is a fake that answers by SQL shape, so a test cannot pass by
 // stubbing the store: the queries themselves are part of what is asserted.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_DECISION_TS_AGE_MS,
@@ -30,6 +30,9 @@ import {
 } from "../../../src/polymarket/paper/bridge.js";
 import type { PaperPool } from "../../../src/polymarket/paper/brokerstore.js";
 
+import * as broker from "../../../src/polymarket/paper/brokerstore.js";
+afterEach(() => vi.restoreAllMocks());
+
 type Row = Record<string, unknown>;
 
 const NOW = new Date("2026-08-27T12:00:00.000Z");
@@ -37,6 +40,8 @@ const CONDITION = "0xa";
 const TOKEN = "tok-1";
 
 interface WorldOptions {
+  readonly metadata?: Row[];
+  readonly noBook?: Row | null;
   readonly decisions?: Row[];
   /** null means "no params recorded", which must stop the bridge. */
   readonly tickSize?: string | null;
@@ -109,6 +114,13 @@ function world(options: WorldOptions = {}): World {
         );
         return respond(fresh.slice(0, params[2] as number));
       }
+      if (text.includes("FROM polymarket_market_metadata_versions")) {
+        return respond(
+          options.metadata ?? [
+            { affirmative_token_id: TOKEN, clob_token_ids: [TOKEN, "tok-no"] },
+          ],
+        );
+      }
       if (text.includes("FROM polymarket_param_versions")) {
         return options.tickSize === null
           ? respond([])
@@ -123,6 +135,19 @@ function world(options: WorldOptions = {}): World {
             ]);
       }
       if (text.includes("FROM polymarket_book_snapshots")) {
+        if (params[0] === "tok-no")
+          return respond(
+            options.noBook === null
+              ? []
+              : [
+                  options.noBook ?? {
+                    bids_json: [{ price: "0.39", size: "30" }],
+                    asks_json: [{ price: "0.4", size: "30" }],
+                    source_ts: NOW,
+                    received_at: NOW,
+                  },
+                ],
+          );
         return respond([
           {
             bids_json: [{ price: "0.61", size: "500" }],
@@ -375,5 +400,127 @@ describe("idempotency", () => {
     expect(bridgeOrderId(42)).toBe("portfolio:42");
     expect(bridgeOrderId(42)).toBe(bridgeOrderId(42));
     expect(bridgeOrderId(43)).not.toBe(bridgeOrderId(42));
+  });
+});
+
+describe("FIN-06 forwarding by real token", () => {
+  const no = () =>
+    decision({
+      token_id: "tok-no",
+      market_side: "NO",
+      q_lo: "0.25",
+      q_hi: "0.35",
+      inputs_json: {
+        entry_contract_version: 2,
+        account_id: "paper",
+        strategy_id: "main",
+      },
+    });
+  it("quotes NO's own book and forwards BUY, shares, identity and conservative bound", async () => {
+    const accept = vi
+      .spyOn(broker, "acceptPaperOrder")
+      .mockResolvedValue({ status: "accepted", acceptedAt: NOW });
+    const result = await run({ decisions: [no()] });
+    expect(result.outcome.accepted).toBe(1);
+    const input = accept.mock.calls[0]![1];
+    expect(input).toMatchObject({
+      conditionId: CONDITION,
+      source: "portfolio",
+      decisionId: 42,
+      draft: { tokenId: "tok-no", side: "BUY", size: "20.000000" },
+      intent: {
+        account_id: "paper",
+        strategy_id: "main",
+        market_side: "NO",
+        order_contract_version: 2,
+        conservative_bound: "0.650000000",
+      },
+    });
+    expect(Number(input.draft.limitPrice)).toBeLessThan(0.5);
+    const reads = result.world.queries.filter((q) =>
+      q.text.includes("FROM polymarket_book_snapshots"),
+    );
+    expect(reads.map((q) => q.params[0])).toEqual(["tok-no"]);
+  });
+  it("refuses a passive NO quote above 1-q_hi after the book moves", async () => {
+    const { logs } = await run({
+      decisions: [no()],
+      noBook: {
+        bids_json: [{ price: "0.7", size: "500" }],
+        asks_json: [{ price: "0.71", size: "500" }],
+        source_ts: NOW,
+        received_at: NOW,
+      },
+    });
+    expect(
+      logs.some((l) => l.reason === "FIN06_PRICE_ABOVE_CONSERVATIVE_BOUND"),
+    ).toBe(true);
+  });
+  it("does not fall back to YES when the NO book is absent", async () => {
+    const { logs } = await run({ decisions: [no()], noBook: null });
+    expect(logs.some((l) => l.reason === "NO_FRESH_BOOK")).toBe(true);
+  });
+  it.each([
+    { metadata: [] },
+    {
+      metadata: [
+        { affirmative_token_id: TOKEN, clob_token_ids: [TOKEN, TOKEN] },
+      ],
+    },
+    {
+      metadata: [
+        { affirmative_token_id: null, clob_token_ids: [TOKEN, "tok-no"] },
+      ],
+    },
+  ])("refuses absent or ambiguous metadata %j", async ({ metadata }) => {
+    const { logs } = await run({ decisions: [no()], metadata });
+    expect(logs.some((l) => l.reason === "FIN06_TOKEN_MAPPING_INVALID")).toBe(
+      true,
+    );
+  });
+  it("refuses the wrong token and owner", async () => {
+    for (const [d, reason] of [
+      [{ ...no(), token_id: TOKEN }, "FIN06_TOKEN_OUTCOME_MISMATCH"],
+      [
+        {
+          ...no(),
+          inputs_json: {
+            entry_contract_version: 2,
+            account_id: "paper",
+            strategy_id: "other",
+          },
+        },
+        "FIN06_OWNER_MISMATCH",
+      ],
+    ] as const) {
+      const { logs } = await run({ decisions: [d] });
+      expect(logs.some((l) => l.reason === reason)).toBe(true);
+    }
+  });
+  it("refuses new SELL entry from legacy or v2 without translating history", async () => {
+    for (const d of [
+      decision({ market_side: "NO", order_side: "SELL" }),
+      { ...no(), order_side: "SELL" },
+    ]) {
+      const { logs, world } = await run({ decisions: [d] });
+      expect(
+        logs.some(
+          (l) => l.reason === "FIN06_LEGACY_ENTRY_REQUIRES_REEVALUATION",
+        ),
+      ).toBe(true);
+      expect(
+        world.queries.some((q) => q.text.includes("INSERT INTO paper_orders")),
+      ).toBe(false);
+    }
+  });
+  it("uses 1-q_hi only for a version 2 BUY NO", () => {
+    expect(conservativeBound("BUY", "0.25", "0.35", "NO", 2)).toBe(
+      "0.650000000",
+    );
+    expect(conservativeBound("BUY", "0.25", "0.35", "YES", 2)).toBe(
+      "0.250000000",
+    );
+    expect(conservativeBound("SELL", "0.25", "0.35", "NO", 2)).toBeNull();
+    expect(conservativeBound("BUY", "0.25", "1.1", "NO", 2)).toBeNull();
   });
 });

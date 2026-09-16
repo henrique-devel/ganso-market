@@ -99,7 +99,7 @@ export function entryDecisionRow(input: {
   return {
     kind: entryDecisionKind(evaluation),
     conditionId: context.conditionId,
-    tokenId: context.tokenId,
+    tokenId: best?.tokenId ?? context.tokenId,
     marketSide: best?.side ?? "YES",
     orderSide: best?.orderSide ?? "BUY",
     decisionTs: context.decisionTs,
@@ -139,7 +139,17 @@ export function entryDecisionRow(input: {
     oldestInputTs: context.oldestInputTs,
     newestInputTs: context.newestInputTs,
     book: context.book,
-    inputs: { panel: evaluation.panel, replay: input.replay },
+    inputs: {
+      panel: evaluation.panel,
+      replay: input.replay,
+      ...(input.replay.entry_contract_version === 2
+        ? {
+            entry_contract_version: 2,
+            account_id: "paper",
+            strategy_id: "main",
+          }
+        : {}),
+    },
     outcome: evaluation.entrable ? "ACCEPTED" : "REJECTED",
     reasonCode: evaluation.entrable
       ? null

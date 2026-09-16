@@ -55,6 +55,7 @@ const CONFIG_HASH = portfolioConfigHash(CONFIG);
 
 /** An entrable market: cheap ask, confident lower bound, no veto. */
 const ENTRY_INPUT: EvaluationInput = {
+  entryContractVersion: 1,
   now: DECISION_TS,
   config: CONFIG,
   conditionId: "0xa",
@@ -451,5 +452,32 @@ describe("replay audit over a batch", () => {
     });
     expect(audit.matched).toBe(0);
     expect(audit.mismatched[0]?.failure).toBe("CONFIG_HASH_MISMATCH");
+  });
+});
+
+describe("FIN-06 versioned replay", () => {
+  it("replays a real NO purchase without replacing its token or book with YES", () => {
+    const decision = entryDecision({
+      entryContractVersion: 2,
+      noTokenId: "no-real",
+      q: "0.3",
+      qLo: "0.25",
+      qHi: "0.35",
+      noBook: {
+        bids: [{ price: "0.39", size: "500" }],
+        asks: [{ price: "0.4", size: "500" }],
+        ageMs: 1000,
+      },
+    });
+    expect(decision.tokenId).toBe("no-real");
+    expect(decision.orderSide).toBe("BUY");
+    expect(decision.marketSide).toBe("NO");
+    expect(replayDecision({ decision, config: CONFIG }).matched).toBe(true);
+  });
+  it("leaves unversioned historical NO as SELL of the affirmative token", () => {
+    const decision = entryDecision({ q: "0.1", qLo: "0.05", qHi: "0.15" });
+    expect(decision.orderSide).toBe("SELL");
+    expect(decision.tokenId).toBe(ENTRY_INPUT.tokenId);
+    expect(replayDecision({ decision, config: CONFIG }).matched).toBe(true);
   });
 });

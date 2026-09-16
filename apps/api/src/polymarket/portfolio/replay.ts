@@ -122,11 +122,9 @@ function resolutionAction(
 /**
  * Serialize the engine input for one entry evaluation.
  *
- * The book is deliberately NOT copied here: it already lives in the decision's
- * `book_json`, and a third copy of a twenty-level book on every row of a log
- * that grows at one row per market per minute is a real cost against the disk
- * quota. The deserializer takes the levels from `book_json`, which is why the
- * runner must hand the engine exactly the levels it persists.
+ * Version 1 reads its single affirmative book from `book_json`. Version 2
+ * stores both evaluated books here; `book_json` carries the selected token's
+ * book. Keeping both is necessary to reproduce side selection after raw TTL.
  */
 export function serializeEntryReplay(
   input: EvaluationInput,
@@ -137,7 +135,20 @@ export function serializeEntryReplay(
   }
   return {
     engine: "evaluateMarket",
-    book_source: "book_json",
+    ...(input.entryContractVersion !== 1
+      ? {
+          entry_contract_version: 2,
+          affirmative_token_id: input.tokenId,
+          yes_bids: input.bids,
+          yes_asks: input.asks,
+          no_token_id: input.noTokenId ?? null,
+          no_book: input.noBook ?? null,
+        }
+      : {}),
+    book_source:
+      input.entryContractVersion === 1
+        ? "book_json"
+        : "replay.yes_bids/yes_asks/no_book",
     question: input.question,
     category: input.category,
     q: input.q,
@@ -187,6 +198,14 @@ export function deserializeEntryReplay(input: {
     return null;
   }
   const raw = input.raw;
+  if (
+    raw.entry_contract_version !== undefined &&
+    raw.entry_contract_version !== 1 &&
+    raw.entry_contract_version !== 2
+  )
+    return null;
+  const realTokens = raw.entry_contract_version === 2;
+  const noBook = isRecord(raw.no_book) ? raw.no_book : null;
   const bookRecord = isRecord(input.book) ? input.book : {};
   const headroomRaw = isRecord(raw.cap_headroom) ? raw.cap_headroom : {};
   const capHeadroom: Record<string, bigint> = {};
@@ -211,7 +230,17 @@ export function deserializeEntryReplay(input: {
     now: input.decisionTs,
     config: input.config,
     conditionId: input.conditionId,
-    tokenId: input.tokenId,
+    entryContractVersion: realTokens ? 2 : 1,
+    noTokenId: str(raw.no_token_id),
+    noBook:
+      noBook === null
+        ? null
+        : {
+            bids: levels(noBook.bids),
+            asks: levels(noBook.asks),
+            ageMs: numberOrNull(noBook.ageMs),
+          },
+    tokenId: realTokens ? (str(raw.affirmative_token_id) ?? "") : input.tokenId,
     question: str(raw.question) ?? "",
     category: str(raw.category),
     q: str(raw.q),
@@ -224,8 +253,8 @@ export function deserializeEntryReplay(input: {
           ? "MARKET_BASELINE"
           : null,
     estimateAgeMs: numberOrNull(raw.estimate_age_ms),
-    bids: levels(bookRecord.bids),
-    asks: levels(bookRecord.asks),
+    bids: levels(realTokens ? raw.yes_bids : bookRecord.bids),
+    asks: levels(realTokens ? raw.yes_asks : bookRecord.asks),
     bookAgeMs: numberOrNull(raw.book_age_ms),
     resolutionAction: resolutionAction(raw.resolution_action),
     resolutionBuffer: str(raw.resolution_buffer),
@@ -422,6 +451,7 @@ export interface ReplayOutcome {
  */
 const COMPARED_FIELDS: readonly (keyof DecisionRow)[] = [
   "kind",
+  "tokenId",
   "marketSide",
   "orderSide",
   "execPrice",
@@ -475,6 +505,7 @@ function diffRows(
   const differences: ReplayDifference[] = [];
   const persistedAsRow: Record<string, unknown> = {
     kind: persisted.decisionKind,
+    tokenId: persisted.tokenId,
     marketSide: persisted.marketSide,
     orderSide: persisted.orderSide,
     execPrice: persisted.execPrice,

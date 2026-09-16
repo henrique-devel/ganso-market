@@ -703,7 +703,16 @@ export function createPortfolioRunner(
       });
     }
 
-    const markets = await loadEligibleMarkets(deps.pool, now);
+    const candidates = await loadEligibleMarkets(deps.pool, now);
+    // There is no truthful token_id for a missing affirmative mapping. Refuse
+    // explicitly without fabricating an identity to satisfy the decision FK.
+    const markets = candidates.filter((market) => {
+      if (market.tokenId) return true;
+      logJson("warn", "FIN06_TOKEN_MAPPING_INVALID", {
+        condition_id: market.conditionId,
+      });
+      return false;
+    });
     const pnl = await loadPaperPnl(deps.pool, {
       accountId: "paper",
       strategyId: "main",
@@ -727,7 +736,10 @@ export function createPortfolioRunner(
     // when it CHANGES (RFC-018 D1). One grouped scan, not one query per market.
     const verdicts = await lastEntryVerdicts(
       deps.pool,
-      markets.map((market) => market.tokenId),
+      markets.flatMap((market) => [
+        market.tokenId,
+        ...(market.noTokenId ? [market.noTokenId] : []),
+      ]),
     );
 
     const books = new Map<string, BookAsOf | null>();
@@ -745,6 +757,11 @@ export function createPortfolioRunner(
       estimates.set(market.tokenId, estimate);
       resolutions.set(market.conditionId, resolution);
       books.set(market.tokenId, sliceBook(book));
+      if (market.noTokenId)
+        books.set(
+          market.noTokenId,
+          sliceBook(await bookAsOf(deps.pool, market.noTokenId, now)),
+        );
     }
     // Positions may sit in markets that already left the universe; their books
     // are still needed for the unwind cost and the staleness breaker.
@@ -875,7 +892,20 @@ export function createPortfolioRunner(
         market.tokenId,
       );
 
+      const noBook = market.noTokenId
+        ? (books.get(market.noTokenId) ?? null)
+        : null;
       const engineInput: EvaluationInput = {
+        entryContractVersion: 2,
+        noTokenId: market.noTokenId ?? null,
+        noBook:
+          noBook === null
+            ? null
+            : {
+                bids: noBook.bids,
+                asks: noBook.asks,
+                ageMs: now.getTime() - noBook.receivedAt.getTime(),
+              },
         now,
         config: deps.config,
         conditionId: market.conditionId,
@@ -933,15 +963,17 @@ export function createPortfolioRunner(
         entrable += 1;
       }
 
+      const selectedBook = result.best?.side === "NO" ? noBook : book;
       const bookJson = {
-        token_id: market.tokenId,
-        bids: book?.bids ?? [],
-        asks: book?.asks ?? [],
-        recorded_at: book?.receivedAt?.toISOString() ?? null,
+        token_id: result.best?.tokenId ?? market.tokenId,
+        bids: selectedBook?.bids ?? [],
+        asks: selectedBook?.asks ?? [],
+        recorded_at: selectedBook?.receivedAt?.toISOString() ?? null,
       };
       const inputTimestamps = [
         estimate?.decisionTs ?? null,
         book?.receivedAt ?? null,
+        noBook?.receivedAt ?? null,
         resolution?.computedAt ?? null,
       ];
       const provenance: DecisionProvenance = {
@@ -986,11 +1018,11 @@ export function createPortfolioRunner(
       // when the verdict did not move it points at the decision still IN FORCE,
       // which is the row that explains the state.
       const signature = entrySignature(row);
-      const onRecord = verdicts.get(market.tokenId) ?? null;
+      const onRecord = verdicts.get(row.tokenId) ?? null;
       let decisionId: number | null = onRecord?.decisionId ?? null;
       if (onRecord === null || onRecord.signature !== signature) {
         decisionId = await insertDecision(deps.pool, row);
-        verdicts.set(market.tokenId, { decisionId, signature });
+        verdicts.set(row.tokenId, { decisionId, signature });
         written += 1;
       }
 
