@@ -18,6 +18,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { SqlExecutor } from "../../../src/database.js";
 import { bridgeTick } from "../../../src/polymarket/paper/bridge.js";
+import {
+  DEFAULT_PORTFOLIO_CONFIG,
+  portfolioConfigHash,
+} from "../../../src/polymarket/portfolio/config.js";
 import type { PaperPool } from "../../../src/polymarket/paper/brokerstore.js";
 
 const DATABASE_URL = process.env.GANSO_TEST_DATABASE_URL;
@@ -77,6 +81,16 @@ function pool(): PaperPool {
 
 async function seed(): Promise<void> {
   const p = pool();
+  await p.query(
+    `INSERT INTO portfolio_config_versions (version,config_hash,content_json,valid_from)
+    VALUES ($1,$2,$3::jsonb,$4)`,
+    [
+      DEFAULT_PORTFOLIO_CONFIG.version,
+      portfolioConfigHash(DEFAULT_PORTFOLIO_CONFIG),
+      JSON.stringify(DEFAULT_PORTFOLIO_CONFIG),
+      new Date(NOW.getTime() - 86400000),
+    ],
+  );
   await p.query(`INSERT INTO paper_financial_owners
     (account_id, strategy_id, initial_cash_usd, capital_source_ref)
     VALUES ('paper', 'main', '1000.000000000', 'QA01:synthetic-fixture')`);
@@ -133,7 +147,7 @@ async function seed(): Promise<void> {
       `${TOKEN}-no`,
       CONDITION,
       new Date(NOW.getTime() - 2_000),
-      JSON.stringify([{ price: "0.13", size: "500" }]),
+      JSON.stringify([{ price: "0.12", size: "500" }]),
       JSON.stringify([{ price: "0.15", size: "500" }]),
     ],
   );
@@ -187,6 +201,7 @@ async function acceptedEntry(
   decidedAt: Date = DECIDED_AT,
   receivedAt: Date = new Date(decidedAt.getTime() + 1_000),
   marketSide: "YES" | "NO" = side === "BUY" ? "YES" : "NO",
+  size = "20.000000",
 ): Promise<number> {
   const result = await pool().query<{ decision_id: string | number }>(
     `INSERT INTO portfolio_decisions
@@ -198,8 +213,8 @@ async function acceptedEntry(
         oldest_input_ts, newest_input_ts, book_json, inputs_json, outcome,
         portfolio_state, received_at)
      VALUES ('ENTRY',$1,$2,$3,$4,$5,'0.800000','0.750000','0.850000',
-             'MARKET_BASELINE','0.620000','0.620000','0.620000','20.000000',
-             '40.000000','12.400000','CAP_ENTRADA','[]'::jsonb,'1.2.0',$6,
+             'MARKET_BASELINE','0.620000','0.620000','0.620000',$10,
+             '40.000000','12.400000','CAP_ENTRADA','[]'::jsonb,$11,$6,
              '1.0.0',1,1,'NONE',$7,$7,'{}'::jsonb,$8::jsonb,'ACCEPTED','NORMAL',
              $9)
      RETURNING decision_id`,
@@ -209,7 +224,7 @@ async function acceptedEntry(
       marketSide,
       side,
       decidedAt,
-      "c".repeat(64),
+      portfolioConfigHash(DEFAULT_PORTFOLIO_CONFIG),
       new Date(decidedAt.getTime() - 1_000),
       JSON.stringify({
         entry_contract_version: 2,
@@ -219,9 +234,16 @@ async function acceptedEntry(
           resolution_source: "UMA:0xadapter",
           invalidation: { prob_lower_below: "0.621000" },
         },
-        replay: { rule_precision_multiplier: 0.9 },
+        replay: {
+          rule_precision_multiplier: 0.9,
+          expected_lockup_s: 0,
+          buffer_daily_hurdle: 0,
+          resolution_buffer: "0.001",
+        },
       }),
       receivedAt,
+      size,
+      DEFAULT_PORTFOLIO_CONFIG.version,
     ],
   );
   return Number(result.rows[0]?.decision_id ?? 0);
@@ -298,6 +320,27 @@ describe.skipIf(DATABASE_URL === undefined)(
         [`portfolio:${String(decisionId)}`],
       );
       const payload = ledger.rows[0]?.payload_json as Record<string, unknown>;
+      expect(payload.final_entry_evaluation).toMatchObject({
+        version: "final-entry-v1",
+        reason: "FINAL_ENTRY_ACCEPTED",
+        order: { tokenId: TOKEN, size: "20.00", orderType: "FAK" },
+        breakdown: {
+          execPriceScaled: "0.620000000",
+          feeScaled: "0.016492000",
+          edgeNetScaled: "0.112508000",
+        },
+      });
+      expect(payload.reservation).toMatchObject({
+        account_id: "paper",
+        strategy_id: "main",
+        price_bound: "0.620000000",
+        fee_per_share: "0.017500000",
+      });
+      const reserve = await pool().query(
+        `SELECT cash_remaining_usd FROM paper_order_reservations WHERE order_id=$1`,
+        [`portfolio:${String(decisionId)}`],
+      );
+      expect(reserve.rows[0]?.cash_remaining_usd).toBe("12.750000000");
       expect(payload.source).toBe("portfolio");
       expect(Number(payload.decision_id)).toBe(decisionId);
     });
@@ -333,7 +376,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         side: "BUY",
         order_type: "GTC",
         post_only: true,
-        limit_price: "0.13",
+        limit_price: "0.12",
       });
       expect(String(order.rows[0]?.policy_reason)).toContain("DEFAULT_PASSIVE");
     });
@@ -469,6 +512,211 @@ describe.skipIf(DATABASE_URL === undefined)(
         new Date(receivedAt.getTime() - 1_000),
       );
       expect(bootBeforeTheRow).toBe(bootAfterTheRow + 1);
+    });
+    function onlyDecision(id: number): PaperPool {
+      const base = pool();
+      return {
+        ...base,
+        query(text, params) {
+          return base.query(
+            text.replace(
+              "WHERE d.outcome",
+              `WHERE d.decision_id=${id} AND d.outcome`,
+            ),
+            params,
+          );
+        },
+      };
+    }
+    async function snapshot(
+      asks: { price: string; size: string }[],
+      bid = "0.49",
+    ) {
+      NOW.setTime(NOW.getTime() + 100);
+      await pool().query(
+        `INSERT INTO polymarket_book_snapshots
+        (token_id,condition_id,received_at,source_ts,bids_json,asks_json)
+        VALUES ($1,$2,$3,$3,$4::jsonb,$5::jsonb)`,
+        [
+          TOKEN,
+          CONDITION,
+          NOW,
+          JSON.stringify([{ price: bid, size: "500" }]),
+          JSON.stringify(asks),
+        ],
+      );
+    }
+    async function audit(decisionId: number, type: string) {
+      const rows = await pool().query(
+        `SELECT payload_json FROM paper_ledger_events
+        WHERE order_id=$1 AND event_type=$2 ORDER BY event_id DESC LIMIT 1`,
+        [`portfolio:${decisionId}`, type],
+      );
+      return rows.rows[0]?.payload_json as Record<string, any>;
+    }
+    async function noReservation(decisionId: number) {
+      const rows = await pool().query(
+        `SELECT order_id FROM paper_order_reservations WHERE order_id=$1`,
+        [`portfolio:${decisionId}`],
+      );
+      expect(rows.rowCount).toBe(0);
+      expect(
+        (
+          await pool().query(
+            `SELECT order_id FROM paper_orders WHERE decision_id=$1`,
+            [decisionId],
+          )
+        ).rowCount,
+      ).toBe(0);
+      expect(
+        (
+          await pool().query(
+            `SELECT outcome, paper_order_id FROM portfolio_decisions WHERE decision_id=$1`,
+            [decisionId],
+          )
+        ).rows[0],
+      ).toMatchObject({ outcome: "ACCEPTED", paper_order_id: null });
+    }
+    it("EXEC-02 refuses the final 100-share maker fallback on a one-share book before reserving", async () => {
+      await snapshot([{ price: "0.50", size: "1" }]);
+      const id = await acceptedEntry("BUY", NOW, NOW, "YES", "100.000000");
+      await bridgeTick(onlyDecision(id), {
+        clock: () => NOW,
+        logSink: () => undefined,
+      });
+      await noReservation(id);
+      const event = await audit(id, "order_rejected");
+      expect(event.reason).toBe("BOOK_WALK_INCOMPLETE");
+      expect(event.final_entry_evaluation).toMatchObject({
+        order: { size: "100.00", postOnly: true },
+        book: { tokenId: TOKEN, asks: [{ price: "0.50", size: "1" }] },
+      });
+    });
+    it("EXEC-02 refuses a book changed after quoting; the refused snapshot is persisted", async () => {
+      await snapshot([{ price: "0.50", size: "500" }]);
+      const id = await acceptedEntry("BUY", NOW, NOW, "YES", "5.000000");
+      const base = onlyDecision(id);
+      let changed = false;
+      await bridgeTick(
+        {
+          ...base,
+          async transaction(run) {
+            if (!changed) {
+              changed = true;
+              await snapshot([
+                { price: "0.50", size: "1" },
+                { price: "0.60", size: "499" },
+              ]);
+            }
+            return base.transaction!(run);
+          },
+        },
+        { clock: () => NOW, logSink: () => undefined },
+      );
+      await noReservation(id);
+      const event = await audit(id, "order_rejected");
+      expect(event.reason).toBe("FINAL_ENTRY_PRICE_BOUND");
+      expect(event.intent.quote.book.asks).toEqual([
+        { price: "0.50", size: "500" },
+      ]);
+      expect(event.final_entry_evaluation.book.asks).toEqual([
+        { price: "0.50", size: "1" },
+        { price: "0.60", size: "499" },
+      ]);
+      expect(event.final_entry_evaluation.evaluation_id).toMatch(
+        /^[a-f0-9]{64}$/,
+      );
+    });
+    it("EXEC-02 re-evaluates an improved book and reserves the exact normalized order", async () => {
+      await snapshot([{ price: "0.62", size: "500" }], "0.60");
+      const id = await acceptedEntry("BUY", NOW, NOW, "YES", "5.019000");
+      const base = onlyDecision(id);
+      let changed = false;
+      await bridgeTick(
+        {
+          ...base,
+          async transaction(run) {
+            if (!changed) {
+              changed = true;
+              await snapshot([{ price: "0.61", size: "500" }], "0.60");
+            }
+            return base.transaction!(run);
+          },
+        },
+        { clock: () => NOW, logSink: () => undefined },
+      );
+      const event = await audit(id, "order_accepted");
+      expect(event.intent.quote.book.asks).toEqual([
+        { price: "0.62", size: "500" },
+      ]);
+      expect(event.final_entry_evaluation).toMatchObject({
+        order: { size: "5.01", limitPrice: "0.62" },
+        book: { asks: [{ price: "0.61", size: "500" }] },
+        breakdown: {
+          execPriceScaled: "0.610000000",
+          feeScaled: "0.016653000",
+          edgeNetScaled: "0.122347000",
+        },
+      });
+      const reserved = await pool().query(
+        `SELECT shares_remaining,cash_remaining_usd FROM paper_order_reservations WHERE order_id=$1`,
+        [`portfolio:${id}`],
+      );
+      expect(reserved.rows[0]).toMatchObject({
+        shares_remaining: "5.01",
+        cash_remaining_usd: "3.193875000",
+      });
+    });
+    it("EXEC-02 refuses final EV below the unchanged margin even when policy chose taker", async () => {
+      await snapshot([{ price: "0.72", size: "500" }], "0.71");
+      const id = await acceptedEntry("BUY", NOW, NOW, "YES", "5.000000");
+      await bridgeTick(onlyDecision(id), {
+        clock: () => NOW,
+        logSink: () => undefined,
+      });
+      await noReservation(id);
+      const event = await audit(id, "order_rejected");
+      // .75 - .72 - (.07*.72*.28) - .001 = .014888 < existing .02 floor.
+      expect(event.reason).toBe("FINAL_ENTRY_EV_BELOW_MARGIN");
+      expect(event.final_entry_evaluation).toMatchObject({
+        order: { orderType: "FAK" },
+        breakdown: { feeScaled: "0.014112000", edgeNetScaled: "0.014888000" },
+      });
+    });
+    it("EXEC-02 refuses fee lost between the taker quote and acceptance", async () => {
+      await snapshot([{ price: "0.50", size: "500" }]);
+      const id = await acceptedEntry("BUY", NOW, NOW, "YES", "5.000000");
+      const lines: string[] = [];
+      const base = onlyDecision(id);
+      let changed = false;
+      await bridgeTick(
+        {
+          ...base,
+          async transaction(run) {
+            if (!changed) {
+              changed = true;
+              NOW.setTime(NOW.getTime() + 100);
+              await pool().query(
+                `INSERT INTO polymarket_param_versions
+            (condition_id,version,content_hash,maker_fee_bps,taker_fee_bps,tick_size,min_order_size,neg_risk,valid_from)
+            VALUES ($1,2,$2,'0',NULL,'0.01','5',FALSE,$3)`,
+                [CONDITION, "d".repeat(64), NOW],
+              );
+              await pool()
+                .query(`UPDATE resolution_runtime_state SET processed_input_change_id=
+                (SELECT COALESCE(max(input_change_id),0) FROM polymarket_resolution_input_changes)`);
+            }
+            return base.transaction!(run);
+          },
+        },
+        { clock: () => NOW, logSink: (line) => lines.push(line) },
+      );
+      await noReservation(id);
+      const event = await audit(id, "order_rejected");
+      expect(event, lines.join("\n")).toBeDefined();
+      expect(event.reason).toBe("TAKER_FEE_UNVERIFIED");
+      expect(event.intent.quote.policy.orderType).toBe("FAK");
+      expect(event.final_entry_evaluation.fee.rate).toBeNull();
     });
   },
 );

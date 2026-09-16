@@ -196,8 +196,8 @@ function contextC(overrides: Partial<FastContext> = {}): FastContext {
 describe("versão e identidade", () => {
   it("tem versão própria e não é a versão da policy global", async () => {
     const global = await import("../../../src/polymarket/paper/policy.js");
-    expect(FAST_POLICY_VERSION).toBe("0.1.0");
-    expect(global.POLICY_VERSION).toBe("1.0.1");
+    expect(FAST_POLICY_VERSION).toBe("0.1.1");
+    expect(global.POLICY_VERSION).toBe("1.0.2");
     expect(FAST_POLICY_VERSION).not.toBe(global.POLICY_VERSION);
     expect(FAST_STRATEGY_ID).toBe("fast_btc_updown");
   });
@@ -1049,5 +1049,91 @@ describe("contexto malformado não é decisão gravável", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("FAST_INVALID_END_TS");
+  });
+});
+
+describe("EXEC-02 fast paper final economics", () => {
+  function paper(): FastContext {
+    const c = context();
+    return {
+      ...c,
+      config: {
+        ...c.config,
+        arms: { ...c.config.arms, A: { ...c.config.arms.A, mode: "paper" } },
+      },
+      finalEntry: {
+        minOrderSize: "5",
+        fee: {
+          rate: "0.04",
+          paramVersionId: 12,
+          sourceTs: null,
+          receivedAt: new Date(NOW - 1000).toISOString(),
+          validFrom: new Date(NOW - 1000).toISOString(),
+        },
+        economics: {
+          accountId: "paper",
+          strategyId: FAST_STRATEGY_ID,
+          conditionId: c.market.conditionId,
+          tokenId: "tok-yes",
+          marketSide: "YES",
+          sizeMax: "5",
+          q: "0.95",
+          qLo: "0.95",
+          qHi: "0.95",
+          expectedLockupS: 0,
+          capitalAnnualRate: "0",
+          bufferDailyHurdle: "0",
+          resolutionBuffer: "0",
+          safetyMarginMin: "0.01",
+          safetyMarginEdgeFraction: "0",
+          edgeLiqMin: "0.02",
+          modelRef: "fixture:bound",
+          makerFee: "0",
+          makerAdverseSelection: "0",
+          makerAssumptionRef: "fixture:conditional-fill",
+        },
+      },
+    };
+  }
+  it("requires actual model/cost evidence and never promotes an assumed fee to verified", () => {
+    const c = paper();
+    const { finalEntry: _ignored, ...missing } = c;
+    expect(decideFastStrategyOrder(missing).reason).toBe(
+      "FINAL_ENTRY_INPUT_MISSING",
+    );
+    expect(
+      decideFastStrategyOrder({
+        ...c,
+        finalEntry: {
+          ...c.finalEntry!,
+          fee: { ...c.finalEntry!.fee, rate: null },
+        },
+      }).reason,
+    ).toBe("TAKER_FEE_UNVERIFIED");
+  });
+  it("uses recorded .04 rather than assumed .07 and persists numeric EV", () => {
+    const result = decideFastStrategyOrder(paper());
+    expect(result.verdict).toBe("order");
+    expect(result.order).toMatchObject({
+      tokenId: "tok-yes",
+      sizeShares: "5.00",
+      limitPrice: "0.86",
+    });
+    // .95 - .86 - .04*.86*.14 = .085184
+    expect(result.finalEntryEvaluation).toMatchObject({
+      breakdown: { feeScaled: "0.004816000", edgeNetScaled: "0.085184000" },
+    });
+  });
+  it("refuses shallow paper depth although the touch still qualifies", () => {
+    const c = paper();
+    expect(
+      decideFastStrategyOrder({
+        ...c,
+        books: c.books.map((b) => ({
+          ...b,
+          asks: b.asks.slice(0, 1).map((a) => ({ ...a, size: "1" })),
+        })),
+      }).reason,
+    ).toBe("BOOK_WALK_INCOMPLETE");
   });
 });

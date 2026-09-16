@@ -432,7 +432,7 @@ describe("FIN-06 forwarding by real token", () => {
         account_id: "paper",
         strategy_id: "main",
         market_side: "NO",
-        order_contract_version: 2,
+        order_contract_version: 3,
         conservative_bound: "0.650000000",
       },
     });
