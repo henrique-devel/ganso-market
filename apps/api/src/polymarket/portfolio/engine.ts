@@ -549,6 +549,8 @@ export function evaluateMarket(input: EvaluationInput): Evaluation {
   const sizing = computeSize({
     probLowerScaled: best.ev.probLowerScaled,
     execPriceScaled: best.ev.execPriceScaled,
+    feePerShareScaled: best.ev.feeScaled,
+    maxEntryPriceScaled: limitPrice,
     intervalWidthScaled: qHiScaled - qLoScaled,
     kellyLambdaScaled: fractionScaled(config.kelly.lambda),
     uncertaintyShrinkSlopeScaled: fractionScaled(

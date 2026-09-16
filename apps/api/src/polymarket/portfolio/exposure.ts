@@ -1,26 +1,23 @@
-// RFC-013 task 4: continuous exposure across every dimension the RFC names.
-//
-// Every cap is consumed at TOTAL LOSS of the position. A binary book can gap
-// from a high price to near zero without trading the levels in between, so an
-// exposure measured at mark-to-market is an exposure measured against a price
-// that may never exist again. The notional paid is the number that matters.
-//
-// A negRisk group is one bet, not N: its legs are mutually exclusive by
-// construction, so the group's worst case is the LARGEST leg rather than the
-// sum — but the group still consumes the correlated-group cap as a unit,
-// because they resolve together and inherit each other's resolution risk.
-
+// FIN-04: residual maximum loss in nano-USD, isolated by financial owner.
+// Paid fees are already in realized PnL; only unpaid fee bounds consume risk.
 import { div, mul, SCALE } from "../fundamental/fixed.js";
 import type { CapConfig } from "./config.js";
 import { capHeadroom, capUtilization } from "./state.js";
 import type { ExposureDimension } from "./types.js";
 
 export interface OpenPosition {
+  readonly accountId: string;
+  readonly strategyId: string;
+  /** Already debited in realized PnL; informational, never charged again. */
+  readonly feesPaidScaled: bigint;
+  readonly realizedPnlScaled: bigint;
+  /** Bound on fees not yet debited. Runtime settlement currently charges zero. */
+  readonly remainingFeesScaled: bigint;
   readonly tokenId: string;
   readonly conditionId: string;
   /** Signed shares: positive is long the token, negative is short. */
   readonly sharesScaled: bigint;
-  /** Cost basis in USD, scaled. What a total loss would cost. */
+  /** Gross basis: paid cost for longs, received proceeds for legacy shorts. */
   readonly costScaled: bigint;
   readonly category: string | null;
   readonly eventId: string | null;
@@ -41,6 +38,12 @@ export interface OpenPosition {
 }
 
 export interface ExposureRow {
+  readonly riskVersion: "payoff-v1";
+  readonly aggregation: "conservative_sum" | "proven_scenarios" | "mixed";
+  readonly proofRefs: readonly string[];
+  /** Informational totals for positions represented by THIS row; not all R/F. */
+  readonly feesPaidScaled: bigint;
+  readonly realizedPnlScaled: bigint;
   readonly dimension: ExposureDimension;
   readonly key: string;
   readonly worstCaseScaled: bigint;
@@ -70,17 +73,144 @@ const DIMENSION_CAP: Readonly<
 
 export const EXPOSURE_DIMENSION_CAP = DIMENSION_CAP;
 
-interface Bucket {
-  worstCase: bigint;
-  count: number;
-  unwind: bigint | null;
-  /** negRisk groups take the max leg, everything else sums. */
-  maxLeg: bigint;
-  negRisk: boolean;
+/**
+ * Trusted contract evidence, supplied only after an upstream verifier establishes
+ * the COMPLETE admissible scenario set (including uncovered outcomes/voids).
+ * Metadata flags are not evidence. FIN-04's runner supplies no proofs.
+ * Each scenario maps every listed token to its payout in [0,1]. A partial,
+ * ambiguous or malformed proof falls back to a labelled conservative sum.
+ */
+export interface PayoffProof {
+  readonly version: "payoff-scenarios-v1";
+  readonly evidenceRef: string;
+  readonly complete: boolean;
+  readonly scope: { readonly kind: "event" | "condition"; readonly id: string };
+  readonly tokens: readonly {
+    readonly tokenId: string;
+    readonly conditionId: string;
+  }[];
+  readonly scenarios: readonly Readonly<Record<string, bigint>>[];
 }
 
-function emptyBucket(): Bucket {
-  return { worstCase: 0n, count: 0, unwind: null, maxLeg: 0n, negRisk: false };
+function validProof(proof: PayoffProof): boolean {
+  const tokens = proof.tokens.map((token) => token.tokenId);
+  return (
+    proof.version === "payoff-scenarios-v1" &&
+    proof.complete &&
+    proof.evidenceRef.trim().length > 0 &&
+    proof.scope.id.length > 0 &&
+    tokens.length > 0 &&
+    new Set(tokens).size === tokens.length &&
+    proof.tokens.every(
+      (token) =>
+        token.tokenId.length > 0 &&
+        token.conditionId.length > 0 &&
+        (proof.scope.kind !== "condition" ||
+          token.conditionId === proof.scope.id),
+    ) &&
+    proof.scenarios.length > 0 &&
+    proof.scenarios.every(
+      (scenario) =>
+        Object.keys(scenario).length === tokens.length &&
+        tokens.every(
+          (token) =>
+            typeof scenario[token] === "bigint" &&
+            scenario[token]! >= 0n &&
+            scenario[token]! <= SCALE,
+        ),
+    )
+  );
+}
+
+/** Floor signed payouts, so a fractional nano-dollar never understates loss. */
+function payoutFloor(shares: bigint, payout: bigint): bigint {
+  const product = shares * payout;
+  return product / SCALE - (product < 0n && product % SCALE !== 0n ? 1n : 0n);
+}
+
+function lossAt(position: OpenPosition, payout: bigint): bigint {
+  const signedBasis =
+    position.sharesScaled < 0n ? -position.costScaled : position.costScaled;
+  return (
+    signedBasis +
+    position.remainingFeesScaled -
+    payoutFloor(position.sharesScaled, payout)
+  );
+}
+
+function riskOf(
+  positions: readonly OpenPosition[],
+  proofs: readonly PayoffProof[],
+) {
+  let worstCaseScaled = 0n;
+  let conservative = false;
+  const groups = new Map<
+    string,
+    { proof: PayoffProof; positions: OpenPosition[] }
+  >();
+  const proofRefs = new Set<string>();
+  for (const position of positions) {
+    const matches = proofs.filter(
+      (proof) =>
+        (proof.scope.kind === "condition"
+          ? position.conditionId
+          : position.eventId) === proof.scope.id &&
+        proof.tokens.some(
+          (token) =>
+            token.tokenId === position.tokenId &&
+            token.conditionId === position.conditionId,
+        ),
+    );
+    if (matches.length !== 1) {
+      conservative = true;
+      const loss = lossAt(position, position.sharesScaled < 0n ? SCALE : 0n);
+      worstCaseScaled += loss > 0n ? loss : 0n;
+      continue;
+    }
+    const proof = matches[0]!;
+    const key = JSON.stringify([
+      position.accountId,
+      position.strategyId,
+      proofs.indexOf(proof),
+    ]);
+    const group = groups.get(key) ?? { proof, positions: [] };
+    group.positions.push(position);
+    groups.set(key, group);
+  }
+  for (const { proof, positions: group } of groups.values()) {
+    let worst = 0n;
+    for (const scenario of proof.scenarios) {
+      const loss = group.reduce(
+        (sum, position) => sum + lossAt(position, scenario[position.tokenId]!),
+        0n,
+      );
+      if (loss > worst) worst = loss;
+    }
+    worstCaseScaled += worst;
+    proofRefs.add(proof.evidenceRef);
+  }
+  const aggregation: ExposureRow["aggregation"] =
+    groups.size === 0
+      ? "conservative_sum"
+      : conservative
+        ? "mixed"
+        : "proven_scenarios";
+  return {
+    worstCaseScaled,
+    aggregation,
+    proofRefs: [...proofRefs],
+    riskVersion: "payoff-v1" as const,
+    feesPaidScaled: positions.reduce((sum, p) => sum + p.feesPaidScaled, 0n),
+    realizedPnlScaled: positions.reduce(
+      (sum, p) => sum + p.realizedPnlScaled,
+      0n,
+    ),
+  };
+}
+
+interface Bucket {
+  positions: OpenPosition[];
+  unwind: bigint | null;
 }
 
 function addTo(
@@ -88,37 +218,19 @@ function addTo(
   key: string,
   position: OpenPosition,
 ): void {
-  const bucket = map.get(key) ?? emptyBucket();
-  bucket.worstCase += position.costScaled;
-  bucket.count += 1;
-  if (position.costScaled > bucket.maxLeg) {
-    bucket.maxLeg = position.costScaled;
-  }
-  if (position.negRisk) {
-    bucket.negRisk = true;
-  }
+  const bucket = map.get(key) ?? { positions: [], unwind: null };
+  bucket.positions.push(position);
   if (position.unwindCostScaled !== null) {
     bucket.unwind = (bucket.unwind ?? 0n) + position.unwindCostScaled;
   }
   map.set(key, bucket);
 }
 
-/**
- * A negRisk event pays at most one leg, so holding every leg is not N times the
- * risk of holding one. The worst case for such a group is the largest leg.
- *
- * This is the ONLY place the sum is relaxed, and only for a structural reason
- * the adapter enforces on-chain (a [1, 1] report reverts). Everywhere else the
- * sum stands.
- */
-function bucketWorstCase(bucket: Bucket): bigint {
-  return bucket.negRisk && bucket.count > 1 ? bucket.maxLeg : bucket.worstCase;
-}
-
 export interface ExposureInput {
   readonly positions: readonly OpenPosition[];
   readonly bankrollScaled: bigint;
   readonly caps: CapConfig;
+  readonly payoffProofs?: readonly PayoffProof[];
 }
 
 function capFractionScaled(fraction: number): bigint {
@@ -133,10 +245,23 @@ export function computeExposures(input: ExposureInput): ExposureRow[] {
     byDimension.set(dimension, new Map<string, Bucket>());
   }
 
-  let total = 0n;
+  const proofs = (input.payoffProofs ?? []).filter(validProof);
+  for (const p of input.positions) {
+    if (
+      !p.tokenId ||
+      !p.conditionId ||
+      !p.accountId ||
+      !p.strategyId ||
+      p.costScaled < 0n ||
+      p.remainingFeesScaled < 0n ||
+      p.feesPaidScaled < 0n ||
+      (p.sharesScaled === 0n && p.costScaled !== 0n)
+    )
+      throw new Error("FIN04_INVALID_POSITION");
+  }
+  const totalRisk = riskOf(input.positions, proofs);
   let totalUnwind: bigint | null = null;
   for (const position of input.positions) {
-    total += position.costScaled;
     if (position.unwindCostScaled !== null) {
       totalUnwind = (totalUnwind ?? 0n) + position.unwindCostScaled;
     }
@@ -172,18 +297,19 @@ export function computeExposures(input: ExposureInput): ExposureRow[] {
     const capKey = DIMENSION_CAP[dimension];
     const capFraction = capFractionScaled(input.caps[capKey]);
     for (const [key, bucket] of buckets) {
-      const worstCase = bucketWorstCase(bucket);
+      const risk = riskOf(bucket.positions, proofs);
+      const worstCase = risk.worstCaseScaled;
       rows.push({
         dimension,
         key,
-        worstCaseScaled: worstCase,
+        ...risk,
         capScaled: mul(capFraction, input.bankrollScaled),
         utilizationScaled: capUtilization(
           capFraction,
           input.bankrollScaled,
           worstCase,
         ),
-        positionCount: bucket.count,
+        positionCount: bucket.positions.length,
         unwindCostScaled: bucket.unwind,
       });
     }
@@ -194,10 +320,12 @@ export function computeExposures(input: ExposureInput): ExposureRow[] {
   rows.push({
     dimension: "total",
     key: "all",
-    worstCaseScaled: total,
+    ...totalRisk,
     capScaled: input.bankrollScaled,
     utilizationScaled:
-      input.bankrollScaled > 0n ? div(total, input.bankrollScaled) : 0n,
+      input.bankrollScaled > 0n
+        ? div(totalRisk.worstCaseScaled, input.bankrollScaled)
+        : 0n,
     positionCount: input.positions.length,
     unwindCostScaled: totalUnwind,
   });

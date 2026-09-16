@@ -1,3 +1,8 @@
+import {
+  computeExposures,
+  capHeadroomFor,
+} from "../../../src/polymarket/portfolio/exposure.js";
+import { DEFAULT_PORTFOLIO_CONFIG } from "../../../src/polymarket/portfolio/config.js";
 import { describe, expect, it } from "vitest";
 
 import { parseScaled } from "../../../src/polymarket/fundamental/fixed.js";
@@ -26,6 +31,7 @@ function s(value: string): bigint {
 const BASE: SizingInput = {
   probLowerScaled: s("0.60"),
   execPriceScaled: s("0.40"),
+  feePerShareScaled: 0n,
   intervalWidthScaled: 0n,
   kellyLambdaScaled: s("0.25"),
   uncertaintyShrinkSlopeScaled: s("1"),
@@ -343,5 +349,104 @@ describe("slippage-capped size", () => {
     const vwap = (notional * s("1")) / taken;
     const allowance = (maxPct * grossEdge) / s("1");
     expect(vwap - s("0.40") <= allowance).toBe(true);
+  });
+});
+
+describe("FIN-04 sizing from maximum-loss headroom", () => {
+  it("uses all 70 of F3, even when one independent leg is negRisk", () => {
+    const common = {
+      accountId: "paper",
+      strategyId: "main",
+      feesPaidScaled: 0n,
+      realizedPnlScaled: 0n,
+      remainingFeesScaled: 0n,
+      sharesScaled: s("100"),
+      category: "crypto",
+      clauseFamily: "binance",
+      factor: "btc",
+      catalystWindow: "window",
+      unresolved: true,
+      unwindCostScaled: null,
+    };
+    const caps = DEFAULT_PORTFOLIO_CONFIG.caps;
+    const rows = computeExposures({
+      positions: [
+        {
+          ...common,
+          tokenId: "x",
+          conditionId: "cx",
+          eventId: "ex",
+          costScaled: s("30"),
+          negRisk: true,
+        },
+        {
+          ...common,
+          tokenId: "y",
+          conditionId: "cy",
+          eventId: "ey",
+          costScaled: s("40"),
+          negRisk: false,
+        },
+      ],
+      bankrollScaled: s("400"),
+      caps,
+    });
+    const headroom = capHeadroomFor(
+      rows,
+      {
+        conditionId: "cz",
+        eventId: "ez",
+        category: "crypto",
+        clauseFamily: "binance",
+        factor: "btc",
+        catalystWindow: "window",
+      },
+      s("400"),
+      caps,
+    );
+    // Factor cap 20% of 400 = 80; -70 leaves 10. Entry cap remains 8.
+    expect(headroom.grupoCorrelacionado).toBe(s("10"));
+    expect(headroom.entrada).toBe(s("8"));
+    const result = computeSize({
+      ...BASE,
+      capHeadroom: headroom,
+      feePerShareScaled: s("0.02"),
+    });
+    expect(result.riskScaled).toBeLessThanOrEqual(s("8"));
+    for (const remaining of Object.values(headroom))
+      expect(result.riskScaled).toBeLessThanOrEqual(remaining);
+  });
+
+  it("bounds price plus fees, separately from notional, without nano-dollar overshoot", () => {
+    const result = computeSize({
+      ...BASE,
+      capHeadroom: { ...BASE.capHeadroom, mercado: s("4") },
+      maxEntryPriceScaled: s("0.6"),
+      feePerShareScaled: s("0.1"),
+      minOrderSizeScaled: 0n,
+    });
+    // 4 / 0.7 = 5.714285714 shares, rounded DOWN. Worst debit rounded UP is 4.
+    expect(result.sizeScaled).toBe(s("5.714285714"));
+    expect(result.riskScaled).toBe(s("4"));
+    expect(result.notionalScaled).toBeLessThan(result.riskScaled);
+    const nano = computeSize({
+      ...BASE,
+      capHeadroom: { ...BASE.capHeadroom, mercado: 1n },
+      execPriceScaled: s("0.6"),
+      probLowerScaled: s("0.9"),
+      minOrderSizeScaled: 0n,
+    });
+    expect(nano.sizeScaled).toBe(1n); // rounded division would allow 2n and risk 2n
+    expect(nano.riskScaled).toBe(1n);
+  });
+
+  it("never uses a price bound below the entry price to create headroom", () => {
+    const result = computeSize({
+      ...BASE,
+      capHeadroom: { ...BASE.capHeadroom, mercado: s("4") },
+      maxEntryPriceScaled: s("0.1"),
+    });
+    expect(result.sizeScaled).toBe(s("10"));
+    expect(result.riskScaled).toBe(s("4"));
   });
 });
