@@ -1,6 +1,6 @@
 Bloco: FIN-05 | RFC: RFC-038 | Data UTC: 2026-09-16
-Estado: code-verified; implementação/testes locais, sem aceite financeiro produtivo/soak.
-Base: ae33084e1242fbb649b38341e875bf7b0ecca6a4; código na branch codex/fin-05-reservations.
+Estado: code-verified; release implantada/verificada, sem reconciliação financeira produtiva/soak.
+Código: 381d65dcd16e91b44dcbbb39bfc6e2564f14f705; base ae33084; merge f381ceb87605cc29b906730be9283d7599143347.
 Resultado: aceite e reserva transacionais por dono, transferência em fill e release somente efetivo.
 Migration: 0025_paper_order_reservations.sql, número conferido na main; tabela proposta por FIN-01.
 Dependências: FIN-02 ownership-v1/0024 e FIN-04 payoff-v1 conferidos por código/recibos integrados.
@@ -15,8 +15,9 @@ Contrato EXEC-03/04: reserveOrder + payload imutável; consume/release por appen
 Config: API/paper usam os arquivos existentes de caps/fatores/léxico somente leitura; valores preservados.
 Legado: sem reservas fabricadas/capital inferido; ordem legada aberta bloqueia nova capacidade do dono.
 Compatibilidade: ledger legado preservado; garantia de admissão vale para o broker FIN-05, não binários antigos simultâneos.
-Gates: make verify passou; última verificação completa e publicação registradas no fecho da entrega.
-Produção: ainda não consultada ou alterada por esta tarefa; PR/CI/merge/deploy pendentes.
+Gates finais: make verify passou; 2402 JavaScript/256 skipped, 16 Rust/220 Python; build/scan/Compose aprovados.
+Publicação: [PR #179](https://github.com/henrique-devel/ganso-market/pull/179) integrado; source/Compose passaram no PR e main; CD aprovado.
+Produção: API/paper/portfolio no merge; schema25/checksum/cinco triggers/healthcheck verificados; configurações e PostgreSQL preservados.
 Limites: sem benchmark produtivo/reconciliação integrada/soak; sem live, worker, cap ou validade novos.
 Revisão automática: guarda adicional contra aceites de binários antigos recusada/não aplicada; caminho compatível mantido.
 Evidência e comandos: [FIN-05](../evidence/FIN-05-reservations.md).

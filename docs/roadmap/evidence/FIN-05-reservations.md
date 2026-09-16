@@ -105,3 +105,22 @@ Uma guarda adicional para recusar aceites de binários antigos após a migration
 foi recusada pela revisão automática por impacto não autorizado em rolling
 deploy. Ela **não foi aplicada**. O caminho compatível descrito acima foi
 mantido e testado; nenhuma alternativa foi usada para impor essa guarda.
+
+## Entrega verificada
+
+Código `381d65dcd16e91b44dcbbb39bfc6e2564f14f705`, integrado pelo
+[PR #179](https://github.com/henrique-devel/ganso-market/pull/179) no merge
+`f381ceb87605cc29b906730be9283d7599143347`. Source e Compose passaram no
+[PR](https://github.com/henrique-devel/ganso-market/actions/runs/35048435037) e
+na [main, incluindo deploy](https://github.com/henrique-devel/ganso-market/actions/runs/35048775160).
+`make verify` final passou: 2402 JavaScript (256 skipped separados), 16 Rust,
+220 Python, build, secret scan e política Compose. Os 45 casos PostgreSQL
+foram executados separadamente no comando focado acima.
+
+API, paper e portfolio carregam o merge. Os dois serviços de profile já
+ativos foram reconstruídos pelo procedimento documentado com `--no-deps`.
+Schema 25, checksum da migration, cinco triggers e healthcheck oficial
+foram verificados; hashes de configuração e imagem/início do PostgreSQL
+permaneceram iguais ao precheck. As consultas produtivas leram somente
+metadados de schema/serviços/configuração, não saldos, ordens ou cashflows.
+Isso verifica a implantação e não declara reconciliação financeira ou soak.
