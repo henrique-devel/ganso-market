@@ -94,3 +94,30 @@ este bloco” e “pare aqui” como restrição à publicação, não superada 
 contínua geral. Nenhum método/destino alternativo foi tentado. A implementação,
 os testes e o contrato FIN-05 estão concluídos localmente; PR, CI remoto, merge
 e deploy permanecem pendentes de confirmação explícita para publicação pública.
+
+A recusa acima foi respondida diretamente pelo proprietário em 16/09/2026:
+“Autorizado em fazer a publicação dos 3 commits”. Os commits `b68e6de`,
+`63a4c82` e `9708ba3` foram publicados sem reescrita no
+[PR #177](https://github.com/henrique-devel/ganso-market/pull/177). Esta atualização
+de fecho registra a autorização efetivamente recebida; checks, merge e
+implantação seguem o fluxo contínuo autorizado do projeto. A recusa permanece
+apenas como histórico, sem confirmação de publicação pendente.
+
+## Entrega concluída e fecho local
+
+O PR #177 foi integrado normalmente em `ff81cf5f9056896f6311426f110cc2ba2e5cf726`.
+Os três commits aprovados continuam ancestrais de main. Source/Compose passaram
+no PR e em main, e o job Deploy production passou. O serviço de portfolio já
+ativo foi reconstruído explicitamente conforme o runbook, com `--no-deps`.
+API e portfolio carregam o merge; healthchecks passaram e um ciclo que declara
+`payoff-v1`/`conservative_sum` foi observado. Os hashes das quatro configurações
+conferidas não mudaram; imagem/horário de início do PostgreSQL foram preservados.
+A inspeção retornou somente metadados operacionais e confirmação booleana de ciclo,
+sem consultar tabelas financeiras. Isso não é reconciliação, novos fills ou soak.
+
+Após publicar os três commits autorizados, a revisão automática recusou o push
+de um quarto commit de fecho documental por considerá-lo fora da aprovação
+específica. Esse fecho, incluindo este registro final, permanece **local**;
+nenhum outro destino/método foi tentado para publicá-lo. O código, seus três
+commits originais, o merge e a implantação estão concluídos. Somente a publicação
+da atualização documental exige confirmação adicional.
