@@ -85,3 +85,12 @@ filtrado numericamente. Atomicidade entre cálculo e aceite continua em FIN-05.
   duas estratégias → leitor SQL → exposição, com fees e exclusão do saldo zerado.
 
 Resultados finais, SHA e publicação são registrados no [recibo](../receipts/FIN-04.md).
+
+## Limite da publicação
+
+Em 16/09/2026 UTC, a revisão automática recusou o push dos commits FIN-04 ao
+repositório público antes de executá-lo. A recusa interpretou “execute somente
+este bloco” e “pare aqui” como restrição à publicação, não superada pela autorização
+contínua geral. Nenhum método/destino alternativo foi tentado. A implementação,
+os testes e o contrato FIN-05 estão concluídos localmente; PR, CI remoto, merge
+e deploy permanecem pendentes de confirmação explícita para publicação pública.

@@ -16,7 +16,8 @@ Testes: 116 passed/zero skipped em exposure,sizing,runner,engine,financial.pg; n
 Comando: GANSO_TEST_DATABASE_URL=<descartável> npm test --workspace @ganso-market/api -- test/polymarket/portfolio/{exposure,sizing,runner,engine}.test.ts test/polymarket/paper/financial.pg.test.ts --no-file-parallelism.
 Gate: make verify passou; 2402 JS passed/237 skipped discriminados, 16 Rust e 220 Python, build/scan/Compose aprovados.
 Ambiente: PostgreSQL18.4 local descartável exclusivo; nenhuma consulta/dado financeiro produtivo.
-Publicação: pendente de PR/checks/merge e verificação da implantação aplicável.
+Publicação: push recusado antes de executar pela revisão automática; sem PR/merge/deploy.
+Recusa: interpretou “somente este bloco/pare aqui” como limite à exportação para repo público; confirmação explícita pendente.
 Limites: runtime sem produtor de provas; nenhuma reserva atômica, ativação live, mudança de cap/capital ou histórico.
 Contrato FIN-05: dono/versões, risco por dimensão/headroom, cash separado, fees/rounding e transferência de reservas.
 Evidência e contrato completo: [FIN-04](../evidence/FIN-04-payoff-exposure.md).
