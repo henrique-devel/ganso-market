@@ -69,3 +69,18 @@ Comandos: `npm test --workspace @ganso-market/api -- test/polymarket/portfolio
 no banco descartável e `--no-file-parallelism`; `make verify` como gate geral.
 Gate final: `make verify` passou (2420 JS passed/257 skipped, 16 Rust, 220 Python,
 build, secret scan, Compose). Publicação e limites operacionais: [recibo](../receipts/FIN-06.md).
+
+
+## Publicação e verificação da release
+
+O proprietário autorizou diretamente a publicação via PR em 16/09/2026.
+[PR #181](https://github.com/henrique-devel/ganso-market/pull/181) integrado
+em `a61b5fed91c6df72f4b082abc5da2f47480765d3`. Os gates source e Compose
+passaram no [PR](https://github.com/henrique-devel/ganso-market/actions/runs/35100784673)
+e na [main, com deploy aprovado](https://github.com/henrique-devel/ganso-market/actions/runs/35101326027).
+Em 16/09 às 13:26:56 UTC, API/paper/portfolio exibiam o SHA integrado e o
+healthcheck passou. Paper e portfolio já estavam em execução e foram atualizados
+conforme o runbook; nenhum worker novo foi ativado. Hashes de runtime/portfolio/fast
+iguais aos anteriores; instante de início do PostgreSQL inalterado.
+Esta verificação confirma a release, não reconciliação financeira produtiva,
+qualidade dos feeds, fill prospectivo ou soak. Nenhum bloco seguinte foi iniciado.
