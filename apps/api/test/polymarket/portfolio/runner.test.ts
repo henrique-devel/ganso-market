@@ -70,11 +70,7 @@ function world(options: WorldOptions = {}): World {
       params: readonly unknown[] = [],
     ): Promise<{ rows: R[]; rowCount: number }> {
       queries.push(text);
-      if (
-        text.includes(
-          "SELECT DISTINCT ON (token_id) token_id, bids_json, asks_json",
-        )
-      )
+      if (text.includes("SELECT t.token_id, b.bids_json, b.asks_json"))
         midTokenBatches.push(params[0] as string[]);
       const respond = (rows: Row[]): Promise<{ rows: R[]; rowCount: number }> =>
         Promise.resolve({ rows: rows as R[], rowCount: rows.length });
@@ -168,7 +164,10 @@ function world(options: WorldOptions = {}): World {
         return respond(options.eligibleMarkets ?? []);
       }
       // RFC-018 D1: the entry verdict already on record, one grouped scan.
-      if (text.includes("AS t(token_id)")) {
+      if (
+        text.includes("AS t(token_id)") &&
+        text.includes("portfolio_decisions p")
+      ) {
         return respond(options.lastEntryVerdicts ?? []);
       }
       if (text.includes("FROM portfolio_config_versions WHERE version")) {

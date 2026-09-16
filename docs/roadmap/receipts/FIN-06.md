@@ -1,5 +1,5 @@
 Bloco: FIN-06 | RFC: RFC-038 | Data UTC: 2026-09-16
-Estado: code-verified; releases iniciais implantadas; ajuste de consulta dos breakers em validação operacional.
+Estado: code-verified; releases iniciais implantadas; reparo SQL isolado para liberar boot em validação.
 Código: 999295c; base 33190a2; merge a61b5fed91c6df72f4b082abc5da2f47480765d3.
 Resultado: novas entradas compram YES/NO real, com livro/profundidade e reserva do próprio token/dono.
 Arquivos: engine/decisionrow/store/runner/replay/bridge; testes e evidência; nenhuma migration.
@@ -20,6 +20,6 @@ Produção: 16/09 13:26:56 UTC; API/paper/portfolio no merge a61b5fe; healthchec
 Limites: sem EV final novo, live/signer, capital/caps, worker novo, migration ou bloco posterior.
 Evidência/contrato: [FIN-06](../evidence/FIN-06-real-tokens.md).
 Autorização: proprietário respondeu “Autorizado fazer o processo de publicação via PR”; recusa anterior superada.
-Ajustes: PR #182/74dddd9 limita lookup v2; caller dos mids preserva universo anterior após inclusão dos livros NO.
-Operação: reinícios/57014 persistiram em 74dddd9; mids dos breakers observados a57–58s/IO; 23 testes runner passam no novo ajuste.
+Ajustes: PR182/74dddd9 lookup v2; PR183/06f05fb preserva universo; reparo isolado de mids usa lateral+LIMIT pelo índice existente.
+Operação: reinícios persistiram em 06f05fb; mids herdados observados a48–58s/IO; reparo SQL não equivale a estabilidade/soak.
 Próximo elegível: FIN-07; EXEC-02/04 recebem contratos, nenhum foi iniciado.

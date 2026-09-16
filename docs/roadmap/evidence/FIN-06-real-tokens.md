@@ -108,3 +108,15 @@ o universo anterior. Os livros NO continuam disponíveis para preço e tamanho
 de entrada. Teste de runner prova simultaneamente BUY NO e ausência desse
 NO exclusivamente de entrada no lote histórico. Sem alteração de query SQL,
 índice, timeout, memória, caps ou sinais dos breakers.
+
+
+A release `06f05fb` (PR #183) também apresentou reinício. Nova amostra agregada
+confirmou `loadMidsAsOf` ativo a 48 s com IO/IPC mesmo após preservar o universo
+anterior: a ordenação histórica herdada continuou sendo um bloqueio operacional.
+O reparo foi dividido em uma entrega isolada de SQL em `exitstore.ts`, além dos
+seis arquivos do contrato original FIN-06: mesma seleção as-of, agora por
+`unnest` + lateral com `ORDER BY received_at DESC LIMIT 1` por token, usando o
+índice já existente. Nenhum schema/índice, timeout, memória, cap ou sinal mudou.
+Fixtures PostgreSQL incluem duas alternativas, snapshots anterior/atual/futuro,
+IDs duplicados, token sem livro e lista vazia; mids esperados são calculados
+manualmente. A implantação continua dependente dos gates e da observação de ciclos.

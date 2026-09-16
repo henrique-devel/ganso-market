@@ -28,6 +28,7 @@ import {
   type PaperPool,
 } from "../../../src/polymarket/paper/brokerstore.js";
 
+import { loadMidsAsOf } from "../../../src/polymarket/portfolio/exitstore.js";
 import { lastEntryVerdicts } from "../../../src/polymarket/portfolio/store.js";
 import { bridgeTick } from "../../../src/polymarket/paper/bridge.js";
 
@@ -913,6 +914,29 @@ describe.skipIf(url === undefined)(
         attributed.find((e) => e.eventType === "fill")?.owner,
       ).toMatchObject({ accountId: "paper", strategyId: "main" });
       expect((await row(id)).state).toBe("consumed");
+      await raw.query(
+        `INSERT INTO polymarket_book_snapshots(token_id,condition_id,received_at,bids_json,asks_json)
+        VALUES ('broker-no','c-broker',$1,'[{"price":"0.10","size":"10"}]','[{"price":"0.12","size":"10"}]'),
+               ('broker-no','c-broker',$2,'[{"price":"0.90","size":"10"}]','[{"price":"0.92","size":"10"}]')`,
+        [new Date(now.getTime() - 1000), new Date(now.getTime() + 1000)],
+      );
+      const mids = await loadMidsAsOf(
+        pool,
+        ["broker-yes", "broker-no", "missing-book", "broker-no"],
+        now,
+      );
+      expect([...mids]).toEqual([
+        ["broker-yes", parseScaled("0.805")],
+        ["broker-no", parseScaled("0.395")],
+      ]);
+      const previousMids = await loadMidsAsOf(
+        pool,
+        ["broker-no"],
+        new Date(now.getTime() - 500),
+      );
+      expect(previousMids.get("broker-no")).toBe(parseScaled("0.11"));
+      expect((await loadMidsAsOf(pool, [], now)).size).toBe(0);
+
       expect(
         (await lastEntryVerdicts(pool, ["broker-no"])).has("broker-no"),
       ).toBe(true);
