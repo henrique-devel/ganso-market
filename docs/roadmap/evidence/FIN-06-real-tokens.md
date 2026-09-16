@@ -67,4 +67,5 @@ integração reduce-only pertencem a EXEC-04 e não foram implementadas aqui.
 Comandos: `npm test --workspace @ganso-market/api -- test/polymarket/portfolio
  test/polymarket/paper/bridge.test.ts`; testes SQL com `GANSO_TEST_DATABASE_URL`
 no banco descartável e `--no-file-parallelism`; `make verify` como gate geral.
-Publicação, resultado final dos gates e limites operacionais: [recibo](../receipts/FIN-06.md).
+Gate final: `make verify` passou (2420 JS passed/257 skipped, 16 Rust, 220 Python,
+build, secret scan, Compose). Publicação e limites operacionais: [recibo](../receipts/FIN-06.md).
