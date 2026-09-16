@@ -95,3 +95,16 @@ não se busca uma linha v2 antiga atrás dela. Regressão PostgreSQL real verifi
 esse caso. Nenhuma migration, índice, timeout, memória ou cap foi alterado.
 A correção elimina essa varredura; estabilidade operacional depende de observação
 posterior ao deploy e não é inferida dos testes locais.
+
+
+O PR #182 foi integrado em `74dddd9`, com gates/deploy aprovados; corrigiu a
+busca de versão, mas não eliminou os reinícios. A amostra técnica seguinte,
+restrita a rótulos fixos de `pg_stat_activity`, localizou a consulta
+`loadMidsAsOf` dos breakers ativa por 57–58 s com `BuffileRead/Write`.
+O novo mapa de livros incluía NO para entrada, e o caller enviava todos os
+IDs também à consulta histórica. O ajuste subsequente restringe os mids aos
+IDs dos mercados/posições realmente observados pelos breakers, restaurando
+o universo anterior. Os livros NO continuam disponíveis para preço e tamanho
+de entrada. Teste de runner prova simultaneamente BUY NO e ausência desse
+NO exclusivamente de entrada no lote histórico. Sem alteração de query SQL,
+índice, timeout, memória, caps ou sinais dos breakers.

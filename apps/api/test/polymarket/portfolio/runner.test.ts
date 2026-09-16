@@ -44,6 +44,7 @@ interface WorldOptions {
 }
 
 interface World {
+  readonly midTokenBatches: string[][];
   readonly pool: PortfolioPool;
   readonly inserts: { table: string; params: readonly unknown[] }[];
   readonly queries: string[];
@@ -51,6 +52,7 @@ interface World {
 }
 
 function world(options: WorldOptions = {}): World {
+  const midTokenBatches: string[][] = [];
   const inserts: { table: string; params: readonly unknown[] }[] = [];
   const queries: string[] = [];
   const exposureUpdates: { text: string; params: readonly unknown[] }[] = [];
@@ -68,6 +70,12 @@ function world(options: WorldOptions = {}): World {
       params: readonly unknown[] = [],
     ): Promise<{ rows: R[]; rowCount: number }> {
       queries.push(text);
+      if (
+        text.includes(
+          "SELECT DISTINCT ON (token_id) token_id, bids_json, asks_json",
+        )
+      )
+        midTokenBatches.push(params[0] as string[]);
       const respond = (rows: Row[]): Promise<{ rows: R[]; rowCount: number }> =>
         Promise.resolve({ rows: rows as R[], rowCount: rows.length });
 
@@ -333,7 +341,7 @@ function world(options: WorldOptions = {}): World {
       return respond([]);
     },
   };
-  return { pool, inserts, queries, exposureUpdates };
+  return { pool, inserts, queries, exposureUpdates, midTokenBatches };
 }
 
 function runner(pool: PortfolioPool) {
@@ -757,6 +765,9 @@ describe("FIN-06 runner token/book provenance", () => {
       (r) => r.table === "portfolio_decisions",
     )!.params;
     expect(d.slice(1, 5)).toEqual(["0xb", "t2-no", "NO", "BUY"]);
+    // NO remains available for actual entry, without doubling the historical
+    // jump-breaker lookup for tokens that breaker does not observe.
+    expect(scene.midTokenBatches).toEqual([["t2"]]);
     const book = JSON.parse(String(d[35]));
     expect(book.token_id).toBe("t2-no");
     expect(book.asks).toEqual([{ price: "0.15", size: "100" }]);
