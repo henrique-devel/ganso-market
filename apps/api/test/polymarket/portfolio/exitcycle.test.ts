@@ -89,6 +89,9 @@ describe("exit price and unwind cost", () => {
     expect(plan.exitPriceScaled).toBe(s("0.608"));
     // The unwind gives up (0.61 - 0.608) x 100 = $0.20 against the best bid.
     expect(plan.unwindCostScaled).toBe(s("0.2"));
+    // 0.66 - 0.608 = 0.052 USD/share; do not debit .002 impact again.
+    expect(plan.edgeAtBidScaled).toBe(52_000_000n);
+    expect(exitEvidence(plan).unwind_cost).toBe("0.200000");
     expect(plan.bookTooThinToExit).toBe(false);
   });
 
@@ -118,6 +121,33 @@ describe("exit price and unwind cost", () => {
     expect(plan.bookTooThinToExit).toBe(true);
     expect(plan.signals.map((signal) => signal.reason)).toContain(
       "LIQUIDITY_OR_RULE_DEGRADED",
+    );
+  });
+});
+
+describe("EXEC-01 unwind cost units", () => {
+  it("compares the residual with full remaining capital once, without a buffer debit", () => {
+    // 50 @ .60 + 50 @ .50 => VWAP .55, impact .05/share or $5 total.
+    // Residual .65-.55=.10; annual capital .20 x .55=.11 => exit.
+    const plan = planExit({
+      context: {
+        ...HELD,
+        probLowerScaled: s("0.65"),
+        expectedLockupS: 365 * 86_400,
+        bids: [
+          { price: "0.60", size: "50" },
+          { price: "0.50", size: "50" },
+        ],
+      },
+      config: { ...CONFIG, costs: { ...CONFIG.costs, capitalCostAnnual: 0.2 } },
+      portfolioState: "NORMAL",
+    });
+    expect(plan.exitPriceScaled).toBe(550_000_000n);
+    expect(plan.unwindCostScaled).toBe(5_000_000_000n);
+    expect(plan.edgeAtBidScaled).toBe(100_000_000n);
+    expect(plan.exitInput?.remainingCapitalCostScaled).toBe(110_000_000n);
+    expect(plan.signals.map((signal) => signal.reason)).toContain(
+      "LOCKUP_NOT_WORTH_EDGE",
     );
   });
 });

@@ -227,3 +227,40 @@ describe("property: no order without a price limit (RFC-011)", () => {
     expect(decisions).toBeGreaterThan(300);
   });
 });
+
+// EXEC-01: price/fee evidence stays separated; no second slippage debit.
+describe("EXEC-01 policy evidence", () => {
+  it.each([null, "invalid", "-0.01"])(
+    "fee %s cannot authorize aggression",
+    (takerFeeRate) => {
+      const result = decideOrderType(context({ qLo: "0.99", takerFeeRate }));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.reason);
+      expect(result.value.postOnly).toBe(true);
+      expect(result.value.limitPrice).toBe("0.480000");
+      expect(result.value.policyReason).toBe(
+        "DEFAULT_PASSIVE_TAKER_FEE_UNKNOWN",
+      );
+    },
+  );
+
+  it("uses worst price plus known fee and margin once even with book impact", () => {
+    // Worst=.60, VWAP=.55; fee=.04*.60*.40=.0096, margin=.01.
+    // .65-.60=.05 > .0196: FAK. Charging .05 impact again would reject.
+    const result = decideOrderType(
+      context({
+        qLo: "0.65",
+        size: "100",
+        takerFeeRate: "0.04",
+        asks: [
+          { price: "0.50", size: "50" },
+          { price: "0.60", size: "50" },
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.value.orderType).toBe("FAK");
+    expect(result.value.limitPrice).toBe("0.600000");
+  });
+});

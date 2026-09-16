@@ -117,7 +117,10 @@ export interface ExitPlan {
   readonly bestBidScaled: bigint | null;
   /** Residual edge at the executable bid, per share, scaled. */
   readonly edgeAtBidScaled: bigint | null;
-  /** USD the unwind would give up against the best bid. */
+  /** USD total, 1e9: (best bid - VWAP) x walked shares. Diagnostic only;
+   * already reflected in exitPriceScaled, never deducted from edge again.
+   * On incomplete walks this describes only the visible filled portion.
+   */
   readonly unwindCostScaled: bigint | null;
   /** Share value under the trinary payoff, when a 50/50 report is possible. */
   readonly trinaryValueScaled: bigint | null;
@@ -239,6 +242,8 @@ export function planExit(input: {
   const edgeAtBidScaled =
     exitPriceScaled === null ? null : probLowerScaled - exitPriceScaled;
 
+  // Fees are not supplied by PositionExitContext: this remains a gross
+  // hold-vs-sell comparison, not a net quote or zero-fee execution approval.
   const unwindCostScaled =
     walk === null
       ? null

@@ -194,10 +194,10 @@ function contextC(overrides: Partial<FastContext> = {}): FastContext {
 }
 
 describe("versão e identidade", () => {
-  it("tem versão própria e não é a 1.0.0 da policy global", async () => {
+  it("tem versão própria e não é a versão da policy global", async () => {
     const global = await import("../../../src/polymarket/paper/policy.js");
     expect(FAST_POLICY_VERSION).toBe("0.1.0");
-    expect(global.POLICY_VERSION).toBe("1.0.0");
+    expect(global.POLICY_VERSION).toBe("1.0.1");
     expect(FAST_POLICY_VERSION).not.toBe(global.POLICY_VERSION);
     expect(FAST_STRATEGY_ID).toBe("fast_btc_updown");
   });
