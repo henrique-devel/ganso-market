@@ -26,6 +26,10 @@ export interface SizingInput {
   readonly probLowerScaled: bigint;
   /** Executable entry price per share, scaled. */
   readonly execPriceScaled: bigint;
+  /** Conservative unpaid fee bound per share; zero only for a fee-free intent. */
+  readonly feePerShareScaled: bigint;
+  /** Upper execution price bound for a new long; caps use the larger price. */
+  readonly maxEntryPriceScaled?: bigint;
   /** Interval width (q_hi - q_lo), scaled: the uncertainty shrink driver. */
   readonly intervalWidthScaled: bigint;
   /** Kelly multiplier in force, scaled. */
@@ -56,6 +60,7 @@ export interface SizingResult {
   /** Kelly ceiling in shares, scaled — recorded, never used as the target. */
   readonly kellyCapSharesScaled: bigint;
   readonly notionalScaled: bigint;
+  readonly riskScaled: bigint;
   readonly bindingConstraint: BindingConstraint;
   readonly limiters: readonly LimiterValue[];
 }
@@ -119,6 +124,11 @@ function sharesFromUsd(usdScaled: bigint, priceScaled: bigint): bigint {
  */
 export function computeSize(input: SizingInput): SizingResult {
   const limiters: LimiterValue[] = [];
+  const fee = input.feePerShareScaled;
+  if (fee < 0n) throw new Error("FIN04_INVALID_FEE_BOUND");
+  const ceiling = input.maxEntryPriceScaled ?? input.execPriceScaled;
+  const riskPerShare =
+    (ceiling > input.execPriceScaled ? ceiling : input.execPriceScaled) + fee;
 
   const kelly = kellyFraction(input);
   const kellyUsdScaled = mul(input.bankrollScaled, kelly.fractionScaled);
@@ -181,11 +191,11 @@ export function computeSize(input: SizingInput): SizingResult {
     const headroom = input.capHeadroom[key] ?? 0n;
     limiters.push({
       constraint,
-      maxSizeScaled: sharesFromUsd(
-        headroom > 0n ? headroom : 0n,
-        input.execPriceScaled,
-      ),
-      note: "remaining cap headroom at total loss",
+      maxSizeScaled:
+        riskPerShare > 0n && headroom > 0n
+          ? (headroom * SCALE) / riskPerShare
+          : 0n,
+      note: "remaining maximum-loss headroom including unpaid fees (rounded down)",
     });
   }
 
@@ -215,6 +225,7 @@ export function computeSize(input: SizingInput): SizingResult {
       sizeScaled: 0n,
       kellyCapSharesScaled,
       notionalScaled: 0n,
+      riskScaled: 0n,
       bindingConstraint:
         sizeScaled <= 0n ? bindingConstraint : "MIN_ORDER_SIZE",
       limiters,
@@ -225,6 +236,7 @@ export function computeSize(input: SizingInput): SizingResult {
     sizeScaled,
     kellyCapSharesScaled,
     notionalScaled: mul(sizeScaled, input.execPriceScaled),
+    riskScaled: (sizeScaled * riskPerShare + SCALE - 1n) / SCALE,
     bindingConstraint,
     limiters,
   };

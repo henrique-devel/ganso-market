@@ -429,6 +429,11 @@ export function createPortfolioRunner(
       eventId: row.eventId,
     });
     return {
+      accountId: row.accountId,
+      strategyId: row.strategyId,
+      feesPaidScaled: row.feesPaidScaled,
+      realizedPnlScaled: row.realizedPnlScaled,
+      remainingFeesScaled: 0n,
       tokenId: row.tokenId,
       conditionId: row.conditionId,
       sharesScaled: row.sharesScaled,
@@ -699,7 +704,14 @@ export function createPortfolioRunner(
     }
 
     const markets = await loadEligibleMarkets(deps.pool, now);
-    const positions = await loadOpenPositions(deps.pool);
+    const pnl = await loadPaperPnl(deps.pool, {
+      accountId: "paper",
+      strategyId: "main",
+      now,
+    });
+    if (pnl.ownerState === undefined)
+      throw new Error("FIN04_OWNER_STATE_REQUIRED");
+    const positions = await loadOpenPositions(deps.pool, pnl.ownerState);
 
     // Per-market context, batched: three grouped scans instead of one round
     // trip per market per question.
@@ -780,11 +792,6 @@ export function createPortfolioRunner(
 
     // 2. State machine over the paper book's realized and marked PnL.
     const current = await loadState(now);
-    const pnl = await loadPaperPnl(deps.pool, {
-      accountId: "paper",
-      strategyId: "main",
-      now,
-    });
     const evaluation = evaluateState({
       now,
       current,
@@ -1026,6 +1033,12 @@ export function createPortfolioRunner(
       positions: positions.length,
       open_breakers: openBreakers.length,
       stale_marks: pnl.positionsWithStaleMark,
+      risk_version: "payoff-v1",
+      exposure_aggregation: "conservative_sum",
+      exposure_owner: {
+        account_id: pnl.ownerState.accountId,
+        strategy_id: pnl.ownerState.strategyId,
+      },
     });
 
     // RFC-027 D1/D2, caminho B. Os mesmos sete campos que acabaram de ir para o

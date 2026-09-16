@@ -1,3 +1,5 @@
+import { computeExposures } from "../../../src/polymarket/portfolio/exposure.js";
+import { DEFAULT_PORTFOLIO_CONFIG } from "../../../src/polymarket/portfolio/config.js";
 // FIN-03: independent FIN-01 monetary oracles through real PostgreSQL.
 // The caller owns the disposable database; schemas and guards are retained.
 import { createHash, randomUUID } from "node:crypto";
@@ -17,6 +19,7 @@ import {
 } from "../../../src/polymarket/paper/ledger.js";
 import {
   loadPaperPnl,
+  loadOpenPositions,
   type PaperPnl,
 } from "../../../src/polymarket/portfolio/exitstore.js";
 import {
@@ -276,6 +279,80 @@ describe.skipIf(DATABASE_URL === undefined)(
           [strategy],
         )
       ).rows;
+
+    it("FIN-04 loads owner quantities, fees and zero filtering without token-netting", async () => {
+      const token = `fin04-${RUN}`;
+      const a = `fin04a-${RUN}`;
+      const b = `fin04b-${RUN}`;
+      await owner(raw, a, "500.000000000");
+      await owner(raw, b, "500.000000000");
+      await order(raw, `${a}-buy`, token, a);
+      await order(raw, `${b}-sell`, token, b, "SELL");
+      await appendLedgerEvent(
+        wrap(raw),
+        fill(`${a}-buy`, token, "BUY", "0.4", "10", "0.1"),
+      );
+      await appendLedgerEvent(
+        wrap(raw),
+        fill(`${b}-sell`, token, "SELL", "0.4", "10", "0.2"),
+      );
+      const pnlA = await pnlFor(a);
+      const pnlB = await pnlFor(b);
+      // Legacy compatibility still parses on the same migrated database; the
+      // attributed replay has no dependency on this empty token-net cache.
+      expect(await loadOpenPositions(store(raw))).toEqual([]);
+      const positionsA = await loadOpenPositions(store(raw), pnlA.ownerState!);
+      const positionsB = await loadOpenPositions(store(raw), pnlB.ownerState!);
+      expect(positionsA).toHaveLength(1);
+      expect(positionsB).toHaveLength(1);
+      expect(positionsA[0]).toMatchObject({
+        accountId: "paper",
+        strategyId: a,
+        tokenId: token,
+        sharesScaled: s("10"),
+        costScaled: s("4"),
+        feesPaidScaled: s("0.1"),
+        realizedPnlScaled: -s("0.1"),
+      });
+      expect(positionsB[0]).toMatchObject({
+        accountId: "paper",
+        strategyId: b,
+        sharesScaled: -s("10"),
+        costScaled: s("4"),
+        feesPaidScaled: s("0.2"),
+        realizedPnlScaled: -s("0.2"),
+      });
+      const rows = computeExposures({
+        positions: [...positionsA, ...positionsB].map((p) => ({
+          ...p,
+          clauseFamily: "unknown",
+          factor: "shared",
+          catalystWindow: "shared",
+          unwindCostScaled: null,
+          remainingFeesScaled: 0n,
+        })),
+        caps: DEFAULT_PORTFOLIO_CONFIG.caps,
+        bankrollScaled: s("1000"),
+      });
+      // Separate loss maxima: long 4, short 6; paid fees 0.3 already in R.
+      expect(rows.find((row) => row.dimension === "total")).toMatchObject({
+        worstCaseScaled: s("10"),
+        feesPaidScaled: s("0.3"),
+        realizedPnlScaled: -s("0.3"),
+      });
+      await appendLedgerEvent(wrap(raw), resolution(token));
+      const closed = await pnlFor(a, DAY13);
+      expect(await loadOpenPositions(store(raw), closed.ownerState!)).toEqual(
+        [],
+      );
+      // A zero canonical string such as 0.000000000 must not create a position.
+      expect(
+        await loadOpenPositions(
+          store(raw),
+          (await pnlFor(b, DAY13)).ownerState!,
+        ),
+      ).toEqual([]);
+    });
 
     it("F4 keeps each owner's basis, fees and equity, then realizes separate UTC days", async () => {
       const token = `f4-${RUN}`;

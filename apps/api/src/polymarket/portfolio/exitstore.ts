@@ -21,7 +21,10 @@ import {
   type FinancialPool,
   type OwnerSelection,
 } from "../paper/financialstore.js";
-import { financialOwnerKey } from "../paper/financial.js";
+import {
+  financialOwnerKey,
+  type FinancialOwnerState,
+} from "../paper/financial.js";
 import {
   utcDayBucket,
   utcWeekStart,
@@ -54,6 +57,10 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
 
 /** One open paper position, joined to what the exit cycle needs to judge it. */
 export interface OpenPositionRow {
+  readonly accountId: string;
+  readonly strategyId: string;
+  readonly feesPaidScaled: bigint;
+  readonly realizedPnlScaled: bigint;
   readonly tokenId: string;
   readonly conditionId: string;
   readonly sharesScaled: bigint;
@@ -85,15 +92,37 @@ export interface OpenPositionRow {
  * Every open paper position with the metadata the exposure dimensions and the
  * exit criteria both need.
  *
- * Read from `paper_positions`, which the RFC-011 ledger derives. This module
- * never writes there: a position is the broker's fact, and the portfolio engine
- * only ever has an opinion about it.
+ * With an owner, use exactly the FIN-03 replay snapshot that produced PnL and
+ * join only its metadata here. No net-token cache can cancel another owner's
+ * short or substitute a stale owner cache. Omission is exit-path compatibility
+ * with paper_positions, explicitly labelled legacy_unattributed/unknown.
  */
 export async function loadOpenPositions(
   pool: PortfolioPool,
+  owner?: FinancialOwnerState,
 ): Promise<OpenPositionRow[]> {
+  const source =
+    owner === undefined
+      ? "paper_positions"
+      : `jsonb_to_recordset($1::jsonb) AS owner_position(
+    token_id text, condition_id text, shares text, cost_usd text,
+    fees_paid_usd text, realized_pnl_usd text, opened_at timestamptz, resolved_at timestamptz)`;
+  const financialRows =
+    owner === undefined
+      ? []
+      : [...owner.positions.values()].map((p) => ({
+          token_id: p.tokenId,
+          condition_id: p.conditionId,
+          shares: p.shares,
+          cost_usd: p.costBasisUsd,
+          fees_paid_usd: p.feesPaidUsd,
+          realized_pnl_usd: p.realizedPnlUsd,
+          opened_at: p.openedAt,
+          resolved_at: p.resolvedAt,
+        }));
   const result = await pool.query<Record<string, unknown>>(
     `SELECT p.token_id, p.condition_id, p.shares, p.cost_usd, p.opened_at,
+            p.fees_paid_usd, p.realized_pnl_usd,
             p.resolved_at,
             meta.category, meta.question, meta.affirmative_token_id,
             COALESCE(par.neg_risk, FALSE) AS neg_risk,
@@ -103,7 +132,7 @@ export async function loadOpenPositions(
             r.description AS rule_description,
             r.end_date,
             r.version AS rule_version
-       FROM paper_positions p
+       FROM ${owner === undefined ? source : `(SELECT * FROM ${source})`} p
        LEFT JOIN LATERAL (
          SELECT question, category, affirmative_token_id
            FROM polymarket_market_metadata_versions v
@@ -125,10 +154,15 @@ export async function loadOpenPositions(
          SELECT event_id FROM polymarket_event_markets em
           WHERE em.condition_id = p.condition_id ORDER BY em.event_id LIMIT 1
        ) ev ON TRUE
-      WHERE p.shares <> '0'
+      WHERE p.shares::numeric <> 0
       ORDER BY p.token_id`,
+    owner === undefined ? [] : [JSON.stringify(financialRows)],
   );
   return result.rows.map((row) => ({
+    accountId: owner?.accountId ?? "legacy_unattributed",
+    strategyId: owner?.strategyId ?? "unknown",
+    feesPaidScaled: parseScaled(String(row.fees_paid_usd ?? "0")) ?? 0n,
+    realizedPnlScaled: parseScaled(String(row.realized_pnl_usd ?? "0")) ?? 0n,
     tokenId: String(row.token_id ?? ""),
     conditionId: String(row.condition_id ?? ""),
     sharesScaled: parseScaled(String(row.shares ?? "0")) ?? 0n,
@@ -150,6 +184,8 @@ export async function loadOpenPositions(
 
 /** Realized and unrealized PnL of the paper book, for the state machine. */
 export interface PaperPnl {
+  /** Same replay snapshot used by exposure; no second token-net read. */
+  readonly ownerState?: FinancialOwnerState;
   /** Present only for the explicit financial-v2 owner selection. */
   readonly financial?: FinancialStateInput;
   /** Realized PnL over the whole book, exact: the ledger's own total. */
@@ -214,6 +250,7 @@ export async function loadPaperPnl(
       else signedMark += scaled(position.markValueSignedUsd);
     }
     return {
+      ownerState: owner,
       realizedTotalScaled: scaled(owner.realizedPnlUsd),
       realizedDayScaled: scaled(
         owner.dailyRealizedPnlUsd.get(utcDayBucket(selection.now)) ?? "0",

@@ -28,6 +28,8 @@ const NOW = new Date("2026-08-26T12:00:00Z");
 const CONFIG = DEFAULT_PORTFOLIO_CONFIG;
 
 interface WorldOptions {
+  /** New synthetic attributed fill, separate from the legacy cache fixture. */
+  readonly ownerFill?: boolean;
   /** Exit signature already on record for the position, or null for none. */
   readonly lastExitSignature?: string | null;
   /** Bids of the position's book; the default leaves plenty of residual edge. */
@@ -89,7 +91,56 @@ function world(options: WorldOptions = {}): World {
         return respond([]);
       }
 
-      if (text.includes("FROM paper_attributed_ledger_v1")) return respond([]);
+      if (text.includes("FROM paper_attributed_ledger_v1")) {
+        expect(params.slice(0, 2)).toEqual(["paper", "main"]);
+        return respond(
+          options.ownerFill
+            ? [
+                {
+                  event_id: "1",
+                  idempotency_key: "fin04:owner-fixture",
+                  event_type: "fill",
+                  order_id: "fin04-order",
+                  token_id: "t1",
+                  condition_id: "0xa",
+                  payload_json: {
+                    side: "SELL",
+                    size: "10",
+                    price: "0.4",
+                    fee: "0.1",
+                  },
+                  event_ts: new Date("2026-08-25T12:00:00Z"),
+                  received_at: new Date("2026-08-25T12:00:00Z"),
+                  account_id: "paper",
+                  strategy_id: "main",
+                  attribution_status: "verified",
+                  evidence_ref: "fixture:FIN04",
+                },
+              ]
+            : [],
+        );
+      }
+      if (text.includes("jsonb_to_recordset($1::jsonb) AS owner_position")) {
+        const positions = JSON.parse(String(params[0])) as Row[];
+        return respond(
+          positions
+            .filter((p) => Number(p.shares) !== 0)
+            .map((p) => ({
+              ...p,
+              category: "crypto",
+              question: "Will BTC be above $88,000?",
+              affirmative_token_id: "t1",
+              neg_risk: false,
+              param_version: 2,
+              event_id: "e1",
+              resolution_source: "UMA:0xadapter",
+              rule_description:
+                "Resolves to the Binance 1 minute candle close for BTCUSDT.",
+              end_date: new Date("2026-08-28T12:00:00Z"),
+              rule_version: 3,
+            })),
+        );
+      }
       if (text.includes("FROM paper_financial_owners")) {
         // Synthetic capital fixture, never a production seed.
         return respond([
@@ -423,7 +474,7 @@ describe("the exposure bucket key (RFC-018 D2)", () => {
   // for 460 of 570 live rule versions, which turned a diversification cap into
   // a ceiling on the whole book. The number stayed at 0.25; the key moved.
   it("keys resolution_source on the rule clause, not on the adapter", async () => {
-    const scene = world({ eligibleMarkets: [MARKET] });
+    const scene = world({ eligibleMarkets: [MARKET], ownerFill: true });
     await runner(scene.pool).tickOnce("panel");
     const keys = scene.inserts
       .filter((row) => row.table === "portfolio_exposures")
@@ -431,12 +482,21 @@ describe("the exposure bucket key (RFC-018 D2)", () => {
       .map((row) => String(row.params[1]));
     expect(keys).toEqual(["OBJETIVA_UNICA:binance"]);
     expect(keys).not.toContain("UMA:0xadapter");
+    // The old cache fixture still has long 100 / cost 50. Only the attributed
+    // short 10 / proceeds 4 consumes this owner's capacity: risk 6, paid fee in R.
+    const total = scene.inserts.find(
+      (row) => row.table === "portfolio_exposures" && row.params[0] === "total",
+    );
+    expect(total?.params[2]).toBe("6.000000");
+    expect(
+      scene.queries.some((query) => query.includes("FROM paper_positions")),
+    ).toBe(false);
   });
 });
 
 describe("DATA-02 exposure lifecycle protection", () => {
   it("keeps active keys out of zeroing and never requests an exposure deletion", async () => {
-    const scene = world({ eligibleMarkets: [MARKET] });
+    const scene = world({ eligibleMarkets: [MARKET], ownerFill: true });
     await runner(scene.pool).tickOnce("panel");
     expect(
       scene.queries.some((query) =>

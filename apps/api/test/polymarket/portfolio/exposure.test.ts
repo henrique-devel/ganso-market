@@ -8,6 +8,7 @@ import {
   computeExposures,
   unwindAlarm,
   type OpenPosition,
+  type PayoffProof,
 } from "../../../src/polymarket/portfolio/exposure.js";
 import {
   DEFAULT_RESOLUTION_LEXICON,
@@ -27,6 +28,11 @@ const BANKROLL = s("1000");
 
 function position(overrides: Partial<OpenPosition> = {}): OpenPosition {
   return {
+    accountId: "paper",
+    strategyId: "main",
+    feesPaidScaled: 0n,
+    realizedPnlScaled: 0n,
+    remainingFeesScaled: 0n,
     tokenId: "t1",
     conditionId: "0xa",
     sharesScaled: s("100"),
@@ -115,9 +121,8 @@ describe("exposure aggregation", () => {
     );
   });
 
-  it("takes the LARGEST leg for a negRisk group, not the sum", () => {
-    // The adapter reverts a [1, 1] report, so at most one leg pays. Summing
-    // would overstate the group's worst case by the number of legs.
+  it("sums an incomplete negRisk event, including an uncovered winning outcome", () => {
+    // An unheld outcome may win: all three held tokens then pay zero.
     const rows = computeExposures({
       positions: [
         position({
@@ -145,7 +150,7 @@ describe("exposure aggregation", () => {
       caps: CAPS,
     });
     const group = find(rows, "event", "evt");
-    expect(money(group!.worstCaseScaled)).toBe("40.000000");
+    expect(money(group!.worstCaseScaled)).toBe("80.000000");
     expect(group!.positionCount).toBe(3);
   });
 
@@ -388,5 +393,340 @@ describe("unwind alarm", () => {
       caps: CAPS,
     });
     expect(unwindAlarm(noBook, s("10"), s("0.5")).ratioScaled).toBeNull();
+  });
+});
+
+describe("FIN-04 independent payoff oracles", () => {
+  const run = (positions: OpenPosition[], payoffProofs: PayoffProof[] = []) =>
+    computeExposures({
+      positions,
+      payoffProofs,
+      bankrollScaled: BANKROLL,
+      caps: CAPS,
+    });
+  const eventProof = (scenarios: PayoffProof["scenarios"]): PayoffProof => ({
+    version: "payoff-scenarios-v1",
+    evidenceRef: "fixture:exhaustive-contract-v1",
+    complete: true,
+    scope: { kind: "event", id: "exclusive" },
+    tokens: [
+      { tokenId: "x", conditionId: "cx" },
+      { tokenId: "y", conditionId: "cy" },
+    ],
+    scenarios,
+  });
+  const legs = () => [
+    position({
+      tokenId: "x",
+      conditionId: "cx",
+      eventId: "exclusive",
+      sharesScaled: s("10"),
+      costScaled: s("6"),
+      negRisk: true,
+    }),
+    position({
+      tokenId: "y",
+      conditionId: "cy",
+      eventId: "exclusive",
+      sharesScaled: s("10"),
+      costScaled: s("6"),
+      negRisk: true,
+    }),
+  ];
+
+  it.each([false, true])(
+    "F3 consumes 70 in every shared dimension even with one negRisk=%s",
+    (negRisk) => {
+      // Enumerated (X,Y) = (0,0),(1,0),(0,1),(1,1): PnL -70,30,30,130.
+      const terminal = [-70n, 30n, 30n, 130n];
+      const expected = -terminal.reduce((a, b) => (a < b ? a : b)) * s("1");
+      const rows = run([
+        position({
+          tokenId: "x",
+          conditionId: "cx",
+          eventId: "ex",
+          costScaled: s("30"),
+          negRisk,
+        }),
+        position({
+          tokenId: "y",
+          conditionId: "cy",
+          eventId: "ey",
+          costScaled: s("40"),
+        }),
+      ]);
+      for (const dimension of [
+        "category",
+        "factor",
+        "resolution_source",
+        "catalyst_window",
+        "locked_capital",
+        "total",
+      ]) {
+        expect(rows.find((row) => row.dimension === dimension)).toMatchObject({
+          worstCaseScaled: expected,
+          aggregation: "conservative_sum",
+        });
+      }
+      expect(find(rows, "event", "ex")!.worstCaseScaled).toBe(s("30"));
+      expect(find(rows, "event", "ey")!.worstCaseScaled).toBe(s("40"));
+      expect(find(rows, "market", "cx")!.capScaled).toBe(s("50"));
+    },
+  );
+
+  it("F1 separates short proceeds, residual loss, paid and unpaid fees", () => {
+    // Q=-10, B=4. Terminal gross PnL at payout 0/1: +4,-6.
+    const short = position({
+      sharesScaled: -s("10"),
+      costScaled: s("4"),
+      feesPaidScaled: s("0.1"),
+      realizedPnlScaled: -s("0.1"),
+    });
+    const total = find(run([short]), "total", "all")!;
+    expect(total.worstCaseScaled).toBe(s("6"));
+    expect(total.feesPaidScaled).toBe(s("0.1"));
+    expect(total.realizedPnlScaled).toBe(-s("0.1"));
+    // Since C0 the loss is 6.1; paid fee is in R once, not added to residual risk.
+    expect(total.worstCaseScaled - total.realizedPnlScaled).toBe(s("6.1"));
+    expect(
+      find(run([{ ...short, remainingFeesScaled: s("0.2") }]), "total", "all")!
+        .worstCaseScaled,
+    ).toBe(s("6.2"));
+    // Partial buyback from F1: Q=-6, B=2.4 => residual 3.6.
+    expect(
+      find(
+        run([{ ...short, sharesScaled: -s("6"), costScaled: s("2.4") }]),
+        "total",
+        "all",
+      )!.worstCaseScaled,
+    ).toBe(s("3.6"));
+  });
+
+  it("F2 real NO has the same six-dollar gross loss without being a short", () => {
+    // NO=0/1 yields -6/+4, with an unpaid 0.2 bound yields -6.2/+3.8.
+    expect(
+      find(
+        run([
+          position({
+            sharesScaled: s("10"),
+            costScaled: s("6"),
+            remainingFeesScaled: s("0.2"),
+          }),
+        ]),
+        "total",
+        "all",
+      )!.worstCaseScaled,
+    ).toBe(s("6.2"));
+  });
+
+  it("reduces only with complete proven scenarios, preserving each dimension's subset", () => {
+    // Exclusive complete X/Y: payoffs (1,0),(0,1) => PnL -2,-2.
+    const rows = run(legs(), [
+      eventProof([
+        { x: s("1"), y: 0n },
+        { x: 0n, y: s("1") },
+      ]),
+    ]);
+    expect(find(rows, "event", "exclusive")).toMatchObject({
+      worstCaseScaled: s("2"),
+      aggregation: "proven_scenarios",
+      proofRefs: ["fixture:exhaustive-contract-v1"],
+    });
+    expect(find(rows, "total", "all")!.worstCaseScaled).toBe(s("2"));
+    // Each condition contains only its own leg: either one can lose all six.
+    expect(find(rows, "market", "cx")!.worstCaseScaled).toBe(s("6"));
+    expect(find(rows, "market", "cy")!.worstCaseScaled).toBe(s("6"));
+    const split = legs();
+    split[1] = { ...split[1]!, category: "other", unresolved: false };
+    const subsets = run(split, [
+      eventProof([
+        { x: s("1"), y: 0n },
+        { x: 0n, y: s("1") },
+      ]),
+    ]);
+    expect(find(subsets, "category", "crypto")!.worstCaseScaled).toBe(s("6"));
+    expect(find(subsets, "category", "other")!.worstCaseScaled).toBe(s("6"));
+    expect(find(subsets, "locked_capital", "all")!.worstCaseScaled).toBe(
+      s("6"),
+    );
+  });
+
+  it("floors a guaranteed profit at zero and includes future fees in proven scenarios", () => {
+    const positions = legs().map((p) => ({ ...p, costScaled: s("4") }));
+    const proof = eventProof([
+      { x: s("1"), y: 0n },
+      { x: 0n, y: s("1") },
+    ]);
+    // Both scenarios pay 10 against cost 8 => profit 2; no negative risk credit.
+    expect(find(run(positions, [proof]), "total", "all")!.worstCaseScaled).toBe(
+      0n,
+    );
+    // Future fees 1.5 per leg: both scenarios now lose 1.
+    expect(
+      find(
+        run(
+          positions.map((p) => ({ ...p, remainingFeesScaled: s("1.5") })),
+          [proof],
+        ),
+        "total",
+        "all",
+      )!.worstCaseScaled,
+    ).toBe(s("1"));
+  });
+
+  it("refuses malformed owner/basis rather than inventing zero risk", () => {
+    expect(() => run([position({ accountId: "" })])).toThrow(
+      "FIN04_INVALID_POSITION",
+    );
+    expect(() => run([position({ costScaled: -1n })])).toThrow(
+      "FIN04_INVALID_POSITION",
+    );
+    expect(() => run([position({ sharesScaled: 0n })])).toThrow(
+      "FIN04_INVALID_POSITION",
+    );
+  });
+
+  it("retains the uncovered outcome even in a proven event", () => {
+    // (1,0),(0,1),(0,0) => PnL -2,-2,-12. Complete evidence includes OTHER.
+    const proof = eventProof([
+      { x: s("1"), y: 0n },
+      { x: 0n, y: s("1") },
+      { x: 0n, y: 0n },
+    ]);
+    expect(find(run(legs(), [proof]), "total", "all")!.worstCaseScaled).toBe(
+      s("12"),
+    );
+  });
+
+  it.each([
+    "incomplete",
+    "missing-token",
+    "out-of-range",
+    "no-evidence",
+    "wrong-scope",
+    "duplicate-proof",
+  ])("falls back conservatively for %s proof", (kind) => {
+    let proof = eventProof([
+      { x: s("1"), y: 0n },
+      { x: 0n, y: s("1") },
+    ]);
+    if (kind === "incomplete") proof = { ...proof, complete: false };
+    if (kind === "missing-token")
+      proof = { ...proof, scenarios: [{ x: s("1") }] };
+    if (kind === "out-of-range")
+      proof = { ...proof, scenarios: [{ x: s("2"), y: 0n }] };
+    if (kind === "no-evidence") proof = { ...proof, evidenceRef: "" };
+    if (kind === "wrong-scope")
+      proof = { ...proof, scope: { kind: "condition", id: "cx" } };
+    expect(
+      find(
+        run(legs(), kind === "duplicate-proof" ? [proof, proof] : [proof]),
+        "total",
+        "all",
+      ),
+    ).toMatchObject({
+      worstCaseScaled: s("12"),
+      aggregation: "conservative_sum",
+    });
+  });
+
+  it.each(["strategyId", "accountId"] as const)(
+    "never offsets distinct %s even under a valid proof",
+    (field) => {
+      const positions = legs();
+      positions[1] = { ...positions[1]!, [field]: "second" };
+      // Owner X can lose 6; owner Y can lose 6. Capital is not shared: sum = 12.
+      const proof = eventProof([
+        { x: s("1"), y: 0n },
+        { x: 0n, y: s("1") },
+      ]);
+      expect(
+        find(run(positions, [proof]), "total", "all")!.worstCaseScaled,
+      ).toBe(s("12"));
+    },
+  );
+
+  it("keeps opposite positions on the same token visible for two strategies", () => {
+    const positions = [
+      position({ sharesScaled: s("10"), costScaled: s("4") }),
+      position({
+        strategyId: "legacy",
+        sharesScaled: -s("10"),
+        costScaled: s("4"),
+      }),
+    ];
+    // Long PnL -4/+6; short +4/-6. Their separate risks sum to 10, not zero.
+    const proof: PayoffProof = {
+      version: "payoff-scenarios-v1",
+      evidenceRef: "fixture:binary",
+      complete: true,
+      scope: { kind: "condition", id: "0xa" },
+      tokens: [{ tokenId: "t1", conditionId: "0xa" }],
+      scenarios: [{ t1: 0n }, { t1: s("1") }],
+    };
+    expect(
+      find(run(positions, [proof]), "market", "0xa")!.worstCaseScaled,
+    ).toBe(s("10"));
+  });
+
+  it("sums an independent event alongside a proven group", () => {
+    const positions = [
+      ...legs(),
+      position({ tokenId: "z", conditionId: "cz", costScaled: s("30") }),
+    ];
+    const proof = eventProof([
+      { x: s("1"), y: 0n },
+      { x: 0n, y: s("1") },
+    ]);
+    expect(find(run(positions, [proof]), "total", "all")).toMatchObject({
+      worstCaseScaled: s("32"),
+      aggregation: "mixed",
+    });
+  });
+
+  it("handles zero quantity, zero bankroll, and empty inventory without reviving fees", () => {
+    expect(find(run([]), "total", "all")!.worstCaseScaled).toBe(0n);
+    expect(
+      find(
+        run([
+          position({
+            sharesScaled: 0n,
+            costScaled: 0n,
+            feesPaidScaled: s("1"),
+            realizedPnlScaled: -s("1"),
+          }),
+        ]),
+        "total",
+        "all",
+      )!.worstCaseScaled,
+    ).toBe(0n);
+    const rows = computeExposures({
+      positions: [position()],
+      bankrollScaled: 0n,
+      caps: CAPS,
+    });
+    expect(find(rows, "total", "all")!.worstCaseScaled).toBe(s("40"));
+    expect(
+      capHeadroomFor(rows, candidateFor("OBJETIVA_UNICA:binance"), 0n, CAPS)
+        .mercado,
+    ).toBe(0n);
+  });
+
+  it("rounds fractional short liabilities upwards to the nano-dollar", () => {
+    const proof: PayoffProof = {
+      version: "payoff-scenarios-v1",
+      evidenceRef: "fixture:void-half",
+      complete: true,
+      scope: { kind: "condition", id: "0xa" },
+      tokens: [{ tokenId: "t1", conditionId: "0xa" }],
+      scenarios: [{ t1: s("0.5") }],
+    };
+    expect(
+      find(
+        run([position({ sharesScaled: -1n, costScaled: 0n })], [proof]),
+        "total",
+        "all",
+      )!.worstCaseScaled,
+    ).toBe(1n);
   });
 });
