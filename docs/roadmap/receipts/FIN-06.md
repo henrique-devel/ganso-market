@@ -1,5 +1,5 @@
 Bloco: FIN-06 | RFC: RFC-038 | Data UTC: 2026-09-16
-Estado: code-verified; implementação e contratos locais; publicação bloqueada pela revisão automática.
+Estado: code-verified; publicação via PR autorizada diretamente em 16/09/2026 UTC, em andamento.
 Código: 999295c; base 33190a26a53f6f2eed44bbb5ad6fbcd9afa8d1f7.
 Resultado: novas entradas compram YES/NO real, com livro/profundidade e reserva do próprio token/dono.
 Arquivos: engine/decisionrow/store/runner/replay/bridge; testes e evidência; nenhuma migration.
@@ -18,5 +18,5 @@ Checks gerais: make verify passou; 2420 JS/257 skipped separados, 16 Rust/220 Py
 Produção: sem push/PR/merge/deploy de FIN-06; nenhum resultado prospectivo/soak declarado.
 Limites: sem EV final novo, live/signer, capital/caps, worker novo, migration ou bloco posterior.
 Evidência/contrato: [FIN-06](../evidence/FIN-06-real-tokens.md).
-Bloqueio: push público recusado; revisão exige autorização direta do payload/destino, solicitada nesta sessão.
+Autorização: proprietário respondeu “Autorizado fazer o processo de publicação via PR”; recusa anterior superada.
 Próximo elegível: FIN-07; EXEC-02/04 recebem contratos, nenhum foi iniciado.
