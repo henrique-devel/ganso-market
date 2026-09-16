@@ -51,6 +51,7 @@ export const LOCKUP_180_DAYS_S = 180 * 86_400;
  * charge can be watched crossing each in turn.
  */
 const ENTRY_INPUT: EvaluationInput = {
+  entryContractVersion: 1,
   now: DECISION_TS,
   config: CONFIG,
   conditionId: "0xa",

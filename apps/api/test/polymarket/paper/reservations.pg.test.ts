@@ -28,6 +28,8 @@ import {
   type PaperPool,
 } from "../../../src/polymarket/paper/brokerstore.js";
 
+import { bridgeTick } from "../../../src/polymarket/paper/bridge.js";
+
 const url = process.env.GANSO_TEST_DATABASE_URL;
 const schema = `fin05_${randomUUID().replaceAll("-", "")}`;
 const at = new Date("2026-09-16T01:00:00Z");
@@ -377,6 +379,58 @@ describe.skipIf(url === undefined)(
       await expect(
         tx((db) => accept(db, "unknown", "unknown", "shared", "1")),
       ).rejects.toThrow("FIN05_CAPITAL_UNKNOWN");
+    });
+
+    it("FIN-06 fills real NO into separate owners and refuses SELL across owners or zero", async () => {
+      await owner("fin06-one");
+      await owner("fin06-two");
+      await owner("fin06-empty");
+      await tx((db) => accept(db, "fin06-one", "fin06-buy1", "no-real", "10"));
+      await tx((db) => accept(db, "fin06-two", "fin06-buy2", "no-real", "20"));
+      await appendLedgerEvent(
+        wrap(raw),
+        fill("fin06-buy1", "no-real", "10", "BUY", "0.4"),
+      );
+      await appendLedgerEvent(
+        wrap(raw),
+        fill("fin06-buy2", "no-real", "20", "BUY", "0.4"),
+      );
+      const one = await totals("fin06-one");
+      const two = await totals("fin06-two");
+      expect(one.state.positions.get("no-real")?.shares).toBe("10.000000000");
+      expect(two.state.positions.get("no-real")?.shares).toBe("20.000000000");
+      expect(one.state.cashUsd).toBe("996.000000000");
+      expect(two.state.cashUsd).toBe("992.000000000");
+      await expect(
+        tx((db) =>
+          accept(db, "fin06-empty", "fin06-sell-empty", "no-real", "1", "SELL"),
+        ),
+      ).rejects.toThrow("FIN05_INVENTORY_UNAVAILABLE");
+      await expect(
+        tx((db) =>
+          accept(
+            db,
+            "fin06-one",
+            "fin06-sell-cross-zero",
+            "no-real",
+            "11",
+            "SELL",
+          ),
+        ),
+      ).rejects.toThrow("FIN05_INVENTORY_UNAVAILABLE");
+      await tx((db) =>
+        accept(db, "fin06-one", "fin06-sell-own", "no-real", "10", "SELL"),
+      );
+      await appendLedgerEvent(
+        wrap(raw),
+        fill("fin06-sell-own", "no-real", "10", "SELL", "0.5"),
+      );
+      expect(
+        (await totals("fin06-one")).state.positions.get("no-real")?.shares,
+      ).toBe("0.000000000");
+      expect(
+        (await totals("fin06-two")).state.positions.get("no-real")?.shares,
+      ).toBe("20.000000000");
     });
 
     it("rolls back order, audit and reserve together; retries after rollback", async () => {
@@ -796,6 +850,68 @@ describe.skipIf(url === undefined)(
         accepted,
       );
       await raw.query("UPDATE paper_kill_switch SET engaged=false");
+
+      // FIN-06: full bridge -> broker -> reservation -> attributed fill.
+      await raw.query(
+        `INSERT INTO polymarket_market_metadata_versions(condition_id,version,question,clob_token_ids,affirmative_token_id,valid_from)
+        VALUES ('c-broker',1,'Synthetic binary fixture','["broker-yes","broker-no"]','broker-yes',$1)`,
+        [at],
+      );
+      await raw.query(
+        `INSERT INTO polymarket_book_snapshots(token_id,condition_id,received_at,source_ts,bids_json,asks_json)
+        VALUES ('broker-yes','c-broker',$1,$1,'[{"price":"0.8","size":"500"}]','[{"price":"0.81","size":"500"}]'),
+               ('broker-no','c-broker',$1,$1,'[{"price":"0.39","size":"10"}]','[{"price":"0.4","size":"10"}]')`,
+        [now],
+      );
+      await raw.query(
+        `UPDATE resolution_runtime_state SET processed_input_change_id=(SELECT COALESCE(max(input_change_id),0) FROM polymarket_resolution_input_changes)`,
+      );
+      const decision = await raw.query(
+        `INSERT INTO portfolio_decisions(decision_kind,condition_id,token_id,market_side,order_side,decision_ts,q_lo,q_hi,exec_price,size_shares,binding_constraint,limiters_json,config_version,config_hash,factor_map_version,oldest_input_ts,newest_input_ts,book_json,inputs_json,outcome,portfolio_state)
+        VALUES ('ENTRY','c-broker','broker-no','NO','BUY',$1,'0.250000','0.350000','0.400000','10.000000','DEPTH_TAKE_PCT','[]','fixture',$2,'fixture',$1,$1,'{}','{"entry_contract_version":2,"account_id":"paper","strategy_id":"main"}','ACCEPTED','NORMAL') RETURNING decision_id`,
+        [now, "0".repeat(64)],
+      );
+      const logs: string[] = [];
+      const bridged = await bridgeTick(pool, {
+        clock: () => now,
+        logSink: (line) => logs.push(line),
+      });
+      expect(bridged, logs.join("\n")).toMatchObject({
+        accepted: 1,
+        skipped: 0,
+      });
+      const id = `portfolio:${decision.rows[0].decision_id}`;
+      const order = (
+        await raw.query("SELECT * FROM paper_orders WHERE order_id=$1", [id])
+      ).rows[0];
+      expect(order).toMatchObject({
+        token_id: "broker-no",
+        side: "BUY",
+        size: "10.00",
+        limit_price: "0.40",
+      });
+      expect(parseScaled((await row(id)).cash_remaining_usd)).toBe(
+        parseScaled("4"),
+      );
+      await appendLedgerEvent(pool, {
+        idempotencyKey: `${id}:fill`,
+        eventType: "fill",
+        orderId: id,
+        tokenId: "broker-no",
+        conditionId: "c-broker",
+        payload: { side: "BUY", size: "10", price: "0.4", fee: "0" },
+        eventTs: now,
+      });
+      const attributed = await loadAttributedLedgerEvents(pool, {
+        accountId: "paper",
+        strategyId: "main",
+        tokenId: "broker-no",
+      });
+      expect(attributed.filter((e) => e.eventType === "fill")).toHaveLength(1);
+      expect(
+        attributed.find((e) => e.eventType === "fill")?.owner,
+      ).toMatchObject({ accountId: "paper", strategyId: "main" });
+      expect((await row(id)).state).toBe("consumed");
     });
   },
 );

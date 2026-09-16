@@ -40,6 +40,14 @@ function fractionScaled(value: number): bigint {
 }
 
 export interface EvaluationInput {
+  /** Version 1 is only for historical replay. New evaluations use version 2. */
+  readonly entryContractVersion?: 1 | 2;
+  readonly noTokenId?: string | null;
+  readonly noBook?: {
+    readonly bids: readonly BookLevel[];
+    readonly asks: readonly BookLevel[];
+    readonly ageMs: number | null;
+  } | null;
   readonly now: Date;
   readonly config: PortfolioConfig;
   readonly conditionId: string;
@@ -94,6 +102,7 @@ export interface EvaluationInput {
 }
 
 export interface SideEvaluation {
+  readonly tokenId?: string;
   readonly side: MarketSide;
   readonly orderSide: "BUY" | "SELL";
   readonly ev: EvBreakdown;
@@ -225,7 +234,7 @@ function spread(
   return money(ask - bid);
 }
 
-/** Complementary book for the NO leg: buying NO is selling YES. */
+/** Historical v1 replay only: synthetic NO from selling affirmative shares. */
 function noSideLevels(bids: readonly BookLevel[]): BookLevel[] {
   const levels: BookLevel[] = [];
   for (const level of bids) {
@@ -412,14 +421,27 @@ export function evaluateMarket(input: EvaluationInput): Evaluation {
   // 5. Both legs, at a probe size of one share: the edge per share does not
   //    depend on the size, and the size is chosen afterwards from the limiters.
   const probeSize = SCALE;
-  const noLevels = noSideLevels(input.bids);
+  const legacy = input.entryContractVersion === 1;
+  if (!legacy && (!input.noTokenId || input.noTokenId === input.tokenId)) {
+    return reject(input, "NO_BOOK", "FIN06_TOKEN_MAPPING_INVALID", false);
+  }
+  if (
+    !legacy &&
+    (!input.noBook ||
+      input.noBook.ageMs === null ||
+      input.noBook.ageMs > config.staleness.bookMaxAgeMs ||
+      input.noBook.asks.length === 0)
+  ) {
+    return reject(input, "NO_BOOK", "FIN06_NO_TOKEN_BOOK_UNAVAILABLE", false);
+  }
+  const noLevels = legacy ? noSideLevels(input.bids) : input.noBook!.asks;
   const legs: {
     side: MarketSide;
     orderSide: "BUY" | "SELL";
     levels: readonly BookLevel[];
   }[] = [
     { side: "YES", orderSide: "BUY", levels: input.asks },
-    { side: "NO", orderSide: "SELL", levels: noLevels },
+    { side: "NO", orderSide: legacy ? "SELL" : "BUY", levels: noLevels },
   ];
 
   const resolutionBufferScaled =
@@ -451,6 +473,9 @@ export function evaluateMarket(input: EvaluationInput): Evaluation {
       ),
     });
     const candidate: SideEvaluation = {
+      ...(!legacy
+        ? { tokenId: leg.side === "YES" ? input.tokenId : input.noTokenId! }
+        : {}),
       side: leg.side,
       orderSide: leg.orderSide,
       ev,
@@ -470,6 +495,15 @@ export function evaluateMarket(input: EvaluationInput): Evaluation {
   const withEdge: PanelFields = {
     ...panelBase,
     suggested_side: best.side,
+    ...(!legacy && best.side === "NO"
+      ? {
+          book: {
+            spread: spread(input.noBook!.bids, input.noBook!.asks),
+            bids: input.noBook!.bids.slice(0, 10),
+            asks: input.noBook!.asks.slice(0, 10),
+          },
+        }
+      : {}),
     edge: {
       gross: money(best.ev.edgeGrossScaled),
       net: money(best.ev.edgeNetScaled),

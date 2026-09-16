@@ -36,6 +36,7 @@ import type {
  * instead remains the forbidden direction.
  */
 export interface EligibleMarket {
+  readonly noTokenId?: string | null;
   readonly conditionId: string;
   readonly tokenId: string;
   readonly question: string;
@@ -73,6 +74,7 @@ export async function loadEligibleMarkets(
      )
      SELECT m.condition_id,
             meta.affirmative_token_id AS token_id,
+            meta.clob_token_ids,
             meta.question,
             meta.category,
             COALESCE(p.neg_risk, FALSE) AS neg_risk,
@@ -86,8 +88,8 @@ export async function loadEligibleMarkets(
             r.version AS rule_version,
             p.version AS param_version
        FROM membership m
-       JOIN LATERAL (
-         SELECT question, category, affirmative_token_id
+       LEFT JOIN LATERAL (
+         SELECT question, category, affirmative_token_id, clob_token_ids
            FROM polymarket_market_metadata_versions v
           WHERE v.condition_id = m.condition_id
             AND v.valid_from <= $1
@@ -121,13 +123,24 @@ export async function loadEligibleMarkets(
           LIMIT 1
        ) ev ON TRUE
       WHERE m.action = 'enter'
-        AND meta.affirmative_token_id IS NOT NULL
       ORDER BY m.condition_id`,
     [asOf],
   );
   return result.rows.map((row) => ({
     conditionId: String(row.condition_id),
-    tokenId: String(row.token_id),
+    tokenId: typeof row.token_id === "string" ? row.token_id : "",
+    noTokenId:
+      Array.isArray(row.clob_token_ids) &&
+      row.clob_token_ids.length === 2 &&
+      new Set(row.clob_token_ids).size === 2 &&
+      row.clob_token_ids.every(
+        (id: unknown) => typeof id === "string" && id.length > 0,
+      ) &&
+      row.clob_token_ids.includes(row.token_id)
+        ? (row.clob_token_ids.find(
+            (id: string) => id !== row.token_id,
+          ) as string)
+        : null,
     question: String(row.question ?? ""),
     category: row.category === null ? null : String(row.category),
     negRisk: row.neg_risk === true,
@@ -418,6 +431,7 @@ export async function lastEntryVerdicts(
            FROM portfolio_decisions p
           WHERE p.token_id = t.token_id
             AND p.decision_kind IN ('ENTRY', 'VETO')
+            AND p.inputs_json->>'entry_contract_version' = '2'
           ORDER BY p.decision_ts DESC, p.decision_id DESC
           LIMIT 1
        ) d ON TRUE`,

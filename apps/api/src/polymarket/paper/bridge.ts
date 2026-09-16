@@ -16,6 +16,7 @@
 // closed positions, 30 markets, two categories, dispersion, and an interval that
 // survives the 50% haircut. What changes is that the counters can finally move.
 
+import { formatScaled, parseScaled, SCALE } from "../fundamental/fixed.js";
 import type { ResolutionGateFn } from "../resolution/enforcement.js";
 import { resolutionGate } from "../resolution/enforcement.js";
 import {
@@ -93,6 +94,8 @@ export interface BridgeOutcome {
 }
 
 interface PendingDecision {
+  readonly contractVersion: 1 | 2;
+  readonly ownerValid: boolean;
   readonly decisionId: number;
   readonly conditionId: string;
   readonly tokenId: string;
@@ -116,7 +119,7 @@ interface PendingDecision {
  */
 const PENDING_SQL =
   "SELECT d.decision_id, d.condition_id, d.token_id, d.market_side, " +
-  "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares " +
+  "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares, d.inputs_json " +
   "FROM portfolio_decisions d " +
   "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
   "AND d.paper_order_id IS NULL " +
@@ -173,6 +176,10 @@ function toInteger(value: unknown): number | null {
 }
 
 function parsePending(row: Record<string, unknown>): PendingDecision | null {
+  const inputs = row["inputs_json"] as
+    Record<string, unknown> | null | undefined;
+  const version = inputs?.["entry_contract_version"] ?? 1;
+  if (version !== 1 && version !== 2) return null;
   const decisionId = toInteger(row["decision_id"]);
   const conditionId = asString(row["condition_id"]);
   const tokenId = asString(row["token_id"]);
@@ -190,6 +197,11 @@ function parsePending(row: Record<string, unknown>): PendingDecision | null {
     return null;
   }
   return {
+    contractVersion: version,
+    ownerValid:
+      version === 1 ||
+      (inputs?.["account_id"] === "paper" &&
+        inputs?.["strategy_id"] === "main"),
     decisionId,
     conditionId,
     tokenId,
@@ -214,24 +226,20 @@ export function bridgeOrderId(decisionId: number): string {
   return `portfolio:${String(decisionId)}`;
 }
 
-/**
- * The conservative bound to quote against, in the traded token's price space.
- *
- * The portfolio engine models the NO leg as SELLING the affirmative token, so
- * every decision names the affirmative token and `order_side` carries the leg.
- * The bound has to flip with the leg: for a BUY the pessimistic case is that the
- * probability is as LOW as `q_lo`, and for a SELL it is that the probability is
- * as HIGH as `q_hi`. Passing `q_lo` for a sell would hand the policy the
- * optimistic bound wearing the name of the conservative one, and the taker
- * branch (`edge = worst - qLo`) would read a profit that the interval does not
- * support.
- */
+/** Version 1 retains the historical affirmative-token SELL price space. */
 export function conservativeBound(
   orderSide: OrderSide,
   qLo: string | null,
   qHi: string | null,
+  marketSide: "YES" | "NO" = "YES",
+  contractVersion: 1 | 2 = 1,
 ): string | null {
-  return orderSide === "BUY" ? qLo : qHi;
+  if (contractVersion === 1) return orderSide === "BUY" ? qLo : qHi;
+  if (orderSide !== "BUY") return null;
+  const value = parseScaled((marketSide === "NO" ? qHi : qLo) ?? "");
+  return value === null || value < 0n || value > SCALE
+    ? null
+    : formatScaled(marketSide === "NO" ? SCALE - value : value, 9);
 }
 
 export async function bridgeTick(
@@ -302,10 +310,53 @@ export async function bridgeTick(
       });
     };
 
+    // Old decisions stay readable, but cannot create a new synthetic short.
+    if (
+      decision.orderSide !== "BUY" ||
+      (decision.contractVersion === 1 && decision.marketSide === "NO")
+    ) {
+      skip("FIN06_LEGACY_ENTRY_REQUIRES_REEVALUATION");
+      continue;
+    }
+    if (!decision.ownerValid) {
+      skip("FIN06_OWNER_MISMATCH");
+      continue;
+    }
+    const metadata = await pool.query<Record<string, unknown>>(
+      `SELECT affirmative_token_id, clob_token_ids FROM polymarket_market_metadata_versions
+       WHERE condition_id=$1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to > $3)
+       ORDER BY version DESC`,
+      [decision.conditionId, decision.decisionTs, now],
+    );
+    const meta = metadata.rows[0];
+    const tokens = meta?.["clob_token_ids"];
+    const yes = meta?.["affirmative_token_id"];
+    if (
+      metadata.rows.length !== 1 ||
+      !Array.isArray(tokens) ||
+      tokens.length !== 2 ||
+      new Set(tokens).size !== 2 ||
+      !tokens.every((id: unknown) => typeof id === "string" && id.length > 0) ||
+      typeof yes !== "string" ||
+      !tokens.includes(yes)
+    ) {
+      skip("FIN06_TOKEN_MAPPING_INVALID");
+      continue;
+    }
+    const expected =
+      decision.marketSide === "YES"
+        ? yes
+        : tokens.find((id: unknown) => id !== yes);
+    if (decision.tokenId !== expected) {
+      skip("FIN06_TOKEN_OUTCOME_MISMATCH");
+      continue;
+    }
     const bound = conservativeBound(
       decision.orderSide,
       decision.qLo,
       decision.qHi,
+      decision.marketSide,
+      decision.contractVersion,
     );
     if (bound === null || decision.sizeShares === null) {
       skip("DECISION_INCOMPLETE");
@@ -363,6 +414,16 @@ export async function bridgeTick(
       continue;
     }
 
+    // A moved book may make the passive fallback exceed the conservative value.
+    // This price ceiling is not the final-order EV contract (EXEC-02).
+    if (
+      decision.contractVersion === 2 &&
+      parseScaled(policy.value.worstPrice ?? policy.value.limitPrice)! >
+        parseScaled(bound)!
+    ) {
+      skip("FIN06_PRICE_ABOVE_CONSERVATIVE_BOUND");
+      continue;
+    }
     const draft: OrderDraft = {
       tokenId: decision.tokenId,
       side: decision.orderSide,
@@ -384,6 +445,13 @@ export async function bridgeTick(
         policyReason: policy.value.policyReason,
         policyVersion: POLICY_VERSION,
         intent: {
+          entry_contract_version: decision.contractVersion,
+          order_contract_version: 2,
+          account_id: "paper",
+          strategy_id: "main",
+          condition_id: decision.conditionId,
+          token_id: decision.tokenId,
+          conservative_bound: bound,
           q_lo: decision.qLo,
           q_hi: decision.qHi,
           size_max: decision.sizeShares,

@@ -12,7 +12,7 @@
 // the queries: a test that stubbed the store functions would pass even if the
 // runner asked the wrong question.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PORTFOLIO_CONFIG } from "../../../src/polymarket/portfolio/config.js";
 import { DEFAULT_FACTOR_MAP } from "../../../src/polymarket/portfolio/factors.js";
@@ -28,6 +28,7 @@ const NOW = new Date("2026-08-26T12:00:00Z");
 const CONFIG = DEFAULT_PORTFOLIO_CONFIG;
 
 interface WorldOptions {
+  readonly noBook?: Row | null;
   /** New synthetic attributed fill, separate from the legacy cache fixture. */
   readonly ownerFill?: boolean;
   /** Exit signature already on record for the position, or null for none. */
@@ -227,6 +228,8 @@ function world(options: WorldOptions = {}): World {
         ]);
       }
       if (text.includes("FROM polymarket_book_snapshots")) {
+        if (params[0] === "t2-no" && options.noBook !== undefined)
+          return respond(options.noBook === null ? [] : [options.noBook]);
         return respond([
           {
             token_id: "t1",
@@ -349,6 +352,7 @@ function runner(pool: PortfolioPool) {
  * The point of these tests is the WRITE CADENCE, not the verdict.
  */
 const MARKET: Row = {
+  clob_token_ids: ["t2", "t2-no"],
   condition_id: "0xb",
   token_id: "t2",
   question: "Will BTC be above $92,000?",
@@ -734,5 +738,62 @@ describe("scope", () => {
     await expect(runner(world().pool).tickOnce("whatever")).rejects.toThrow(
       /unknown job/,
     );
+  });
+});
+
+describe("FIN-06 runner token/book provenance", () => {
+  it("persists BUY NO with the actual NO book, owner and replay version", async () => {
+    const scene = world({
+      eligibleMarkets: [MARKET],
+      noBook: {
+        bids_json: [{ price: "0.14", size: "50" }],
+        asks_json: [{ price: "0.15", size: "100" }],
+        received_at: new Date("2026-08-26T11:59:59Z"),
+      },
+    });
+    await runner(scene.pool).cycleOnce();
+    const d = scene.inserts.find(
+      (r) => r.table === "portfolio_decisions",
+    )!.params;
+    expect(d.slice(1, 5)).toEqual(["0xb", "t2-no", "NO", "BUY"]);
+    const book = JSON.parse(String(d[35]));
+    expect(book.token_id).toBe("t2-no");
+    expect(book.asks).toEqual([{ price: "0.15", size: "100" }]);
+    const inputs = JSON.parse(String(d[36]));
+    expect(inputs).toMatchObject({
+      entry_contract_version: 2,
+      account_id: "paper",
+      strategy_id: "main",
+      replay: { affirmative_token_id: "t2", no_token_id: "t2-no" },
+    });
+  });
+  it("records explicit refusal for an absent NO book", async () => {
+    const scene = world({ eligibleMarkets: [MARKET], noBook: null });
+    await runner(scene.pool).cycleOnce();
+    const d = scene.inserts.find(
+      (r) => r.table === "portfolio_decisions",
+    )!.params;
+    expect(JSON.parse(String(d[36])).panel.entry_reason).toBe(
+      "FIN06_NO_TOKEN_BOOK_UNAVAILABLE",
+    );
+  });
+  it("logs missing affirmative metadata without inventing a token for persistence", async () => {
+    const scene = world({
+      eligibleMarkets: [{ ...MARKET, token_id: null, clob_token_ids: null }],
+    });
+    const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      await runner(scene.pool).cycleOnce();
+      expect(scene.inserts.some((r) => r.table === "portfolio_decisions")).toBe(
+        false,
+      );
+      expect(
+        log.mock.calls.some((call) =>
+          String(call[0]).includes("FIN06_TOKEN_MAPPING_INVALID"),
+        ),
+      ).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
