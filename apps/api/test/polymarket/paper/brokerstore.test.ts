@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// This suite exercises the broker state machine, not financial atomicity.
+// Real reserve/consume/release and owner contention run in reservations.pg.test.
+vi.mock("../../../src/polymarket/paper/reservations.js", async (original) => ({
+  ...(await original<
+    typeof import("../../../src/polymarket/paper/reservations.js")
+  >()),
+  reserveOrder: vi.fn(async () => ({ version: "reservation-v1" })),
+}));
 
 import type { QueryResult, SqlExecutor } from "../../../src/database.js";
 import {
@@ -246,6 +255,7 @@ function worldPool(world: World): PaperPool {
       world.queries.push(text);
       const rows = ((): Row[] => {
         // --- paper_orders ---
+        if (text.includes("AS identical_request")) return [];
         if (text.startsWith("INSERT INTO paper_orders")) {
           const acceptedGeneration = params[16];
           world.orders.push({

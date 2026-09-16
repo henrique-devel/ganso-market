@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DatabasePool,
@@ -8,6 +8,14 @@ import type {
 } from "../../../src/database.js";
 import { registerPaperRoutes } from "../../../src/polymarket/paper/api.js";
 import { SIMULATION_BANNER } from "../../../src/polymarket/paper/runner.js";
+
+// Route/policy tests isolate admission; reservation atomicity is proved in PostgreSQL.
+vi.mock("../../../src/polymarket/paper/reservations.js", async (original) => ({
+  ...(await original<
+    typeof import("../../../src/polymarket/paper/reservations.js")
+  >()),
+  reserveOrder: vi.fn(async () => ({ version: "reservation-v1" })),
+}));
 
 type Row = Record<string, unknown>;
 type Responder = (text: string, params: readonly unknown[]) => Row[];
@@ -38,7 +46,10 @@ function respondingPool(respond: Responder): RoutePool {
       params: readonly unknown[] = [],
     ): Promise<QueryResult<R>> {
       const rows = respond(text, params) as R[];
-      return Promise.resolve({ rows, rowCount: rows.length });
+      return Promise.resolve({
+        rows,
+        rowCount: text.includes("INSERT INTO paper_orders") ? 1 : rows.length,
+      });
     },
   });
 }
