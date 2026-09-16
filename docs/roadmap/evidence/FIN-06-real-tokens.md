@@ -120,3 +120,13 @@ seis arquivos do contrato original FIN-06: mesma seleção as-of, agora por
 Fixtures PostgreSQL incluem duas alternativas, snapshots anterior/atual/futuro,
 IDs duplicados, token sem livro e lista vazia; mids esperados são calculados
 manualmente. A implantação continua dependente dos gates e da observação de ciclos.
+
+## Fecho da publicação
+
+O reparo SQL foi integrado pelo [PR #184](https://github.com/henrique-devel/ganso-market/pull/184).
+`make verify` passou novamente; a regressão de reservas/mids passou em PostgreSQL
+descartável (20 casos), e runner passou com 23 casos.
+[CI do PR](https://github.com/henrique-devel/ganso-market/actions/runs/35106506618)
+e [CI/CD da main](https://github.com/henrique-devel/ganso-market/actions/runs/35106986060)
+foram aprovados. A evidência operacional detalhada do fecho foi preservada
+localmente; não integra esta publicação. FIN-06 termina sem iniciar outro bloco.
