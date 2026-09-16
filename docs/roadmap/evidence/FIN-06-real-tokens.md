@@ -84,3 +84,14 @@ conforme o runbook; nenhum worker novo foi ativado. Hashes de runtime/portfolio/
 iguais aos anteriores; instante de início do PostgreSQL inalterado.
 Esta verificação confirma a release, não reconciliação financeira produtiva,
 qualidade dos feeds, fill prospectivo ou soak. Nenhum bloco seguinte foi iniciado.
+
+
+A observação posterior encontrou reinícios do portfolio e SQLSTATE `57014`.
+Sem exportar logs brutos, identificou-se um risco na consulta nova de deduplicação:
+o filtro v2 dentro do lateral pode varrer o histórico inteiro antes do LIMIT
+quando não existe decisão v2. O PR #182 move a verificação de versão para depois
+da seleção da última linha pelo índice. Uma última linha legada exige reavaliação;
+não se busca uma linha v2 antiga atrás dela. Regressão PostgreSQL real verifica
+esse caso. Nenhuma migration, índice, timeout, memória ou cap foi alterado.
+A correção elimina essa varredura; estabilidade operacional depende de observação
+posterior ao deploy e não é inferida dos testes locais.

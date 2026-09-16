@@ -423,21 +423,23 @@ export async function lastEntryVerdicts(
   }
   const result = await pool.query<Record<string, unknown>>(
     `SELECT t.token_id, d.decision_id, d.decision_kind, d.outcome,
-            d.reason_code, d.binding_constraint
+            d.reason_code, d.binding_constraint, d.entry_contract_version
        FROM unnest($1::text[]) AS t(token_id)
        JOIN LATERAL (
          SELECT decision_id, decision_kind, outcome, reason_code,
-                binding_constraint
+                binding_constraint, p.inputs_json->>'entry_contract_version' AS entry_contract_version
            FROM portfolio_decisions p
           WHERE p.token_id = t.token_id
             AND p.decision_kind IN ('ENTRY', 'VETO')
-            AND p.inputs_json->>'entry_contract_version' = '2'
           ORDER BY p.decision_ts DESC, p.decision_id DESC
           LIMIT 1
        ) d ON TRUE`,
     [[...tokenIds]],
   );
   for (const row of result.rows) {
+    // Inspect only the latest indexed row. Filtering JSON inside the lateral
+    // would scan every historical decision when a token has no v2 row yet.
+    if (row.entry_contract_version !== "2") continue;
     verdicts.set(String(row.token_id), {
       decisionId: Number(row.decision_id),
       signature: entrySignature({

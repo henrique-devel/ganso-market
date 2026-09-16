@@ -28,6 +28,7 @@ import {
   type PaperPool,
 } from "../../../src/polymarket/paper/brokerstore.js";
 
+import { lastEntryVerdicts } from "../../../src/polymarket/portfolio/store.js";
 import { bridgeTick } from "../../../src/polymarket/paper/bridge.js";
 
 const url = process.env.GANSO_TEST_DATABASE_URL;
@@ -912,6 +913,19 @@ describe.skipIf(url === undefined)(
         attributed.find((e) => e.eventType === "fill")?.owner,
       ).toMatchObject({ accountId: "paper", strategyId: "main" });
       expect((await row(id)).state).toBe("consumed");
+      expect(
+        (await lastEntryVerdicts(pool, ["broker-no"])).has("broker-no"),
+      ).toBe(true);
+      // A newer legacy row must trigger reevaluation; never search behind it
+      // for a historical v2 row (or through all history when none exists).
+      await raw.query(
+        `INSERT INTO portfolio_decisions(decision_kind,condition_id,token_id,market_side,order_side,decision_ts,binding_constraint,limiters_json,config_version,config_hash,factor_map_version,oldest_input_ts,newest_input_ts,book_json,inputs_json,outcome,reason_code,portfolio_state)
+        VALUES ('VETO','c-broker','broker-no','YES','BUY',$1,'NOT_SIZED','[]','fixture',$2,'fixture',$1,$1,'{}','{}','REJECTED','NO_BOOK','NORMAL')`,
+        [new Date(now.getTime() + 1000), "0".repeat(64)],
+      );
+      expect(
+        (await lastEntryVerdicts(pool, ["broker-no"])).has("broker-no"),
+      ).toBe(false);
     });
   },
 );

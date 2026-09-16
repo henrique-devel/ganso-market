@@ -372,6 +372,7 @@ const MARKET: Row = {
 /** The verdict the fixture above actually produces, as a persisted row. */
 function verdictOnRecord(overrides: Row = {}): Row {
   return {
+    entry_contract_version: "2",
     token_id: "t2",
     decision_id: 77,
     decision_kind: "ENTRY",
