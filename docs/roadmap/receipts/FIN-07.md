@@ -14,7 +14,7 @@ Divergência: evento F4/a2, R v2=1,010000000 vs v1=0,743333; diferença0,266667 
 Correção mínima: [FIN-03/#187](https://github.com/henrique-devel/ganso-market/issues/187), consumidores/cache legado; não implementada aqui.
 Aceite pendente: broker/cache/leitores legados por dono/versão, buckets1,01/5,60, total6,61; repetir FIN-07.
 Checks: typecheck/SQL/make verify exit0; 2420JS+16Rust+220Python, 261 skips source-only separados; scan/Compose/diff passaram.
-Publicação: PR documental autorizado; nenhum código runtime/migration/config alterado; dispensa RFC-020 aplicável.
+Publicação: [PR #188](https://github.com/henrique-devel/ganso-market/pull/188), artefatos3cb78ee; checks/merge no PR; classificador deploy=false (5docs).
 Histórico/produção: não consultados; donos desconhecidos/marks históricos não quantificados; sem backfill/transferência.
 Limites: sem prontidão global/produtiva/soak, worker/live/caps; EXEC-04 ainda entrega saídas.
 Continuidade: parar aqui; somente correção pendente registrada, nenhum outro bloco iniciado.
