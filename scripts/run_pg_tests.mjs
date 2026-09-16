@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -43,15 +44,9 @@ try {
   if (!template) throw new Error("A disposable migrated database is required");
 
   // Inventory includes mixed unit/PG files and future *.pg.test.ts files.
-  const inventory = spawnSync(
-    "rg",
-    ["--files", "apps/api/test", "-g", "*.test.ts"],
-    { cwd: root, encoding: "utf8" },
-  );
-  if (inventory.status !== 0) throw new Error("PostgreSQL inventory failed");
-  const files = inventory.stdout
-    .trim()
-    .split("\n")
+  const files = readdirSync(join(root, "apps/api/test"), { recursive: true })
+    .filter((file) => file.endsWith(".test.ts"))
+    .map((file) => join("apps/api/test", file))
     .filter(
       (file) =>
         file.endsWith(".pg.test.ts") ||
