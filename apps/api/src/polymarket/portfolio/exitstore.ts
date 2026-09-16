@@ -762,6 +762,8 @@ export async function loadCorrelatedMarkets(
 /**
  * Executable mid of the newest recorded book at or before an instant, for a
  * batch of tokens. Used by the jump breaker as the "before" leg.
+ * Probe the existing (token_id, received_at) index once per token; DISTINCT ON
+ * over the full retained history can spill and exceed the startup timeout.
  */
 export async function loadMidsAsOf(
   pool: PortfolioPool,
@@ -773,10 +775,15 @@ export async function loadMidsAsOf(
     return out;
   }
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT DISTINCT ON (token_id) token_id, bids_json, asks_json
-       FROM polymarket_book_snapshots
-      WHERE token_id = ANY($1::text[]) AND received_at <= $2
-      ORDER BY token_id, received_at DESC`,
+    `SELECT t.token_id, b.bids_json, b.asks_json
+       FROM unnest($1::text[]) AS t(token_id)
+       JOIN LATERAL (
+         SELECT bids_json, asks_json
+           FROM polymarket_book_snapshots s
+          WHERE s.token_id = t.token_id AND s.received_at <= $2
+          ORDER BY s.received_at DESC
+          LIMIT 1
+       ) b ON TRUE`,
     [[...new Set(tokenIds)], asOf],
   );
   for (const row of result.rows) {
