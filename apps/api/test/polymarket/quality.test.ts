@@ -221,10 +221,8 @@ describe.skipIf(SILENCE_TEST_DATABASE_URL === undefined)(
   "silence gap writer against PostgreSQL",
   () => {
     let database: pg.Pool;
-    const episodes: string[] = [];
     const newEpisode = (): string => {
       const id = randomUUID();
-      episodes.push(id);
       return id;
     };
     beforeAll(() => {
@@ -234,16 +232,8 @@ describe.skipIf(SILENCE_TEST_DATABASE_URL === undefined)(
       });
     });
     afterAll(async () => {
-      try {
-        await database.query(
-          `DELETE FROM polymarket_data_gaps
-           WHERE source = 'clob_ws' AND cause = 'stream_silent'
-             AND details_json->>'episode_id' = ANY($1::text[])`,
-          [episodes],
-        );
-      } finally {
-        await database.end();
-      }
+      // The isolated database is discarded; evidence rows remain protected.
+      await database.end();
     });
 
     function writer(): ReturnType<typeof createGapWriter> {

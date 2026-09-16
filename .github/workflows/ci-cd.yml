@@ -54,13 +54,48 @@ jobs:
       - name: Run the complete source gate
         run: make verify
 
+  postgres:
+    name: Verify PostgreSQL contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Pin npm
+        run: npm install --global npm@11.17.0
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Require real PostgreSQL execution
+        run: make test-postgres
+
   integration:
     name: Verify Compose runtime
-    needs: verify
+    needs: [verify, postgres]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
+      # A skipped required check can permit a merge. Fail this existing gate
+      # explicitly when either prerequisite failed, instead of skipping it.
+      - name: Require source and PostgreSQL gates
+        env:
+          SOURCE_RESULT: ${{ needs.verify.result }}
+          POSTGRES_RESULT: ${{ needs.postgres.result }}
+        run: test "$SOURCE_RESULT" = success && test "$POSTGRES_RESULT" = success
+
       - name: Check out the exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

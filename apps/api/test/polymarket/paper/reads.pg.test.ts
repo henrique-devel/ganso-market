@@ -27,6 +27,10 @@ import type {
 } from "../../../src/database.js";
 import { registerPaperRoutes } from "../../../src/polymarket/paper/api.js";
 
+import { createPgFixture } from "../../pg-fixture.js";
+
+let fixture: Awaited<ReturnType<typeof createPgFixture>> | undefined;
+
 const DATABASE_URL = process.env.GANSO_TEST_DATABASE_URL;
 const RUN = `${String(process.pid)}-${String(Date.now())}`;
 
@@ -234,30 +238,12 @@ async function seed(): Promise<void> {
   );
 }
 
-async function limpar(): Promise<void> {
-  const p = pool();
-  await p.query("DELETE FROM paper_orders WHERE order_id LIKE $1", [`%${RUN}`]);
-  await p.query("DELETE FROM paper_positions WHERE token_id = ANY($1)", [
-    TOKENS,
-  ]);
-  await p.query("DELETE FROM fundamental_labels WHERE token_id = ANY($1)", [
-    TOKENS,
-  ]);
-  await p.query(
-    "DELETE FROM polymarket_rule_versions WHERE condition_id = ANY($1)",
-    [[CONDITION, CONDITION_ABERTO]],
-  );
-  await p.query("DELETE FROM polymarket_markets WHERE condition_id = ANY($1)", [
-    [CONDITION, CONDITION_ABERTO],
-  ]);
-}
-
 describe.skipIf(DATABASE_URL === undefined)(
   "GET /polymarket/paper/positions against real PostgreSQL",
   () => {
     beforeAll(async () => {
-      raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-      await limpar();
+      fixture = await createPgFixture(DATABASE_URL);
+      raw = fixture.pool;
       await seed();
     });
 
@@ -270,8 +256,8 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     afterAll(async () => {
       if (raw !== null) {
-        await limpar();
-        await raw.end();
+        await fixture?.dispose();
+        fixture = undefined;
         raw = null;
       }
     });
@@ -366,8 +352,8 @@ describe.skipIf(DATABASE_URL === undefined)(
   "GET /polymarket/paper/orders against real PostgreSQL",
   () => {
     beforeAll(async () => {
-      raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-      await limpar();
+      fixture = await createPgFixture(DATABASE_URL);
+      raw = fixture.pool;
       await seed();
     });
 
@@ -380,8 +366,8 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     afterAll(async () => {
       if (raw !== null) {
-        await limpar();
-        await raw.end();
+        await fixture?.dispose();
+        fixture = undefined;
         raw = null;
       }
     });

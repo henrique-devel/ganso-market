@@ -245,9 +245,10 @@ describe.skipIf(DATABASE_URL === undefined).each([false, true])(
       );
     });
 
-    it.skipIf(!indexed)(
-      "builds and drops only the exact concurrent candidate without changing results",
-      async () => {
+    // Index lifecycle applies only to the candidate variant; do not register a
+    // deliberately skipped case in the mandatory PostgreSQL gate.
+    if (indexed)
+      it("builds and drops only the exact concurrent candidate without changing results", async () => {
         await add("btc/usd", "twap30", "100", null, -1);
         const catalog = await client.query(
           `SELECT indisvalid,indisready,indislive,
@@ -274,7 +275,6 @@ describe.skipIf(DATABASE_URL === undefined).each([false, true])(
             )
           ).rows[0]?.n,
         ).toBe(1);
-      },
-    );
+      });
   },
 );

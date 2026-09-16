@@ -88,13 +88,6 @@ async function buildApp(): Promise<FastifyInstance> {
   return app;
 }
 
-async function limpar(): Promise<void> {
-  await pool().query(
-    `DELETE FROM polymarket_series_1m WHERE token_id LIKE $1`,
-    [`serie-%-${RUN}`],
-  );
-}
-
 async function seed(): Promise<void> {
   const linhas: unknown[][] = [];
   // 30 buckets de 1 min para A, 10 para B, dentro da última hora.
@@ -150,7 +143,6 @@ describe.skipIf(DATABASE_URL === undefined)(
   () => {
     beforeAll(async () => {
       raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-      await limpar();
       await seed();
     });
 
@@ -163,7 +155,6 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     afterAll(async () => {
       if (raw !== null) {
-        await limpar();
         await raw.end();
         raw = null;
       }

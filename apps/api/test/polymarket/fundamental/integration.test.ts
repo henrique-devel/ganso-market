@@ -77,19 +77,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     beforeAll(async () => {
       raw = new pg.Pool({ connectionString: DATABASE_URL });
       pool = poolAdapter(raw);
-      // TRUNCATE ... CASCADE, not DELETE: model rows are protected by the
-      // immutability trigger, which is exactly what production wants and what a
-      // throwaway test database has to get around.
-      await pool.query(`TRUNCATE fundamental_estimates, fundamental_gate_reports,
-                               fundamental_calibration_reports,
-                               fundamental_model_events, fundamental_labels,
-                               fundamental_models CASCADE`);
-      await pool.query(`TRUNCATE polymarket_markets, polymarket_universe_log,
-                               polymarket_book_snapshots_full, polymarket_book_deltas,
-                               polymarket_rule_versions, polymarket_param_versions,
-                               polymarket_resolution_events, polymarket_rtds_prices,
-                               polymarket_rtds_1m`);
-
+      // The PG runner provides a pristine migrated database for this file.
       const bookAt = new Date(DECISION_TS.getTime() - 5_000);
       await pool.query(
         `INSERT INTO polymarket_markets
@@ -284,7 +272,15 @@ describe.skipIf(DATABASE_URL === undefined)(
       // An absent estimate writes no row on purpose. If the cadence keyed only on
       // stored rows, a token with a permanently invalid book would be re-read six
       // times a minute forever, producing nothing.
-      await pool.query(`DELETE FROM polymarket_book_snapshots_full`);
+      // Append a newer invalid observation without deleting historical books.
+      for (const token of [TOKEN_YES, TOKEN_NO]) {
+        await pool.query(
+          `INSERT INTO polymarket_book_snapshots_full
+             (token_id, reason, bids_json, asks_json, source_ts, received_at)
+           VALUES ($1, 'subscribe', '[]'::jsonb, '[]'::jsonb, $2, $2)`,
+          [token, new Date(DECISION_TS.getTime() + 3_599_000)],
+        );
+      }
       let now = DECISION_TS.getTime() + 3_600_000;
       const estimator = createEstimator({
         pool,

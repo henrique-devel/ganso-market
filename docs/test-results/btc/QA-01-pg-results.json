@@ -1,0 +1,1372 @@
+{
+  "block": "QA-01",
+  "base_sha": "5a1a0a3ea4167d895a7af94c1f45083560d7eb27",
+  "code": "QA-01 diff on current main; commit referenced by receipt",
+  "validated_at_utc": "2026-09-16T19:48:37+00:00",
+  "postgres": "18.4",
+  "migrations": 25,
+  "passed": 288,
+  "failed": 0,
+  "unexecuted": 0,
+  "files": [
+    {
+      "file": "apps/api/test/polymarket/fundamental/asof.pg.test.ts",
+      "passed": 13,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: false) preserves NULL fallback, both future barriers, id ties and inclusive boundaries",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: false) orders by effective source and then id even when receive order disagrees",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: false) retains a stale preferred feed instead of manufacturing freshness",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: false) does not fall back to an older valid price in the same feed",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: false) preserves empty/missing series and deduplicates repeated input pairs",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: false) skips a long run of late arrivals without leaking or imposing a TTL",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) preserves NULL fallback, both future barriers, id ties and inclusive boundaries",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) orders by effective source and then id even when receive order disagrees",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) retains a stale preferred feed instead of manufacturing freshness",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) does not fall back to an older valid price in the same feed",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) preserves empty/missing series and deduplicates repeated input pairs",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) skips a long run of late arrivals without leaking or imposing a TTL",
+          "status": "passed"
+        },
+        {
+          "name": "DB-03 RTDS as-of PostgreSQL (candidate index: true) builds and drops only the exact concurrent candidate without changing results",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/fundamental/integration.test.ts",
+      "passed": 8,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-010 against PostgreSQL writes a baseline estimate per token when no model is promoted",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL rate-limits a second cycle inside the same minute",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL registers the catalog models in shadow and writes shadow rows",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL does not re-evaluate a token whose book is invalid on every tick",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL refuses to promote a model without a passing gate",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL produces a NO_EVIDENCE_OF_ALPHA gate report with too little coverage",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL RFC-014/019: 1.1.0 covers barrier and updown in shadow while 1.0.0 abstains",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-010 against PostgreSQL keeps the database constraints as the last line of defence",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/intraday-horizon.pg.test.ts",
+      "passed": 4,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-016 end_ts against PostgreSQL records the instant and refuses to erase it with a null observation",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-016 end_ts against PostgreSQL does not mint a metadata version — the 0012 trigger stays asleep",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-016 end_ts against PostgreSQL resolves the label loader's horizon from the rule version alone",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-016 end_ts against PostgreSQL uses the partial index to find the markets closest to expiry",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/overview.pg.test.ts",
+      "passed": 3,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-015 panel aggregator against real PostgreSQL answers 200 — every column the aggregator names exists",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-015 panel aggregator against real PostgreSQL answers 200 on the event feed too — its 9 sources are real tables",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-015 panel aggregator against real PostgreSQL still refuses an unauthenticated call before touching the database",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/bridge.pg.test.ts",
+      "passed": 8,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-013 bridge against real PostgreSQL turns an accepted entry into a simulated order that names its decision",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL buys the real NO token against 1 - q_hi using its own book",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL refuses legacy synthetic NO entries without creating a SELL order",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL does not act twice on the same decision, even before the stamp lands",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL drops a decision that aged out instead of executing it late",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL acts on the production shape: decided 45 s ago, logged 5 s ago",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL refuses a decision past the 90 s ceiling however fresh the log entry is",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 bridge against real PostgreSQL keeps decisions received before this process booted out of aged_out",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/faststore.pg.test.ts",
+      "passed": 28,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "0020 — strategy_decisions é append-only aceita uma decisão de recusa sem plano",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only aceita uma decisão de ordem com plano e insumos as-of",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only UPDATE lança",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only DELETE lança",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only um UPDATE que não casa linha nenhuma não lança",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only veredito 'order' sem plano é recusado, e 'skip' com plano também",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only reason fora do padrão FAST_* é recusado",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only braço desconhecido é recusado",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only hash que não é sha256 hex é recusado",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only z aceita sinal negativo; preço não",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only preço fora das seis casas é recusado: o replay compara texto",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — strategy_decisions é append-only o índice da D7 existe, na ordem que ela escreve",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_config_versions é imutável congela uma versão",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_config_versions é imutável UPDATE lança: mudar a config é mintar versão nova",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_config_versions é imutável DELETE lança",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_config_versions é imutável a mesma versão duas vezes colide na chave primária",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_config_versions é imutável versão que não é semver é recusada",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' 'fast' é uma fonte aceita — e é a REGRESSÃO desta migration",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' 'fast' SEM strategy_id é recusado",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' strategy_id em fonte que não é 'fast' é recusado",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' as fontes antigas seguem aceitas, e com strategy_id nulo",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' uma fonte desconhecida segue recusada",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' o CHECK de decision_id da 0015 continua valendo para 'fast'",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — paper_orders ganha strategy_id e a fonte 'fast' o filtro da carteira principal exclui a ordem da estratégia",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_wallet_state aceita o estado inicial da sub-carteira",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_wallet_state dinheiro fora das seis casas é recusado",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_wallet_state PnL aceita negativo; bankroll e fees não",
+          "status": "passed"
+        },
+        {
+          "name": "0020 — fast_wallet_state ordens do dia não podem ser negativas",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/financial.pg.test.ts",
+      "passed": 9,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) FIN-04 loads owner quantities, fees and zero filtering without token-netting",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) F4 keeps each owner's basis, fees and equity, then realizes separate UTC days",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) rebuilds a late F4 partial sale into day 12 after resolution was already cached",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) F1 values a legacy short against asks and carries its loss into portfolio state",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) never nets opposing owners or reuses a token-wide legacy mark as their valuation",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) keeps unestablished capital NULL even with a verified prospective owner and fresh mark",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) requires enough executable bid depth and fresh proven source time without erasing the last mark",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) rolls back a multi-token rebuild atomically while every production guard stays enabled",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-03 financial loader (disposable PostgreSQL) concurrent owner rebuilds converge after any PostgreSQL snapshot retry",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/kill-switch.pg.test.ts",
+      "passed": 8,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions requires 15 observed minutes and appends exactly one auto event while preserving frozen markets and history",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions rolls back the state transition when the rearm audit INSERT fails",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions serializes two workers reaching the fifteenth healthy tick into one rearm",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions does not clear the switch when the automatic audit key already exists",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions rechecks a concurrent stream_silent insertion after waiting for the gap table lock",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions preserves a concurrent manual engagement committed while the automatic tick waits for the row lock",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions keeps the production append-only guards active after automatic rearm",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-03 kill switch — PostgreSQL transactions preserves a manual engagement even when its supplied reason is RECORDER_STALE",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/ownership.pg.test.ts",
+      "passed": 17,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) matches unfiltered membership across tokens with default cutoffs and net-zero owners",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) assigns new manual and fast orders explicitly, without creating capital",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) preserves F4 fill/fee ownership, partial-exit retry and one resolution for two owners",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) keeps opposing owners open when the token aggregate is zero and resolves both",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) refuses divergent retry content or owner and retains the original event",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) arbitrates concurrent same-key writes from different owners without reassignment",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) rolls back the order and ledger when an ownership insert fails",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) checks order token, condition and side before persisting attribution",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) rejects a reserved fast main identity instead of merging financial owners",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) rolls back new invalid financial payloads instead of recording unparseable ownership",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) validates global condition and owner membership and refuses an ambiguous shared fee",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) rejects a late first-owner fill whose prior resolution lacks that owner",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) attributes fills and resolution inserted in one statement to both owners",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) freezes order identity but allows broker status progress",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) keeps evidence immutable and the existing HOLD guards enabled",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) retains historical bytes and makes unknown ownership explicit outside paper/main",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-02 ownership (disposable PostgreSQL) classifies missing-order rejection as unknown and omits global kill diagnostics",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/reads.pg.test.ts",
+      "passed": 6,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "GET /polymarket/paper/positions against real PostgreSQL returns exactly one row per position, JOINs and all",
+          "status": "passed"
+        },
+        {
+          "name": "GET /polymarket/paper/positions against real PostgreSQL flags pending settlement only where the label is final AND shares are positive",
+          "status": "passed"
+        },
+        {
+          "name": "GET /polymarket/paper/positions against real PostgreSQL takes the end instant from the versioned rule, not the flat column",
+          "status": "passed"
+        },
+        {
+          "name": "GET /polymarket/paper/positions against real PostgreSQL carries the market's name, and says nothing when there is no registry row",
+          "status": "passed"
+        },
+        {
+          "name": "GET /polymarket/paper/orders against real PostgreSQL names the market and keeps the queue position it already published",
+          "status": "passed"
+        },
+        {
+          "name": "GET /polymarket/paper/orders against real PostgreSQL still filters by status, and still refuses a status outside the domain",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/reservations.pg.test.ts",
+      "passed": 20,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations serializes competing undefined/undefined accepts, reversed=false",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations serializes competing undefined/undefined accepts, reversed=true",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations reserves risk even when cash is sufficient; dimensions remain separate",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations transfers partial fill, retains requested cancellation, releases effectively and retries exactly",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations prevents two exits from spending the same owner's inventory",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations isolates strategies on the same token and records unknown capital as a refusal",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations FIN-06 fills real NO into separate owners and refuses SELL across owners or zero",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations rolls back order, audit and reserve together; retries after rollback",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations reconstructs corrupted projection after restart, expires and resolves idempotently",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations rejects fees, prices and quantities outside the immutable reservation",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations uses current default caps without introducing a runtime limit",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations orders a concurrent fill and effective cancellation, cancelFirst=false",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations orders a concurrent fill and effective cancellation, cancelFirst=true",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations resolution releases an active reservation without waiting for a broker restart",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations reserves an explicit taker fee bound and debits actual fees only once",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations does not double risk already transferred into a position",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations keeps rounding exact when splitting a fractional-nano obligation",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations reserves BUY reductions of legacy shorts and rejects cross-owner projection writes",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations does not release a past GTD deadline without the effective expiry event",
+          "status": "passed"
+        },
+        {
+          "name": "FIN-05 PostgreSQL atomic reservations runs the actual broker acceptance, persisted retry and requested cancellation",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/portfolio/funnelstore.pg.test.ts",
+      "passed": 7,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "upsertDecisionHourly (RFC-027 D1, caminho B) agrupa por balde de hora, código e resultado",
+          "status": "passed"
+        },
+        {
+          "name": "upsertDecisionHourly (RFC-027 D1, caminho B) é idempotente: duas execuções deixam uma linha por chave",
+          "status": "passed"
+        },
+        {
+          "name": "upsertDecisionHourly (RFC-027 D1, caminho B) reprocessa a hora anterior, e não toca as mais antigas",
+          "status": "passed"
+        },
+        {
+          "name": "upsertDecisionHourly (RFC-027 D1, caminho B) conta o Quase na banda dos dois lados, com o piso vindo da config",
+          "status": "passed"
+        },
+        {
+          "name": "upsertDecisionHourly (RFC-027 D1, caminho B) usa o piso da config, não um 0,02 literal",
+          "status": "passed"
+        },
+        {
+          "name": "upsertDecisionHourly (RFC-027 D1, caminho B) declara a banda que a RFC fixa",
+          "status": "passed"
+        },
+        {
+          "name": "upsertCycleSummary (RFC-027 D2, caminho B) é idempotente e guarda uma linha só",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/portfolio/integration.pg.test.ts",
+      "passed": 34,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-013 store layer against real PostgreSQL loads the eligible universe with the rule text and the fee schedule",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL loads open positions with the metadata the exit cycle needs",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL reads the paper PnL, taking cost over a missing mark",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL batches the market change state in one grouped scan",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL D1: a late fee_base_bps fill (NULL -> value) is not a parameter change",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL D1: a real tick_size change is the instant, the field and both values",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL D1: a later version that moves only min_order_size does not move the answer",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL D1: losing a value (value -> NULL) is a finding, not a breaker",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL D1: fee_base_bps counts, because the EV reads it as the taker fee",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL finds correlated markets through the logical graph",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL reads mids as of an instant, for the jump breaker",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL answers the macro catalyst window",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL opens, lists and closes a circuit breaker",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL writes a decision the log accepts, and reads it back for replay",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL REFUSES a decision whose newest input postdates it",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL finds the entry provenance an exit compares against",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL runs every gate input query without a type error",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL reconciles a taker execution as ONE order, not as one row per level",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL mints a gate report and attaches the owner's review exactly once",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL starts and resets the G2 clock, keeping the event trail",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL writes an IMMUTABLE gate measurement",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL reads back the stored config so a replay uses the right parameters",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL preserves an abandoned bucket and clears its obsolete breach exactly once",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL zeros the market bucket when its last position closes and keeps it zero next cycle",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL opens UMA_PROPOSED_OR_DISPUTED on a live proposal over a held position",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL runs the panel cycle end to end and writes what it decided",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL runs the exit cycle and the replay of what it wrote agrees",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL runs the gate cycle and records six immutable measurements",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL stamps a bridged order and preserves its decision and thesis against pruning",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL refuses to rewrite an entry's recorded thesis",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL refuses to mint the same config version with different content",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL shadow estimates stay invisible to consumers (RFC-010) a shadow row at the SAME instant never wins over the active one",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL shadow estimates stay invisible to consumers (RFC-010) a NEWER shadow row never wins either — the filter decides, not the clock",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-013 store layer against real PostgreSQL shadow estimates stay invisible to consumers (RFC-010) still returns nothing when no active estimate precedes the instant",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/quality.test.ts",
+      "passed": 26,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "gap writer loads bounded open CLOB silence episodes with their original identities",
+          "status": "passed"
+        },
+        {
+          "name": "gap writer opens a gap and returns the gap_id from RETURNING",
+          "status": "passed"
+        },
+        {
+          "name": "gap writer closes a gap with an UPDATE on gap_end",
+          "status": "passed"
+        },
+        {
+          "name": "gap writer records an instant gap with start = end",
+          "status": "passed"
+        },
+        {
+          "name": "gap writer saves a complete silence snapshot with a stable episode identity",
+          "status": "passed"
+        },
+        {
+          "name": "gap writer keeps a global silence token and unfinished end null",
+          "status": "passed"
+        },
+        {
+          "name": "gap writer propagates silence persistence failure so the journal can retry",
+          "status": "passed"
+        },
+        {
+          "name": "silence gap writer against PostgreSQL restores only pre-boot open episodes and closes their existing rows",
+          "status": "passed"
+        },
+        {
+          "name": "silence gap writer against PostgreSQL deduplicates concurrent replay and never reopens a closed episode",
+          "status": "passed"
+        },
+        {
+          "name": "silence gap writer against PostgreSQL persists the first snapshot already closed and keeps episodes distinct",
+          "status": "passed"
+        },
+        {
+          "name": "feed health reports ~100% uptime for a continuously heartbeating source",
+          "status": "passed"
+        },
+        {
+          "name": "feed health counts a silence longer than the stale threshold as downtime",
+          "status": "passed"
+        },
+        {
+          "name": "feed health tracks sources independently",
+          "status": "passed"
+        },
+        {
+          "name": "reconciler does nothing when the REST book matches the cache by hash",
+          "status": "passed"
+        },
+        {
+          "name": "reconciler requests a resync and records an instant gap on divergence",
+          "status": "passed"
+        },
+        {
+          "name": "reconciler compares top-10 levels when no hash is available",
+          "status": "passed"
+        },
+        {
+          "name": "reconciler backs off on 429 and skips the next round without fetching",
+          "status": "passed"
+        },
+        {
+          "name": "reconciler samples at most 20 tokens per round, round-robin",
+          "status": "passed"
+        },
+        {
+          "name": "metrics snapshot aggregates gaps, lag percentiles, updates and table sizes",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) abre a lacuna com fonte, causa e token",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) uma lacuna por episódio: reabrir com uma aberta não abre a segunda",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) o book chegando ANTES do id voltar: a lacuna fecha, não vaza aberta",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) fechar sem lacuna aberta não faz nada",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) fechar duas vezes fecha uma vez",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) abandon esquece a lacuna SEM fechá-la — ela é a medição",
+          "status": "passed"
+        },
+        {
+          "name": "createTokenGapTracker (RFC-024 D3) o open falhando é logado e não deixa o token travado",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/resolution/integration.test.ts",
+      "passed": 22,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-012 against PostgreSQL keeps the database constraints as the last line of defence",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL keeps membership inserts valid and refuses mutation and truncate under HOLD",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL journals all six live resolution input sources with collision-free keys",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL captures one metadata version and journal row from a legacy market update",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL keeps the current writer idempotent after database capture",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL serializes legacy and current metadata writers without deadlock",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL backfills every resolution input, upgrades the runtime cursor and reapplies migrations idempotently",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL holds source inserts behind the journal SHARE barrier until the fill transaction commits",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL enforces consistent pending resolution-risk claims",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL runs the batched historical loaders against PostgreSQL",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL scores every market with action, justification and state (<= 60s path)",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL persists the UMA timeline (proposed -> disputed -> reset)",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL ignores planted FUTURE data at the decision instant (look-ahead)",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL reproduces the same score for the same version and instant",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL classifies the planted rule change as a material clarification",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL refuses to reuse a score_version name for different content",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL blocks score mutation and retention deletes under HOLD and freezes score versions",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL enforces the gate against the real state rows (task 17)",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL records a LIVE UMA proposal on the market state (RFC-018 item 3)",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL absorbs timeline replays without duplicating events",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL releases a settled market and its coupled group despite a delayed proposal",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-012 against PostgreSQL keeps prospective metadata replayable without projecting the backfill backward",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/retention-archive.pg.test.ts",
+      "passed": 20,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) restores raw L2 exactly, preserving bigint/microseconds and the unchanged source under HOLD",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) restores ledger/orders/position and independently reconciles exact money, identities and provenance",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) restores the exact nonempty residual selector set without granting deletion eligibility",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects corrupted archive bytes before any restore insert",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects a rehashed partial row export even if counts and row checksums were adjusted",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects an entirely missing anchor table from a rehashed export",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) detects source row drift after the explicit independently hashed inventory",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) detects source pins inserted after the manifest without lifting HOLD",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) detects source schema drift before transferring rows",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) detects restore schema drift before inserting rows",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rolls back earlier inserts when a later destination table is nonempty, preserving its fixture",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects altered rehashed monetary rows against independent publication anchors",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) refuses an expired DATA-02 manifest before transfer",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects corrupted certificates and certificates after manifest expiry",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects the same source connection used as a restore destination",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) fails closed when the measured capacity is insufficient",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) rejects stale or mismatched capacity receipts before source reads",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) never executes arbitrary SQL embedded in an otherwise rehashed manifest",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) fails fast behind an active source reference writer",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-03 archive and isolated restore (real PostgreSQL) binds a restored archive to its exact planned target identity",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/retention-manifest.pg.test.ts",
+      "passed": 16,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL bounds the inspected primary-key slab before a sparse time filter and distinguishes exact count from estimate",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL keeps 64-bit keys as strings and cutoff timestamp ties deterministic",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL holds ledger/orders/open-position closure and raw even without a dataset pin or aggregate",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL applies whole-table dataset pins to residual review and changes the manifest on pin drift",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL detects disabled SQL protections instead of claiming migration alone proves application",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects a disabled pin writer lock",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL hashes bigint payloads exactly and normalizes session timezone",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL binds content and schema into the hash and rejects edits/expiration",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"*\"]}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"paper_orders; DELETE FROM paper_orders\"]}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"auth_sessions\"]}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"paper_orders\",\"paper_orders\"]}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"paper_orders\"],\"limit\":1001}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"paper_orders\"],\"cutoffUtc\":\"2026-08-31T21:00:00-03:00\"}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"paper_orders\"],\"cutoffUtc\":\"2026-08-31T00:00:00.000123Z\"}",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 bounded manifest PostgreSQL rejects ambiguous/unbounded request before selection: {\"tables\":[\"paper_orders\"],\"cutoffUtc\":\"2026-09-31T00:00:00Z\"}",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/retention-protection.pg.test.ts",
+      "passed": 7,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) installs the explicit 73-table policy without changing existing guards or auth",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) refuses legacy DELETE and TRUNCATE on every held table, including zero rows",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) preserves ledger/strategy immutability and keeps normal order/position updates working",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) validates table-wide pins and atomically audits insert/removal while holding all evidence",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) lets independent reference writers coexist and rejects pin/selector acquisition until commit",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) preserves a concurrent writer while the short pin transaction holds its snapshot",
+          "status": "passed"
+        },
+        {
+          "name": "DATA-02 evidence protection (disposable PostgreSQL) preserves a concurrent writer while the short selector transaction holds its snapshot",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/rtdsgaps.test.ts",
+      "passed": 9,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RTDS gap journal retains a failed open through recovery and saves its close with the same identity",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal serializes flushes without losing a close received during an open write",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal bounds retry bursts despite updates and can recover on a later slow probe",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal preserves unresolved entries at capacity and frees space only after a saved close",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal stops within five seconds of a hung write and never dispatches later queued writes",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal drains every pending close during graceful shutdown",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal drains a close queued behind its in-flight open snapshot",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal bounds a hung graceful drain and freezes external writes immediately",
+          "status": "passed"
+        },
+        {
+          "name": "RTDS gap journal against PostgreSQL deduplicates concurrent inserts and preserves a saved close on a stale replay",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/samplers.pg.test.ts",
+      "passed": 5,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "OPS-07 observed closure — PostgreSQL writes closure once across repeats/restart, preserves metadata/history, and leaves unresolved markets pending",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-07 observed closure — PostgreSQL accepts only literal true, changes NULL to true and never inserts a missing registry row",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-07 observed closure — PostgreSQL repairs a legacy hydrated closed status without duplicating its event",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-07 observed closure — PostgreSQL logs a real UPDATE failure, keeps the market pending and converges on retry before emitting resolution",
+          "status": "passed"
+        },
+        {
+          "name": "OPS-07 observed closure — PostgreSQL retries an INSERT failure after closure is persisted without another UPDATE or terminal duplicate",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/series.pg.test.ts",
+      "passed": 4,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "RFC-026 D10 — as séries, contra o Postgres metric=ohlc devolve as seis colunas e respeita o `from`",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-026 D10 — as séries, contra o Postgres o lote agrupa por token e responde por todos os pedidos",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-026 D10 — as séries, contra o Postgres uma janela larga demais é 400, e não uma varredura lenta",
+          "status": "passed"
+        },
+        {
+          "name": "RFC-026 D10 — as séries, contra o Postgres as quatro métricas antigas continuam respondendo",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/trades.pg.test.ts",
+      "passed": 12,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: false) uses the initial lookback for an empty market",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: false) ignores NULL trade_ts even when received_at is newer",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: false) keeps market/source filters, tied tokens and the one-second overlap",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: false) preserves a future data_api cursor instead of substituting now",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: false) preserves exact trade identity and deduplication across restarts",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: false) validates the concurrent index and rolls it back without changing rows",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: true) uses the initial lookback for an empty market",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: true) ignores NULL trade_ts even when received_at is newer",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: true) keeps market/source filters, tied tokens and the one-second overlap",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: true) preserves a future data_api cursor instead of substituting now",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: true) preserves exact trade identity and deduplication across restarts",
+          "status": "passed"
+        },
+        {
+          "name": "DB-02 backfill PostgreSQL (candidate index: true) validates the concurrent index and rolls it back without changing rows",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "file": "apps/api/test/polymarket/versioning.pg.test.ts",
+      "passed": 2,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true,
+      "tests": [
+        {
+          "name": "parameter version serialization (PostgreSQL) preserves disjoint out-of-order patches in one contiguous chain",
+          "status": "passed"
+        },
+        {
+          "name": "parameter version serialization (PostgreSQL) blocks then rejects an out-of-order complete rule observation",
+          "status": "passed"
+        }
+      ]
+    }
+  ]
+}

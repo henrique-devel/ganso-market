@@ -13,7 +13,7 @@
 // primária e o `date_trunc` fazem o que o cabeçalho dela diz é esta.
 
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { QueryResult, SqlExecutor } from "../../../src/database.js";
 import {
@@ -22,6 +22,8 @@ import {
   upsertCycleSummary,
   upsertDecisionHourly,
 } from "../../../src/polymarket/portfolio/funnelstore.js";
+
+import { createPgFixture } from "../../pg-fixture.js";
 
 type Row = Record<string, unknown>;
 
@@ -110,32 +112,20 @@ async function hourly(): Promise<Row[]> {
   return result.rows;
 }
 
-beforeAll(() => {
-  if (DATABASE_URL !== undefined) {
-    raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-  }
-});
-
-// Limpo ANTES de cada teste, não depois.
-//
-// As suítes pg compartilham um banco (é por isso que se roda com
-// `--no-file-parallelism`), e o que este arquivo agrega é o conteúdo de
-// `portfolio_decisions`. Limpar só no `afterEach` deixaria cada teste
-// dependendo de o arquivo anterior ter limpado o seu — e a primeira vez que
-// isso falhou foi aqui: `overview.pg.test.ts` grava decisões com um
-// `decision_ts` na mesma janela de 2026-09-04, e o upsert as contou junto,
-// devolvendo 6 baldes onde o teste esperava 3. O estado inicial é uma
-// pré-condição deste arquivo, então é ele que a estabelece.
+// Aggregates require a pristine database for every case. Clone rather than
+// DELETE/TRUNCATE: all evidence guards stay enabled during the assertions.
+let fixture: Awaited<ReturnType<typeof createPgFixture>> | undefined;
 beforeEach(async () => {
-  if (raw !== null) {
-    await raw.query("TRUNCATE portfolio_decision_hourly");
-    await raw.query("TRUNCATE portfolio_cycle_summary");
-    await raw.query("DELETE FROM portfolio_decisions");
+  if (DATABASE_URL !== undefined) {
+    await fixture?.dispose();
+    fixture = undefined;
+    fixture = await createPgFixture(DATABASE_URL);
+    raw = fixture.pool;
   }
 });
 
 afterAll(async () => {
-  await raw?.end();
+  await fixture?.dispose();
   raw = null;
 });
 
