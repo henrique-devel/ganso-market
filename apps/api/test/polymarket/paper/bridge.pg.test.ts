@@ -77,6 +77,9 @@ function pool(): PaperPool {
 
 async function seed(): Promise<void> {
   const p = pool();
+  await p.query(`INSERT INTO paper_financial_owners
+    (account_id, strategy_id, initial_cash_usd, capital_source_ref)
+    VALUES ('paper', 'main', '1000.000000000', 'QA01:synthetic-fixture')`);
   await p.query(
     `INSERT INTO polymarket_market_metadata_versions
        (condition_id, version, question, category, clob_token_ids,
@@ -120,6 +123,18 @@ async function seed(): Promise<void> {
       new Date(NOW.getTime() - 2_000),
       JSON.stringify([{ price: "0.61", size: "500" }]),
       JSON.stringify([{ price: "0.62", size: "500" }]),
+    ],
+  );
+  await p.query(
+    `INSERT INTO polymarket_book_snapshots
+       (token_id, condition_id, received_at, source_ts, bids_json, asks_json)
+     VALUES ($1,$2,$3,$3,$4::jsonb,$5::jsonb)`,
+    [
+      `${TOKEN}-no`,
+      CONDITION,
+      new Date(NOW.getTime() - 2_000),
+      JSON.stringify([{ price: "0.13", size: "500" }]),
+      JSON.stringify([{ price: "0.15", size: "500" }]),
     ],
   );
   await p.query(
@@ -171,6 +186,7 @@ async function acceptedEntry(
   side: "BUY" | "SELL" = "BUY",
   decidedAt: Date = DECIDED_AT,
   receivedAt: Date = new Date(decidedAt.getTime() + 1_000),
+  marketSide: "YES" | "NO" = side === "BUY" ? "YES" : "NO",
 ): Promise<number> {
   const result = await pool().query<{ decision_id: string | number }>(
     `INSERT INTO portfolio_decisions
@@ -189,13 +205,16 @@ async function acceptedEntry(
      RETURNING decision_id`,
     [
       CONDITION,
-      TOKEN,
-      side === "BUY" ? "YES" : "NO",
+      marketSide === "NO" && side === "BUY" ? `${TOKEN}-no` : TOKEN,
+      marketSide,
       side,
       decidedAt,
       "c".repeat(64),
       new Date(decidedAt.getTime() - 1_000),
       JSON.stringify({
+        entry_contract_version: 2,
+        account_id: "paper",
+        strategy_id: "main",
         panel: {
           resolution_source: "UMA:0xadapter",
           invalidation: { prob_lower_below: "0.621000" },
@@ -221,19 +240,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // The decision log is append-only for UPDATE, not for DELETE — retention
-  // prunes it. Cleaning up this run's rows keeps the shared test database from
-  // accumulating accepted entries that other suites would then read.
-  if (raw !== null) {
-    const p = pool();
-    // The ledger is immutable for DELETE as well as UPDATE, so its acceptance
-    // events stay. They are harmless: no fill was ever appended, so nothing
-    // reconstructs a position or a P&L from them.
-    await p.query(`DELETE FROM paper_orders WHERE token_id = $1`, [TOKEN]);
-    await p.query(`DELETE FROM portfolio_decisions WHERE token_id = $1`, [
-      TOKEN,
-    ]);
-  }
+  // The runner drops this isolated database; HOLD forbids row cleanup.
   await raw?.end();
   raw = null;
 });
@@ -295,13 +302,15 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(Number(payload.decision_id)).toBe(decisionId);
     });
 
-    it("quotes the NO leg against q_hi, so the same book does not take", async () => {
-      // The NO leg is a SELL of the affirmative token. Its conservative bound is
-      // q_hi = 0.85, and selling at a bid of 0.61 does not beat 0.85 — so the
-      // taker branch must NOT fire, and the order rests. Under the old-style
-      // mistake of passing q_lo for a sell, the bound would be 0.75 and this
-      // book would look like a profitable take.
-      const decisionId = await acceptedEntry("SELL");
+    it("buys the real NO token against 1 - q_hi using its own book", async () => {
+      // q_hi YES = 0.85 gives a NO bound of 0.15. At ask 0.15 the fee
+      // prevents a take; the passive BUY must stay inside that bound.
+      const decisionId = await acceptedEntry(
+        "BUY",
+        DECIDED_AT,
+        new Date(DECIDED_AT.getTime() + 1_000),
+        "NO",
+      );
       const lines: string[] = [];
       const outcome = await bridgeTick(pool(), {
         clock: () => NOW,
@@ -315,16 +324,38 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(skipped).toBeUndefined();
       expect(outcome.accepted).toBeGreaterThanOrEqual(1);
       const order = await pool().query<Record<string, unknown>>(
-        `SELECT order_type, limit_price, post_only, policy_reason
+        `SELECT token_id, side, order_type, limit_price, post_only, policy_reason
            FROM paper_orders WHERE decision_id = $1`,
         [decisionId],
       );
       expect(order.rows[0]).toMatchObject({
+        token_id: `${TOKEN}-no`,
+        side: "BUY",
         order_type: "GTC",
         post_only: true,
-        limit_price: "0.62",
+        limit_price: "0.13",
       });
       expect(String(order.rows[0]?.policy_reason)).toContain("DEFAULT_PASSIVE");
+    });
+
+    it("refuses legacy synthetic NO entries without creating a SELL order", async () => {
+      const decisionId = await acceptedEntry("SELL");
+      const lines: string[] = [];
+      await bridgeTick(pool(), {
+        clock: () => NOW,
+        logSink: (line) => lines.push(line),
+      });
+      expect(
+        logsOf(lines).find((line) => line.decision_id === decisionId),
+      ).toMatchObject({
+        reason_code: "BRIDGE_DECISION_SKIPPED",
+        reason: "FIN06_LEGACY_ENTRY_REQUIRES_REEVALUATION",
+      });
+      const orders = await pool().query(
+        "SELECT order_id FROM paper_orders WHERE decision_id=$1",
+        [decisionId],
+      );
+      expect(orders.rows).toEqual([]);
     });
 
     it("does not act twice on the same decision, even before the stamp lands", async () => {

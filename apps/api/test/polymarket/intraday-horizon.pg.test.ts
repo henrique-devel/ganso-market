@@ -97,18 +97,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     });
 
     afterAll(async () => {
-      // The metadata version minted by the seed INSERT is deliberately NOT
-      // cleaned up: `polymarket_market_metadata_versions` is append-only and
-      // its trigger refuses DELETE, which is the guarantee the third test
-      // depends on. Every run uses a fresh CONDITION_ID, so the row is inert.
-      await raw.query(
-        `DELETE FROM polymarket_rule_versions WHERE condition_id = $1`,
-        [CONDITION_ID],
-      );
-      await raw.query(
-        `DELETE FROM polymarket_markets WHERE condition_id = $1`,
-        [CONDITION_ID],
-      );
+      // The runner disposes the database, including all retained evidence.
       await raw.end();
     });
 

@@ -291,20 +291,12 @@ describe.skipIf(TEST_DATABASE_URL === undefined)(
   "RTDS gap journal against PostgreSQL",
   () => {
     let database: pg.Pool;
-    const episodeIds: string[] = [];
     beforeAll(() => {
       database = new pg.Pool({ connectionString: TEST_DATABASE_URL, max: 2 });
     });
     afterAll(async () => {
-      try {
-        await database.query(
-          `DELETE FROM polymarket_data_gaps
-         WHERE source = 'rtds' AND details_json->>'episode_id' = ANY($1::text[])`,
-          [episodeIds],
-        );
-      } finally {
-        await database.end();
-      }
+      // The isolated database is discarded; evidence rows remain protected.
+      await database.end();
     });
 
     const newJournal = () =>
@@ -326,7 +318,6 @@ describe.skipIf(TEST_DATABASE_URL === undefined)(
 
     it("deduplicates concurrent inserts and preserves a saved close on a stale replay", async () => {
       const episodeId = randomUUID();
-      episodeIds.push(episodeId);
       const first = newJournal();
       const second = newJournal();
       for (const journal of [first, second])

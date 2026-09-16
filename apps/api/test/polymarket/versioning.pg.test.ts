@@ -138,32 +138,11 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     beforeAll(async () => {
       raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-      await raw.query(
-        `DELETE FROM polymarket_param_versions WHERE condition_id = $1`,
-        [CONDITION_ID],
-      );
-      await raw.query(
-        `DELETE FROM polymarket_rule_versions WHERE condition_id = $1`,
-        [RULE_CONDITION_ID],
-      );
     });
 
     afterAll(async () => {
-      if (raw !== undefined) {
-        await raw
-          .query(
-            `DELETE FROM polymarket_param_versions WHERE condition_id = $1`,
-            [CONDITION_ID],
-          )
-          .catch(() => undefined);
-        await raw
-          .query(
-            `DELETE FROM polymarket_rule_versions WHERE condition_id = $1`,
-            [RULE_CONDITION_ID],
-          )
-          .catch(() => undefined);
-        await raw.end();
-      }
+      // No DELETE under HOLD; the runner owns the isolated database.
+      await raw?.end();
     });
 
     it("preserves disjoint out-of-order patches in one contiguous chain", async () => {

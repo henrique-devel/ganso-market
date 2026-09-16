@@ -7,7 +7,7 @@ RUFF := $(VENV)/bin/ruff
 SERVER_ENV ?= deploy/server.env
 SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 
-.PHONY: help doctor install init-secrets format format-check lint test build verify \
+.PHONY: help doctor install init-secrets format format-check lint test test-postgres build verify \
 	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \
 	recorder-up recorder-logs recorder-down \
 	estimator-up estimator-logs estimator-down \
@@ -22,6 +22,7 @@ help:
 	@echo "  make verify         format-check, lint, testes, build, scan e Compose config"
 	@echo "  make up             sobe o runtime local em 127.0.0.1"
 	@echo "  make integration    testa Compose, readiness e shutdown"
+	@echo "  make test-postgres  gate obrigatório em PostgreSQL descartável (Docker)"
 	@echo "  make down           encerra sem apagar volumes"
 	@echo "  make recorder-up    sobe o recorder Polymarket (dados públicos)"
 	@echo "  make recorder-logs  acompanha os logs do recorder Polymarket"
@@ -75,6 +76,11 @@ test:
 	cargo test --workspace --all-targets --locked
 	$(PYTHON) -m unittest discover -s workers/model-worker/tests -v
 	$(PYTHON) -m unittest discover -s scripts/tests -v
+
+# O gate rápido acima pode omitir PG sem GANSO_TEST_DATABASE_URL.
+# CI exige também este gate, que nunca aceita banco ausente ou testes pulados.
+test-postgres:
+	@sh scripts/test_postgres.sh
 
 build:
 	npm run build

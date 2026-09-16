@@ -15,7 +15,11 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { QueryResult } from "../../../src/database.js";
+import type {
+  QueryResult,
+  SqlExecutor,
+  DatabasePool,
+} from "../../../src/database.js";
 import {
   closeBreaker,
   entryProvenanceFor,
@@ -65,6 +69,8 @@ import {
 import { replayAudit } from "../../../src/polymarket/portfolio/replay.js";
 import type { PortfolioPool } from "../../../src/polymarket/portfolio/types.js";
 
+import { createPgFixture } from "../../pg-fixture.js";
+
 const DATABASE_URL = process.env.GANSO_TEST_DATABASE_URL;
 const RUN = `${String(process.pid)}-${String(Date.now())}`;
 const CONDITION = `0xpg-${RUN}`;
@@ -81,12 +87,37 @@ const CONFIG = DEFAULT_PORTFOLIO_CONFIG;
 
 let raw: pg.Pool | null = null;
 
-function pool(): PortfolioPool {
+function pool(): PortfolioPool & Pick<DatabasePool, "transaction"> {
   const instance = raw;
   if (instance === null) {
     throw new Error("pool not initialised");
   }
   return {
+    async transaction<T>(run: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+      const client = await instance.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await run({
+          async query<R extends Record<string, unknown>>(
+            text: string,
+            params?: readonly unknown[],
+          ) {
+            const response = await client.query<R>(
+              text,
+              params === undefined ? undefined : [...params],
+            );
+            return { rows: response.rows, rowCount: response.rowCount ?? 0 };
+          },
+        });
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
     async query<R extends Record<string, unknown>>(
       text: string,
       params?: readonly unknown[],
@@ -114,6 +145,9 @@ function states_of(
 
 async function seed(): Promise<void> {
   const p = pool();
+  await p.query(`INSERT INTO paper_financial_owners
+    (account_id, strategy_id, initial_cash_usd, capital_source_ref)
+    VALUES ('paper', 'main', '1000.000000000', 'QA01:synthetic-fixture')`);
   await p.query(
     `INSERT INTO polymarket_universe_log (condition_id, action, reason, at)
      VALUES ($1, 'enter', 'integration_fixture', $2)`,
@@ -237,8 +271,8 @@ async function seed(): Promise<void> {
   );
   await p.query(
     `INSERT INTO polymarket_book_snapshots
-       (token_id, condition_id, received_at, bids_json, asks_json)
-     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+       (token_id, condition_id, received_at, source_ts, bids_json, asks_json)
+     VALUES ($1, $2, $3, $3, $4::jsonb, $5::jsonb)`,
     [
       TOKEN,
       CONDITION,
@@ -247,14 +281,23 @@ async function seed(): Promise<void> {
       JSON.stringify([{ price: "0.62", size: "300" }]),
     ],
   );
+  // FIN-06 evaluates both real tokens; this is an independently observed NO
+  // book, deliberately too expensive to beat the affirmative fixture's edge.
+  await p.query(
+    `INSERT INTO polymarket_book_snapshots
+    (token_id,condition_id,received_at,source_ts,bids_json,asks_json)
+    VALUES ($1,$2,$3,$3,'[{"price":"0.35","size":"500"}]'::jsonb,
+      '[{"price":"0.36","size":"500"}]'::jsonb)`,
+    [`${TOKEN}-no`, CONDITION, new Date("2026-08-26T11:59:58.000Z")],
+  );
   // A SECOND, earlier snapshot, so the book the decision saw and the book the
   // fill consumed are two different recorded observations. With only one row
   // they would be the same line, and the G4 slippage reference would be the
   // simulator compared against itself.
   await p.query(
     `INSERT INTO polymarket_book_snapshots
-       (token_id, condition_id, received_at, bids_json, asks_json)
-     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+       (token_id, condition_id, received_at, source_ts, bids_json, asks_json)
+     VALUES ($1, $2, $3, $3, $4::jsonb, $5::jsonb)`,
     [
       TOKEN,
       CONDITION,
@@ -270,15 +313,35 @@ async function seed(): Promise<void> {
      VALUES ($1, $2, '100', '50', '0', $3, '60', FALSE)`,
     [TOKEN, CONDITION, new Date("2026-08-25T12:00:00.000Z")],
   );
+  // The main owner's ledger agrees with its legacy cache. Reconciliation
+  // samples below belong to another strategy and do not fund this portfolio.
+  await p.query(
+    `INSERT INTO paper_orders
+    (order_id,token_id,condition_id,side,order_type,limit_price,size,filled_size,status,decided_at,accepted_at)
+    VALUES ($1,$2,$3,'BUY','GTC','0.5','100','100','filled',$4,$4)`,
+    [`owner-${RUN}`, TOKEN, CONDITION, new Date("2026-08-25T12:00:00.000Z")],
+  );
+  await p.query(
+    `INSERT INTO paper_ledger_events
+    (idempotency_key,event_type,order_id,token_id,condition_id,payload_json,event_ts)
+    VALUES ($1,'fill',$2,$3,$4,'{"side":"BUY","price":"0.5","size":"100","fee":"0"}'::jsonb,$5)`,
+    [
+      `owner-${RUN}:fill`,
+      `owner-${RUN}`,
+      TOKEN,
+      CONDITION,
+      new Date("2026-08-25T12:00:00.000Z"),
+    ],
+  );
   // One taker execution, written the way the RFC-011 ledger writes it: ONE
   // event per book level consumed. The G4 reconciliation has to put the order
   // back together before it can compare anything.
   await p.query(
     `INSERT INTO paper_orders
        (order_id, token_id, condition_id, side, order_type, limit_price, size,
-        filled_size, post_only, worst_price, status, decided_at, accepted_at)
+        filled_size, post_only, worst_price, status, decided_at, accepted_at, source, strategy_id)
      VALUES ($1, $2, $3, 'BUY', 'FAK', '0.63', '150', '150', FALSE, '0.63',
-             'filled', $4, $4)`,
+             'filled', $4, $4, 'fast', 'qa01_reconciliation')`,
     [`ord-${RUN}`, TOKEN, CONDITION, new Date("2026-08-26T11:59:00.000Z")],
   );
   for (const [index, fill] of [
@@ -740,8 +803,8 @@ describe.skipIf(DATABASE_URL === undefined)(
       ]) {
         await pool().query(
           `INSERT INTO polymarket_book_snapshots
-             (token_id, condition_id, received_at, bids_json, asks_json)
-           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+             (token_id, condition_id, received_at, source_ts, bids_json, asks_json)
+           VALUES ($1, $2, $3, $3, $4::jsonb, $5::jsonb)`,
           [
             TOKEN,
             CONDITION,
@@ -796,9 +859,9 @@ describe.skipIf(DATABASE_URL === undefined)(
         `INSERT INTO paper_orders
            (order_id, token_id, condition_id, side, order_type, limit_price,
             size, filled_size, post_only, worst_price, status, decided_at,
-            accepted_at)
+            accepted_at, source, strategy_id)
          VALUES ($1, $2, $3, 'BUY', 'FAK', '0.70', '900', '900', FALSE, '0.70',
-                 'filled', $4, $4)`,
+                 'filled', $4, $4, 'fast', 'qa01_reconciliation')`,
         [`deep-${RUN}`, TOKEN, CONDITION, new Date("2026-08-26T11:59:00.000Z")],
       );
       await pool().query(
@@ -1042,45 +1105,46 @@ describe.skipIf(DATABASE_URL === undefined)(
     });
 
     it("zeros the market bucket when its last position closes and keeps it zero next cycle", async () => {
-      let clock = NOW;
-      const engine = createPortfolioRunner({
-        pool: pool(),
-        config: CONFIG,
-        factorMap: DEFAULT_FACTOR_MAP,
-        lexicon: DEFAULT_RESOLUTION_LEXICON,
-        executionMode: "paper",
-        clock: () => clock,
-      });
-      const readBucket = () =>
-        pool().query<{
-          exposure_id: string;
-          worst_case_usd: string;
-          cap_usd: string;
-          utilization: string;
-          position_count: number;
-          unwind_cost_usd: string;
-          computed_at: Date;
-          updated_at: Date;
-        }>(
-          `SELECT exposure_id, worst_case_usd, cap_usd, utilization, position_count,
+      // Closing a real financial position appends an immutable event. Keep
+      // that closure in a clone so subsequent cases retain their open fixture.
+      await raw?.end();
+      const fixture = await createPgFixture(DATABASE_URL);
+      raw = fixture.pool;
+      try {
+        let clock = NOW;
+        const engine = createPortfolioRunner({
+          pool: pool(),
+          config: CONFIG,
+          factorMap: DEFAULT_FACTOR_MAP,
+          lexicon: DEFAULT_RESOLUTION_LEXICON,
+          executionMode: "paper",
+          clock: () => clock,
+        });
+        const readBucket = () =>
+          pool().query<{
+            exposure_id: string;
+            worst_case_usd: string;
+            cap_usd: string;
+            utilization: string;
+            position_count: number;
+            unwind_cost_usd: string;
+            computed_at: Date;
+            updated_at: Date;
+          }>(
+            `SELECT exposure_id, worst_case_usd, cap_usd, utilization, position_count,
                  unwind_cost_usd, computed_at, updated_at FROM portfolio_exposures
            WHERE dimension = 'market' AND dimension_key = $1`,
-          [CONDITION],
-        );
-      await engine.tickOnce("panel");
-      const held = (await readBucket()).rows[0];
-      expect(held?.worst_case_usd).toBe("50.000000");
-      expect(held?.position_count).toBe(1);
-      const position = (
-        await pool().query<{ shares: string; resolved_at: Date | null }>(
-          `SELECT shares, resolved_at FROM paper_positions WHERE token_id = $1`,
-          [TOKEN],
-        )
-      ).rows[0];
-      try {
+            [CONDITION],
+          );
+        await engine.tickOnce("panel");
+        const held = (await readBucket()).rows[0];
+        expect(held?.worst_case_usd).toBe("50.000000");
+        expect(held?.position_count).toBe(1);
         await pool().query(
-          `UPDATE paper_positions SET shares = '0', resolved_at = $2 WHERE token_id = $1`,
-          [TOKEN, NOW],
+          `INSERT INTO paper_ledger_events
+          (idempotency_key,event_type,token_id,condition_id,payload_json,event_ts)
+          VALUES ($1,'resolution',$2,$3,'{"outcome_price":"0.5","fee":"0"}'::jsonb,$4)`,
+          [`owner-${RUN}:resolution`, TOKEN, CONDITION, NOW],
         );
         clock = new Date(NOW.getTime() + 1);
         await engine.tickOnce("panel");
@@ -1099,10 +1163,8 @@ describe.skipIf(DATABASE_URL === undefined)(
         await engine.tickOnce("panel");
         expect((await readBucket()).rows).toEqual(closed.rows);
       } finally {
-        await pool().query(
-          `UPDATE paper_positions SET shares = $2, resolved_at = $3 WHERE token_id = $1`,
-          [TOKEN, position?.shares, position?.resolved_at],
-        );
+        await fixture.dispose();
+        raw = new pg.Pool({ connectionString: DATABASE_URL, max: 2 });
       }
     });
 

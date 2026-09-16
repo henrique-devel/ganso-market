@@ -209,22 +209,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     beforeAll(async () => {
       raw = new pg.Pool({ connectionString: DATABASE_URL });
       pool = poolAdapter(raw);
-      // TRUNCATE, not DELETE: several 0010 tables carry append-only triggers,
-      // which is exactly what production wants and a throwaway DB works around.
-      await pool.query(`TRUNCATE resolution_scores, resolution_score_versions,
-        resolution_market_state, resolution_clarifications,
-        resolution_uma_timeline, resolution_onchain_events,
-        resolution_onchain_cursor, resolution_adjudication_samples,
-        graph_violations, graph_sanity_vetoes, graph_edges,
-        resolution_layer_divergences, resolution_reports CASCADE`);
-      await pool.query(`TRUNCATE polymarket_resolution_input_changes,
-        resolution_runtime_state, polymarket_markets,
-        polymarket_market_metadata_versions, polymarket_universe_log,
-        polymarket_book_snapshots, polymarket_rule_versions,
-        polymarket_param_versions, polymarket_resolution_events,
-        polymarket_oi_holders, polymarket_events, polymarket_event_markets,
-        polymarket_series_1m CASCADE`);
-
+      // The PG runner provides a pristine migrated database for this file.
       await seedMarket(
         pool,
         CLEAN_ID,
@@ -318,7 +303,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       ).rejects.toThrow(/graph_edges_curated_needs_author/);
     });
 
-    it("keeps membership sources append-only without blocking insert or truncate", async () => {
+    it("keeps membership inserts valid and refuses mutation and truncate under HOLD", async () => {
       await reapplyMigration(raw, 11, "0011_resolution_runtime_safety.sql");
       const suffix = Date.now().toString(36);
       const eventId = `ev-append-only-${suffix}`;
@@ -353,7 +338,9 @@ describe.skipIf(DATABASE_URL === undefined)(
             WHERE event_id = $1 AND condition_id = $2`,
           [eventId, conditionId],
         ),
-      ).rejects.toThrow(/polymarket_event_markets rows are append-only/);
+      ).rejects.toThrow(
+        /DATA02_EVIDENCE_HOLD: polymarket_event_markets DELETE/,
+      );
       await expect(
         raw.query(
           `UPDATE polymarket_universe_log
@@ -368,21 +355,11 @@ describe.skipIf(DATABASE_URL === undefined)(
             WHERE condition_id = $1 AND reason = 'append_only_guard_fixture'`,
           [conditionId],
         ),
-      ).rejects.toThrow(/polymarket_universe_log rows are append-only/);
+      ).rejects.toThrow(/DATA02_EVIDENCE_HOLD: polymarket_universe_log DELETE/);
 
-      const client = await raw.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          "TRUNCATE polymarket_event_markets, polymarket_universe_log",
-        );
-        await client.query("ROLLBACK");
-      } catch (error: unknown) {
-        await client.query("ROLLBACK").catch(() => undefined);
-        throw error;
-      } finally {
-        client.release();
-      }
+      await expect(
+        raw.query("TRUNCATE polymarket_event_markets, polymarket_universe_log"),
+      ).rejects.toThrow(/DATA02_EVIDENCE_HOLD: .* TRUNCATE/);
     });
 
     it("journals all six live resolution input sources with collision-free keys", async () => {
@@ -921,7 +898,9 @@ describe.skipIf(DATABASE_URL === undefined)(
             WHERE condition_id = $1`,
           [conditionId],
         ),
-      ).rejects.toThrow(/immutable/);
+      ).rejects.toThrow(
+        /DATA02_EVIDENCE_HOLD: polymarket_resolution_input_changes DELETE/,
+      );
     });
 
     it("holds source inserts behind the journal SHARE barrier until the fill transaction commits", async () => {
@@ -1175,7 +1154,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       ).rejects.toThrow(/SCORE_VERSION_CONTENT_MISMATCH/);
     });
 
-    it("blocks score mutation, permits score retention deletes and freezes score versions", async () => {
+    it("blocks score mutation and retention deletes under HOLD and freezes score versions", async () => {
       await expect(
         pool.query(`UPDATE resolution_scores SET score = '0.000001'`),
       ).rejects.toThrow(/immutable/);
@@ -1188,11 +1167,16 @@ describe.skipIf(DATABASE_URL === undefined)(
       );
       expect(Number(stored.rows[0]?.n)).toBeGreaterThan(0);
 
-      const deleted = await pool.query(
-        `DELETE FROM resolution_scores WHERE condition_id = $1`,
+      await expect(
+        pool.query(`DELETE FROM resolution_scores WHERE condition_id = $1`, [
+          CLEAN_ID,
+        ]),
+      ).rejects.toThrow(/DATA02_EVIDENCE_HOLD: resolution_scores DELETE/);
+      const retained = await pool.query(
+        `SELECT COUNT(*)::bigint AS n FROM resolution_scores WHERE condition_id = $1`,
         [CLEAN_ID],
       );
-      expect(deleted.rowCount).toBe(Number(stored.rows[0]?.n));
+      expect(retained.rows).toEqual(stored.rows);
 
       await expect(
         pool.query(
@@ -1207,7 +1191,9 @@ describe.skipIf(DATABASE_URL === undefined)(
           `DELETE FROM resolution_score_versions WHERE score_version = $1`,
           [deps.scoreVersion],
         ),
-      ).rejects.toThrow(/immutable/);
+      ).rejects.toThrow(
+        /DATA02_EVIDENCE_HOLD: resolution_score_versions DELETE/,
+      );
     });
 
     it("enforces the gate against the real state rows (task 17)", async () => {
@@ -1435,7 +1421,9 @@ describe.skipIf(DATABASE_URL === undefined)(
             WHERE condition_id = $1`,
           [CLEAN_ID],
         ),
-      ).rejects.toThrow(/append-only/);
+      ).rejects.toThrow(
+        /DATA02_EVIDENCE_HOLD: polymarket_market_metadata_versions DELETE/,
+      );
 
       const integrityId = "0xmetadata-integrity";
       await expect(

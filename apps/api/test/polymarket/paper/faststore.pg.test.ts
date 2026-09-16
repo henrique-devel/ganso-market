@@ -13,7 +13,9 @@
 // `paper_orders` de banco descartável.
 
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+
+import { createPgFixture } from "../../pg-fixture.js";
 
 const DATABASE_URL = process.env["GANSO_TEST_DATABASE_URL"];
 
@@ -21,6 +23,7 @@ const HASH = "a".repeat(64);
 const STRATEGY = "fast_btc_updown";
 
 let raw: pg.Pool | null = null;
+let fixture: Awaited<ReturnType<typeof createPgFixture>> | undefined;
 
 function pool(): pg.Pool {
   if (raw === null) {
@@ -77,20 +80,17 @@ async function insertDecision(
 describe.skipIf(DATABASE_URL === undefined)(
   "0020 — strategy_decisions é append-only",
   () => {
-    beforeAll(() => {
-      raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-    });
-
     afterAll(async () => {
-      await raw?.end();
+      await fixture?.dispose();
+      fixture = undefined;
       raw = null;
     });
 
     beforeEach(async () => {
-      // TRUNCATE não passa pelo trigger de linha, então o setup consegue
-      // limpar uma tabela que nenhum DELETE consegue esvaziar. É de propósito:
-      // o trigger protege a história, não o banco de teste.
-      await pool().query("TRUNCATE strategy_decisions");
+      await fixture?.dispose();
+      fixture = undefined;
+      fixture = await createPgFixture(DATABASE_URL);
+      raw = fixture.pool;
     });
 
     it("aceita uma decisão de recusa sem plano", async () => {
@@ -135,7 +135,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         pool().query("DELETE FROM strategy_decisions WHERE decision_id = $1", [
           id,
         ]),
-      ).rejects.toThrow(/append-only/);
+      ).rejects.toThrow(/DATA02_EVIDENCE_HOLD: strategy_decisions DELETE/);
     });
 
     it("um UPDATE que não casa linha nenhuma não lança", async () => {
@@ -217,17 +217,17 @@ describe.skipIf(DATABASE_URL === undefined)(
 describe.skipIf(DATABASE_URL === undefined)(
   "0020 — fast_config_versions é imutável",
   () => {
-    beforeAll(() => {
-      raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-    });
-
     afterAll(async () => {
-      await raw?.end();
+      await fixture?.dispose();
+      fixture = undefined;
       raw = null;
     });
 
     beforeEach(async () => {
-      await pool().query("TRUNCATE fast_config_versions");
+      await fixture?.dispose();
+      fixture = undefined;
+      fixture = await createPgFixture(DATABASE_URL);
+      raw = fixture.pool;
     });
 
     async function freeze(version: string, hash: string): Promise<void> {
@@ -262,7 +262,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         pool().query("DELETE FROM fast_config_versions WHERE version = $1", [
           "0.1.0",
         ]),
-      ).rejects.toThrow(/mint a new version/);
+      ).rejects.toThrow(/DATA02_EVIDENCE_HOLD: fast_config_versions DELETE/);
     });
 
     it("a mesma versão duas vezes colide na chave primária", async () => {
@@ -281,17 +281,17 @@ describe.skipIf(DATABASE_URL === undefined)(
 describe.skipIf(DATABASE_URL === undefined)(
   "0020 — paper_orders ganha strategy_id e a fonte 'fast'",
   () => {
-    beforeAll(() => {
-      raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-    });
-
     afterAll(async () => {
-      await raw?.end();
+      await fixture?.dispose();
+      fixture = undefined;
       raw = null;
     });
 
     beforeEach(async () => {
-      await pool().query("DELETE FROM paper_orders");
+      await fixture?.dispose();
+      fixture = undefined;
+      fixture = await createPgFixture(DATABASE_URL);
+      raw = fixture.pool;
     });
 
     /** O mínimo que os CHECKs da 0008/0015 exigem de uma ordem. */
@@ -384,17 +384,17 @@ describe.skipIf(DATABASE_URL === undefined)(
 );
 
 describe.skipIf(DATABASE_URL === undefined)("0020 — fast_wallet_state", () => {
-  beforeAll(() => {
-    raw = new pg.Pool({ connectionString: DATABASE_URL, max: 4 });
-  });
-
   afterAll(async () => {
-    await raw?.end();
+    await fixture?.dispose();
+    fixture = undefined;
     raw = null;
   });
 
   beforeEach(async () => {
-    await pool().query("DELETE FROM fast_wallet_state");
+    await fixture?.dispose();
+    fixture = undefined;
+    fixture = await createPgFixture(DATABASE_URL);
+    raw = fixture.pool;
   });
 
   it("aceita o estado inicial da sub-carteira", async () => {
