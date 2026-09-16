@@ -550,7 +550,14 @@ export function createPortfolioRunner(
     }
     const midsBefore = await loadMidsAsOf(
       deps.pool,
-      [...input.books.keys()],
+      // Entry-only NO books are needed for sizing, not an extra breaker
+      // observation. Preserve the pre-FIN-06 historical-query universe.
+      [
+        ...new Set([
+          ...input.markets.map((market) => market.tokenId),
+          ...input.positions.map((position) => position.tokenId),
+        ]),
+      ],
       windowFrom,
     );
     const macroCatalyst = await macroCatalystInWindow(
