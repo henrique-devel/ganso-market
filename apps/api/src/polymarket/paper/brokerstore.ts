@@ -35,6 +35,7 @@ import {
 } from "./ledger.js";
 import { validateOrder, type OrderDraft } from "./validator.js";
 import { loadOpenOwnerTokens } from "./ownership.js";
+import { reserveOrder, ReservationRejected } from "./reservations.js";
 import type { ResolutionAction } from "../resolution/types.js";
 import { errorFields } from "../../errors.js";
 
@@ -483,6 +484,16 @@ async function engageKillSwitchInTransaction(
   const open = await tx.query(
     "SELECT order_id, token_id, condition_id FROM paper_orders WHERE status = 'open' FOR UPDATE",
   );
+  // Batch paths acquire every token before the first owner lock (FIN-05).
+  for (const token of [
+    ...new Set(
+      open.rows
+        .map((row) => asString(row["token_id"]))
+        .filter((value): value is string => value !== null),
+    ),
+  ].sort()) {
+    await lockToken(tx, token);
+  }
   for (const row of open.rows) {
     const orderId = asString(row["order_id"]);
     if (orderId === null) {
@@ -656,6 +667,29 @@ function isAuditedVetoOverride(value: unknown): boolean {
   );
 }
 
+async function acceptanceRetry(
+  pool: SqlExecutor,
+  input: AcceptInput,
+): Promise<AcceptOutcome | null> {
+  const previous = await pool.query(
+    `SELECT o.accepted_at,
+      e.payload_json->'acceptance_request' = $2::jsonb AS identical_request
+    FROM paper_orders o JOIN paper_ledger_events e USING(order_id)
+    WHERE o.order_id=$1 AND e.event_type='order_accepted'`,
+    [input.orderId, JSON.stringify(input)],
+  );
+  const row = previous.rows[0];
+  if (row === undefined) return null;
+  const acceptedAt = toDate(row["accepted_at"]);
+  return row["identical_request"] === true && acceptedAt !== null
+    ? { status: "accepted", acceptedAt }
+    : {
+        status: "rejected",
+        httpStatus: 409,
+        reason: "FIN05_ACCEPTANCE_CONFLICT",
+      };
+}
+
 export async function acceptPaperOrder(
   pool: PaperPool,
   input: AcceptInput,
@@ -664,6 +698,10 @@ export async function acceptPaperOrder(
   const clock = deps.clock ?? ((): Date => new Date());
   const latencyMs = deps.latencyMs ?? DEFAULT_LATENCY_MS;
   const now = clock();
+  // A committed identical request remains the same acceptance after restart,
+  // expiry, a changed spread or a hard stop. This never creates a new order.
+  const retry = await acceptanceRetry(pool, input);
+  if (retry !== null) return retry;
 
   const killSwitch = await loadKillSwitch(pool);
   if (killSwitch.engaged) {
@@ -833,12 +871,12 @@ export async function acceptPaperOrder(
       }
 
       const resolutionGeneration = runtime.generation;
-      await tx.query(
+      const inserted = await tx.query(
         "INSERT INTO paper_orders (order_id, token_id, condition_id, side, order_type, " +
           "limit_price, size, amount_usd, post_only, worst_price, expiration_s, " +
           "policy_reason, policy_version, source, status, decided_at, accepted_at, " +
           "resolution_generation, decision_id) " +
-          "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17::uuid,$18)",
+          "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17::uuid,$18) ON CONFLICT (order_id) DO NOTHING",
         [
           input.orderId,
           order.tokenId,
@@ -860,6 +898,12 @@ export async function acceptPaperOrder(
           input.decisionId ?? null,
         ],
       );
+      if (inserted.rowCount === 0) {
+        const concurrentRetry = await acceptanceRetry(tx, input);
+        if (concurrentRetry !== null) return concurrentRetry;
+        throw new PaperAcceptanceRejected(409, "FIN05_ACCEPTANCE_INCOMPLETE");
+      }
+      const reservation = await reserveOrder(tx, input.orderId, now);
       const acceptedEventInserted = await appendLedgerEvent(tx, {
         idempotencyKey: `${input.orderId}:accepted`,
         eventType: "order_accepted",
@@ -867,6 +911,8 @@ export async function acceptPaperOrder(
         tokenId: order.tokenId,
         conditionId,
         payload: {
+          reservation,
+          acceptance_request: input,
           side: order.side,
           order_type: order.orderType,
           limit_price: order.limitPrice,
@@ -921,6 +967,9 @@ export async function acceptPaperOrder(
       return { status: "accepted", acceptedAt };
     });
   } catch (error: unknown) {
+    if (error instanceof ReservationRejected) {
+      return { status: "rejected", httpStatus: 409, reason: error.message };
+    }
     if (error instanceof PaperAcceptanceRejected) {
       return {
         status: "rejected",
@@ -2769,7 +2818,16 @@ export async function settlementTick(
               FOR UPDATE`,
             [tokenId, conditionId],
           );
-          await lockToken(tx, tokenId);
+          for (const token of [
+            ...new Set([
+              tokenId,
+              ...openOrders.rows
+                .map((row) => asString(row["token_id"]))
+                .filter((value): value is string => value !== null),
+            ]),
+          ].sort()) {
+            await lockToken(tx, token);
+          }
 
           const eventIdRaw = event["resolution_event_id"];
           const resolutionEventId =

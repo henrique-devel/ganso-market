@@ -91,6 +91,10 @@ services:
       dockerfile: apps/api/Dockerfile
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      # FIN-05 admission uses the existing portfolio caps and classifications.
+      GANSO_PORTFOLIO_CONFIG_FILE: /etc/ganso/portfolio.json
+      GANSO_PORTFOLIO_FACTOR_MAP_FILE: /etc/ganso/factor-map.json
+      GANSO_RESOLUTION_LEXICON_FILE: /etc/ganso/resolution-lexicon.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       # RFC-029 D3, owner decision P3. Without this variable the shadow-replay
       # endpoints answer 404 to everything and the API is otherwise unchanged --
@@ -101,6 +105,9 @@ services:
       - postgres_password
     volumes:
       - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      - ./config/portfolio.json:/etc/ganso/portfolio.json:ro
+      - ./config/factor-map.json:/etc/ganso/factor-map.json:ro
+      - ./config/resolution-lexicon.json:/etc/ganso/resolution-lexicon.json:ro
       # RFC-029 D1/D2. The daily job runs on the HOST, as root, and writes the
       # replay JSONs here; the API reads them as uid `node` through this
       # read-only mount. `:ro` is the reason the "no new write path" invariant
@@ -332,6 +339,10 @@ services:
       ["node", "--max-old-space-size=192", "apps/api/dist/polymarket-paper.js"]
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      # FIN-05 admission uses the existing portfolio caps and classifications.
+      GANSO_PORTFOLIO_CONFIG_FILE: /etc/ganso/portfolio.json
+      GANSO_PORTFOLIO_FACTOR_MAP_FILE: /etc/ganso/factor-map.json
+      GANSO_RESOLUTION_LEXICON_FILE: /etc/ganso/resolution-lexicon.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       # The revision is baked into the image (apps/api/Dockerfile), so the
       # provenance on a paper fill is always the code that produced it.
@@ -340,6 +351,9 @@ services:
       - postgres_password
     volumes:
       - ./config/runtime.json:/etc/ganso/runtime.json:ro
+      - ./config/portfolio.json:/etc/ganso/portfolio.json:ro
+      - ./config/factor-map.json:/etc/ganso/factor-map.json:ro
+      - ./config/resolution-lexicon.json:/etc/ganso/resolution-lexicon.json:ro
     networks:
       - backend
     depends_on:

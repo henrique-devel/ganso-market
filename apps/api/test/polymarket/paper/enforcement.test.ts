@@ -3,7 +3,7 @@
 // and a manual override_veto is audited in the ledger's order_accepted event.
 
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DatabasePool,
@@ -15,6 +15,14 @@ import type {
   ResolutionGateFn,
   ResolutionGateResult,
 } from "../../../src/polymarket/resolution/enforcement.js";
+
+// Route/policy tests isolate admission; reservation atomicity is proved in PostgreSQL.
+vi.mock("../../../src/polymarket/paper/reservations.js", async (original) => ({
+  ...(await original<
+    typeof import("../../../src/polymarket/paper/reservations.js")
+  >()),
+  reserveOrder: vi.fn(async () => ({ version: "reservation-v1" })),
+}));
 
 type Row = Record<string, unknown>;
 
@@ -112,7 +120,7 @@ function worldPool(record: {
         return respond([{ effective_action: "NONE" }]);
       }
       if (text.includes("INSERT INTO paper_orders")) {
-        return respond([]);
+        return respond([{ order_id: "synthetic" }]);
       }
       if (text.includes("INSERT INTO paper_ledger_events")) {
         record.ledger.push({ text, params });
