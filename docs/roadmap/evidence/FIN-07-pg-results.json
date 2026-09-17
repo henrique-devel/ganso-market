@@ -121,7 +121,7 @@
     },
     {
       "file": "apps/api/test/polymarket/resolution/integration.test.ts",
-      "passed": 22,
+      "passed": 23,
       "failed": 0,
       "unexecuted": 0,
       "ok": true
@@ -183,7 +183,7 @@
       "ok": true
     }
   ],
-  "passed": 318,
+  "passed": 319,
   "failed": 0,
   "unexecuted": 0,
   "success": true
