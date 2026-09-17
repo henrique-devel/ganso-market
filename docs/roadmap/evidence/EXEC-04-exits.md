@@ -50,7 +50,7 @@ replay, portfolio/scope, bridge, brokerstore e paper/scope: **250 passaram**.
 
 `GANSO_PG_RESULTS_DIR=/private/tmp/exec04-pg-results make test-postgres`:
 PostgreSQL **18.4**, imagem fixada pelo projeto, **25 migrations**, **24 arquivos,
-310 passaram / 0 falharam / 0 não executados**. [Resumo do gate](EXEC-04-pg-results.json).
+310 passaram (279 SQL reais + 31 unitários auxiliares) / 0 falharam / 0 não executados**. [Resumo do gate](EXEC-04-pg-results.json).
 O gate inclui 15 casos novos em `bridge-exits.pg.test.ts` e os 14 existentes
 de `bridge.pg.test.ts`, além das regressões de reservas/ledger/resolução.
 

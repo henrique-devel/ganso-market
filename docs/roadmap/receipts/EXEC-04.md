@@ -9,7 +9,7 @@ Economia: bid/ask pelo lado correto; passiva GTC post-only, fee maker explícita
 Proteções: kill/resolução/reduce-only preservados; HOLD mantém ordem; terminal libera nova avaliação.
 Vínculo: decision_id imediato; portfolio carimba paper_order_id; recusas persistem com reason/decision_id.
 Focados: 250 passaram; regressão de quatro casos novos falha na base anterior.
-SQL: make test-postgres, PG18.4/25migrations, 24arquivos/310passaram/zero falhas/skips; 15casos D4 novos.
+SQL: make test-postgres, PG18.4/25migrations, 24arquivos/310passaram (279SQL+31unitários), zero falhas/skips; 15casos D4 novos.
 Aceite: ±8,11; parcial2→restante6,11; donos opostos, duplicata/disputa/cancelamento/livro/veto/kill/resolução.
 Cobertura: cada caso exige EXIT elegível não vazio e 100% ordem vinculada ou recusa persistida.
 Checks: make verify passou; 2478JS/16Rust/220Python, 279skips source-only separados; tipos/build/scan/Compose/diff OK.
