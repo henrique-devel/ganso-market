@@ -1,6 +1,6 @@
 # EXEC-03 — contrato de execução paper
 
-Base: 18a6c20 (EXEC-02/FIN-05 integrados). Modelo `paper-fill-v2`, sem migration.
+Código: 63fd9b3; base 83856e9 (EXEC-02/FIN-05 integrados). Modelo `paper-fill-v2`, sem migration.
 
 - `requestCancel` trava a ordem e grava timestamp + evento na mesma transação.
   Retry conserva o primeiro pedido; falha de auditoria reverte o timestamp.
@@ -65,3 +65,17 @@ não comprova oportunidade nova. Sem política nova de frescor/expiração.
 `requestCancel(pool, orderId, deps)` exige transação. Reutilizar ordem → token →
 dono, identidade/fee imutáveis e mesmos limites. EXEC-04 não iniciado; FIN-07
 continua dependência própria. Nenhum worker ativado, sem live/caps/G4 novos.
+
+## Verificação observada
+
+`node_modules/.bin/vitest run apps/api/test/polymarket/paper/{broker,brokerstore,performance,ledger,financial}.test.ts`: 215 passaram.
+`make test-postgres`: PostgreSQL 18.4, 25 migrations, 23 arquivos, 295 passaram,
+zero falhas/zero skips. `make verify`: 2.472 JavaScript, 16 Rust e 220 Python;
+264 testes SQL omitidos no gate sem banco foram cobertos pelo gate PG separado.
+Typecheck, formatação, build, scan e Compose passaram. Rebase posterior alterou
+somente documentos de EXEC-02; árvores de código/testes verificadas idênticas.
+Logs locais: `/private/tmp/exec03-focused.log`, `/private/tmp/exec03-pg.log`,
+`/private/tmp/exec03-verify.log`. Recibo de EXEC-03 permanece com até 25 linhas.
+Push recusado pela revisão automática por saída sensível sem autorização
+explícita do payload/destino. Nenhuma tentativa alternativa, PR ou deploy.
+Autorização contínua foi lida; o bloqueio efetivo da ferramenta permanece.
