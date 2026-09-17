@@ -307,6 +307,41 @@ export async function recomputeMarkets(
     return { scored: 0, failed: 0 };
   }
 
+  // A negRisk sibling can have left the scoreable universe before this
+  // process ever scored it. Coupling still requires its own state. Complete
+  // the missing state set from versioned inputs at this same cutoff, rather
+  // than skipping a member or inventing a permissive action. Traverse newly
+  // included siblings too, because they may belong to another event group.
+  const selected = new Set(targets.map((market) => market.conditionId));
+  let frontier = [...selected];
+  while (frontier.length > 0) {
+    const groups = await eventGroupsFor(pool, frontier, asOf);
+    const members = [
+      ...new Set(
+        [...groups.values()].flatMap((entries) =>
+          entries
+            .filter((group) => group.negRisk)
+            .flatMap((group) => group.members),
+        ),
+      ),
+    ].filter((id) => !selected.has(id));
+    if (members.length === 0) break;
+    const existing = await pool.query<Record<string, unknown>>(
+      "SELECT condition_id FROM resolution_market_state WHERE condition_id = ANY($1)",
+      [members],
+    );
+    const present = new Set(
+      existing.rows.map((row) => String(row.condition_id)),
+    );
+    frontier = members.filter((id) => !present.has(id));
+    if (frontier.length === 0) break;
+    const missing = await marketsByIds(pool, frontier, asOf);
+    for (const market of missing) {
+      selected.add(market.conditionId);
+      targets.push(market);
+    }
+  }
+
   const stats = await measuredCategoryStats(pool, asOf);
   const statsByCategory = new Map<string, MeasuredPriorInput>();
   for (const row of stats) {
