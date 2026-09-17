@@ -26,8 +26,11 @@ import {
 import {
   acceptPaperOrder,
   requestCancel,
+  brokerTick,
   type PaperPool,
 } from "../../../src/polymarket/paper/brokerstore.js";
+
+import { buildPerformanceReport } from "../../../src/polymarket/paper/performance.js";
 
 import { loadMidsAsOf } from "../../../src/polymarket/portfolio/exitstore.js";
 import { lastEntryVerdicts } from "../../../src/polymarket/portfolio/store.js";
@@ -161,7 +164,7 @@ async function row(id: string) {
     )
   ).rows[0]!;
 }
-async function totals(strategy: string) {
+async function totals(strategy: string, asOf = later) {
   const selected = { accountId: "paper", strategyId: strategy };
   const state = replayFinancialLedger(
     await loadAttributedLedgerEvents(wrap(raw), selected),
@@ -173,7 +176,7 @@ async function totals(strategy: string) {
       },
     ],
     [],
-    later,
+    asOf,
   ).owners.get(financialOwnerKey("paper", strategy))!;
   const rows = await raw.query(
     "SELECT COALESCE(sum(cash_remaining_usd),0)::text AS cash, COALESCE(sum(risk_remaining_usd),0)::text AS risk FROM paper_order_reservations WHERE account_id='paper' AND strategy_id=$1",
@@ -345,6 +348,63 @@ describe.skipIf(url === undefined)(
       await expect(
         appendLedgerEvent(wrap(raw), fill("partial", "partial", "401")),
       ).rejects.toThrow("FIN02_IDEMPOTENCY_CONFLICT");
+    });
+
+    it("EXEC-03 preserves fees and realized PnL on reordered retries for two owners", async () => {
+      await raw.query(
+        `INSERT INTO polymarket_param_versions(condition_id,version,content_hash,tick_size,min_order_size,taker_fee_bps,valid_from)
+        VALUES ('c-exec03-token',1,'exec03-fee-fixture','0.01','1','800',$1)`,
+        [at],
+      );
+      const acceptFee = (strategy: string, id: string, side: string) =>
+        tx(async (db) => {
+          await db.query(
+            `INSERT INTO paper_orders(order_id,token_id,condition_id,side,order_type,limit_price,worst_price,size,source,strategy_id,status,decided_at,accepted_at)
+            VALUES ($1,'exec03-token','c-exec03-token',$2,'FAK','0.5','0.5','10','fast',$3,'open',$4,$4)`,
+            [id, side, strategy, at],
+          );
+          const reservation = await reserveOrder(db, id, later, caps);
+          await appendLedgerEvent(db, {
+            idempotencyKey: `${id}:accepted`,
+            eventType: "order_accepted",
+            orderId: id,
+            tokenId: "exec03-token",
+            conditionId: "c-exec03-token",
+            payload: { side, reservation },
+            eventTs: later,
+          });
+        });
+      for (const strategy of ["exec03-a", "exec03-b"]) {
+        await owner(strategy);
+        const buy = `${strategy}-buy`,
+          sell = `${strategy}-sell`;
+        await acceptFee(strategy, buy, "BUY");
+        const buyFill = fill(buy, "exec03-token", "10", "BUY", "0.40", "0.10");
+        await appendLedgerEvent(wrap(raw), buyFill);
+        await acceptFee(strategy, sell, "SELL");
+        const sellFill = {
+          ...fill(sell, "exec03-token", "10", "SELL", "0.60", "0.20"),
+          eventTs: new Date(later.getTime() + 1000),
+        };
+        await appendLedgerEvent(wrap(raw), sellFill);
+        await expect(appendLedgerEvent(wrap(raw), sellFill)).resolves.toBe(
+          false,
+        );
+        await expect(appendLedgerEvent(wrap(raw), buyFill)).resolves.toBe(
+          false,
+        );
+        await tx((db) =>
+          reconcileReservations(db, {
+            accountId: "paper",
+            strategyId: strategy,
+          }),
+        );
+        const result = await totals(strategy, new Date(later.getTime() + 1000));
+        expect(result.state.cashUsd).toBe("1001.700000000");
+        expect(result.state.realizedPnlUsd).toBe("1.700000000");
+        expect(result.state.feesPaidUsd).toBe("0.300000000");
+        expect(result.reserved).toBe(0n);
+      }
     });
 
     it("prevents two exits from spending the same owner's inventory", async () => {
@@ -827,6 +887,40 @@ describe.skipIf(url === undefined)(
         status: "rejected",
         reason: "FIN05_ACCEPTANCE_CONFLICT",
       });
+      const failCancel: PaperPool = {
+        ...pool,
+        transaction: (run) =>
+          tx((db) =>
+            run({
+              async query<R extends Record<string, unknown>>(
+                sql: string,
+                args: readonly unknown[] = [],
+              ) {
+                if (
+                  sql.startsWith("INSERT INTO paper_ledger_events") &&
+                  args[1] === "cancel_requested"
+                )
+                  throw new Error("injected cancel audit failure");
+                return db.query<R>(sql, args);
+              },
+            }),
+          ),
+      };
+      await expect(
+        requestCancel(failCancel, "broker", {
+          clock: () => new Date(now.getTime() + 2000),
+        }),
+      ).rejects.toThrow("injected cancel audit failure");
+      expect(
+        (
+          await raw.query(
+            "SELECT cancel_requested_at FROM paper_orders WHERE order_id='broker'",
+          )
+        ).rows[0].cancel_requested_at,
+      ).toBeNull();
+      expect(parseScaled((await row("broker")).cash_remaining_usd)).toBe(
+        parseScaled("5"),
+      );
       expect(
         await requestCancel(pool, "broker", {
           clock: () => new Date(now.getTime() + 2000),
@@ -965,6 +1059,76 @@ describe.skipIf(url === undefined)(
       expect(
         (await lastEntryVerdicts(pool, ["broker-no"])).has("broker-no"),
       ).toBe(false);
+      // EXEC-03: exercise the real broker against reserved cash and real SQL.
+      // Restrict only the tick's work list; all locks/writes/triggers stay real.
+      const brokerPool: PaperPool = {
+        ...pool,
+        async query<R extends Record<string, unknown>>(
+          sql: string,
+          args: readonly unknown[] = [],
+        ) {
+          return pool.query<R>(
+            sql.replace(
+              "WHERE o.status = 'open' ORDER BY",
+              "WHERE o.status = 'open' AND o.order_id='broker' ORDER BY",
+            ),
+            args,
+          );
+        },
+      };
+      const tick = (ms: number) =>
+        brokerTick(brokerPool, {
+          clock: () => new Date(now.getTime() + ms),
+          latencyMs: 1000,
+        });
+      await raw.query(
+        `INSERT INTO polymarket_book_snapshots(token_id,condition_id,received_at,source_ts,bids_json,asks_json)
+        VALUES ('broker','c-broker',$1,$1,'[{"price":"0.49","size":"10"}]','[{"price":"0.52","size":"10"}]')`,
+        [now],
+      );
+      await raw.query(
+        `INSERT INTO polymarket_trades(trade_id,token_id,condition_id,price,size,provenance,trade_ts,received_at)
+        OVERRIDING SYSTEM VALUE VALUES (10000,'broker','c-broker','0.50','2','ws',$1,$1)`,
+        [new Date(now.getTime() + 1500)],
+      );
+      await tick(1800);
+      expect(parseScaled((await row("broker")).shares_remaining)).toBe(
+        parseScaled("8"),
+      );
+      expect(parseScaled((await row("broker")).cash_remaining_usd)).toBe(
+        parseScaled("4"),
+      );
+      expect(
+        await requestCancel(pool, "broker", {
+          clock: () => new Date(now.getTime() + 2000),
+        }),
+      ).toEqual({ status: "requested" });
+      expect(parseScaled((await row("broker")).cash_remaining_usd)).toBe(
+        parseScaled("4"),
+      );
+      await raw.query(
+        `INSERT INTO polymarket_trades(trade_id,token_id,condition_id,price,size,provenance,trade_ts,received_at)
+        OVERRIDING SYSTEM VALUE VALUES
+        (10001,'broker','c-broker','0.50','3','ws',$1,$1),
+        (10002,'broker','c-broker','0.50','100','ws',$2,$2)`,
+        [new Date(now.getTime() + 2500), new Date(now.getTime() + 3000)],
+      );
+      await tick(4000);
+      await tick(5000);
+
+      expect((await row("broker")).state).toBe("released");
+      expect(parseScaled((await row("broker")).cash_remaining_usd)).toBe(0n);
+      expect(
+        (
+          await raw.query(
+            "SELECT filled_size,status FROM paper_orders WHERE order_id='broker'",
+          )
+        ).rows[0],
+      ).toMatchObject({ filled_size: "5.000000", status: "canceled" });
+      const report = await buildPerformanceReport(pool);
+      expect(report.execution.maker.fee_evidence_fills).toBeGreaterThanOrEqual(
+        2,
+      );
     });
   },
 );

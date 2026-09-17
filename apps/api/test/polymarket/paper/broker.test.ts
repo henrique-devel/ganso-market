@@ -170,3 +170,21 @@ describe("D2 mark to executable", () => {
     expect(markToExecutable("-40", asks)).toBe("22.000000");
   });
 });
+
+describe("EXEC-03 fee evidence", () => {
+  it.each([null, "invalid", "-0.01", "1.01"])(
+    "never turns %s into zero fee",
+    (rate) => {
+      expect(
+        executeTaker(
+          "BUY",
+          "10",
+          "0.6",
+          [{ price: "0.5", size: "100" }],
+          rate,
+          false,
+        ),
+      ).toBeNull();
+    },
+  );
+});

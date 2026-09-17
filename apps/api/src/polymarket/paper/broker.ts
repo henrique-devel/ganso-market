@@ -66,8 +66,15 @@ export function executeTaker(
 ): TakerExecution | null {
   const size = parseScaled(sizeStr);
   const worst = parseScaled(worstPriceStr);
-  const rate = takerFeeRate === null ? 0n : (parseScaled(takerFeeRate) ?? 0n);
-  if (size === null || size <= 0n || worst === null || worst <= 0n) {
+  const rate = takerFeeRate === null ? null : parseScaled(takerFeeRate);
+  if (rate === null || rate < 0n || rate > SCALE) return null;
+  if (
+    size === null ||
+    size <= 0n ||
+    worst === null ||
+    worst <= 0n ||
+    worst > SCALE
+  ) {
     return null;
   }
   let remaining = size;
@@ -79,7 +86,13 @@ export function executeTaker(
     }
     const price = parseScaled(level.price);
     const levelSize = parseScaled(level.size);
-    if (price === null || levelSize === null || price <= 0n) {
+    if (
+      price === null ||
+      levelSize === null ||
+      price <= 0n ||
+      price > SCALE ||
+      levelSize < 0n
+    ) {
       return null;
     }
     // Beyond the worst price the walk stops: FAK leaves the rest unfilled.
