@@ -98,7 +98,9 @@ function fakePool(): SqlExecutor {
 
 describe("three-column performance report (RFC-011 task 8)", () => {
   it("always publishes optimistic, base and stress — base never optimistic", async () => {
-    const report = await buildPerformanceReport(fakePool());
+    const report = await buildPerformanceReport(fakePool(), {
+      accountingVersion: "ledger-v1",
+    });
     // Base: buy 10 at 0.50 (cost 5, fee 0.1), resolve at 1 => realized 4.9;
     // minus the 1-tick taker haircut (10 x 0.01) => 4.8.
     expect(report.columns.base_realized_usd).toBe("4.800000");
@@ -116,7 +118,9 @@ describe("three-column performance report (RFC-011 task 8)", () => {
   });
 
   it("reports fill rates, taker slippage and markout buckets", async () => {
-    const report = await buildPerformanceReport(fakePool());
+    const report = await buildPerformanceReport(fakePool(), {
+      accountingVersion: "ledger-v1",
+    });
     expect(report.fill_rates_by_type["FAK"]).toMatchObject({
       orders: 1,
       filled: 1,

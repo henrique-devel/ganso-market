@@ -1125,7 +1125,9 @@ describe.skipIf(url === undefined)(
           )
         ).rows[0],
       ).toMatchObject({ filled_size: "5.000000", status: "canceled" });
-      const report = await buildPerformanceReport(pool);
+      const report = await buildPerformanceReport(pool, {
+        now: new Date(now.getTime() + 5000),
+      });
       expect(report.execution.maker.fee_evidence_fills).toBeGreaterThanOrEqual(
         2,
       );

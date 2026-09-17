@@ -29,8 +29,15 @@
       "ok": true
     },
     {
+      "file": "apps/api/test/polymarket/paper/bridge-exits.pg.test.ts",
+      "passed": 15,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
       "file": "apps/api/test/polymarket/paper/bridge.pg.test.ts",
-      "passed": 8,
+      "passed": 14,
       "failed": 0,
       "unexecuted": 0,
       "ok": true
@@ -51,7 +58,7 @@
     },
     {
       "file": "apps/api/test/polymarket/paper/kill-switch.pg.test.ts",
-      "passed": 8,
+      "passed": 10,
       "failed": 0,
       "unexecuted": 0,
       "ok": true
@@ -71,6 +78,13 @@
       "ok": true
     },
     {
+      "file": "apps/api/test/polymarket/paper/reconciliation-broker.pg.test.ts",
+      "passed": 2,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
       "file": "apps/api/test/polymarket/paper/reconciliation.pg.test.ts",
       "passed": 4,
       "failed": 0,
@@ -79,7 +93,7 @@
     },
     {
       "file": "apps/api/test/polymarket/paper/reservations.pg.test.ts",
-      "passed": 20,
+      "passed": 21,
       "failed": 0,
       "unexecuted": 0,
       "ok": true
@@ -169,7 +183,7 @@
       "ok": true
     }
   ],
-  "passed": 292,
+  "passed": 318,
   "failed": 0,
   "unexecuted": 0,
   "success": true

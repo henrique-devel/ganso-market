@@ -28,8 +28,8 @@ import {
   loadMarketChangeStates,
   loadMidsAsOf,
   loadOpenBreakers,
-  loadOpenPositions,
-  loadPaperPnl,
+  loadLegacyOpenPositions,
+  loadLegacyPaperPnl,
   macroCatalystInWindow,
   openBreaker,
   type MarketChangeState,
@@ -426,7 +426,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     });
 
     it("loads open positions with the metadata the exit cycle needs", async () => {
-      const positions = await loadOpenPositions(pool());
+      const positions = await loadLegacyOpenPositions(pool());
       const position = positions.find((row) => row.tokenId === TOKEN);
       expect(position?.affirmativeTokenId).toBe(TOKEN);
       expect(position?.category).toBe("crypto");
@@ -435,7 +435,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     });
 
     it("reads the paper PnL, taking cost over a missing mark", async () => {
-      const pnl = await loadPaperPnl(pool());
+      const pnl = await loadLegacyPaperPnl(pool());
       // The seeded position has a fresh mark of 60 against a cost of 50.
       expect(pnl.openCostScaled).toBeGreaterThan(0n);
       expect(pnl.openMarkScaled).toBeGreaterThanOrEqual(pnl.openCostScaled);

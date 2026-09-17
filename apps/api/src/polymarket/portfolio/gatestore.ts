@@ -9,6 +9,9 @@
 // Writes are confined to `portfolio_gate_measurements`, `portfolio_gate_reports`,
 // `portfolio_g2_clock` and `portfolio_g2_clock_events`.
 
+import { replayFinancialLedger } from "../paper/financial.js";
+import { loadAttributedLedgerEvents } from "../paper/ownership.js";
+import type { OwnerSelection } from "../paper/financialstore.js";
 import { createHash } from "node:crypto";
 
 import { parsePortfolioConfig, type PortfolioConfig } from "./config.js";
@@ -114,17 +117,28 @@ export async function loadForecastRows(
 /**
  * Positions the paper broker has settled, with their realized PnL.
  *
- * A "closed position" is a resolved token position: `paper_positions` is keyed
- * by token and carries the realized total the RFC-011 ledger derived, and
- * `resolved_at` is the instant it settled. The block bootstrap then resamples
- * these in chronological order.
+ * The default portfolio selection is paper/main. Replay settled owner positions
+ * at financial-v2 precision; another owner's profit never enters this sample.
+ * The block bootstrap resamples these in chronological order.
  */
 export async function loadClosedPositions(
   pool: PortfolioPool,
+  owner: OwnerSelection = { accountId: "paper", strategyId: "main" },
 ): Promise<ClosedPosition[]> {
+  const state = replayFinancialLedger(
+    await loadAttributedLedgerEvents(pool, owner),
+  );
+  const positions = [...state.owners.values()]
+    .flatMap((o) => [...o.positions.values()])
+    .filter((p) => p.resolvedAt !== null)
+    .map((p) => ({
+      condition_id: p.conditionId,
+      realized_pnl_usd: p.realizedPnlUsd,
+      resolved_at: p.resolvedAt,
+    }));
   const result = await pool.query<Record<string, unknown>>(
     `SELECT p.condition_id, p.realized_pnl_usd, p.resolved_at, meta.category
-       FROM paper_positions p
+       FROM jsonb_to_recordset($1::jsonb) p(condition_id text,realized_pnl_usd text,resolved_at timestamptz)
        LEFT JOIN LATERAL (
          SELECT category FROM polymarket_market_metadata_versions v
           WHERE v.condition_id = p.condition_id AND v.valid_to IS NULL
@@ -132,6 +146,7 @@ export async function loadClosedPositions(
        ) meta ON TRUE
       WHERE p.resolved_at IS NOT NULL
       ORDER BY p.resolved_at`,
+    [JSON.stringify(positions)],
   );
   const rows: ClosedPosition[] = [];
   for (const row of result.rows) {

@@ -1,8 +1,8 @@
 // OPS-03 / RFC-021 D2-D3. Run only against a disposable PostgreSQL database:
 // GANSO_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:<port>/ops03_test
 // Each test creates its own schema; the real 0008 ledger guards remain enabled.
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 
 import pg from "pg";
 import {
@@ -15,6 +15,8 @@ import {
   it,
 } from "vitest";
 
+import { appendLedgerEvent } from "../../../src/polymarket/paper/ledger.js";
+import { readFinancialState } from "../../../src/polymarket/paper/financialstore.js";
 import type { QueryResult, SqlExecutor } from "../../../src/database.js";
 import {
   KILL_SWITCH_HEALTHY_TICKS,
@@ -74,10 +76,14 @@ function at(tick: number): Date {
 
 async function fresh(tick: number): Promise<void> {
   const now = at(tick);
-  await raw.query("UPDATE polymarket_book_snapshots SET received_at = $1", [
-    now,
-  ]);
-  await raw.query("UPDATE polymarket_book_deltas SET received_at = $1", [now]);
+  await raw.query(
+    "INSERT INTO polymarket_book_snapshots(token_id,received_at,bids_json,asks_json) VALUES('fixture',$1,'[]','[]')",
+    [now],
+  );
+  await raw.query(
+    "INSERT INTO polymarket_book_deltas(token_id,side,price,size,received_at) VALUES('fixture','BUY','0.5','1',$1)",
+    [now],
+  );
 }
 
 function trigger(tick: number, recovery: Recovery): Promise<void> {
@@ -117,19 +123,20 @@ describe.skipIf(DATABASE_URL === undefined)(
   () => {
     beforeAll(async () => {
       admin = new pg.Pool({ connectionString: DATABASE_URL, max: 2 });
-      const original = await readFile(
-        new URL(
-          "../../../../../migrations/0008_polymarket_paper_broker.sql",
-          import.meta.url,
-        ),
-        "utf8",
-      );
-      // Execute the production DDL verbatim; only the migration-runner receipt
-      // needs psql variables/schema_versions outside this isolated schema.
-      migration = original.split("INSERT INTO schema_versions")[0] ?? "";
-      expect(migration).toContain(
-        "CREATE TRIGGER paper_ledger_events_guard_trg",
-      );
+      const dir = new URL("../../../../../migrations/", import.meta.url);
+      migration = "";
+      for (const name of (await readdir(dir))
+        .filter((n) => /^\d{4}_.+\.sql$/.test(n))
+        .sort()) {
+        const sql = await readFile(new URL(name, dir), "utf8");
+        migration +=
+          sql
+            .replaceAll(":'migration_version'", `'${name.slice(0, 4)}'`)
+            .replaceAll(
+              ":'migration_checksum'",
+              `'${createHash("sha256").update(sql).digest("hex")}'`,
+            ) + "\n";
+      }
     });
 
     beforeEach(async () => {
@@ -142,14 +149,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         application_name: schema,
       });
       await raw.query(migration);
-      await raw.query(`
-      CREATE TABLE polymarket_book_snapshots (received_at timestamptz NOT NULL);
-      CREATE TABLE polymarket_book_deltas (received_at timestamptz NOT NULL);
-      CREATE TABLE polymarket_data_gaps (cause text NOT NULL, gap_end timestamptz);
-      CREATE TABLE polymarket_resolution_events (condition_id text, event_type text);
-      INSERT INTO polymarket_book_snapshots VALUES ('2026-09-11T11:50:00Z');
-      INSERT INTO polymarket_book_deltas VALUES ('2026-09-11T11:50:00Z');
-    `);
+      await fresh(-10);
       // Engage through the real automatic D2 path: even a public/manual call
       // using the reason RECORDER_STALE must not become eligible for D3.
       await killSwitchTriggersTick(pool(), {
@@ -276,7 +276,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       const writer = await raw.connect();
       await writer.query("BEGIN");
       await writer.query(
-        "INSERT INTO polymarket_data_gaps (cause, gap_end) VALUES ('stream_silent', NULL)",
+        "INSERT INTO polymarket_data_gaps (source,gap_start,cause,gap_end) VALUES ('clob_ws','2026-09-11T12:00:00Z','stream_silent',NULL)",
       );
       const automatic = trigger(15, recovery);
       try {
@@ -371,10 +371,123 @@ describe.skipIf(DATABASE_URL === undefined)(
       ).rejects.toThrow("immutable (append-only ledger)");
       await expect(
         raw.query("DELETE FROM paper_ledger_events"),
-      ).rejects.toThrow("immutable (append-only ledger)");
+      ).rejects.toThrow("DATA02_EVIDENCE_HOLD: paper_ledger_events DELETE");
       expect(await engagements()).toEqual(before);
     });
 
+    async function syntheticFill(
+      strategy: string,
+      id: string,
+      side: string,
+      price: string,
+      size: string,
+      when: Date,
+    ) {
+      await raw.query(
+        `INSERT INTO paper_orders(order_id,token_id,condition_id,side,order_type,limit_price,size,source,strategy_id,status,decided_at,accepted_at) VALUES($1,'shared','condition-shared',$2,'GTC',$3,$4,'fast',$5,'filled',$6,$6)`,
+        [id, side, price, size, strategy, when],
+      );
+      await appendLedgerEvent(executor(raw), {
+        idempotencyKey: id,
+        eventType: "fill",
+        orderId: id,
+        tokenId: "shared",
+        conditionId: "condition-shared",
+        payload: { side, price, size, fee: "0" },
+        eventTs: when,
+      });
+    }
+    async function financialOwners() {
+      await raw.query(
+        `INSERT INTO paper_financial_owners(account_id,strategy_id,initial_cash_usd,capital_source_ref) VALUES ('paper','A','500.000000000','FIN07:fixture'),('paper','B','500.000000000','FIN07:fixture')`,
+      );
+      await raw.query("UPDATE paper_kill_switch SET engaged=false,reason=NULL");
+    }
+    it("FIN-07 refuses cross-owner offset: A loses100 while B gains120 on the same token", async () => {
+      await financialOwners();
+      await syntheticFill("A", "a1", "BUY", "0.5", "200", at(1));
+      await syntheticFill("B", "b1", "BUY", "0", "200", at(1));
+      await syntheticFill("A", "a2", "SELL", "0", "200", at(2));
+      await syntheticFill("B", "b2", "SELL", "0.6", "200", at(2));
+      await fresh(3);
+      await killSwitchTriggersTick(pool(), {
+        clock: () => at(3),
+        dailyLossLimitUsd: "50",
+        logSink: silentSink,
+      });
+      expect(await switchState()).toMatchObject({
+        engaged: true,
+        reason: "DAILY_LOSS_LIMIT",
+      });
+      const state = await readFinancialState(executor(raw), at(3));
+      expect(state.realizedPnlUsd).toBe("20.000000000");
+      expect(
+        state.owners
+          .get('["paper","A"]')
+          ?.dailyRealizedPnlUsd.get("2026-09-11"),
+      ).toBe("-100.000000000");
+      expect(
+        state.owners
+          .get('["paper","B"]')
+          ?.dailyRealizedPnlUsd.get("2026-09-11"),
+      ).toBe("120.000000000");
+      await trigger(4, createKillSwitchRecoveryState(at(3)));
+      expect((await switchState()).reason).toBe("DAILY_LOSS_LIMIT");
+    });
+    it("FIN-07 persists separate anchors across restart and refuses net-zero inventory with a missing mark", async () => {
+      await financialOwners();
+      await syntheticFill("A", "a1", "BUY", "0.5", "200", at(1));
+      await syntheticFill("B", "b1", "SELL", "0.5", "200", at(1));
+      const book = async (tick: number, price: string) =>
+        raw.query(
+          `INSERT INTO polymarket_book_snapshots(token_id,condition_id,bids_json,asks_json,source_ts,received_at) VALUES('shared','condition-shared',$1,$1,$2,$2)`,
+          [JSON.stringify([{ price, size: "400" }]), at(tick)],
+        );
+      await fresh(2);
+      await book(2, "0.5");
+      await killSwitchTriggersTick(pool(), {
+        clock: () => at(2),
+        dailyLossLimitUsd: "50",
+        logSink: silentSink,
+      });
+      expect((await switchState()).engaged).toBe(false);
+      const anchors = (await switchState()).daily_owner_anchors_json;
+      expect(anchors).toEqual({
+        '["legacy_unattributed","unknown"]': "0.000000000",
+        '["paper","A"]': "0.000000000",
+        '["paper","B"]': "0.000000000",
+      });
+      await raw.end();
+      raw = new pg.Pool({
+        connectionString: DATABASE_URL,
+        max: 6,
+        options: `-c search_path=${schema} -c statement_timeout=5000`,
+        application_name: schema,
+      });
+      await fresh(3);
+      await book(3, "0.2");
+      await killSwitchTriggersTick(pool(), {
+        clock: () => at(3),
+        dailyLossLimitUsd: "50",
+        logSink: silentSink,
+      });
+      expect(await switchState()).toMatchObject({
+        engaged: true,
+        reason: "DAILY_LOSS_LIMIT",
+        daily_owner_anchors_json: anchors,
+      });
+      // Fresh recorder does not manufacture a usable per-owner price.
+      await raw.query("UPDATE paper_kill_switch SET engaged=false,reason=NULL");
+      await fresh(4);
+      await killSwitchTriggersTick(pool(), {
+        clock: () => at(4),
+        logSink: silentSink,
+      });
+      expect(await switchState()).toMatchObject({
+        engaged: true,
+        reason: "FINANCIAL_DATA_UNAVAILABLE",
+      });
+    });
     it("preserves a manual engagement even when its supplied reason is RECORDER_STALE", async () => {
       const manuallyEngagedAt = at(0.5);
       await engageKillSwitch(pool(), "RECORDER_STALE", manuallyEngagedAt, {

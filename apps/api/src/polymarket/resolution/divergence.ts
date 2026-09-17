@@ -58,7 +58,7 @@ export async function divergenceCheck(
   );
 
   const positions = await pool.query<Record<string, unknown>>(
-    `SELECT condition_id, shares FROM paper_positions WHERE condition_id IS NOT NULL`,
+    `SELECT condition_id, shares FROM paper_open_owner_tokens() WHERE condition_id IS NOT NULL`,
   );
   const held = new Set<string>();
   for (const row of positions.rows) {

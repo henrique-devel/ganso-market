@@ -630,7 +630,7 @@ export function registerOverviewRoutes(
             `SELECT
                (SELECT COUNT(*)::int FROM paper_orders
                  WHERE status = 'open') AS ordens_abertas,
-               (SELECT COUNT(*)::int FROM paper_positions
+               (SELECT COUNT(*)::int FROM paper_open_owner_tokens()
                  WHERE shares::numeric <> 0) AS posicoes,
                (SELECT COUNT(*)::int FROM paper_ledger_events
                  WHERE event_type = 'fill'

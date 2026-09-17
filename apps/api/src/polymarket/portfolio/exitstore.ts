@@ -92,12 +92,25 @@ export interface OpenPositionRow {
  * Every open paper position with the metadata the exposure dimensions and the
  * exit criteria both need.
  *
- * With an owner, use exactly the FIN-03 replay snapshot that produced PnL and
+ * Use exactly the FIN-03 replay snapshot that produced PnL and
  * join only its metadata here. No net-token cache can cancel another owner's
- * short or substitute a stale owner cache. Omission is exit-path compatibility
- * with paper_positions, explicitly labelled legacy_unattributed/unknown.
+ * short or substitute a stale owner cache. Historical token diagnostics require
+ * the explicitly named loadLegacyOpenPositions entry point.
  */
-export async function loadOpenPositions(
+export function loadOpenPositions(
+  pool: PortfolioPool,
+  owner: FinancialOwnerState,
+): Promise<OpenPositionRow[]> {
+  if (!owner) throw new Error("FIN03_OWNER_REQUIRED");
+  return readOpenPositions(pool, owner);
+}
+/** Explicit historical diagnostic, excluded from runtime decisions. */
+export function loadLegacyOpenPositions(
+  pool: PortfolioPool,
+): Promise<OpenPositionRow[]> {
+  return readOpenPositions(pool);
+}
+async function readOpenPositions(
   pool: PortfolioPool,
   owner?: FinancialOwnerState,
 ): Promise<OpenPositionRow[]> {
@@ -205,28 +218,12 @@ export interface PaperPnl {
   readonly positionsWithStaleMark: number;
 }
 
-/**
- * Explicit owner selection uses financial-v2 below: atomic replay/cache,
- * signed executable marks, economic UTC buckets and nullable absolute equity.
- * Omitted selection preserves the following ledger-v1 compatibility contract.
- *
- * The total is exact — `realized_pnl_usd` is what the RFC-011 ledger derived.
- * The DAY and WEEK figures attribute each position's realized total to its
- * `resolved_at`, which is the only per-position realization instant the broker's
- * table carries.
- *
- * The consequence, stated because it matters: realization from closing a
- * position EARLY (selling before resolution) is not attributed to the day it
- * happened — it lands when the token finally resolves. So the daily and weekly
- * loss limits can trigger LATE for a book that trades out of positions instead
- * of holding them to settlement. Attributing it correctly would mean replaying
- * the RFC-011 ledger event by event, which is that module's job and not this
- * one's; `updated_at` is not a substitute, because a mark refresh moves it and
- * would re-attribute an old loss to today on every cycle.
- */
+/** Required owner selection: atomic financial-v2 replay/cache, signed executable
+ * marks, UTC event-time buckets and nullable absolute equity. Partial exits
+ * realize on their fill timestamp, independently of the final resolution. */
 export async function loadPaperPnl(
   pool: FinancialPool,
-  selection?: OwnerSelection & { readonly now: Date },
+  selection: OwnerSelection & { readonly now: Date },
 ): Promise<PaperPnl> {
   if (selection !== undefined) {
     const result = await loadOwnerFinancialState(
@@ -276,6 +273,13 @@ export async function loadPaperPnl(
       },
     };
   }
+  throw new Error("FIN03_OWNER_REQUIRED");
+}
+
+/** Explicit legacy diagnostic; never use for monetary decisions. */
+export async function loadLegacyPaperPnl(
+  pool: FinancialPool,
+): Promise<PaperPnl> {
   // ledger-v1 compatibility only. New runtime callers select an owner above.
   const result = await pool.query<Record<string, unknown>>(
     `SELECT

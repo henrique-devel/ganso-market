@@ -1242,9 +1242,14 @@ function PipelineSection({
                 </thead>
                 <tbody>
                   {pipeline.positions.map((position) => (
-                    <tr key={position.token_id}>
+                    <tr
+                      key={`${position.account_id}:${position.strategy_id}:${position.token_id}`}
+                    >
                       <td title={position.token_id}>
                         {marketLabel(markets, position.condition_id)}
+                        <small>
+                          {position.account_id} / {position.strategy_id}
+                        </small>
                       </td>
                       <td>{fmtOrDash(position.shares, 2)}</td>
                       <td>{usdOrDash(position.cost_usd)}</td>
@@ -1254,14 +1259,7 @@ function PipelineSection({
                           <span className="muted"> (mark obsoleto)</span>
                         ) : null}
                       </td>
-                      <td>
-                        {position.mark_value_usd === null ||
-                        position.cost_usd === null
-                          ? "—"
-                          : usdOrDash(
-                              position.mark_value_usd - position.cost_usd,
-                            )}
-                      </td>
+                      <td>{usdOrDash(position.unrealized_pnl_usd ?? null)}</td>
                       <td>{usdOrDash(position.realized_pnl_usd)}</td>
                       <td>{relativeTime(position.updated_at, now)}</td>
                     </tr>

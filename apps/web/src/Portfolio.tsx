@@ -200,6 +200,10 @@ function CartaoPosicao({
           {posicao.question ?? "sem nome"}
         </h4>
         <div className="cartao-selos">
+          <span className="badge">
+            {posicao.account_id ?? "legado"} /{" "}
+            {posicao.strategy_id ?? "não atribuído"}
+          </span>
           {/* Âmbar: a marca envelheceu, então o PnL abaixo é de antes. D3
               reserva âmbar para "envelhecido" e vermelho para "não sai
               sozinho" — e uma marca velha se resolve na próxima marcação. */}
@@ -923,7 +927,11 @@ export function PortfolioPanel({
                 )
                 .map((posicao) => (
                   <CartaoPosicao
-                    key={posicao.token_id}
+                    key={JSON.stringify([
+                      posicao.account_id,
+                      posicao.strategy_id,
+                      posicao.token_id,
+                    ])}
                     posicao={posicao}
                     agoraMs={agoraMs}
                   />

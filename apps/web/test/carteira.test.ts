@@ -324,7 +324,9 @@ describe("fetchPaperPositions", () => {
     if (resultado.kind !== "ok") {
       return;
     }
-    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/polymarket/paper/positions");
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "/api/polymarket/paper/positions?account_id=paper&strategy_id=main",
+    );
     const linha = resultado.value[0];
     expect(linha?.shares).toBe("12.090000");
     expect(typeof linha?.unrealized_pnl_usd).toBe("string");

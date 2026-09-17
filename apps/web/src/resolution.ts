@@ -116,6 +116,9 @@ export interface OpenOrder {
 }
 
 export interface PaperPosition {
+  readonly account_id?: string | null;
+  readonly strategy_id?: string | null;
+  readonly unrealized_pnl_usd?: number | null;
   readonly token_id: string;
   readonly condition_id: string | null;
   readonly shares: number | null;
@@ -766,6 +769,9 @@ function parsePosition(row: unknown): PaperPosition | null {
   }
   return {
     token_id: tokenId,
+    account_id: asString(row.account_id),
+    strategy_id: asString(row.strategy_id),
+    unrealized_pnl_usd: asNumeric(row.unrealized_pnl_usd),
     condition_id: asString(row.condition_id),
     shares: asNumeric(row.shares),
     cost_usd: asNumeric(row.cost_usd),

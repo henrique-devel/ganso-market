@@ -1,5 +1,3 @@
-// Artefato histórico do PR188 (16/09/2026); reprodução atual em
-// apps/api/test/polymarket/paper/reconciliation.pg.test.ts. Não copiar sobre a suíte permanente.
 import { computeExposures } from "../../../src/polymarket/portfolio/exposure.js";
 import { DEFAULT_PORTFOLIO_CONFIG } from "../../../src/polymarket/portfolio/config.js";
 // FIN-07: independent FIN-01 monetary oracles through real PostgreSQL.
@@ -14,7 +12,10 @@ import type { SqlExecutor } from "../../../src/database.js";
 import { parseScaled } from "../../../src/polymarket/fundamental/fixed.js";
 import type { PaperPool } from "../../../src/polymarket/paper/brokerstore.js";
 import { financialOwnerKey } from "../../../src/polymarket/paper/financial.js";
-import { loadOwnerFinancialState } from "../../../src/polymarket/paper/financialstore.js";
+import {
+  loadOwnerFinancialState,
+  refreshFinancialToken,
+} from "../../../src/polymarket/paper/financialstore.js";
 import {
   appendLedgerEvent,
   loadLedgerEvents,
@@ -665,6 +666,30 @@ describe.skipIf(DATABASE_URL === undefined)(
           string | null,
         ][],
       };
+      // Same writer invoked atomically by broker fills: check its physical rows
+      // before loadPaperPnl is allowed to rebuild anything.
+      await transaction(raw, (client) =>
+        refreshFinancialToken(wrap(client), t, DAY12),
+      );
+      expect(
+        (
+          await raw.query(
+            "SELECT strategy_id,realized_pnl_usd,cost_basis_usd FROM paper_owner_positions WHERE token_id=$1 ORDER BY strategy_id",
+            [t],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          strategy_id: a,
+          realized_pnl_usd: "1.060000000",
+          cost_basis_usd: "2.400000000",
+        },
+        {
+          strategy_id: b,
+          realized_pnl_usd: "-0.050000000",
+          cost_basis_usd: "3.000000000",
+        },
+      ]);
       const pa = await checkpoint(a, "500", DAY12, ea),
         pb = await checkpoint(b, "500", DAY12, eb);
       expect(s(pa.ownerState!.cashUsd!) + s(pb.ownerState!.cashUsd!)).toBe(

@@ -12,7 +12,12 @@
 // The "do nothing" baseline is zero by definition and is printed alongside so
 // the net columns are always read against it.
 
-import type { SqlExecutor } from "../../database.js";
+import { readFinancialState, type FinancialPool } from "./financialstore.js";
+import { replayFinancialLedger } from "./financial.js";
+import {
+  loadAttributedLedgerEvents,
+  type AttributedLedgerEvent,
+} from "./ownership.js";
 import {
   SCALE,
   div,
@@ -26,7 +31,7 @@ import {
   type LedgerEventRecord,
 } from "./ledger.js";
 
-export type QueryPool = { query: SqlExecutor["query"] };
+export type QueryPool = FinancialPool;
 
 /** Base column: one tick charged per taker share (fallback when no tick). */
 export const BASE_SLIPPAGE_FALLBACK = "0.01";
@@ -43,6 +48,8 @@ export interface PerformanceColumns {
 }
 
 export interface PerformanceReport {
+  readonly accounting_version: "financial-v2" | "ledger-v1";
+  readonly owners: readonly Record<string, unknown>[];
   readonly execution: ReturnType<typeof executionCoverage>;
   readonly columns: PerformanceColumns;
   readonly baseline_no_trade_usd: string;
@@ -106,13 +113,26 @@ export function optimisticEvents(
 /** Separate observations without pretending mixed maker/taker inventory has
  * independent PnL. Retains the existing report's ledger accounting convention. */
 export function executionCoverage(events: readonly LedgerEventRecord[]) {
+  const attributed = events.every((e) => "owner" in e);
+  const key = (e: LedgerEventRecord) =>
+    JSON.stringify([
+      ...(attributed
+        ? [
+            (e as AttributedLedgerEvent).owner.accountId,
+            (e as AttributedLedgerEvent).owner.strategyId,
+          ]
+        : []),
+      e.tokenId,
+    ]);
   const unique = [
-    ...new Map(events.map((e) => [e.idempotencyKey, e])).values(),
+    ...new Map(
+      events.map((e) => [JSON.stringify([key(e), e.idempotencyKey]), e]),
+    ).values(),
   ];
   const classes = new Map<string, Set<string>>();
   for (const e of unique) {
     if (e.eventType !== "fill" || e.tokenId === null) continue;
-    const kinds = classes.get(e.tokenId) ?? new Set<string>();
+    const kinds = classes.get(key(e)) ?? new Set<string>();
     kinds.add(
       e.payload["taker"] === true
         ? "taker"
@@ -120,7 +140,7 @@ export function executionCoverage(events: readonly LedgerEventRecord[]) {
           ? "maker"
           : "unknown",
     );
-    classes.set(e.tokenId, kinds);
+    classes.set(key(e), kinds);
   }
   const bucket = (kind: "maker" | "taker") => {
     const fills = unique.filter(
@@ -128,12 +148,15 @@ export function executionCoverage(events: readonly LedgerEventRecord[]) {
         e.eventType === "fill" && e.payload["taker"] === (kind === "taker"),
     );
     const covered = fills.filter(
-      (e) => e.tokenId !== null && classes.get(e.tokenId)?.size === 1,
+      (e) => e.tokenId !== null && classes.get(key(e))?.size === 1,
     );
-    const tokens = new Set(covered.map((e) => e.tokenId));
-    const pnl = replayLedger(
-      unique.filter((e) => e.tokenId !== null && tokens.has(e.tokenId)),
+    const tokens = new Set(covered.map(key));
+    const selected = unique.filter(
+      (e) => e.tokenId !== null && tokens.has(key(e)),
     );
+    const pnl = attributed
+      ? replayFinancialLedger(selected as AttributedLedgerEvent[])
+      : replayLedger(selected);
     const fees = fills.reduce(
       (n, e) => n + (parseScaled(asString(e.payload["fee"]) ?? "") ?? 0n),
       0n,
@@ -162,17 +185,45 @@ export function executionCoverage(events: readonly LedgerEventRecord[]) {
     unknown_fills: unique.filter(
       (e) => e.eventType === "fill" && typeof e.payload["taker"] !== "boolean",
     ).length,
-    note: "Paper only; PnL uses existing legacy report accounting, excludes mixed/unknown execution tokens; no sample or fee evidence never approves G4.",
+    note: "Paper only; PnL is separated by owner/token, excludes mixed/unknown execution positions; no sample or fee evidence never approves G4.",
   };
 }
 
+export interface PerformanceOptions {
+  readonly now?: Date;
+  readonly accountingVersion?: "financial-v2" | "ledger-v1";
+}
 export async function buildPerformanceReport(
   pool: QueryPool,
+  options: PerformanceOptions = {},
 ): Promise<PerformanceReport> {
-  const events = await loadLedgerEvents(pool);
-  const base = replayLedger(events);
-  const optimistic = replayLedger(optimisticEvents(events));
-
+  if (options.accountingVersion === "ledger-v1")
+    return performanceInSnapshot(pool, options);
+  if (!pool.transaction) throw new Error("FIN03_TRANSACTION_REQUIRED");
+  return pool.transaction(async (tx) => {
+    await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    return performanceInSnapshot(tx, options);
+  });
+}
+async function performanceInSnapshot(
+  pool: QueryPool,
+  options: PerformanceOptions,
+): Promise<PerformanceReport> {
+  const legacy = options.accountingVersion === "ledger-v1";
+  const now = options.now ?? new Date();
+  const events = legacy
+    ? await loadLedgerEvents(pool)
+    : await loadAttributedLedgerEvents(pool);
+  const financial = legacy ? null : await readFinancialState(pool, now);
+  const base = financial ?? replayLedger(events);
+  const optimistic = legacy
+    ? replayLedger(optimisticEvents(events))
+    : replayFinancialLedger(
+        optimisticEvents(events) as AttributedLedgerEvent[],
+        [],
+        [],
+        now,
+      );
   const baseRealized = parseScaled(base.realizedPnlUsd) ?? 0n;
   const stressHaircut = parseScaled(STRESS_SLIPPAGE_USD) ?? 0n;
   const basePenalty = takerPenalty(events, (tick) => {
@@ -183,32 +234,48 @@ export async function buildPerformanceReport(
   });
   const stressPenalty = takerPenalty(events, () => stressHaircut);
 
-  // Unrealized: executable-bid marks from the position cache (STALE_MARK
-  // positions contribute their frozen value; unmarked ones contribute null).
-  const unrealizedRow = await pool.query(
-    "SELECT COALESCE(SUM(CASE " +
-      "WHEN shares::numeric > 0 THEN COALESCE(mark_value_usd::numeric, cost_usd::numeric) - cost_usd::numeric " +
-      "WHEN shares::numeric < 0 THEN cost_usd::numeric - COALESCE(mark_value_usd::numeric, cost_usd::numeric) " +
-      "ELSE 0 END), 0)::text AS unrealized, " +
-      "BOOL_OR(shares::numeric <> 0 AND mark_value_usd IS NULL) AS unmarked " +
-      "FROM paper_positions",
-  );
-  const unrealizedStr = asString(unrealizedRow.rows[0]?.["unrealized"]);
-  const hasUnmarked = unrealizedRow.rows[0]?.["unmarked"] === true;
-  const unrealized =
-    unrealizedStr === null ? null : (parseScaled(unrealizedStr) ?? null);
+  // financial-v2 uses fresh executable bid/ask marks for each owner. A missing
+  // or stale mark keeps aggregate unrealized unavailable. The explicit v1
+  // diagnostic preserves its historical cache convention.
+  let unrealized: bigint | null;
+  let hasUnmarked: boolean;
+  if (financial) {
+    const owners = [...financial.owners.values()];
+    hasUnmarked = owners.some((o) => o.unrealizedPnlUsd === null);
+    unrealized = hasUnmarked
+      ? null
+      : owners.reduce((sum, o) => sum + parseScaled(o.unrealizedPnlUsd!)!, 0n);
+  } else {
+    const unrealizedRow = await pool.query(
+      "SELECT COALESCE(SUM(CASE " +
+        "WHEN shares::numeric > 0 THEN COALESCE(mark_value_usd::numeric, cost_usd::numeric) - cost_usd::numeric " +
+        "WHEN shares::numeric < 0 THEN cost_usd::numeric - COALESCE(mark_value_usd::numeric, cost_usd::numeric) " +
+        "ELSE 0 END), 0)::text AS unrealized, " +
+        "BOOL_OR(shares::numeric <> 0 AND mark_value_usd IS NULL) AS unmarked " +
+        "FROM paper_positions",
+    );
+    const unrealizedStr = asString(unrealizedRow.rows[0]?.["unrealized"]);
+    hasUnmarked = unrealizedRow.rows[0]?.["unmarked"] === true;
+    unrealized =
+      unrealizedStr === null ? null : (parseScaled(unrealizedStr) ?? null);
+  }
 
   const baseAdjusted = baseRealized - basePenalty;
   const columns: PerformanceColumns = {
     optimistic_realized_usd: optimistic.realizedPnlUsd,
-    base_realized_usd: formatScaled(baseAdjusted, 6),
+    base_realized_usd: formatScaled(baseAdjusted, legacy ? 6 : 9),
     base_unrealized_usd:
-      unrealized === null || hasUnmarked ? null : formatScaled(unrealized, 6),
+      unrealized === null || hasUnmarked
+        ? null
+        : formatScaled(unrealized, legacy ? 6 : 9),
     base_net_usd:
       unrealized === null || hasUnmarked
         ? null
-        : formatScaled(baseAdjusted + unrealized, 6),
-    stress_realized_usd: formatScaled(baseRealized - stressPenalty, 6),
+        : formatScaled(baseAdjusted + unrealized, legacy ? 6 : 9),
+    stress_realized_usd: formatScaled(
+      baseRealized - stressPenalty,
+      legacy ? 6 : 9,
+    ),
     note:
       "optimistic is diagnostic only and never feeds a gate; " +
       "base charges 1 tick per taker share; stress charges " +
@@ -325,6 +392,22 @@ export async function buildPerformanceReport(
     };
   }
   return {
+    accounting_version: legacy ? "ledger-v1" : "financial-v2",
+    owners: financial
+      ? [...financial.owners.values()].map((o) => ({
+          account_id: o.accountId,
+          strategy_id: o.strategyId,
+          accounting_version: o.accountingVersion,
+          initial_cash_usd: o.initialCashUsd,
+          cash_usd: o.cashUsd,
+          realized_pnl_usd: o.realizedPnlUsd,
+          fees_paid_usd: o.feesPaidUsd,
+          unrealized_pnl_usd: o.unrealizedPnlUsd,
+          equity_usd: o.equityUsd,
+          daily_realized_pnl_usd: Object.fromEntries(o.dailyRealizedPnlUsd),
+          weekly_realized_pnl_usd: Object.fromEntries(o.weeklyRealizedPnlUsd),
+        }))
+      : [],
     markouts_by_execution: split,
     execution: executionCoverage(events),
     columns,

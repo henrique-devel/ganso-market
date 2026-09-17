@@ -8,6 +8,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { DatabasePool, SqlExecutor } from "../../database.js";
+import {
+  loadFinancialState,
+  financialPositionRows,
+} from "../paper/financialstore.js";
 import { edgeKeyOf } from "./graph.js";
 import { parseCuratedEdges } from "./curated.js";
 import type { GraphEdgeKind } from "./types.js";
@@ -227,13 +231,8 @@ export function registerResolutionRoutes(
           ORDER BY created_at DESC
           LIMIT ${LIST_LIMIT}`,
       );
-      const positions = await pool.query(
-        `SELECT token_id, condition_id, shares, cost_usd, realized_pnl_usd,
-                mark_value_usd, mark_stale, updated_at
-           FROM paper_positions
-          ORDER BY updated_at DESC
-          LIMIT ${LIST_LIMIT}`,
-      );
+      const financial = await loadFinancialState(pool, clock());
+      const positions = financialPositionRows(financial, clock());
       const divergences = await pool.query(
         `SELECT COUNT(*)::bigint AS active
            FROM resolution_layer_divergences
@@ -242,7 +241,8 @@ export function registerResolutionRoutes(
       return reply.send({
         kill_switch: killSwitch.rows[0] ?? null,
         open_orders: orders.rows,
-        positions: positions.rows,
+        accounting_version: "financial-v2",
+        positions,
         divergences_active: Number(divergences.rows[0]?.active ?? 0),
         checked_at: clock().toISOString(),
       });

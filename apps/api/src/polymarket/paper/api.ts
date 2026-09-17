@@ -26,6 +26,8 @@ import {
   type BrokerDeps,
 } from "./brokerstore.js";
 import { unrealizedPnlUsd } from "./ledger.js";
+import { loadFinancialState, financialPositionRows } from "./financialstore.js";
+import { parseScaled } from "../fundamental/fixed.js";
 import { buildPerformanceReport } from "./performance.js";
 import { decideOrderType, POLICY_VERSION } from "./policy.js";
 import { SIMULATION_BANNER } from "./runner.js";
@@ -427,8 +429,57 @@ export function registerPaperRoutes(
   app.get(
     "/polymarket/paper/positions",
     { preHandler: guard },
-    async (_request, reply) => {
+    async (request, reply) => {
       try {
+        const now = brokerDeps.clock?.() ?? new Date();
+        const legacy =
+          (request.query as Record<string, unknown>)["accounting_version"] ===
+          "ledger-v1";
+        if (!legacy) {
+          const q = request.query as Record<string, unknown>;
+          const account =
+            typeof q["account_id"] === "string" ? q["account_id"] : undefined;
+          const strategy =
+            typeof q["strategy_id"] === "string" ? q["strategy_id"] : undefined;
+          if ((account === undefined) !== (strategy === undefined))
+            return jsonError(reply, 422, "FIN03_OWNER_REQUIRED");
+          const state = await loadFinancialState(
+            pool,
+            now,
+            account && strategy
+              ? { accountId: account, strategyId: strategy }
+              : {},
+          );
+          const rows = financialPositionRows(state, now);
+          const metadata = await pool.query(
+            `SELECT t.token_id,m.question,COALESCE(r.end_date,m.end_ts) AS end_ts,COALESCE(fl.is_final,FALSE) AS is_final FROM jsonb_to_recordset($1::jsonb) t(token_id text,condition_id text) LEFT JOIN polymarket_markets m ON m.condition_id=t.condition_id LEFT JOIN fundamental_labels fl USING(token_id) LEFT JOIN LATERAL (SELECT end_date FROM polymarket_rule_versions rv WHERE rv.condition_id=m.condition_id AND rv.valid_to IS NULL ORDER BY rv.version DESC LIMIT 1) r ON TRUE`,
+            [
+              JSON.stringify([
+                ...new Map(
+                  rows.map((p) => [
+                    p.token_id,
+                    { token_id: p.token_id, condition_id: p.condition_id },
+                  ]),
+                ).values(),
+              ]),
+            ],
+          );
+          const byToken = new Map(
+            metadata.rows.map((row) => [row["token_id"], row]),
+          );
+          return reply.send({
+            simulation: SIMULATION_BANNER,
+            accounting_version: "financial-v2",
+            positions: rows.map((p) => ({
+              ...p,
+              ...byToken.get(p.token_id),
+              stale_mark: p.mark_stale ? "STALE_MARK" : null,
+              pending_settlement:
+                byToken.get(p.token_id)?.["is_final"] === true &&
+                parseScaled(p.shares)! !== 0n,
+            })),
+          });
+        }
         // RFC-026 D8. Two LEFT JOINs, both on a primary key, so neither can
         // change the number of rows this route returns:
         //
@@ -505,7 +556,12 @@ export function registerPaperRoutes(
         });
         return await reply.send({
           simulation: SIMULATION_BANNER,
-          positions,
+          accounting_version: "ledger-v1",
+          diagnostic_only: true,
+          positions: positions.map((p) => ({
+            ...p,
+            accounting_version: "ledger-v1",
+          })),
         });
       } catch (error) {
         logPaperApiError("PAPER_API_FAILED", error);
@@ -659,7 +715,9 @@ export function registerPaperRoutes(
     { preHandler: guard },
     async (_request, reply) => {
       try {
-        const report = await buildPerformanceReport(pool);
+        const report = await buildPerformanceReport(pool, {
+          now: brokerDeps.clock?.() ?? new Date(),
+        });
         const fillReport = await pool.query(
           "SELECT generated_at, data_from, data_to, samples_total, buckets_json " +
             "FROM paper_fill_reports ORDER BY generated_at DESC LIMIT 1",
