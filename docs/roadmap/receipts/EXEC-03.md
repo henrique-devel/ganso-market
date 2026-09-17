@@ -1,6 +1,6 @@
 Bloco: EXEC-03 | RFC: RFC-034 | Data UTC: 2026-09-17
-Estado: code-verified; publicação expressamente autorizada pelo proprietário, entrega em andamento.
-Código: 63fd9b3; base83856e9 após rebase documental; worktree /private/tmp/ganso-exec03.
+Estado: code-verified; PR193 integrado, CI PR/main e deploy padrão aprovados; worker preservado.
+Código: 63fd9b3; merge e3ce391; [PR193](https://github.com/henrique-devel/ganso-market/pull/193).
 Resultado: aceite → parcial → pedido → parcial antes do efeito → cancelamento sem fill posterior.
 Dependências: EXEC-02/PR190–192 e FIN-05/0025 conferidos por código/recibos.
 Modelo: paper-fill-v2; nenhuma migration; ledger e gatilhos reservation-v1 reutilizados.
@@ -13,7 +13,8 @@ Focados: 215 passed (broker/brokerstore/performance/ledger/financial); typecheck
 SQL: make test-postgres, PostgreSQL18.4/25 migrations, 23 arquivos/295 passed/zero skips.
 Checks: make verify passou (2472 JS/264 PG skips separados; 16 Rust; 220 Python; build/scan/Compose).
 Aceite econômico: dois donos, cash1.001,70/PnL1,70/fees0,30 cada; retries e reconstrução.
-Produção: não alterada; nenhum worker ativado; CI remoto não executado.
+Entrega: [CI/CD main aprovado](https://github.com/henrique-devel/ganso-market/actions/runs/35171147254); API e3ce391/healthcheck OK em 17/09 01:40Z.
+Worker paper: 18a6c20, iniciado00:20:44Z/restarts0; não reiniciado/ativado por limite do pedido; código novo ainda não aplicado nele.
 Autorização: proprietário respondeu “Autorizo realizar a publicação codigo/documentação”; recusa anterior superada.
 Limites: simulação, precisão difere da venue; PnL legado exclui tokens mistos; sem G4/soak/live.
 EXEC-04: reserveOrder + appendLedgerEvent(fill/terminal) + reconcileReservations + requestCancel transacional.
