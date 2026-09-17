@@ -377,17 +377,22 @@ export interface EntryProvenance {
 export async function entryProvenanceFor(
   pool: PortfolioPool,
   tokenId: string,
+  owner?: OwnerSelection,
 ): Promise<EntryProvenance | null> {
   const stamped = await pool.query<Record<string, unknown>>(
     `SELECT decision_id, entry_decision_ts AS decision_ts, market_side, q_lo,
             q_hi, rule_version, resolution_source,
             rule_precision AS rule_precision_multiplier,
             invalidation_prob_lower_below
-       FROM portfolio_position_entries
+       FROM portfolio_position_entries p
       WHERE token_id = $1
+        AND ($2::text IS NULL OR EXISTS (SELECT 1 FROM paper_orders o
+          JOIN paper_order_owners a USING(order_id)
+          WHERE o.decision_id=p.decision_id AND a.ownership_version=1
+          AND a.account_id=$2 AND a.strategy_id=$3 AND a.attribution_status='verified'))
       ORDER BY entry_decision_ts DESC, decision_id DESC
       LIMIT 1`,
-    [tokenId],
+    [tokenId, owner?.accountId ?? null, owner?.strategyId ?? null],
   );
   const stampedRow = stamped.rows[0];
   if (stampedRow !== undefined) {
@@ -404,9 +409,10 @@ export async function entryProvenanceFor(
       WHERE token_id = $1
         AND decision_kind = 'ENTRY'
         AND outcome = 'ACCEPTED'
+        AND ($2::text IS NULL OR (inputs_json->>'account_id'=$2 AND inputs_json->>'strategy_id'=$3))
       ORDER BY decision_ts DESC
       LIMIT 1`,
-    [tokenId],
+    [tokenId, owner?.accountId ?? null, owner?.strategyId ?? null],
   );
   const row = result.rows[0];
   if (row === undefined) {
@@ -452,16 +458,27 @@ function parseOrNull(value: string | null): bigint | null {
 export async function lastExitSignature(
   pool: PortfolioPool,
   tokenId: string,
+  owner?: OwnerSelection,
 ): Promise<string | null> {
   const result = await pool.query<Record<string, unknown>>(
-    `SELECT inputs_json #>> '{exit,signature}' AS signature
-       FROM portfolio_decisions
+    `SELECT CASE WHEN outcome='ACCEPTED' AND EXISTS (
+         SELECT 1 FROM paper_orders o WHERE o.decision_id=d.decision_id AND o.status<>'open'
+       ) THEN NULL ELSE inputs_json #>> '{exit,signature}' END AS signature
+       FROM portfolio_decisions d
       WHERE token_id = $1 AND decision_kind = 'EXIT'
-      ORDER BY decision_ts DESC
+        AND ($2::text IS NULL OR (inputs_json->>'account_id'=$2 AND inputs_json->>'strategy_id'=$3))
+      ORDER BY decision_ts DESC, decision_id DESC
       LIMIT 1`,
-    [tokenId],
+    [tokenId, owner?.accountId ?? null, owner?.strategyId ?? null],
   );
   return text(result.rows[0]?.signature);
+}
+
+/** Only portfolio writes its decision log; the broker's decision_id is the durable link. */
+export async function stampExitOrders(pool: PortfolioPool): Promise<void> {
+  await pool.query(`UPDATE portfolio_decisions d SET paper_order_id=o.order_id
+    FROM paper_orders o WHERE o.decision_id=d.decision_id AND d.decision_kind='EXIT'
+      AND d.outcome='ACCEPTED' AND d.paper_order_id IS NULL`);
 }
 
 /** Market state the breakers and the exit criteria both read. */

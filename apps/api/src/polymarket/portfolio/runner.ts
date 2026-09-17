@@ -57,6 +57,7 @@ import {
   entryProvenanceFor,
   feeRateFromBps,
   lastExitSignature,
+  stampExitOrders,
   loadCorrelatedMarkets,
   loadMarketChangeStates,
   loadMidsAsOf,
@@ -1131,7 +1132,13 @@ export function createPortfolioRunner(
    */
   async function exitCycle(): Promise<{ evaluated: number; exiting: number }> {
     const now = clock();
-    const positions = await loadOpenPositions(deps.pool);
+    await stampExitOrders(deps.pool);
+    const pnl = await loadPaperPnl(deps.pool, {
+      accountId: "paper",
+      strategyId: "main",
+      now,
+    });
+    const positions = await loadOpenPositions(deps.pool, pnl.ownerState);
     if (positions.length === 0) {
       logJson("info", "PORTFOLIO_EXIT_CYCLE", { evaluated: 0, exiting: 0 });
       return { evaluated: 0, exiting: 0 };
@@ -1153,8 +1160,8 @@ export function createPortfolioRunner(
           bookAsOf(deps.pool, position.tokenId, now),
           estimateAsOf(deps.pool, estimateToken, now),
           resolutionStateFor(deps.pool, position.conditionId),
-          entryProvenanceFor(deps.pool, position.tokenId),
-          lastExitSignature(deps.pool, position.tokenId),
+          entryProvenanceFor(deps.pool, position.tokenId, position),
+          lastExitSignature(deps.pool, position.tokenId, position),
         ]);
       const sliced = sliceBook(book);
       const change = changes.get(position.conditionId) ?? NO_MARKET_CHANGE;
@@ -1164,8 +1171,12 @@ export function createPortfolioRunner(
       // bound wearing the name of the lower one.
       const qLo = estimate === null ? null : parseScaled(estimate.qLo);
       const qHi = estimate === null ? null : parseScaled(estimate.qHi);
+      // Lower value of the economic exposure: a short benefits when its real
+      // token loses. Cover still buys that SAME token on its asks.
+      const economicSide =
+        position.sharesScaled < 0n ? (side === "YES" ? "NO" : "YES") : side;
       const probLowerScaled =
-        side === "YES" ? qLo : qHi === null ? null : SCALE - qHi;
+        economicSide === "YES" ? qLo : qHi === null ? null : SCALE - qHi;
       const entryProbLowerScaled =
         entry === null
           ? null
@@ -1234,6 +1245,7 @@ export function createPortfolioRunner(
       ];
       const row = exitDecisionRow({
         plan,
+        owner: position,
         context: {
           conditionId: position.conditionId,
           tokenId: position.tokenId,

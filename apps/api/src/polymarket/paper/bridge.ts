@@ -21,6 +21,7 @@ import type { ResolutionGateFn } from "../resolution/enforcement.js";
 import { resolutionGate } from "../resolution/enforcement.js";
 import {
   acceptPaperOrder,
+  exitInventory,
   bookAtOrBefore,
   feeRateFromBps,
   paramsAtOrBefore,
@@ -28,6 +29,7 @@ import {
 } from "./brokerstore.js";
 import { POLICY_VERSION, decideOrderType } from "./policy.js";
 import type { OrderSide, OrderDraft } from "./validator.js";
+import { appendLedgerEvent } from "./ledger.js";
 
 /**
  * How long a decision stays actionable after the LOG received it (RFC-022 D1).
@@ -94,6 +96,7 @@ export interface BridgeOutcome {
 }
 
 interface PendingDecision {
+  readonly kind: "ENTRY" | "EXIT";
   readonly contractVersion: 1 | 2;
   readonly ownerValid: boolean;
   readonly decisionId: number;
@@ -119,9 +122,9 @@ interface PendingDecision {
  */
 const PENDING_SQL =
   "SELECT d.decision_id, d.condition_id, d.token_id, d.market_side, " +
-  "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares, d.inputs_json " +
+  "d.order_side, d.decision_ts, d.q_lo, d.q_hi, d.size_shares, d.inputs_json, d.decision_kind " +
   "FROM portfolio_decisions d " +
-  "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
+  "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind IN ('ENTRY','EXIT') " +
   "AND d.paper_order_id IS NULL " +
   "AND d.received_at > $1 AND d.decision_ts > $2 " +
   "AND NOT EXISTS (SELECT 1 FROM paper_orders o WHERE o.decision_id = d.decision_id) " +
@@ -144,7 +147,7 @@ const PENDING_SQL =
  */
 const AGED_OUT_SQL =
   "SELECT count(*) AS aged_out FROM portfolio_decisions d " +
-  "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind = 'ENTRY' " +
+  "WHERE d.outcome = 'ACCEPTED' AND d.decision_kind IN ('ENTRY','EXIT') " +
   "AND d.paper_order_id IS NULL " +
   "AND (d.received_at <= $1 OR d.decision_ts <= $2) " +
   "AND d.received_at > $3 " +
@@ -197,11 +200,14 @@ function parsePending(row: Record<string, unknown>): PendingDecision | null {
     return null;
   }
   return {
+    kind: row["decision_kind"] === "EXIT" ? "EXIT" : "ENTRY",
     contractVersion: version,
     ownerValid:
-      version === 1 ||
+      (row["decision_kind"] !== "EXIT" && version === 1) ||
       (inputs?.["account_id"] === "paper" &&
-        inputs?.["strategy_id"] === "main"),
+        inputs?.["strategy_id"] === "main" &&
+        (row["decision_kind"] !== "EXIT" ||
+          inputs?.["exit_contract_version"] === 1)),
     decisionId,
     conditionId,
     tokenId,
@@ -291,36 +297,81 @@ export async function bridgeTick(
   const considered = pendingRows.rows.length;
 
   for (const row of pendingRows.rows) {
-    const decision = parsePending(row);
+    let decision = parsePending(row);
     if (decision === null) {
       skipped += 1;
-      log("error", "BRIDGE_DECISION_UNREADABLE", {});
+      log("error", "BRIDGE_DECISION_UNREADABLE", {
+        decision_id: row["decision_id"],
+        reason: "DECISION_INCOMPLETE",
+      });
       continue;
     }
-    const skip = (
+    const selected = decision;
+    const isExit = decision.kind === "EXIT";
+    const skip = async (
       reason: string,
       extra: Record<string, unknown> = {},
-    ): void => {
+    ): Promise<void> => {
       skipped += 1;
       log("warn", "BRIDGE_DECISION_SKIPPED", {
-        decision_id: decision.decisionId,
-        token_id: decision.tokenId,
+        decision_id: selected.decisionId,
+        token_id: selected.tokenId,
         reason,
         ...extra,
       });
+      if (isExit)
+        await appendLedgerEvent(pool, {
+          idempotencyKey: `portfolio:${String(selected.decisionId)}:exit-refused:${reason}:${now.toISOString()}`,
+          eventType: "order_rejected",
+          orderId: bridgeOrderId(selected.decisionId),
+          tokenId: selected.tokenId,
+          conditionId: selected.conditionId,
+          eventTs: now,
+          payload: {
+            decision_id: selected.decisionId,
+            reason,
+            contract: "exit-reduce-only-v1",
+          },
+        });
     };
 
     // Old decisions stay readable, but cannot create a new synthetic short.
     if (
-      decision.orderSide !== "BUY" ||
-      (decision.contractVersion === 1 && decision.marketSide === "NO")
+      !isExit &&
+      (decision.orderSide !== "BUY" ||
+        (decision.contractVersion === 1 && decision.marketSide === "NO"))
     ) {
-      skip("FIN06_LEGACY_ENTRY_REQUIRES_REEVALUATION");
+      await skip("FIN06_LEGACY_ENTRY_REQUIRES_REEVALUATION");
       continue;
     }
     if (!decision.ownerValid) {
-      skip("FIN06_OWNER_MISMATCH");
+      await skip(isExit ? "EXIT_OWNER_UNPROVEN" : "FIN06_OWNER_MISMATCH");
       continue;
+    }
+    if (isExit) {
+      let inventory;
+      try {
+        inventory = await exitInventory(pool, decision.tokenId, now);
+      } catch {
+        await skip("EXIT_INVENTORY_EVIDENCE_INVALID");
+        continue;
+      }
+      if (inventory.active) {
+        await skip("EXIT_ORDER_ALREADY_OPEN");
+        continue;
+      }
+      if (inventory.available <= 0n) {
+        await skip("EXIT_INVENTORY_UNAVAILABLE");
+        continue;
+      }
+      if (inventory.side !== decision.orderSide) {
+        await skip("EXIT_SIDE_MISMATCH");
+        continue;
+      }
+      decision = {
+        ...decision,
+        sizeShares: formatScaled(inventory.available, 9),
+      };
     }
     const metadata = await pool.query<Record<string, unknown>>(
       `SELECT affirmative_token_id, clob_token_ids FROM polymarket_market_metadata_versions
@@ -340,7 +391,7 @@ export async function bridgeTick(
       typeof yes !== "string" ||
       !tokens.includes(yes)
     ) {
-      skip("FIN06_TOKEN_MAPPING_INVALID");
+      await skip("FIN06_TOKEN_MAPPING_INVALID");
       continue;
     }
     const expected =
@@ -348,7 +399,7 @@ export async function bridgeTick(
         ? yes
         : tokens.find((id: unknown) => id !== yes);
     if (decision.tokenId !== expected) {
-      skip("FIN06_TOKEN_OUTCOME_MISMATCH");
+      await skip("FIN06_TOKEN_OUTCOME_MISMATCH");
       continue;
     }
     const bound = conservativeBound(
@@ -358,8 +409,8 @@ export async function bridgeTick(
       decision.marketSide,
       decision.contractVersion,
     );
-    if (bound === null || decision.sizeShares === null) {
-      skip("DECISION_INCOMPLETE");
+    if ((!isExit && bound === null) || decision.sizeShares === null) {
+      await skip("DECISION_INCOMPLETE");
       continue;
     }
 
@@ -374,13 +425,13 @@ export async function bridgeTick(
       source: "intent",
     });
     if (!gate.allowed) {
-      skip(gate.reason ?? "RESOLUTION_REFUSED", { action: gate.action });
+      await skip(gate.reason ?? "RESOLUTION_REFUSED", { action: gate.action });
       continue;
     }
 
     const params = await paramsAtOrBefore(pool, decision.conditionId, now);
     if (params === null || params.tickSize === null) {
-      skip("UNKNOWN_MARKET_PARAMS");
+      await skip("UNKNOWN_MARKET_PARAMS");
       continue;
     }
 
@@ -391,37 +442,61 @@ export async function bridgeTick(
       reference === null ||
       now.getTime() - reference.getTime() > MAX_BOOK_AGE_MS
     ) {
-      skip("NO_FRESH_BOOK");
+      await skip("NO_FRESH_BOOK");
       continue;
     }
 
-    const minsToCatalyst = await catalystMinutes(pool, decision.tokenId);
-    const policy = decideOrderType({
-      side: decision.orderSide,
-      qLo: bound,
-      size: decision.sizeShares,
-      bids: book.bids,
-      asks: book.asks,
-      tickSize: params.tickSize,
-      takerFeeRate: feeRateFromBps(params.takerFeeBps),
-      minsToCatalyst,
-      // The defensive external-fair wire is not part of a decision's payload;
-      // absent signal means no retreat, never an attack.
-      externalFairAgainst: false,
-    });
+    const minsToCatalyst = isExit
+      ? null
+      : await catalystMinutes(pool, decision.tokenId);
+    const passivePrice =
+      decision.orderSide === "SELL" ? book.asks[0]?.price : book.bids[0]?.price;
+    if (
+      isExit &&
+      (!passivePrice || book.bids.length === 0 || book.asks.length === 0)
+    ) {
+      await skip("EXIT_NO_BOOK");
+      continue;
+    }
+    const policy = isExit
+      ? {
+          ok: true as const,
+          value: {
+            orderType: "GTC" as const,
+            postOnly: true,
+            limitPrice: passivePrice!,
+            worstPrice: null,
+            ttlS: null,
+            policyReason: "EXIT_REDUCE_ONLY",
+          },
+        }
+      : decideOrderType({
+          side: decision.orderSide,
+          qLo: bound!,
+          size: decision.sizeShares,
+          bids: book.bids,
+          asks: book.asks,
+          tickSize: params.tickSize,
+          takerFeeRate: feeRateFromBps(params.takerFeeBps),
+          minsToCatalyst,
+          // The defensive external-fair wire is not part of a decision's payload;
+          // absent signal means no retreat, never an attack.
+          externalFairAgainst: false,
+        });
     if (!policy.ok) {
-      skip(policy.reason);
+      await skip(policy.reason);
       continue;
     }
 
     // A moved book may make the passive fallback exceed the conservative value.
     // This price ceiling is not the final-order EV contract (EXEC-02).
     if (
+      !isExit &&
       decision.contractVersion === 2 &&
       parseScaled(policy.value.worstPrice ?? policy.value.limitPrice)! >
-        parseScaled(bound)!
+        parseScaled(bound!)!
     ) {
-      skip("FIN06_PRICE_ABOVE_CONSERVATIVE_BOUND");
+      await skip("FIN06_PRICE_ABOVE_CONSERVATIVE_BOUND");
       continue;
     }
     const draft: OrderDraft = {
@@ -446,6 +521,7 @@ export async function bridgeTick(
         policyVersion: POLICY_VERSION,
         intent: {
           entry_contract_version: decision.contractVersion,
+          ...(isExit ? { exit_contract_version: 1, reduce_only: true } : {}),
           order_contract_version: 3,
           quote: {
             book,
@@ -471,7 +547,7 @@ export async function bridgeTick(
       },
     );
     if (outcome.status === "rejected") {
-      skip(outcome.reason, { http_status: outcome.httpStatus });
+      await skip(outcome.reason, { http_status: outcome.httpStatus });
       continue;
     }
     accepted += 1;

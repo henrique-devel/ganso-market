@@ -182,6 +182,7 @@ export interface ExitDecisionInput extends DecisionProvenance {
  */
 export function exitDecisionRow(input: {
   readonly plan: ExitPlan;
+  readonly owner?: { readonly accountId: string; readonly strategyId: string };
   readonly context: ExitDecisionInput;
   readonly replay: Readonly<Record<string, unknown>>;
 }): DecisionRow {
@@ -193,7 +194,7 @@ export function exitDecisionRow(input: {
     tokenId: context.tokenId,
     marketSide: context.side,
     // Leaving a long is a sale of the token held, on either leg.
-    orderSide: "SELL",
+    orderSide: plan.orderSide,
     decisionTs: context.decisionTs,
     q: context.q,
     qLo: context.qLo,
@@ -226,7 +227,13 @@ export function exitDecisionRow(input: {
     oldestInputTs: context.oldestInputTs,
     newestInputTs: context.newestInputTs,
     book: context.book,
-    inputs: { exit: exitEvidence(plan), replay: input.replay },
+    inputs: {
+      exit_contract_version: 1,
+      account_id: input.owner?.accountId ?? null,
+      strategy_id: input.owner?.strategyId ?? null,
+      exit: exitEvidence(plan),
+      replay: input.replay,
+    },
     outcome: exiting ? "ACCEPTED" : "REJECTED",
     reasonCode: exiting ? null : HOLD_REASON_CODE,
     portfolioState: context.portfolioState,

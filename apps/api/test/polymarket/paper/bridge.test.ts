@@ -200,7 +200,7 @@ async function run(options: WorldOptions = {}): Promise<{
 }
 
 describe("which decisions the bridge picks up", () => {
-  it("asks only for accepted entries with no order, inside both freshness windows", async () => {
+  it("asks for accepted entries and exits with no order, inside both freshness windows", async () => {
     const { world: w } = await run();
     const pending = w.queries.find((query) =>
       query.text.includes("FROM portfolio_decisions d"),
@@ -208,7 +208,7 @@ describe("which decisions the bridge picks up", () => {
     expect(pending).toBeDefined();
     const text = pending?.text ?? "";
     expect(text).toContain("d.outcome = 'ACCEPTED'");
-    expect(text).toContain("d.decision_kind = 'ENTRY'");
+    expect(text).toContain("d.decision_kind IN ('ENTRY','EXIT')");
     // RFC-022 D1: the window that decides whether the bridge may act is the one
     // on when the bridge could first SEE the row, not on when the engine
     // decided. `decision_ts` stays as an absolute ceiling.

@@ -1,0 +1,176 @@
+{
+  "files": [
+    {
+      "file": "apps/api/test/polymarket/fundamental/asof.pg.test.ts",
+      "passed": 13,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/fundamental/integration.test.ts",
+      "passed": 8,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/intraday-horizon.pg.test.ts",
+      "passed": 4,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/overview.pg.test.ts",
+      "passed": 3,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/bridge-exits.pg.test.ts",
+      "passed": 15,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/bridge.pg.test.ts",
+      "passed": 14,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/faststore.pg.test.ts",
+      "passed": 28,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/financial.pg.test.ts",
+      "passed": 9,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/kill-switch.pg.test.ts",
+      "passed": 8,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/ownership.pg.test.ts",
+      "passed": 17,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/reads.pg.test.ts",
+      "passed": 6,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/paper/reservations.pg.test.ts",
+      "passed": 21,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/portfolio/funnelstore.pg.test.ts",
+      "passed": 7,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/portfolio/integration.pg.test.ts",
+      "passed": 34,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/quality.test.ts",
+      "passed": 26,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/resolution/integration.test.ts",
+      "passed": 22,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/retention-archive.pg.test.ts",
+      "passed": 20,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/retention-manifest.pg.test.ts",
+      "passed": 16,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/retention-protection.pg.test.ts",
+      "passed": 7,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/rtdsgaps.test.ts",
+      "passed": 9,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/samplers.pg.test.ts",
+      "passed": 5,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/series.pg.test.ts",
+      "passed": 4,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/trades.pg.test.ts",
+      "passed": 12,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    },
+    {
+      "file": "apps/api/test/polymarket/versioning.pg.test.ts",
+      "passed": 2,
+      "failed": 0,
+      "unexecuted": 0,
+      "ok": true
+    }
+  ],
+  "passed": 310,
+  "failed": 0,
+  "unexecuted": 0,
+  "success": true
+}

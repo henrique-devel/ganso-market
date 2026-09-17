@@ -76,7 +76,7 @@ export interface PositionExitContext {
    */
   readonly invalidationProbLowerBelowScaled: bigint | null;
 
-  /** Current RFC-010 estimate, already side-adjusted to the leg held. */
+  /** Lower value of the economic exposure. A short uses 1 - the real token's upper bound. */
   readonly probLowerScaled: bigint | null;
   /** Current recorded book for the position's own token. */
   readonly bids: readonly BookLevel[];
@@ -106,6 +106,7 @@ export interface PositionExitContext {
 }
 
 export interface ExitPlan {
+  readonly orderSide: "BUY" | "SELL";
   readonly tokenId: string;
   readonly conditionId: string;
   readonly side: MarketSide;
@@ -113,7 +114,7 @@ export interface ExitPlan {
   readonly freeze: DisputeFreeze;
   /** Volume-weighted executable exit price for the WHOLE position, scaled. */
   readonly exitPriceScaled: bigint | null;
-  /** Best bid, for the slippage the unwind would pay. */
+  /** Best price on the reducing side: bid for long, ask for short (legacy field name). */
   readonly bestBidScaled: bigint | null;
   /** Residual edge at the executable bid, per share, scaled. */
   readonly edgeAtBidScaled: bigint | null;
@@ -152,10 +153,10 @@ export function exitSignature(signals: readonly ExitSignal[]): string {
 export const HOLD_REASON_CODE = "HOLD_NO_EXIT_SIGNAL";
 
 function exitContextIncomplete(context: PositionExitContext): string | null {
-  if (context.sharesScaled <= 0n) {
+  if (context.sharesScaled === 0n) {
     return "POSITION_EMPTY";
   }
-  if (context.bids.length === 0) {
+  if ((context.sharesScaled < 0n ? context.asks : context.bids).length === 0) {
     return "NO_EXIT_BOOK";
   }
   if (context.probLowerScaled === null) {
@@ -180,6 +181,8 @@ export function planExit(input: {
   readonly portfolioState: PortfolioStateName;
 }): ExitPlan {
   const { context, config, portfolioState } = input;
+  const short = context.sharesScaled < 0n;
+  const orderSide = short ? "BUY" : "SELL";
   const freeze = disputeFreeze({
     resolutionAction: context.resolutionAction ?? "NONE",
     disputeActive: context.disputeActive,
@@ -210,6 +213,7 @@ export function planExit(input: {
             },
           ];
     return {
+      orderSide,
       tokenId: context.tokenId,
       conditionId: context.conditionId,
       side: context.side,
@@ -229,25 +233,34 @@ export function planExit(input: {
 
   const probLowerScaled = context.probLowerScaled ?? 0n;
 
-  // The exit price is what the recorded bids would actually pay for the WHOLE
-  // position, walked best-first. `complete` false means the book cannot absorb
+  // The exit price walks bids for a sale or asks for coverage, best-first over
+  // the absolute position. `complete` false means the book cannot absorb
   // the position at all, which is itself the liquidity criterion firing.
-  const walk = bookWalk(context.bids, context.sharesScaled);
+  const levels = short ? context.asks : context.bids;
+  const walk = bookWalk(
+    levels,
+    short ? -context.sharesScaled : context.sharesScaled,
+  );
   const exitPriceScaled = walk?.vwapScaled ?? null;
   const bestBidScaled = walk?.bestScaled ?? null;
   const bookTooThinToExit = walk === null || !walk.complete;
 
-  // Residual edge at the executable bid: what is still left to earn by holding
-  // to resolution instead of selling into the book now.
+  // Hold minus reduction: long lower value - bid; short ask - upper liability.
   const edgeAtBidScaled =
-    exitPriceScaled === null ? null : probLowerScaled - exitPriceScaled;
+    exitPriceScaled === null
+      ? null
+      : probLowerScaled - (short ? SCALE - exitPriceScaled : exitPriceScaled);
 
   // Fees are not supplied by PositionExitContext: this remains a gross
   // hold-vs-sell comparison, not a net quote or zero-fee execution approval.
   const unwindCostScaled =
     walk === null
       ? null
-      : ((walk.bestScaled - walk.vwapScaled) * walk.filledScaled) / SCALE;
+      : ((short
+          ? walk.vwapScaled - walk.bestScaled
+          : walk.bestScaled - walk.vwapScaled) *
+          walk.filledScaled) /
+        SCALE;
 
   // The FULL cost of the remaining lockup, not the excess over the RFC-012
   // buffer's own daily hurdle.
@@ -265,7 +278,7 @@ export function planExit(input: {
     exitPriceScaled === null
       ? 0n
       : capitalCostPerShare({
-          priceScaled: exitPriceScaled,
+          priceScaled: short ? SCALE - exitPriceScaled : exitPriceScaled,
           expectedLockupS: context.expectedLockupS,
           annualRateScaled: fractionScaled(config.costs.capitalCostAnnual),
           bufferDailyHurdleScaled: 0n,
@@ -296,9 +309,12 @@ export function planExit(input: {
     context.clarifiedAt !== null &&
     (since === null || context.clarifiedAt.getTime() > since.getTime());
 
-  // Executable depth on the exit side: every recorded bid level, since selling
-  // walks down the book rather than up to a limit.
-  const exitDepthScaled = depthUpTo(context.bids, 0n, "bid");
+  // All recorded depth on the reducing side, including asks for coverage.
+  const exitDepthScaled = depthUpTo(
+    levels,
+    short ? SCALE : 0n,
+    short ? "ask" : "bid",
+  );
 
   const exitInput: ExitInput = {
     side: context.side,
@@ -340,6 +356,7 @@ export function planExit(input: {
     : signals;
 
   return {
+    orderSide,
     tokenId: context.tokenId,
     conditionId: context.conditionId,
     side: context.side,
@@ -371,6 +388,8 @@ export function exitEvidence(plan: ExitPlan): Record<string, unknown> {
     token_id: plan.tokenId,
     condition_id: plan.conditionId,
     side: plan.side,
+    order_side: plan.orderSide,
+    book_side: plan.orderSide === "BUY" ? "ask" : "bid",
     signals: plan.signals.map((signal) => ({
       reason: signal.reason,
       detail: signal.detail,
