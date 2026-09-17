@@ -60,7 +60,7 @@ function createWorld(): DivergenceWorld {
       if (text.includes("FROM paper_kill_switch")) {
         return respond([{ frozen_markets_json: [...state.frozen] }]);
       }
-      if (text.includes("FROM paper_positions")) {
+      if (text.includes("FROM paper_open_owner_tokens()")) {
         return respond(state.positions);
       }
       if (

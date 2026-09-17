@@ -350,6 +350,9 @@ describe("fetchPipeline", () => {
     expect(outcome.value.positions[0]).toMatchObject({
       token_id: "tok-1",
       mark_value_usd: 12.5,
+      account_id: null,
+      strategy_id: null,
+      unrealized_pnl_usd: null,
       mark_stale: true,
     });
     expect(outcome.value.divergences_active).toBe(2);

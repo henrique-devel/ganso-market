@@ -256,6 +256,61 @@ function worldPool(world: World): PaperPool {
     ): Promise<QueryResult<R>> {
       world.queries.push(text);
       const rows = ((): Row[] => {
+        if (
+          text.startsWith("SET TRANSACTION") ||
+          text.startsWith("INSERT INTO paper_owner_positions")
+        )
+          return [];
+        if (text.includes("FROM paper_financial_owners"))
+          return [
+            {
+              account_id: "paper",
+              strategy_id: "main",
+              initial_cash_usd: "1000.000000000",
+              capital_source_ref: "fixture",
+            },
+          ];
+        if (text.includes("FROM paper_owner_positions")) return [];
+        if (text.includes("FROM paper_order_owners"))
+          return [{ account_id: "paper", strategy_id: "main" }];
+        if (text.includes("FROM paper_attributed_ledger_v1")) {
+          if (world.ledgerReadError) throw world.ledgerReadError;
+          return world.ledger
+            .filter(
+              (e) =>
+                !["kill_switch_engaged", "kill_switch_rearmed"].includes(
+                  String(e["event_type"]),
+                ),
+            )
+            .map((e, i): Row => ({
+              ...e,
+              event_id: String(i + 1),
+              received_at: e["event_ts"],
+              account_id: "paper",
+              strategy_id: "main",
+              attribution_status: "verified",
+              evidence_ref: "fixture",
+            }))
+            .filter((e) => params[2] == null || e["token_id"] === params[2]);
+        }
+        if (text.includes("FROM unnest($1::text[])"))
+          return (params[0] as string[]).flatMap((token) =>
+            world.snapshots
+              .filter(
+                (b) =>
+                  b.token_id === token && b.received_at <= (params[1] as Date),
+              )
+              .sort((a, b) => b.received_at.getTime() - a.received_at.getTime())
+              .slice(0, 1),
+          );
+        if (text.includes("SET daily_anchor_date=$1")) {
+          world.kill["daily_anchor_date"] = params[0];
+          world.kill["daily_anchor_equity_usd"] = params[1];
+          world.kill["daily_owner_anchors_json"] = JSON.parse(
+            params[2] as string,
+          );
+          return [];
+        }
         // --- paper_orders ---
         if (text.includes("AS identical_request")) return [];
         if (text.startsWith("INSERT INTO paper_orders")) {
@@ -835,7 +890,7 @@ function worldPool(world: World): PaperPool {
         }
         if (
           text.includes("FROM polymarket_resolution_events") &&
-          text.includes("JOIN paper_positions")
+          text.includes("JOIN paper_open_owner_tokens()")
         ) {
           const held = new Set(
             world.positions
@@ -979,6 +1034,18 @@ async function acceptOrder(
   );
 }
 
+function seedRealizedLoss(world: World, fee: string, eventTs: Date) {
+  for (const [i, side] of ["BUY", "SELL"].entries())
+    world.ledger.push({
+      idempotency_key: `loss:${fee}:${i}`,
+      event_type: "fill",
+      order_id: `loss-${i}`,
+      token_id: "loss",
+      condition_id: "loss",
+      payload_json: { side, price: "0", size: "1", fee: i === 0 ? fee : "0" },
+      event_ts: eventTs,
+    });
+}
 function seedSignedPosition(world: World, shares: string): void {
   const signed = Number(shares);
   if (!Number.isFinite(signed) || signed === 0) {
@@ -3277,7 +3344,7 @@ describe("kill switch (D4)", () => {
     // The day turns against us beyond the limit.
     const position = world.positions[0];
     if (position !== undefined) {
-      position["realized_pnl_usd"] = "-80";
+      seedRealizedLoss(world, "80", at(0));
     }
     await killSwitchTriggersTick(worldPool(world), deps);
     expect(world.kill["engaged"]).toBe(true);
@@ -3286,6 +3353,7 @@ describe("kill switch (D4)", () => {
 
   it("a UMA dispute on a held market freezes that market only", async () => {
     const world = emptyWorld();
+    seedSignedPosition(world, "10");
     seedMarket(world);
     seedBook(world, -1_000, "0.48", "0.52");
     world.deltas.push({ received_at: at(-1_000) });
@@ -3557,7 +3625,7 @@ describe("recorder kill switch and conditioned recovery (RFC-021)", () => {
   it("a loss reached during RECORDER_STALE becomes a persistent loss block", async () => {
     const f = await fixture();
     await f.healthy(1, 14);
-    f.world.positions.push({ shares: "0", realized_pnl_usd: "-101" });
+    seedRealizedLoss(f.world, "101", at(900_000));
     await f.tick(900_000);
     expect(f.world.kill).toMatchObject({
       engaged: true,
@@ -3570,7 +3638,7 @@ describe("recorder kill switch and conditioned recovery (RFC-021)", () => {
   it.each([
     "FOR UPDATE",
     "AS snapshots_newest",
-    "SUM(realized_pnl_usd",
+    "FROM paper_attributed_ledger_v1",
     "SELECT daily_anchor_date",
     "SELECT DISTINCT r.condition_id",
     "SELECT payload_json",

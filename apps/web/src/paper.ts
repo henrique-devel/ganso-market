@@ -67,6 +67,9 @@ export function rearmKillSwitch(
 // these types are counts and durations, which are counts of things.
 
 export interface PaperPosition {
+  readonly account_id?: string | null;
+  readonly strategy_id?: string | null;
+  readonly accounting_version?: string | null;
   readonly token_id: string;
   readonly condition_id: string | null;
   /** O nome do mercado, ou `null` quando o registro não tem a linha. */
@@ -156,6 +159,9 @@ function parsePosition(row: unknown): PaperPosition | null {
     return null;
   }
   return {
+    account_id: asTexto(row.account_id),
+    strategy_id: asTexto(row.strategy_id),
+    accounting_version: asTexto(row.accounting_version),
     token_id: tokenId,
     condition_id: asTexto(row.condition_id),
     question: asTexto(row.question),
@@ -226,7 +232,7 @@ export function fetchPaperPositions(
   signal?: AbortSignal,
 ): Promise<ResolutionGetResult<readonly PaperPosition[]>> {
   return authorizedGet(
-    "/api/polymarket/paper/positions",
+    "/api/polymarket/paper/positions?account_id=paper&strategy_id=main",
     accessToken,
     (body) =>
       isRecord(body) ? parseLista(body.positions, parsePosition) : null,

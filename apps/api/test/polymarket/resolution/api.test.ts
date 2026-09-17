@@ -50,6 +50,31 @@ function worldPool(
         rowCount = rows.length,
       ): Promise<QueryResult<R>> =>
         Promise.resolve({ rows: rows as R[], rowCount });
+      if (text.startsWith("SET TRANSACTION")) return respond([]);
+      if (
+        text.includes("FROM paper_financial_owners") ||
+        text.includes("FROM paper_owner_positions")
+      )
+        return respond([]);
+      if (text.includes("FROM paper_attributed_ledger_v1"))
+        return respond([
+          {
+            event_id: "1",
+            idempotency_key: "fixture",
+            event_type: "fill",
+            order_id: "fixture",
+            token_id: "tok",
+            condition_id: "cond",
+            payload_json: { side: "BUY", price: "0.5", size: "1", fee: "0" },
+            event_ts: NOW,
+            received_at: NOW,
+            account_id: "paper",
+            strategy_id: "main",
+            attribution_status: "verified",
+            evidence_ref: "fixture",
+          },
+        ]);
+      if (text.includes("FROM unnest($1::text[])")) return respond([]);
       if (
         text.startsWith(
           "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE",

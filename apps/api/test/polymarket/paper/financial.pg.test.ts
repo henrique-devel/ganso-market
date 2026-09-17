@@ -20,6 +20,7 @@ import {
 import {
   loadPaperPnl,
   loadOpenPositions,
+  loadLegacyOpenPositions,
   type PaperPnl,
 } from "../../../src/polymarket/portfolio/exitstore.js";
 import {
@@ -300,7 +301,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       const pnlB = await pnlFor(b);
       // Legacy compatibility still parses on the same migrated database; the
       // attributed replay has no dependency on this empty token-net cache.
-      expect(await loadOpenPositions(store(raw))).toEqual([]);
+      expect(await loadLegacyOpenPositions(store(raw))).toEqual([]);
       const positionsA = await loadOpenPositions(store(raw), pnlA.ownerState!);
       const positionsB = await loadOpenPositions(store(raw), pnlB.ownerState!);
       expect(positionsA).toHaveLength(1);

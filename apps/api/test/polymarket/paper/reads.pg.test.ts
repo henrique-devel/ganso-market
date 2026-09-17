@@ -122,7 +122,7 @@ async function positions(): Promise<readonly PositionRow[]> {
   const instancia = await buildApp();
   const response = await instancia.inject({
     method: "GET",
-    url: "/polymarket/paper/positions",
+    url: "/polymarket/paper/positions?accounting_version=ledger-v1",
     headers: AUTH,
   });
   expect(response.statusCode).toBe(200);

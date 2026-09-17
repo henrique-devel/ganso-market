@@ -151,6 +151,8 @@ function world(options: WorldOptions = {}): World {
         // Synthetic capital fixture, never a production seed.
         return respond([
           {
+            account_id: "paper",
+            strategy_id: "main",
             initial_cash_usd: "1000.000000000",
             capital_source_ref: "fixture:runner",
           },

@@ -38,6 +38,11 @@ import {
   loadOpenOwnerTokens,
   loadAttributedLedgerEvents,
 } from "./ownership.js";
+import {
+  refreshFinancialToken,
+  loadOwnerFinancialState,
+  readFinancialState,
+} from "./financialstore.js";
 import { financialOwnerKey, replayFinancialLedger } from "./financial.js";
 import { evaluateFinalEntry, type FinalOrderEvaluation } from "./finalorder.js";
 import { loadEntryEconomics } from "./finalorderstore.js";
@@ -1338,7 +1343,11 @@ async function refreshPosition(
   pool: PaperPool,
   tokenId: string,
   conditionId: string | null,
+  now: Date,
 ): Promise<void> {
+  // Canonical owner cache is committed with the fill/settlement.
+  await refreshFinancialToken(pool, tokenId, now);
+  // ledger-v1 cache remains an explicitly historical compatibility artifact.
   const events = await loadTokenLedger(pool, tokenId);
   const state = replayLedger(events);
   const position = state.positions.get(tokenId);
@@ -1404,17 +1413,26 @@ async function loadTokenLedger(
 async function loadPositionShares(
   pool: PaperPool,
   tokenId: string,
+  orderId: string,
 ): Promise<bigint> {
-  const state = replayLedger(await loadTokenLedger(pool, tokenId));
-  const position = state.positions.get(tokenId);
-  if (position === undefined) {
-    return 0n;
-  }
-  const shares = parseScaled(position.shares);
-  if (shares === null) {
-    throw new Error("INVALID_LEDGER_POSITION_SHARES");
-  }
-  return shares;
+  const selected = await pool.query(
+    "SELECT account_id,strategy_id FROM paper_order_owners WHERE order_id=$1 AND ownership_version=1",
+    [orderId],
+  );
+  const row = selected.rows[0];
+  if (!row) throw new Error("FIN02_OWNER_UNKNOWN");
+  const owner = {
+    accountId: String(row["account_id"]),
+    strategyId: String(row["strategy_id"]),
+  };
+  const state = replayFinancialLedger(
+    await loadAttributedLedgerEvents(pool, { ...owner, tokenId }),
+  );
+  return parseScaled(
+    state.owners
+      .get(financialOwnerKey(owner.accountId, owner.strategyId))
+      ?.positions.get(tokenId)?.shares ?? "0",
+  )!;
 }
 
 // ---------------------------------------------------------------------------
@@ -1913,7 +1931,7 @@ async function assertResolutionPolicyForFill(
   try {
     positionShares = order.exitReduction
       ? (await exitInventory(pool, order.tokenId, at)).shares
-      : await loadPositionShares(pool, order.tokenId);
+      : await loadPositionShares(pool, order.tokenId, order.orderId);
   } catch (error: unknown) {
     throw new ResolutionRiskCheckError(
       "RESOLUTION_POSITION_UNAVAILABLE",
@@ -2626,7 +2644,7 @@ export async function brokerTick(
           try {
             positionShares = order.exitReduction
               ? (await exitInventory(tx, order.tokenId, now)).shares
-              : await loadPositionShares(tx, order.tokenId);
+              : await loadPositionShares(tx, order.tokenId, order.orderId);
           } catch (error: unknown) {
             log("error", "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER", {
               order_id: order.orderId,
@@ -2857,7 +2875,7 @@ export async function brokerTick(
             execTs,
           );
           if (inserted) {
-            await refreshPosition(tx, order.tokenId, order.conditionId);
+            await refreshPosition(tx, order.tokenId, order.conditionId, now);
             await revalidateResolutionRuntimeForFill(
               tx,
               order.resolutionGeneration,
@@ -3088,7 +3106,7 @@ export async function brokerTick(
           );
         }
         if (newEvents) {
-          await refreshPosition(tx, order.tokenId, order.conditionId);
+          await refreshPosition(tx, order.tokenId, order.conditionId, now);
         }
         await clearResolutionRiskCheck(tx, order.orderId);
         if (newEvents) {
@@ -3305,7 +3323,7 @@ export async function settlementTick(
             eventTs: now,
           });
           if (inserted) {
-            await refreshPosition(tx, tokenId, conditionId);
+            await refreshPosition(tx, tokenId, conditionId, now);
           }
           return null;
         },
@@ -3340,6 +3358,21 @@ export async function markTick(
   const log = makeLog(deps.logSink);
   const clock = deps.clock ?? ((): Date => new Date());
   const now = clock();
+  const ownerTokens = await loadOpenOwnerTokens(pool);
+  const owners = new Map(
+    ownerTokens.map((o) => [financialOwnerKey(o.accountId, o.strategyId), o]),
+  );
+  for (const owner of owners.values()) {
+    try {
+      await loadOwnerFinancialState(pool, owner, now);
+    } catch (error) {
+      log("error", "PAPER_OWNER_MARK_FAILED", {
+        account_id: owner.accountId,
+        strategy_id: owner.strategyId,
+        ...errorFields(error),
+      });
+    }
+  }
   const positions = await pool.query(
     "SELECT token_id, condition_id, shares FROM paper_positions WHERE shares::numeric <> 0",
   );
@@ -3551,66 +3584,88 @@ export async function killSwitchTriggersTick(
         resetKillSwitchRecoveryState(next, now);
         return;
       }
-      // 2. Daily paper loss above the limit (equity vs the UTC-day anchor).
-      const totals = await tx.query(
-        "SELECT COALESCE(SUM(realized_pnl_usd::numeric), 0)::text AS realized, " +
-          "COALESCE(SUM(CASE " +
-          "WHEN shares::numeric > 0 THEN COALESCE(mark_value_usd::numeric, cost_usd::numeric) - cost_usd::numeric " +
-          "WHEN shares::numeric < 0 THEN cost_usd::numeric - COALESCE(mark_value_usd::numeric, cost_usd::numeric) " +
-          "ELSE 0 END), 0)::text AS unrealized " +
-          "FROM paper_positions",
-      );
-      const realized =
-        parseScaled(asString(totals.rows[0]?.["realized"]) ?? "0") ?? 0n;
-      const unrealized =
-        parseScaled(asString(totals.rows[0]?.["unrealized"]) ?? "0") ?? 0n;
-      const equity = realized + unrealized;
+      // 2. No owner can fund another owner's loss. Keep the existing USD
+      // limit; compare each owner to its own persisted UTC-day anchor. Fees
+      // and realized buckets come from financial-v2, never token-net caches.
+      const financial = await readFinancialState(tx, now);
       const today = now.toISOString().slice(0, 10);
       const anchorRow = await tx.query(
-        "SELECT daily_anchor_date, daily_anchor_equity_usd FROM paper_kill_switch WHERE kill_switch_id = 1",
+        "SELECT daily_anchor_date, daily_anchor_equity_usd, daily_owner_anchors_json FROM paper_kill_switch WHERE kill_switch_id = 1",
       );
       const anchorDateRaw = anchorRow.rows[0]?.["daily_anchor_date"];
       const anchorDate =
         anchorDateRaw instanceof Date
           ? anchorDateRaw.toISOString().slice(0, 10)
-          : (asString(anchorDateRaw)?.slice(0, 10) ?? null);
-      const anchorEquity = parseScaled(
-        asString(anchorRow.rows[0]?.["daily_anchor_equity_usd"]) ?? "",
-      );
-      if (anchorDate !== today || anchorEquity === null) {
-        await tx.query(
-          "UPDATE paper_kill_switch SET daily_anchor_date = $1, daily_anchor_equity_usd = $2, updated_at = $3 WHERE kill_switch_id = 1",
-          [today, formatScaled(equity, 6), now],
-        );
-      } else {
-        const limit =
-          parseScaled(deps.dailyLossLimitUsd ?? DEFAULT_DAILY_LOSS_LIMIT_USD) ??
-          0n;
-        if (limit > 0n && anchorEquity - equity > limit) {
-          if (!state.engaged || state.reason === "RECORDER_STALE") {
-            const ordersCanceled = await engageKillSwitchInTransaction(
-              tx,
-              "DAILY_LOSS_LIMIT",
-              now,
-            );
-            logs.push([
-              "error",
-              "PAPER_KILL_SWITCH_ENGAGED",
-              {
-                reason: "DAILY_LOSS_LIMIT",
-                orders_canceled: ordersCanceled,
-              },
-            ]);
-          }
-          resetKillSwitchRecoveryState(next, now);
-          return;
+          : asString(anchorDateRaw)?.slice(0, 10);
+      const rawAnchors = anchorRow.rows[0]?.["daily_owner_anchors_json"];
+      const anchors: Record<string, string> =
+        anchorDate === today &&
+        typeof rawAnchors === "object" &&
+        rawAnchors !== null
+          ? { ...(rawAnchors as Record<string, string>) }
+          : {};
+      const limit =
+        parseScaled(deps.dailyLossLimitUsd ?? DEFAULT_DAILY_LOSS_LIMIT_USD) ??
+        0n;
+      let breached = false;
+      let unavailable = false;
+      let total = 0n;
+      for (const owner of financial.owners.values()) {
+        if (owner.unrealizedPnlUsd === null) {
+          unavailable = true;
+          continue;
         }
+        const equity =
+          parseScaled(owner.realizedPnlUsd)! +
+          parseScaled(owner.unrealizedPnlUsd)!;
+        const key = financialOwnerKey(owner.accountId, owner.strategyId);
+        const previous = parseScaled(anchors[key] ?? "");
+        const dayRealized = parseScaled(
+          owner.dailyRealizedPnlUsd.get(today) ?? "0",
+        )!;
+        // First observation anchors the open leg, as before; today's realized
+        // loss is still checked immediately (including late fills after restart).
+        if (previous === null) anchors[key] = formatScaled(equity, 9);
+        if (
+          limit > 0n &&
+          ((previous !== null && previous - equity > limit) ||
+            -dayRealized > limit)
+        )
+          breached = true;
+        total += equity;
+      }
+      await tx.query(
+        "UPDATE paper_kill_switch SET daily_anchor_date=$1, daily_anchor_equity_usd=$2, daily_owner_anchors_json=$3::jsonb, updated_at=$4 WHERE kill_switch_id=1",
+        [today, formatScaled(total, 9), JSON.stringify(anchors), now],
+      );
+      if (breached || unavailable) {
+        const reason = breached
+          ? "DAILY_LOSS_LIMIT"
+          : "FINANCIAL_DATA_UNAVAILABLE";
+        if (!state.engaged || state.reason === "RECORDER_STALE") {
+          const ordersCanceled = await engageKillSwitchInTransaction(
+            tx,
+            reason,
+            now,
+          );
+          logs.push([
+            "error",
+            "PAPER_KILL_SWITCH_ENGAGED",
+            {
+              reason,
+              orders_canceled: ordersCanceled,
+              accounting_version: "financial-v2",
+            },
+          ]);
+        }
+        resetKillSwitchRecoveryState(next, now);
+        return;
       }
 
       // 3. A UMA dispute on a market we hold freezes entries in THAT market.
       const disputes = await tx.query(
         "SELECT DISTINCT r.condition_id FROM polymarket_resolution_events r " +
-          "JOIN paper_positions p ON p.condition_id = r.condition_id " +
+          "JOIN paper_open_owner_tokens() p ON p.condition_id = r.condition_id " +
           "WHERE r.event_type = 'disputed' AND p.shares::numeric <> 0",
       );
       for (const row of disputes.rows) {

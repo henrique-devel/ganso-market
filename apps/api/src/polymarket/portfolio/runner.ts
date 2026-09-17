@@ -728,7 +728,7 @@ export function createPortfolioRunner(
     });
     if (pnl.ownerState === undefined)
       throw new Error("FIN04_OWNER_STATE_REQUIRED");
-    const positions = await loadOpenPositions(deps.pool, pnl.ownerState);
+    const positions = await loadOpenPositions(deps.pool, pnl.ownerState!);
 
     // Per-market context, batched: three grouped scans instead of one round
     // trip per market per question.
@@ -1138,7 +1138,7 @@ export function createPortfolioRunner(
       strategyId: "main",
       now,
     });
-    const positions = await loadOpenPositions(deps.pool, pnl.ownerState);
+    const positions = await loadOpenPositions(deps.pool, pnl.ownerState!);
     if (positions.length === 0) {
       logJson("info", "PORTFOLIO_EXIT_CYCLE", { evaluated: 0, exiting: 0 });
       return { evaluated: 0, exiting: 0 };
