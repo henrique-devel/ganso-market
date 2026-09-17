@@ -31,6 +31,7 @@ interface WorldOptions {
   readonly noBook?: Row | null;
   /** New synthetic attributed fill, separate from the legacy cache fixture. */
   readonly ownerFill?: boolean;
+  readonly ownerLong?: boolean;
   /** Exit signature already on record for the position, or null for none. */
   readonly lastExitSignature?: string | null;
   /** Bids of the position's book; the default leaves plenty of residual edge. */
@@ -99,7 +100,7 @@ function world(options: WorldOptions = {}): World {
       if (text.includes("FROM paper_attributed_ledger_v1")) {
         expect(params.slice(0, 2)).toEqual(["paper", "main"]);
         return respond(
-          options.ownerFill
+          options.ownerFill || options.ownerLong
             ? [
                 {
                   event_id: "1",
@@ -109,8 +110,8 @@ function world(options: WorldOptions = {}): World {
                   token_id: "t1",
                   condition_id: "0xa",
                   payload_json: {
-                    side: "SELL",
-                    size: "10",
+                    side: options.ownerLong ? "BUY" : "SELL",
+                    size: options.ownerLong ? "100" : "10",
                     price: "0.4",
                     fee: "0.1",
                   },
@@ -534,8 +535,27 @@ describe("DATA-02 exposure lifecycle protection", () => {
 });
 
 describe("exit cycle", () => {
-  it("writes an EXIT decision for a position it has never evaluated", async () => {
+  it("does not emit an EXIT for the aggregate cache when the owner has no inventory", async () => {
     const scene = world();
+    await runner(scene.pool).tickOnce("exits");
+    expect(
+      scene.inserts.filter((r) => r.table === "portfolio_decisions"),
+    ).toHaveLength(0);
+  });
+  it("emits a BUY for the owner's legacy short on the real YES token", async () => {
+    const scene = world({ ownerFill: true });
+    await runner(scene.pool).tickOnce("exits");
+    const row = scene.inserts.find((r) => r.table === "portfolio_decisions")!;
+    expect(row.params.slice(0, 5)).toEqual(["EXIT", "0xa", "t1", "YES", "BUY"]);
+    expect(JSON.parse(String(row.params[36]))).toMatchObject({
+      account_id: "paper",
+      strategy_id: "main",
+      exit_contract_version: 1,
+    });
+  });
+
+  it("writes an EXIT decision for a position it has never evaluated", async () => {
+    const scene = world({ ownerLong: true });
     await runner(scene.pool).tickOnce("exits");
     const decisions = scene.inserts.filter(
       (row) => row.table === "portfolio_decisions",
@@ -550,7 +570,7 @@ describe("exit cycle", () => {
   it("records a HOLD as a decision, not as silence", async () => {
     // "We looked and decided to stay" is evidence, and its absence would be
     // indistinguishable from never having looked.
-    const scene = world();
+    const scene = world({ ownerLong: true });
     await runner(scene.pool).tickOnce("exits");
     const decision = scene.inserts.find(
       (row) => row.table === "portfolio_decisions",
@@ -561,7 +581,7 @@ describe("exit cycle", () => {
   });
 
   it("does NOT rewrite the same verdict on the next cycle", async () => {
-    const scene = world({ lastExitSignature: "hold" });
+    const scene = world({ ownerLong: true, lastExitSignature: "hold" });
     await runner(scene.pool).tickOnce("exits");
     expect(
       scene.inserts.filter((row) => row.table === "portfolio_decisions"),
@@ -572,6 +592,7 @@ describe("exit cycle", () => {
     // The bid has risen to where it captures the advantage: the verdict moves
     // from `hold` to EDGE_CAPTURED_AT_BID, and that is worth a row.
     const scene = world({
+      ownerLong: true,
       lastExitSignature: "hold",
       bids: [
         { price: "0.659", size: "500" },
@@ -590,7 +611,7 @@ describe("exit cycle", () => {
   it("persists the replay block and the book excerpt with the decision", async () => {
     // Without both, the mandatory replay could not re-derive the exit once the
     // raw book snapshot is pruned.
-    const scene = world();
+    const scene = world({ ownerLong: true });
     await runner(scene.pool).tickOnce("exits");
     const decision = scene.inserts.find(
       (row) => row.table === "portfolio_decisions",

@@ -348,3 +348,49 @@ describe("verdict signature", () => {
     expect(moved.signature).not.toBe(held.signature);
   });
 });
+
+// Manual oracle: short liability upper bound .70, asks .60/.62 => VWAP .61,
+// hold-minus-cover value .61-.70=-.09; total book impact $1 for 100 shares.
+describe("EXEC-04 signed exits", () => {
+  it("walks asks for a short and emits BUY without declaring it empty", () => {
+    const plan = planExit({
+      context: {
+        ...HELD,
+        sharesScaled: s("-100"),
+        probLowerScaled: s("0.30"),
+        bids: [],
+        asks: [
+          { price: "0.60", size: "50" },
+          { price: "0.62", size: "50" },
+        ],
+      },
+      config: CONFIG,
+      portfolioState: "REDUCE_ONLY",
+    });
+    expect(plan.orderSide).toBe("BUY");
+    expect(plan.incompleteReason).toBeNull();
+    expect(plan.exitPriceScaled).toBe(s("0.61"));
+    expect(plan.edgeAtBidScaled).toBe(s("-0.09"));
+    expect(plan.unwindCostScaled).toBe(s("1"));
+    expect(plan.exitInput?.exitDepthScaled).toBe(s("100"));
+    expect(plan.signals.map((x) => x.reason)).toContain("PORTFOLIO_LIMIT");
+  });
+  it.each(["YES", "NO"] as const)("sells the real long %s token", (side) => {
+    const plan = planExit({
+      context: { ...HELD, side, sharesScaled: s("8.11") },
+      config: CONFIG,
+      portfolioState: "REDUCE_ONLY",
+    });
+    expect(plan.orderSide).toBe("SELL");
+    expect(plan.bookTooThinToExit).toBe(false);
+  });
+  it("requires asks to evaluate short coverage even if bids exist", () => {
+    const plan = planExit({
+      context: { ...HELD, sharesScaled: s("-8.11"), asks: [] },
+      config: CONFIG,
+      portfolioState: "REDUCE_ONLY",
+    });
+    expect(plan.incompleteReason).toBe("NO_EXIT_BOOK");
+    expect(plan.signals.map((x) => x.reason)).toContain("PORTFOLIO_LIMIT");
+  });
+});

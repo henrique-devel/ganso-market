@@ -34,7 +34,11 @@ import {
   type LedgerEventType,
 } from "./ledger.js";
 import { validateOrder, type OrderDraft } from "./validator.js";
-import { loadOpenOwnerTokens } from "./ownership.js";
+import {
+  loadOpenOwnerTokens,
+  loadAttributedLedgerEvents,
+} from "./ownership.js";
+import { financialOwnerKey, replayFinancialLedger } from "./financial.js";
 import { evaluateFinalEntry, type FinalOrderEvaluation } from "./finalorder.js";
 import { loadEntryEconomics } from "./finalorderstore.js";
 import { reserveOrder, ReservationRejected } from "./reservations.js";
@@ -698,6 +702,53 @@ async function acceptanceRetry(
       };
 }
 
+/** EXEC-04: the attributed ledger is authoritative; token-wide caches are not inventory. */
+export async function exitInventory(
+  tx: SqlExecutor,
+  tokenId: string,
+  now: Date,
+): Promise<{
+  shares: bigint;
+  available: bigint;
+  side: "BUY" | "SELL";
+  active: boolean;
+}> {
+  const owner = { accountId: "paper", strategyId: "main", tokenId };
+  const events = await loadAttributedLedgerEvents(tx, owner);
+  if (
+    events.some(
+      (e) =>
+        (e.eventType === "fill" || e.eventType === "resolution") &&
+        e.eventTs > now,
+    )
+  )
+    throw new PaperAcceptanceRejected(409, "EXIT_FUTURE_EVENT");
+  const position = replayFinancialLedger(events, [], [], now)
+    .owners.get(financialOwnerKey(owner.accountId, owner.strategyId))
+    ?.positions.get(tokenId);
+  const shares = parseScaled(position?.shares ?? "0") ?? 0n;
+  const side = shares < 0n ? "BUY" : "SELL";
+  const pending = await tx.query(
+    `SELECT r.shares_remaining, r.inventory_side, o.policy_reason
+    FROM paper_order_reservations r JOIN paper_orders o USING(order_id)
+    WHERE r.account_id=$1 AND r.strategy_id=$2 AND o.token_id=$3 AND r.state='active'`,
+    [owner.accountId, owner.strategyId, tokenId],
+  );
+  const used = pending.rows
+    .filter((r) => r["inventory_side"] === side)
+    .reduce(
+      (sum, r) => sum + (parseScaled(String(r["shares_remaining"])) ?? 0n),
+      0n,
+    );
+  const available = (shares < 0n ? -shares : shares) - used;
+  return {
+    shares,
+    side,
+    available: available > 0n ? available : 0n,
+    active: pending.rows.some((r) => r["policy_reason"] === "EXIT_REDUCE_ONLY"),
+  };
+}
+
 export async function acceptPaperOrder(
   pool: PaperPool,
   input: AcceptInput,
@@ -816,6 +867,7 @@ export async function acceptPaperOrder(
   let finalizedAt = now;
   let acceptedAt = new Date(now.getTime() + latencyMs);
   let finalEvaluation: FinalOrderEvaluation | null = null;
+  let exitEvidence: Record<string, unknown> | null = null;
   try {
     return await pool.transaction(async (tx: SqlExecutor) => {
       // One authoritative acceptance revision: journal -> runtime -> derived
@@ -955,6 +1007,93 @@ export async function acceptPaperOrder(
           });
           if (!finalEvaluation.ok)
             throw new PaperAcceptanceRejected(422, finalEvaluation.reason);
+        } else {
+          const decision = (
+            await tx.query(
+              `SELECT * FROM portfolio_decisions WHERE decision_id=$1`,
+              [input.decisionId],
+            )
+          ).rows[0];
+          const identity = decision?.["inputs_json"] as
+            Record<string, unknown> | undefined;
+          if (
+            decision?.["outcome"] !== "ACCEPTED" ||
+            decision["condition_id"] !== conditionId ||
+            decision["token_id"] !== order.tokenId ||
+            decision["order_side"] !== order.side ||
+            identity?.["exit_contract_version"] !== 1 ||
+            identity["account_id"] !== "paper" ||
+            identity["strategy_id"] !== "main" ||
+            input.policyReason !== "EXIT_REDUCE_ONLY"
+          )
+            throw new PaperAcceptanceRejected(422, "EXIT_IDENTITY_MISMATCH");
+          const metadata = (
+            await tx.query(
+              `SELECT affirmative_token_id, clob_token_ids
+            FROM polymarket_market_metadata_versions WHERE condition_id=$1
+            AND valid_from <= $2 AND (valid_to IS NULL OR valid_to > $2)`,
+              [conditionId, at],
+            )
+          ).rows;
+          const tokens = metadata[0]?.["clob_token_ids"];
+          const yes = metadata[0]?.["affirmative_token_id"];
+          if (
+            metadata.length !== 1 ||
+            !Array.isArray(tokens) ||
+            tokens.length !== 2 ||
+            new Set(tokens).size !== 2 ||
+            !tokens.includes(yes) ||
+            (decision["market_side"] === "YES"
+              ? yes
+              : tokens.find((t) => t !== yes)) !== order.tokenId
+          )
+            throw new PaperAcceptanceRejected(
+              422,
+              "EXIT_TOKEN_MAPPING_INVALID",
+            );
+          const book = await bookAtOrBefore(tx, order.tokenId, at);
+          const reference = book?.sourceTs ?? book?.receivedAt;
+          const bid = parseScaled(book?.bids[0]?.price ?? "");
+          const ask = parseScaled(book?.asks[0]?.price ?? "");
+          if (
+            !reference ||
+            at.getTime() - reference.getTime() > MARK_MAX_BOOK_AGE_MS ||
+            bid === null ||
+            ask === null ||
+            bid < 0n ||
+            ask > SCALE ||
+            bid >= ask
+          )
+            throw new PaperAcceptanceRejected(422, "EXIT_NO_FRESH_BOOK");
+          if (
+            order.orderType !== "GTC" ||
+            !order.postOnly ||
+            parseScaled(order.limitPrice) !==
+              (order.side === "SELL" ? ask : bid)
+          )
+            throw new PaperAcceptanceRejected(
+              422,
+              "EXIT_PASSIVE_QUOTE_CHANGED",
+            );
+          finalizedAt = at;
+          acceptedAt = new Date(at.getTime() + latencyMs);
+          exitEvidence = {
+            version: "exit-reduce-only-v1",
+            decision_id: input.decisionId,
+            account_id: "paper",
+            strategy_id: "main",
+            token_id: order.tokenId,
+            side: order.side,
+            size: order.size,
+            limit_price: order.limitPrice,
+            book,
+            evaluated_at: at.toISOString(),
+            signals: identity["exit"],
+            fee_per_share: "0",
+            fee_ref:
+              "paper-passive-v1:zero-fee;conditional-fill;selection-unmodelled",
+            profit_gate: "not-applicable:inventory-reduction",
+          };
         }
       }
 
@@ -1003,6 +1142,22 @@ export async function acceptPaperOrder(
         )
           throw new PaperAcceptanceRejected(422, "FINAL_ENTRY_OWNER_MISMATCH");
       }
+      if (exitEvidence !== null) {
+        // Same order -> token -> owner ordering as FIN-05. Fills, settlement,
+        // and competing EXITs cannot consume the inventory between read/reserve.
+        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+          order.tokenId,
+        ]);
+        const inventory = await exitInventory(tx, order.tokenId, finalizedAt);
+        if (inventory.active)
+          throw new PaperAcceptanceRejected(409, "EXIT_ORDER_ALREADY_OPEN");
+        if (
+          inventory.shares === 0n ||
+          inventory.side !== order.side ||
+          parseScaled(order.size)! > inventory.available
+        )
+          throw new PaperAcceptanceRejected(409, "EXIT_INVENTORY_UNAVAILABLE");
+      }
       const reservation = await reserveOrder(tx, input.orderId, finalizedAt);
       const acceptedEventInserted = await appendLedgerEvent(tx, {
         idempotencyKey: `${input.orderId}:accepted`,
@@ -1013,6 +1168,7 @@ export async function acceptPaperOrder(
         payload: {
           reservation,
           final_entry_evaluation: finalEvaluation?.evidence ?? null,
+          exit_evaluation: exitEvidence,
           acceptance_request: input,
           side: order.side,
           order_type: order.orderType,
@@ -1265,6 +1421,7 @@ async function loadPositionShares(
 // The processing tick.
 
 interface OpenOrderRow {
+  readonly exitReduction: boolean;
   readonly orderId: string;
   readonly tokenId: string;
   readonly conditionId: string | null;
@@ -1312,6 +1469,7 @@ function parseOpenOrder(row: Record<string, unknown>): OpenOrderRow | null {
   const expirationRaw = row["expiration_s"];
   return {
     orderId,
+    exitReduction: row["policy_reason"] === "EXIT_REDUCE_ONLY",
     tokenId,
     conditionId: asString(row["condition_id"]),
     side,
@@ -1344,7 +1502,7 @@ async function loadOpenOrders(pool: PaperPool): Promise<OpenOrderRow[]> {
     "SELECT o.order_id, o.token_id, o.condition_id, o.side, o.order_type, o.limit_price, o.size, o.filled_size, " +
       "o.post_only, o.worst_price, o.expiration_s, o.queue_ahead, o.accepted_at, o.cancel_requested_at, " +
       "o.resolution_generation, o.resolution_risk_check_pending, " +
-      "o.resolution_risk_claim, o.resolution_risk_claimed_at, o.source, " +
+      "o.resolution_risk_claim, o.resolution_risk_claimed_at, o.source, o.policy_reason, " +
       "EXISTS (SELECT 1 FROM paper_ledger_events accepted " +
       "WHERE accepted.order_id = o.order_id AND accepted.event_type = 'order_accepted' " +
       "AND jsonb_typeof(accepted.payload_json->'override_veto') = 'object' " +
@@ -1376,7 +1534,7 @@ async function loadLockedOpenOrder(
     "SELECT o.order_id, o.token_id, o.condition_id, o.side, o.order_type, o.limit_price, o.size, o.filled_size, " +
       "o.post_only, o.worst_price, o.expiration_s, o.queue_ahead, o.accepted_at, o.cancel_requested_at, " +
       "o.resolution_generation, o.resolution_risk_check_pending, " +
-      "o.resolution_risk_claim, o.resolution_risk_claimed_at, o.source, " +
+      "o.resolution_risk_claim, o.resolution_risk_claimed_at, o.source, o.policy_reason, " +
       "EXISTS (SELECT 1 FROM paper_ledger_events accepted " +
       "WHERE accepted.order_id = o.order_id AND accepted.event_type = 'order_accepted' " +
       "AND jsonb_typeof(accepted.payload_json->'override_veto') = 'object' " +
@@ -1726,6 +1884,7 @@ async function assertResolutionPolicyForFill(
   pool: PaperPool,
   order: OpenOrderRow,
   fillSize: string,
+  at: Date,
 ): Promise<void> {
   const result = await loadResolutionOrderPolicy(pool, order);
   if (!result.ok) {
@@ -1743,13 +1902,18 @@ async function assertResolutionPolicyForFill(
       new Error(denial.reason),
     );
   }
-  if (result.policy.effectiveAction !== "CIRCUIT_BREAKER") {
+  if (
+    result.policy.effectiveAction !== "CIRCUIT_BREAKER" &&
+    !order.exitReduction
+  ) {
     return;
   }
   const parsedFillSize = parseScaled(fillSize);
   let positionShares: bigint;
   try {
-    positionShares = await loadPositionShares(pool, order.tokenId);
+    positionShares = order.exitReduction
+      ? (await exitInventory(pool, order.tokenId, at)).shares
+      : await loadPositionShares(pool, order.tokenId);
   } catch (error: unknown) {
     throw new ResolutionRiskCheckError(
       "RESOLUTION_POSITION_UNAVAILABLE",
@@ -2451,7 +2615,7 @@ export async function brokerTick(
           await clearResolutionRiskCheck(tx, order.orderId);
           return;
         }
-        if (underBreaker) {
+        if (underBreaker || order.exitReduction) {
           const size = parseScaled(order.size);
           const alreadyFilled = parseScaled(order.filledSize);
           const remaining =
@@ -2460,7 +2624,9 @@ export async function brokerTick(
               : size - alreadyFilled;
           let positionShares: bigint;
           try {
-            positionShares = await loadPositionShares(tx, order.tokenId);
+            positionShares = order.exitReduction
+              ? (await exitInventory(tx, order.tokenId, now)).shares
+              : await loadPositionShares(tx, order.tokenId);
           } catch (error: unknown) {
             log("error", "PAPER_POSITION_READ_FAILED_CIRCUIT_BREAKER", {
               order_id: order.orderId,
@@ -2615,7 +2781,7 @@ export async function brokerTick(
               tx,
               order.resolutionGeneration,
             );
-            await assertResolutionPolicyForFill(tx, order, fill.size);
+            await assertResolutionPolicyForFill(tx, order, fill.size, execTs);
             const isNew = await appendLedgerEvent(tx, {
               idempotencyKey: `${order.orderId}:taker:${index}`,
               eventType: "fill",
@@ -2831,6 +2997,7 @@ export async function brokerTick(
             tx,
             order,
             formatScaled(delta, 6),
+            trade.ts,
           );
           const isNew = await appendLedgerEvent(tx, {
             idempotencyKey: fillKey,
