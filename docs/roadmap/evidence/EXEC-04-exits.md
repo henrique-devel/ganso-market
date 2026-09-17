@@ -50,7 +50,7 @@ replay, portfolio/scope, bridge, brokerstore e paper/scope: **250 passaram**.
 
 `GANSO_PG_RESULTS_DIR=/private/tmp/exec04-pg-results make test-postgres`:
 PostgreSQL **18.4**, imagem fixada pelo projeto, **25 migrations**, **24 arquivos,
-310 passaram / 0 falharam / 0 não executados**. [Resumo do gate](EXEC-04-pg-results.json).
+310 passaram (279 SQL reais + 31 unitários auxiliares) / 0 falharam / 0 não executados**. [Resumo do gate](EXEC-04-pg-results.json).
 O gate inclui 15 casos novos em `bridge-exits.pg.test.ts` e os 14 existentes
 de `bridge.pg.test.ts`, além das regressões de reservas/ledger/resolução.
 
@@ -89,4 +89,25 @@ Saídas de outras estratégias exigem consumidor próprio; este não toma seu sa
 FRESH-03 integra validade à policy; EXEC-05 fará a prova integrada final por
 dono/ordem. Não se iniciou nenhum desses blocos.
 
-Entrega remota e verificação operacional serão registradas no recibo após os checks.
+## Entrega e observação operacional
+
+[PR195](https://github.com/henrique-devel/ganso-market/pull/195) integrado em
+`1f49f475fa2de0c5cc786545e2615905119e732d`. Source/PostgreSQL/Compose aprovados
+no PR e em main; [CI/CD35174412739](https://github.com/henrique-devel/ganso-market/actions/runs/35174412739)
+concluiu o deploy padrão em 17/09/2026 02:31:01Z. A autorização contínua e o
+runbook também cobriram a atualização dos dois serviços de profile existentes,
+com `--no-deps`, sem alterar banco, configuração, capital ou kill switch.
+
+Paper e portfolio iniciados às02:31:30Z, ambos com SHA1f49f47 e zero restarts;
+healthcheck aprovado. PostgreSQL manteve início07/09/2026 22:59:17Z e zero restarts.
+Boot confirmou `execution_mode=paper`. Portfolio executou ciclo de100 mercados em
+REDUCE_ONLY; o ciclo de saída02:32:14Z avaliou0 posições atribuídas ao dono.
+Nenhum erro de job/fatal apareceu na leitura limitada após o boot.
+**A amostra produtiva vazia não comprova saída executada**: o aceite comportamental
+é exclusivamente a amostra SQL não vazia descrita acima; sem fill novo ou soak.
+
+A revisão automática inicialmente recusou merge por associar deploy à ativação
+live. Foram conferidos o modo paper efetivo por SSH, a enumeração exclusivamente
+paper no código e a ausência de alteração de config/Compose/deploy; a mesma ação
+foi então reavaliada e liberada, sem contorno. Não há aprovação pendente desse evento.
+O fecho documental segue RFC-020, sem forçar novo deploy.
