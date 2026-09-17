@@ -1326,6 +1326,83 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(sibling.allowed).toBe(true);
     });
 
+    it("completes an unscored exited sibling before coupling, retaining strict group guards", async () => {
+      const active = "0xfin07-active-member",
+        exited = "0xfin07-exited-member";
+      for (const id of [active, exited]) {
+        await seedMarket(
+          pool,
+          id,
+          "Will Alpha win?",
+          "Resolves YES per the official announcement.",
+          { negRisk: true },
+        );
+        await applyMarketMetadataObservation(
+          pool,
+          {
+            conditionId: id,
+            question: "Will Alpha win?",
+            category: "crypto",
+            clobTokenIds: [TOKEN(id, 0), TOKEN(id, 1)],
+            affirmativeTokenId: TOKEN(id, 0),
+            sourceTs: T0,
+          },
+          T0,
+        );
+      }
+      await pool.query(
+        "INSERT INTO polymarket_events(event_id,slug,title,neg_risk,received_at) VALUES('fin07-group','fixture','Fixture',TRUE,$1)",
+        [T0],
+      );
+      for (const id of [active, exited])
+        await pool.query(
+          "INSERT INTO polymarket_event_markets(event_id,condition_id,received_at) VALUES('fin07-group',$1,$2)",
+          [id, T0],
+        );
+      await pool.query(
+        "INSERT INTO polymarket_universe_log(condition_id,action,reason,at) VALUES($1,'exit','fixture',$2)",
+        [exited, new Date(T0.getTime() + 60_000)],
+      );
+      await pool.query(
+        "INSERT INTO polymarket_resolution_events(condition_id,event_type,payload_json,received_at) VALUES($1,'market_resolved','{}',$2)",
+        [exited, new Date(T0.getTime() + 120_000)],
+      );
+      expect(
+        (
+          await pool.query(
+            "SELECT condition_id FROM resolution_market_state WHERE condition_id=ANY($1)",
+            [[active, exited]],
+          )
+        ).rows,
+      ).toEqual([]);
+      const summary = await recomputeMarkets(deps, "boot", AS_OF, [active]);
+      expect(summary).toEqual({ scored: 2, failed: 0 });
+      const states = await pool.query(
+        "SELECT condition_id,action,event_ids_json,justification FROM resolution_market_state WHERE condition_id=ANY($1) ORDER BY condition_id",
+        [[active, exited]],
+      );
+      expect(states.rows).toHaveLength(2);
+      expect(
+        states.rows.every(
+          (row) =>
+            Array.isArray(row.event_ids_json) &&
+            row.event_ids_json.includes("fin07-group"),
+        ),
+      ).toBe(true);
+      expect(
+        states.rows.find((row) => row.condition_id === exited),
+      ).toMatchObject({ action: "NONE" });
+      expect(
+        String(
+          states.rows.find((row) => row.condition_id === exited)?.justification,
+        ),
+      ).toContain("terminal");
+      expect(await recomputeMarkets(deps, "boot", AS_OF, [active])).toEqual({
+        scored: 1,
+        failed: 0,
+      });
+    });
+
     it("keeps prospective metadata replayable without projecting the backfill backward", async () => {
       const changedAt = new Date("2026-08-20T18:00:00.000Z");
       const laterPollAt = new Date("2026-08-20T20:00:00.000Z");

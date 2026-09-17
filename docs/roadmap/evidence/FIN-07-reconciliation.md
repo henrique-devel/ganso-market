@@ -199,3 +199,28 @@ Nenhum capital, limite, parâmetro de operação ou kill switch foi manualmente 
 O deploy atualiza somente os serviços existentes afetados; não cria worker nem
 habilita estratégia. EXEC-04 fornece as saídas usadas pela regressão; não se
 antecipa o aceite de EXEC-05. Parar no FIN-07.
+
+## Reparo mínimo da entrega operacional — issue198
+
+[PR197](https://github.com/henrique-devel/ganso-market/pull/197) foi integrado em
+main6279457, com CI/CD aprovado. API/paper/portfolio receberam o código e schema26;
+configurações e banco foram preservados. A verificação adicional da resolução
+identificou um bloqueio de sessão ociosa, liberado com rollback exclusivamente do
+trabalho não confirmado, e em seguida um conjunto incompleto de estados de grupo.
+A reversão para a imagem anterior reproduziu a mesma falha de grupo.
+
+Correção em [OPS/RISK198](https://github.com/henrique-devel/ganso-market/issues/198):
+antes do acoplamento, incluir irmãos negRisk sem estado que saíram do universo,
+recomputando seus inputs versionados no mesmo corte. Grupos conectados são
+percorridos até completar o conjunto necessário. Faltas de versão, falha no score,
+conjuntos duplicados/inválidos e vetos continuam recusando prontidão. Nenhum estado
+permissivo é fabricado; não há alteração de caps, timeout ou edição de cache manual.
+
+A regressão SQL inclui um irmão terminal fora do universo e sem estado, obtém os
+dois estados calculados e prova retry sem duplicar trabalho desnecessário.
+`GANSO_PG_RESULTS_DIR=/private/tmp/fin07-resolution-pg make test-postgres`: exit0,
+**319 passed/0 failed/0 unexecuted** (288 SQL reais+31 unitários mistos),26 arquivos;
+os318 contratos anteriores também passam. Testes focados recompute/runner:39 passed.
+`make verify` exit0:2478JS/16Rust/220Python;288 skips no gate source-only executados no PostgreSQL. A prontidão operacional final será registrada após implantar este reparo.
+A causa da transação ociosa permanece para investigação própria em198; detalhes
+operacionais ficam no diagnóstico local e não compõem o relatório público.
