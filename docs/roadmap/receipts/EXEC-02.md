@@ -1,6 +1,6 @@
 Bloco: EXEC-02 | RFC: RFC-034 | Data UTC: 2026-09-17
-Estado: code-verified; PR190/CI/CD aprovado; worker paper aguarda o reparo de concorrência desta revisão.
-Código: aa9e448/merge768d3fa (PR190); reparo 236538a/base768d3fa, branch codex/exec-02-acceptance-locks; /private/tmp/ganso-exec02.
+Estado: code-verified; PRs [190](https://github.com/henrique-devel/ganso-market/pull/190)/[191](https://github.com/henrique-devel/ganso-market/pull/191) integrados, CI PR/main e deploy aprovados.
+Código: aa9e448/merge768d3fa; reparo236538a/merge18a6c20; worktree /private/tmp/ganso-exec02; fecho codex/exec-02-delivery-receipt.
 Resultado: entradas portfolio BUY YES/NO são normalizadas e reavaliadas dentro da transação, antes da reserva.
 Dependências: EXEC-01/ev-costs-v2, FIN-03/financial-v2 e FIN-06/entry-v2 conferidos por código/recibos; FIN-05/0025 preservado.
 Arquivos de lógica: bridge, brokerstore, policy, fastpolicy; novos finalorder.ts e finalorderstore.ts; nenhuma migration.
@@ -22,4 +22,4 @@ Checks: make verify passou na revisão reparada (2459 JS, 263 PG skips separados
 SQL: make test-postgres passou, PostgreSQL18.4 descartável/25 migrations, 23 arquivos/294 testes/zero falhas/zero skips; disputa de lock observada sem deadlock, fee/reserva .0175 iguais.
 Integração EXEC-03: consumir ordem normalizada + final_entry_evaluation + reservation no ledger; alteração econômica exige avaliar novamente.
 Integração EXEC-04: EXIT desvia deste gate (teste explícito); nenhuma saída D4 implementada. FRESH-03: evaluatedAt/book/fee timestamps e ponto pré-reserva.
-Limites: sem expiry/frescor novo, alteração de margens/caps/G4/live/capital, prontidão/soak; não iniciar outro bloco.
+Produção 17/09 00:21Z: API/paper no SHA18a6c20, healthchecks/fixture pura passaram, zero reinícios/erros observados; sem amostra econômica/soak, expiry/D4/caps/G4/live/capital novos; parar aqui.
