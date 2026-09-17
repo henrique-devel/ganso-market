@@ -4,6 +4,7 @@ import type { QueryResult, SqlExecutor } from "../../../src/database.js";
 import {
   buildPerformanceReport,
   optimisticEvents,
+  executionCoverage,
 } from "../../../src/polymarket/paper/performance.js";
 import type { LedgerEventRecord } from "../../../src/polymarket/paper/ledger.js";
 
@@ -164,5 +165,51 @@ describe("optimistic transformation", () => {
     expect(transformed[0]?.eventType).toBe("fill");
     expect(transformed[0]?.payload["fee"]).toBe("0");
     expect(transformed[1]?.eventType).toBe("mark");
+  });
+});
+
+describe("EXEC-03 execution coverage", () => {
+  const fill = (
+    key: string,
+    taker: boolean,
+    token = "tok",
+  ): LedgerEventRecord => ({
+    idempotencyKey: key,
+    eventType: "fill",
+    orderId: key,
+    tokenId: token,
+    conditionId: "c",
+    eventTs: T0,
+    payload: {
+      side: "BUY",
+      price: "0.5",
+      size: "10",
+      fee: taker ? "0.1" : "0",
+      taker,
+    },
+  });
+  it("reports no evidence instead of profitable empty samples", () => {
+    const report = executionCoverage([]);
+    expect(report.maker.realized_pnl_usd).toBeNull();
+    expect(report.taker.sample).toBe("no_evidence");
+  });
+  it("deduplicates fees and exposes mixed inventory PnL coverage", () => {
+    const a = fill("a", false),
+      b = fill("b", true);
+    const report = executionCoverage([a, b, b]);
+    expect(report.taker.fees_paid_usd).toBe("0.100000");
+    expect(report.taker.fills).toBe(1);
+    expect(report.maker.pnl_uncovered_fills).toBe(1);
+    expect(report.taker.realized_pnl_usd).toBeNull();
+    expect(report.taker.fee_evidence_fills).toBe(0);
+  });
+  it("separates fees and existing PnL for covered tokens", () => {
+    const report = executionCoverage([
+      fill("a", false, "maker"),
+      fill("b", true, "taker"),
+    ]);
+    expect(report.maker.realized_pnl_usd).toBe("0.000000");
+    expect(report.taker.realized_pnl_usd).toBe("-0.100000");
+    expect(report.taker.pnl_covered_fills).toBe(1);
   });
 });

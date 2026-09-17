@@ -43,6 +43,7 @@ export interface PerformanceColumns {
 }
 
 export interface PerformanceReport {
+  readonly execution: ReturnType<typeof executionCoverage>;
   readonly columns: PerformanceColumns;
   readonly baseline_no_trade_usd: string;
   readonly fees_paid_usd: string;
@@ -54,6 +55,10 @@ export interface PerformanceReport {
     orders: number;
     avg_predicted_vs_realized_usd: string | null;
   };
+  readonly markouts_by_execution: Record<
+    string,
+    Record<string, { fills: number; avg_mid_markout: string | null }>
+  >;
   readonly markouts_by_horizon: Record<
     string,
     { fills: number; avg_mid_markout: string | null }
@@ -96,6 +101,69 @@ export function optimisticEvents(
         }
       : event,
   );
+}
+
+/** Separate observations without pretending mixed maker/taker inventory has
+ * independent PnL. Retains the existing report's ledger accounting convention. */
+export function executionCoverage(events: readonly LedgerEventRecord[]) {
+  const unique = [
+    ...new Map(events.map((e) => [e.idempotencyKey, e])).values(),
+  ];
+  const classes = new Map<string, Set<string>>();
+  for (const e of unique) {
+    if (e.eventType !== "fill" || e.tokenId === null) continue;
+    const kinds = classes.get(e.tokenId) ?? new Set<string>();
+    kinds.add(
+      e.payload["taker"] === true
+        ? "taker"
+        : e.payload["taker"] === false
+          ? "maker"
+          : "unknown",
+    );
+    classes.set(e.tokenId, kinds);
+  }
+  const bucket = (kind: "maker" | "taker") => {
+    const fills = unique.filter(
+      (e) =>
+        e.eventType === "fill" && e.payload["taker"] === (kind === "taker"),
+    );
+    const covered = fills.filter(
+      (e) => e.tokenId !== null && classes.get(e.tokenId)?.size === 1,
+    );
+    const tokens = new Set(covered.map((e) => e.tokenId));
+    const pnl = replayLedger(
+      unique.filter((e) => e.tokenId !== null && tokens.has(e.tokenId)),
+    );
+    const fees = fills.reduce(
+      (n, e) => n + (parseScaled(asString(e.payload["fee"]) ?? "") ?? 0n),
+      0n,
+    );
+    return {
+      fills: fills.length,
+      orders_with_fill: new Set(fills.map((e) => e.orderId)).size,
+      fees_paid_usd: formatScaled(fees, 6),
+      fee_evidence_fills: fills.filter(
+        (e) =>
+          e.payload["fee_model"] !== undefined &&
+          (kind === "maker"
+            ? e.payload["fee_source"] !== undefined
+            : e.payload["fee_param_version_id"] != null &&
+              e.payload["fee_source_ts"] != null),
+      ).length,
+      realized_pnl_usd: covered.length === 0 ? null : pnl.realizedPnlUsd,
+      pnl_covered_fills: covered.length,
+      pnl_uncovered_fills: fills.length - covered.length,
+      sample: fills.length === 0 ? "no_evidence" : "paper_observations_only",
+    };
+  };
+  return {
+    maker: bucket("maker"),
+    taker: bucket("taker"),
+    unknown_fills: unique.filter(
+      (e) => e.eventType === "fill" && typeof e.payload["taker"] !== "boolean",
+    ).length,
+    note: "Paper only; PnL uses existing legacy report accounting, excludes mixed/unknown execution tokens; no sample or fee evidence never approves G4.",
+  };
 }
 
 export async function buildPerformanceReport(
@@ -151,7 +219,7 @@ export async function buildPerformanceReport(
   // Fill rate per order type from the orders table.
   const rates = await pool.query(
     "SELECT order_type, COUNT(*)::int AS orders, " +
-      "COUNT(*) FILTER (WHERE status = 'filled')::int AS filled " +
+      "COUNT(*) FILTER (WHERE filled_size::numeric > 0)::int AS filled " +
       "FROM paper_orders GROUP BY order_type",
   );
   const fillRates: Record<
@@ -235,7 +303,30 @@ export async function buildPerformanceReport(
     };
   }
 
+  const splitRows = await pool.query(
+    "SELECT CASE WHEN e.payload_json->>'taker'='true' THEN 'taker' WHEN e.payload_json->>'taker'='false' THEN 'maker' ELSE 'unknown' END AS execution_kind, " +
+      "m.horizon_s, COUNT(m.mid_markout)::int AS fills, AVG(m.mid_markout::numeric)::text AS avg_mid " +
+      "FROM paper_markouts m JOIN paper_ledger_events e ON e.idempotency_key=m.fill_key " +
+      "GROUP BY execution_kind,m.horizon_s",
+  );
+  const split: PerformanceReport["markouts_by_execution"] = {
+    maker: {},
+    taker: {},
+    unknown: {},
+  };
+  for (const row of splitRows.rows) {
+    const kind = asString(row["execution_kind"]);
+    if (kind === null || !split[kind]) continue;
+    const avg = asString(row["avg_mid"]);
+    split[kind][`${String(row["horizon_s"])}s`] = {
+      fills: Number(row["fills"] ?? 0),
+      avg_mid_markout:
+        avg === null ? null : formatScaled(parseScaled(avg) ?? 0n, 6),
+    };
+  }
   return {
+    markouts_by_execution: split,
+    execution: executionCoverage(events),
     columns,
     baseline_no_trade_usd: "0.000000",
     fees_paid_usd: base.feesPaidUsd,

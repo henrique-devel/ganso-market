@@ -1117,11 +1117,22 @@ export async function requestCancel(
   orderId: string,
   deps: BrokerDeps = {},
 ): Promise<CancelOutcome> {
+  if (!pool.transaction) throw new Error("PAPER_TRANSACTION_REQUIRED");
+  return pool.transaction(async (tx) =>
+    requestCancelLocked(tx as PaperPool, orderId, deps),
+  );
+}
+
+async function requestCancelLocked(
+  pool: PaperPool,
+  orderId: string,
+  deps: BrokerDeps,
+): Promise<CancelOutcome> {
   const clock = deps.clock ?? ((): Date => new Date());
   const now = clock();
   const result = await pool.query(
     "SELECT order_id, token_id, condition_id, order_type, status, accepted_at, cancel_requested_at " +
-      "FROM paper_orders WHERE order_id = $1",
+      "FROM paper_orders WHERE order_id = $1 FOR UPDATE",
     [orderId],
   );
   const row = result.rows[0];
@@ -1465,17 +1476,24 @@ async function tradesAtLevel(
 async function persistedPassiveFillKeys(
   pool: PaperPool,
   orderId: string,
-): Promise<Set<string>> {
+): Promise<Map<string, { size: bigint; at: number }>> {
   const result = await pool.query(
-    "SELECT idempotency_key FROM paper_ledger_events " +
+    "SELECT idempotency_key, payload_json, event_ts FROM paper_ledger_events " +
       "WHERE order_id = $1 AND event_type = 'fill'",
     [orderId],
   );
-  return new Set(
-    result.rows
-      .map((row) => asString(row["idempotency_key"]))
-      .filter((key): key is string => key !== null),
-  );
+  const fills = new Map<string, { size: bigint; at: number }>();
+  for (const row of result.rows) {
+    const key = asString(row["idempotency_key"]);
+    const payload = row["payload_json"] as Record<string, unknown> | undefined;
+    const size = parseScaled(asString(payload?.["size"]) ?? "");
+    if (key === null || size === null || size <= 0n)
+      throw new Error("PAPER_INVALID_PERSISTED_FILL");
+    const at = toDate(row["event_ts"]);
+    if (at === null) throw new Error("PAPER_INVALID_PERSISTED_FILL_TIME");
+    fills.set(key, { size, at: at.getTime() });
+  }
+  return fills;
 }
 
 async function closeOrder(
@@ -2514,7 +2532,49 @@ export async function brokerTick(
               ? null
               : await paramsAtOrBefore(tx, order.conditionId, execTs);
           const feeRate = feeRateFromBps(params?.takerFeeBps ?? null);
-          const opposing = order.side === "BUY" ? book.asks : book.bids;
+          if (
+            feeRate === null ||
+            params?.paramVersionId == null ||
+            params.sourceTs === null ||
+            params.receivedAt === null ||
+            params.validFrom === null ||
+            params.sourceTs > execTs ||
+            params.receivedAt > execTs ||
+            params.validFrom > execTs
+          ) {
+            await cancelForResolutionRisk(
+              tx,
+              order,
+              "FEE_EVIDENCE_MISSING",
+              execTs,
+            );
+            return;
+          }
+          // Token lock serializes competitors, including different owners.
+          // A recorded snapshot is finite liquidity, never replenished by retry.
+          const prior = await loadTokenLedger(tx, order.tokenId);
+          const opposing = (order.side === "BUY" ? book.asks : book.bids).map(
+            (level) => {
+              let remaining = parseScaled(level.size) ?? 0n;
+              for (const event of prior) {
+                if (
+                  event.eventType === "fill" &&
+                  event.payload["taker"] === true &&
+                  event.payload["side"] === order.side &&
+                  event.payload["book_received_at"] ===
+                    book.receivedAt.toISOString() &&
+                  parseScaled(String(event.payload["price"])) ===
+                    parseScaled(level.price)
+                ) {
+                  remaining -= parseScaled(String(event.payload["size"])) ?? 0n;
+                }
+              }
+              return {
+                price: level.price,
+                size: formatScaled(remaining > 0n ? remaining : 0n, 9),
+              };
+            },
+          );
           const executionSize =
             reduceOnlyCap === null
               ? order.size
@@ -2568,7 +2628,15 @@ export async function brokerTick(
                 size: fill.size,
                 fee: fill.feeUsd,
                 taker: true,
-                fee_param_version_id: params?.paramVersionId ?? null,
+                execution_model: "paper-fill-v2",
+                fee_param_version_id: params.paramVersionId,
+                fee_source_ts: params.sourceTs.toISOString(),
+                fee_received_at: params.receivedAt.toISOString(),
+                fee_valid_from: params.validFrom.toISOString(),
+                fee_rate: feeRate,
+                fee_model: "rate-p-one-minus-p-fixed9-v1",
+                book_received_at: book.receivedAt.toISOString(),
+                book_source_ts: book.sourceTs?.toISOString() ?? null,
                 tick_size: params?.tickSize ?? null,
                 book_slice: execution.consumedSlice,
                 exec_ts: execTs.toISOString(),
@@ -2582,15 +2650,22 @@ export async function brokerTick(
             await assertResolutionPolicyStillAuthorizesOrder(tx, order);
             inserted = inserted || isNew;
           }
-          if (reduceOnlyCap !== null) {
+          if (
+            reduceOnlyCap !== null ||
+            (parseScaled(execution.filledSize) ?? 0n) <
+              (parseScaled(order.size) ?? 0n)
+          ) {
             await appendLedgerEvent(tx, {
-              idempotencyKey: `${order.orderId}:resolution_circuit_breaker`,
+              idempotencyKey: `${order.orderId}:${reduceOnlyCap !== null ? "resolution_circuit_breaker" : "cancel_effective"}`,
               eventType: "cancel_effective",
               orderId: order.orderId,
               tokenId: order.tokenId,
               conditionId: order.conditionId,
               payload: {
-                reason: "RESOLUTION_CIRCUIT_BREAKER_CROSS_ZERO_REMAINDER",
+                reason:
+                  reduceOnlyCap !== null
+                    ? "RESOLUTION_CIRCUIT_BREAKER_CROSS_ZERO_REMAINDER"
+                    : "FAK_UNFILLED_REMAINDER",
                 side: order.side,
                 max_reducible_size: executionSize,
                 filled_size: execution.filledSize,
@@ -2600,7 +2675,9 @@ export async function brokerTick(
             ordersCanceled += 1;
           }
           const status =
-            reduceOnlyCap !== null
+            reduceOnlyCap !== null ||
+            (parseScaled(execution.filledSize) ?? 0n) <
+              (parseScaled(order.size) ?? 0n)
               ? "canceled"
               : parseScaled(execution.filledSize) !== null &&
                   (parseScaled(execution.filledSize) ?? 0n) > 0n
@@ -2633,10 +2710,11 @@ export async function brokerTick(
             order.tokenId,
             order.acceptedAt,
           );
-          queueAhead =
-            book === null
-              ? "0"
-              : visibleSizeAtLevel(book, order.side, order.limitPrice);
+          if (book === null) {
+            await cancelForResolutionRisk(tx, order, "NO_BOOK_AT_ACCEPT", now);
+            return;
+          }
+          queueAhead = visibleSizeAtLevel(book, order.side, order.limitPrice);
           await tx.query(
             "UPDATE paper_orders SET queue_ahead = $2 WHERE order_id = $1 AND queue_ahead IS NULL",
             [order.orderId, queueAhead],
@@ -2680,10 +2758,19 @@ export async function brokerTick(
           order.orderId,
         );
         let cumulative = 0n;
-        let filled = 0n;
+        let filled = [...persistedFills.values()].reduce(
+          (total, value) => total + value.size,
+          0n,
+        );
+        const lastFillAt = Math.max(
+          -Infinity,
+          ...[...persistedFills.values()].map((value) => value.at),
+        );
         const size = parseScaled(order.size) ?? 0n;
         let newEvents = false;
         for (const trade of trades) {
+          // At the cancellation instant, cancellation wins the tie.
+          if (cancelEffective !== null && trade.ts >= cancelEffective) continue;
           const tradeSize = parseScaled(trade.size);
           if (tradeSize === null || tradeSize <= 0n) {
             continue;
@@ -2705,7 +2792,13 @@ export async function brokerTick(
                 formatScaled(cumulative, 6),
               ),
             ) ?? 0n;
-          const delta = afterTotal - beforeTotal;
+          // Already committed fills retain their original sizes even if late
+          // trades reorder the cumulative queue. Never recompute economic history.
+          const fillKey = `${order.orderId}:fill:${trade.tradeId}`;
+          if (persistedFills.has(fillKey) || trade.ts.getTime() < lastFillAt)
+            continue;
+          const candidate = afterTotal - beforeTotal;
+          const delta = candidate < size - filled ? candidate : size - filled;
           if (delta <= 0n) {
             continue;
           }
@@ -2730,12 +2823,6 @@ export async function brokerTick(
             continue;
           }
           filled += delta;
-          const fillKey = `${order.orderId}:fill:${trade.tradeId}`;
-          if (persistedFills.has(fillKey)) {
-            // Historical volume still contributes to cumulative filled size,
-            // but its already-committed fill is not a new risk decision.
-            continue;
-          }
           await revalidateResolutionRuntimeForFill(
             tx,
             order.resolutionGeneration,
@@ -2757,6 +2844,10 @@ export async function brokerTick(
               size: formatScaled(delta, 6),
               fee: "0.000000",
               taker: false,
+              execution_model: "paper-fill-v2",
+              fee_model: "maker-zero-docs-2026-09-17",
+              fee_source: "https://docs.polymarket.com/trading/fees",
+              fee_verified_at: "2026-09-17",
               queue_ahead_at_accept: queueAhead,
               trade_id: trade.tradeId,
             },
@@ -2769,7 +2860,10 @@ export async function brokerTick(
           await assertResolutionPolicyStillAuthorizesOrder(tx, order);
           newEvents = newEvents || isNew;
           if (isNew) {
-            persistedFills.add(fillKey);
+            persistedFills.set(fillKey, {
+              size: delta,
+              at: trade.ts.getTime(),
+            });
           }
           if (filled >= size) {
             break;

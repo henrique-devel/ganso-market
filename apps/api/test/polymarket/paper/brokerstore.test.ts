@@ -63,6 +63,8 @@ interface World {
     param_version_id: number;
     version: number;
     valid_from: Date;
+    source_ts: Date;
+    received_at: Date;
     tick_size: string;
     min_order_size: string;
     taker_fee_bps: string | null;
@@ -527,7 +529,9 @@ function worldPool(world: World): PaperPool {
           );
         }
         if (
-          text.startsWith("SELECT idempotency_key FROM paper_ledger_events") &&
+          text.startsWith(
+            "SELECT idempotency_key, payload_json, event_ts FROM paper_ledger_events",
+          ) &&
           text.includes("event_type = 'fill'")
         ) {
           return world.ledger.filter(
@@ -909,6 +913,8 @@ function seedMarket(world: World): void {
     param_version_id: 7,
     version: 1,
     valid_from: at(-86_400_000),
+    source_ts: at(-86_400_000),
+    received_at: at(-86_400_000),
     tick_size: "0.01",
     min_order_size: "5",
     taker_fee_bps: "700",
@@ -3753,4 +3759,144 @@ describe("recorder kill switch and conditioned recovery (RFC-021)", () => {
     expect(f.world.kill["reason"]).toBe("MANUAL");
     expect(f.world.ledger).toEqual(ledger);
   });
+});
+
+describe("EXEC-03 persistent execution contract", () => {
+  it("keeps partial fills through late trade reorder, cancel latency and restart", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2000, "0.48", "0.52", "10");
+    await acceptOrder(world, { size: "20" });
+    // order-1/trade 10, 11 and 12 pass the deterministic degradation fixture.
+    world.trades.push({
+      trade_id: 10,
+      token_id: "tok-yes",
+      price: "0.48",
+      size: "15",
+      ts: at(2000),
+    });
+    const tick = (t: number) =>
+      brokerTick(worldPool(world), {
+        clock: () => at(t),
+        latencyMs: 1000,
+        logSink: silentSink,
+      });
+    await tick(2100);
+    expect(world.orders[0]?.["filled_size"]).toBe("5.000000");
+    // Late evidence changes historical queue attribution, not the committed fill.
+    world.trades.push({
+      trade_id: 11,
+      token_id: "tok-yes",
+      price: "0.48",
+      size: "5",
+      ts: at(1500),
+    });
+    await tick(2200);
+    expect(world.orders[0]?.["filled_size"]).toBe("5.000000");
+    await requestCancel(worldPool(world), "order-1", { clock: () => at(2300) });
+    world.trades.push({
+      trade_id: 12,
+      token_id: "tok-yes",
+      price: "0.48",
+      size: "4",
+      ts: at(2500),
+    });
+    world.trades.push({
+      trade_id: 13,
+      token_id: "tok-yes",
+      price: "0.48",
+      size: "100",
+      ts: at(3300),
+    });
+    await tick(3400);
+    await tick(5000);
+    const fills = world.ledger.filter((e) => e["event_type"] === "fill");
+    expect(fills.map((e) => (e["payload_json"] as Row)["size"])).toEqual([
+      "5.000000",
+      "4.000000",
+    ]);
+    expect(world.orders[0]?.["filled_size"]).toBe("9.000000");
+    expect(world.orders[0]?.["status"]).toBe("canceled");
+    expect(
+      world.ledger.filter((e) => e["event_type"] === "cancel_effective"),
+    ).toHaveLength(1);
+  });
+
+  it("does not create a maker fill from a touching book without trades", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2000, "0.48", "0.52", "100");
+    await acceptOrder(world, { size: "20" });
+    seedBook(world, 2000, "0.47", "0.48", "100");
+    await brokerTick(worldPool(world), {
+      clock: () => at(3000),
+      logSink: silentSink,
+    });
+    expect(world.ledger.filter((e) => e["event_type"] === "fill")).toHaveLength(
+      0,
+    );
+  });
+
+  it("shares finite snapshot depth across orders and cancels a FAK remainder", async () => {
+    const world = emptyWorld();
+    seedMarket(world);
+    seedBook(world, -2000, "0.48", "0.52", "5");
+    await acceptOrder(world, {
+      size: "20",
+      orderType: "FAK",
+      limitPrice: "0.55",
+      worstPrice: "0.55",
+    });
+    // A second owner/order observes the same snapshot after the first order.
+    world.orders.push({ ...world.orders[0], order_id: "order-2" });
+    await brokerTick(worldPool(world), {
+      clock: () => at(1200),
+      logSink: silentSink,
+    });
+    expect(world.ledger.filter((e) => e["event_type"] === "fill")).toHaveLength(
+      0,
+    );
+    await brokerTick(worldPool(world), {
+      clock: () => at(2000),
+      logSink: silentSink,
+    });
+    await brokerTick(worldPool(world), {
+      clock: () => at(3000),
+      logSink: silentSink,
+    });
+    const fills = world.ledger.filter((e) => e["event_type"] === "fill");
+    expect(fills).toHaveLength(1);
+    expect((fills[0]?.["payload_json"] as Row)["size"]).toBe("5.000000");
+    expect((fills[0]?.["payload_json"] as Row)["fee"]).toBe("0.087360");
+    expect(world.orders.map((o) => o["status"])).toEqual([
+      "canceled",
+      "canceled",
+    ]);
+  });
+
+  it.each([null, "invalid", "-1"])(
+    "refuses execution when fee becomes %s",
+    async (fee) => {
+      const world = emptyWorld();
+      seedMarket(world);
+      seedBook(world, -2000, "0.48", "0.52");
+      await acceptOrder(world, {
+        size: "20",
+        orderType: "FAK",
+        limitPrice: "0.55",
+        worstPrice: "0.55",
+      });
+      world.params[0]!.taker_fee_bps = fee;
+      await brokerTick(worldPool(world), {
+        clock: () => at(2000),
+        logSink: silentSink,
+      });
+      expect(
+        world.ledger.filter((e) => e["event_type"] === "fill"),
+      ).toHaveLength(0);
+      expect(world.orders[0]?.["resolution_cancel_reason"]).toBe(
+        "FEE_EVIDENCE_MISSING",
+      );
+    },
+  );
 });
