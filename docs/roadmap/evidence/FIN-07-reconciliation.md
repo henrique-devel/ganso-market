@@ -173,12 +173,12 @@ make verify
 
 O harness fornece a URL somente do banco descartável. Rejeita banco ausente,
 falha, skip ou relatório incompleto. Execução final em 2026-09-17T14:01:25+00:00, código `a03490ccf07b05d927d045d937da699e4d962873`: **318 passed / 0 failed / 0 unexecuted, 26 arquivos** (287 casos SQL reais +31 unitários em arquivos mistos). Comando observado: `GANSO_PG_RESULTS_DIR=/private/tmp/fin07-repair-pg7 make test-postgres`, exit0.
-[Resumo nominal](FIN-07-pg-results.json).
+O [resumo nominal atual](FIN-07-pg-results.json) contém a reexecução ampliada de319 testes descrita no reparo operacional abaixo; esta rodada inicial teve318.
 
 `make verify`: exit0, 2.478 JavaScript aprovados (287 skips SQL no gate source-only,
 verificados separadamente no gate real),16 Rust,13+207 Python; formatação, lint,
 build, scan de segredos e Compose aprovados. Typechecks API/web e diff também
-passaram. CI remoto ainda deve confirmar source/PostgreSQL/Compose antes do merge.
+passaram. Source/PostgreSQL/Compose passaram no PR197 e em main; o reparo de inicialização também passou no PR199.
 
 As rodadas de desenvolvimento registraram erros de fixtures e expectativas
 antes do sucesso: schema antigo do teste de kill switch, guarda DELETE/HOLD,
@@ -188,7 +188,22 @@ nenhuma tolerância monetária ou guarda produtiva foi relaxada.
 
 ## Entrega e limites
 
-Código `a03490ccf07b05d927d045d937da699e4d962873`. Publicação e implantação em andamento; CI remoto e SHA produtivo serão registrados no fecho. Saúde prévia verificada às13:57:48Z: release1f49f47, serviços existentes ativos e healthcheck aprovado.
+[PR197](https://github.com/henrique-devel/ganso-market/pull/197), merge6279457,
+entregou a correção financeira; [CI/CD aprovado](https://github.com/henrique-devel/ganso-market/actions/runs/35231573111).
+[PR199](https://github.com/henrique-devel/ganso-market/pull/199), mergef2f5528,
+entregou o reparo mínimo de inicialização descrito abaixo. FIN-03/issue187 encerrada.
+[CI/CD do reparo](https://github.com/henrique-devel/ganso-market/actions/runs/35234388076) aprovado.
+Conferência UTC de17/09/2026 14:39:42–14:39:45: API/resolution no SHA
+`f2f552801be2162515b0b4cf113a863c5726c672`; paper/portfolio no SHA financeiro
+`627945767e248a212fab84811506d8fd78b64e5d`, cujo código não mudou no reparo.
+Resolução `ready=true`, heartbeat recente, sem failure_reason; healthcheck aprovado.
+Os containers atuais afetados têm zero restarts. Schema26/checksum
+`0aa21e31f2611bb16ddcdacdfca13a4753ae63090fda114c9ec92899daa42f31`
+conferido. PostgreSQL preservou container/início07/09 22:59:17Z e zero restarts;
+hashes de runtime/portfolio/fast idênticos antes/depois. Boot paper e portfolio
+REDUCE_ONLY observados. G4 permanece INSUFFICIENT_DATA para amostra independente
+fee/slippage/soak; o aceite FIN-07 não libera esse gate operacional.
+
 
 Prontidão declarada é a financeira do contrato FIN-07 sobre fixtures não vazias,
 com broker/cache/leitores e recuperação reconciliados. Não é alegação de lucro,
@@ -221,6 +236,10 @@ dois estados calculados e prova retry sem duplicar trabalho desnecessário.
 `GANSO_PG_RESULTS_DIR=/private/tmp/fin07-resolution-pg make test-postgres`: exit0,
 **319 passed/0 failed/0 unexecuted** (288 SQL reais+31 unitários mistos),26 arquivos;
 os318 contratos anteriores também passam. Testes focados recompute/runner:39 passed.
-`make verify` exit0:2478JS/16Rust/220Python;288 skips no gate source-only executados no PostgreSQL. A prontidão operacional final será registrada após implantar este reparo.
+`make verify` exit0:2478JS/16Rust/220Python;288 skips no gate source-only executados no PostgreSQL. O reparo foi integrado no PR199 e a prontidão foi confirmada conforme a seção de entrega acima.
 A causa da transação ociosa permanece para investigação própria em198; detalhes
 operacionais ficam no diagnóstico local e não compõem o relatório público.
+
+Hashes SHA256 das fixtures financeiras executadas:
+- `reconciliation.pg.test.ts`: `08e5f316f25dd568ea2e106861264c187e285e6b083adb7890681d071630b490`.
+- `reconciliation-broker.pg.test.ts`: `8cd6d7092b3a6f54a971407d59c36fb562f6ee3e50ec63db1936136782a4d7e1`.
