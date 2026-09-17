@@ -82,3 +82,17 @@ Autorização contínua foi lida; o bloqueio efetivo da ferramenta permanece.
 
 O proprietário autorizou explicitamente a publicação do código/documentação
 na retomada desta tarefa; a recusa acima é histórico, não aprovação pendente.
+
+## Publicação e observação operacional
+
+[PR193](https://github.com/henrique-devel/ganso-market/pull/193) integrado em
+`e3ce391e854d2c1664f354e13781236f116700c1`; checks source/PostgreSQL/Compose
+aprovados no PR e main. [CI/CD35171147254](https://github.com/henrique-devel/ganso-market/actions/runs/35171147254)
+concluiu o deploy padrão. Leitura SSH com host key fixada em 17/09/2026 01:40Z:
+API no SHA do merge, healthcheck aprovado, zero restarts; PostgreSQL iniciado
+em 07/09 22:59:17Z, zero restarts. Worker paper preservado em `18a6c20`, iniciado
+em 17/09 00:20:44Z, zero restarts. Nenhum comando para ligar/recriar worker foi
+executado. Portanto o código está publicado e na API, mas sua aplicação ao
+processo paper ainda depende de uma entrega operacional posterior compatível
+com o limite do pedido. Não confundir os testes com fills novos de produção.
+O fecho documental não deve forçar outro deploy; aplica-se RFC-020.
