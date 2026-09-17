@@ -880,12 +880,11 @@ export async function acceptPaperOrder(
         throw new PaperAcceptanceRejected(409, "MARKET_FROZEN_DISPUTE");
       }
 
-      // Pin parameter/mapping revisions through reservation (which reads the fee
-      // too). The book is an immutable observation, re-read at this acceptance.
+      // The journal SHARE lock already prevents parameter/mapping writers from
+      // committing (0011/0012 triggers). Do not lock their source tables here:
+      // a writer may hold them while waiting to append to that same journal.
+      // The book is an immutable observation, re-read at this acceptance.
       if (input.source === "portfolio") {
-        await tx.query(
-          "LOCK TABLE polymarket_param_versions, polymarket_market_metadata_versions IN SHARE MODE",
-        );
         const at = clock();
         let economics;
         try {

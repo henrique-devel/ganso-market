@@ -683,6 +683,97 @@ describe.skipIf(DATABASE_URL === undefined)(
         breakdown: { feeScaled: "0.014112000", edgeNetScaled: "0.014888000" },
       });
     });
+    it("EXEC-02 pins the fee through reservation without deadlocking a source writer", async () => {
+      await snapshot([{ price: "0.50", size: "500" }]);
+      const id = await acceptedEntry("BUY", NOW, NOW, "YES", "5.000000");
+      const base = onlyDecision(id);
+      const writer = await instance().connect();
+      await writer.query("BEGIN");
+      const pid = (await writer.query("SELECT pg_backend_pid() AS pid")).rows[0]
+        .pid;
+      let pending: Promise<unknown> | null = null;
+      const lines: string[] = [];
+      try {
+        await bridgeTick(
+          {
+            ...base,
+            transaction(run) {
+              return base.transaction!((tx) =>
+                run({
+                  async query<R extends Record<string, unknown>>(
+                    text: string,
+                    params: readonly unknown[] = [],
+                  ) {
+                    const result = await tx.query<R>(text, params);
+                    if (
+                      text ===
+                        "LOCK TABLE polymarket_resolution_input_changes IN SHARE MODE" &&
+                      pending === null
+                    ) {
+                      // The writer owns its source table, then waits on the journal
+                      // held by acceptance. Acceptance must never wait on that source.
+                      pending = writer
+                        .query(
+                          `INSERT INTO polymarket_param_versions
+                (condition_id,version,content_hash,maker_fee_bps,taker_fee_bps,tick_size,min_order_size,neg_risk,valid_from)
+                VALUES ($1,2,$2,'0','400','0.01','5',FALSE,$3)`,
+                          [CONDITION, "e".repeat(64), NOW],
+                        )
+                        .then(
+                          () => null,
+                          (error) => error,
+                        );
+                      const deadline = Date.now() + 5000;
+                      let blocked = false;
+                      while (Date.now() < deadline) {
+                        blocked =
+                          (
+                            await instance().query(
+                              `SELECT 1 FROM pg_locks WHERE pid=$1
+                  AND relation='polymarket_resolution_input_changes'::regclass AND NOT granted`,
+                              [pid],
+                            )
+                          ).rowCount! > 0;
+                        if (blocked) break;
+                        await new Promise((resolve) => setTimeout(resolve, 10));
+                      }
+                      expect(blocked).toBe(true);
+                    }
+                    return result;
+                  },
+                }),
+              );
+            },
+          },
+          { clock: () => NOW, logSink: (line) => lines.push(line) },
+        );
+        expect(await pending).toBeNull();
+        await writer.query("COMMIT");
+        const event = await audit(id, "order_accepted");
+        expect(event, lines.join("\n")).toBeDefined();
+        expect(event.final_entry_evaluation.fee.rate).toBe("0.070000000");
+        expect(event.final_entry_evaluation.breakdown.feeScaled).toBe(
+          "0.017500000",
+        );
+        expect(event.reservation.fee_per_share).toBe("0.017500000");
+        expect(
+          (
+            await pool().query(
+              `SELECT cash_remaining_usd FROM paper_order_reservations WHERE order_id=$1`,
+              [`portfolio:${id}`],
+            )
+          ).rows[0]?.cash_remaining_usd,
+        ).toBe("2.587500000");
+      } finally {
+        await pending;
+        await writer.query("ROLLBACK");
+        writer.release();
+        await pool()
+          .query(`UPDATE resolution_runtime_state SET processed_input_change_id=
+          (SELECT COALESCE(max(input_change_id),0) FROM polymarket_resolution_input_changes)`);
+      }
+    });
+
     it("EXEC-02 refuses fee lost between the taker quote and acceptance", async () => {
       await snapshot([{ price: "0.50", size: "500" }]);
       const id = await acceptedEntry("BUY", NOW, NOW, "YES", "5.000000");
@@ -699,7 +790,7 @@ describe.skipIf(DATABASE_URL === undefined)(
               await pool().query(
                 `INSERT INTO polymarket_param_versions
             (condition_id,version,content_hash,maker_fee_bps,taker_fee_bps,tick_size,min_order_size,neg_risk,valid_from)
-            VALUES ($1,2,$2,'0',NULL,'0.01','5',FALSE,$3)`,
+            VALUES ($1,3,$2,'0',NULL,'0.01','5',FALSE,$3)`,
                 [CONDITION, "d".repeat(64), NOW],
               );
               await pool()
