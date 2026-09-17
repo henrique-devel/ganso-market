@@ -1,5 +1,5 @@
 Bloco: EXEC-03 | RFC: RFC-034 | Data UTC: 2026-09-17
-Estado: code-verified; publicação bloqueada pela revisão automática, sem PR/merge/deploy.
+Estado: code-verified; publicação expressamente autorizada pelo proprietário, entrega em andamento.
 Código: 63fd9b3; base83856e9 após rebase documental; worktree /private/tmp/ganso-exec03.
 Resultado: aceite → parcial → pedido → parcial antes do efeito → cancelamento sem fill posterior.
 Dependências: EXEC-02/PR190–192 e FIN-05/0025 conferidos por código/recibos.
@@ -14,7 +14,7 @@ SQL: make test-postgres, PostgreSQL18.4/25 migrations, 23 arquivos/295 passed/ze
 Checks: make verify passou (2472 JS/264 PG skips separados; 16 Rust; 220 Python; build/scan/Compose).
 Aceite econômico: dois donos, cash1.001,70/PnL1,70/fees0,30 cada; retries e reconstrução.
 Produção: não alterada; nenhum worker ativado; CI remoto não executado.
-Bloqueio: push a henrique-devel/ganso-market recusado como saída sensível sem autorização explícita do payload/destino.
+Autorização: proprietário respondeu “Autorizo realizar a publicação codigo/documentação”; recusa anterior superada.
 Limites: simulação, precisão difere da venue; PnL legado exclui tokens mistos; sem G4/soak/live.
 EXEC-04: reserveOrder + appendLedgerEvent(fill/terminal) + reconcileReservations + requestCancel transacional.
 Detalhes/reprodução/limitações: [evidência](../evidence/EXEC-03-fills.md).

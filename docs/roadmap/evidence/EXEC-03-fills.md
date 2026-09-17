@@ -79,3 +79,6 @@ Logs locais: `/private/tmp/exec03-focused.log`, `/private/tmp/exec03-pg.log`,
 Push recusado pela revisão automática por saída sensível sem autorização
 explícita do payload/destino. Nenhuma tentativa alternativa, PR ou deploy.
 Autorização contínua foi lida; o bloqueio efetivo da ferramenta permanece.
+
+O proprietário autorizou explicitamente a publicação do código/documentação
+na retomada desta tarefa; a recusa acima é histórico, não aprovação pendente.
