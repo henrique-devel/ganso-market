@@ -1,3 +1,5 @@
+// Artefato histórico do PR188 (16/09/2026); reprodução atual em
+// apps/api/test/polymarket/paper/reconciliation.pg.test.ts. Não copiar sobre a suíte permanente.
 import { computeExposures } from "../../../src/polymarket/portfolio/exposure.js";
 import { DEFAULT_PORTFOLIO_CONFIG } from "../../../src/polymarket/portfolio/config.js";
 // FIN-07: independent FIN-01 monetary oracles through real PostgreSQL.
