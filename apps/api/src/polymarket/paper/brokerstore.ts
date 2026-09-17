@@ -35,6 +35,8 @@ import {
 } from "./ledger.js";
 import { validateOrder, type OrderDraft } from "./validator.js";
 import { loadOpenOwnerTokens } from "./ownership.js";
+import { evaluateFinalEntry, type FinalOrderEvaluation } from "./finalorder.js";
+import { loadEntryEconomics } from "./finalorderstore.js";
 import { reserveOrder, ReservationRejected } from "./reservations.js";
 import type { ResolutionAction } from "../resolution/types.js";
 import { errorFields } from "../../errors.js";
@@ -347,6 +349,9 @@ export async function bookAtOrBefore(
 }
 
 interface MarketParamsAt {
+  readonly sourceTs: Date | null;
+  readonly receivedAt: Date | null;
+  readonly validFrom: Date | null;
   readonly tickSize: string | null;
   readonly minOrderSize: string | null;
   readonly takerFeeBps: string | null;
@@ -360,7 +365,7 @@ export async function paramsAtOrBefore(
   at: Date,
 ): Promise<MarketParamsAt | null> {
   const result = await pool.query(
-    "SELECT param_version_id, tick_size, min_order_size, taker_fee_bps, neg_risk " +
+    "SELECT param_version_id, tick_size, min_order_size, taker_fee_bps, neg_risk, source_ts, received_at, valid_from " +
       "FROM polymarket_param_versions " +
       "WHERE condition_id = $1 AND valid_from <= $2 " +
       "ORDER BY version DESC LIMIT 1",
@@ -372,6 +377,9 @@ export async function paramsAtOrBefore(
   }
   const versionRaw = row["param_version_id"];
   return {
+    sourceTs: toDate(row["source_ts"]),
+    receivedAt: toDate(row["received_at"]),
+    validFrom: toDate(row["valid_from"]),
     tickSize: asString(row["tick_size"]),
     minOrderSize: asString(row["min_order_size"]),
     takerFeeBps: asString(row["taker_fee_bps"]),
@@ -751,7 +759,7 @@ export async function acceptPaperOrder(
   if (!validated.ok) {
     return { status: "rejected", httpStatus: 422, reason: validated.reason };
   }
-  const order = validated.value;
+  let order = validated.value;
 
   if (
     input.resolutionOverride !== undefined &&
@@ -805,7 +813,9 @@ export async function acceptPaperOrder(
     };
   }
 
-  const acceptedAt = new Date(now.getTime() + latencyMs);
+  let finalizedAt = now;
+  let acceptedAt = new Date(now.getTime() + latencyMs);
+  let finalEvaluation: FinalOrderEvaluation | null = null;
   try {
     return await pool.transaction(async (tx: SqlExecutor) => {
       // One authoritative acceptance revision: journal -> runtime -> derived
@@ -870,6 +880,85 @@ export async function acceptPaperOrder(
         throw new PaperAcceptanceRejected(409, "MARKET_FROZEN_DISPUTE");
       }
 
+      // Pin parameter/mapping revisions through reservation (which reads the fee
+      // too). The book is an immutable observation, re-read at this acceptance.
+      if (input.source === "portfolio") {
+        await tx.query(
+          "LOCK TABLE polymarket_param_versions, polymarket_market_metadata_versions IN SHARE MODE",
+        );
+        const at = clock();
+        let economics;
+        try {
+          economics = await loadEntryEconomics(
+            tx,
+            input.decisionId ?? -1,
+            conditionId,
+            order.tokenId,
+            at,
+          );
+        } catch (error) {
+          throw new PaperAcceptanceRejected(
+            422,
+            error instanceof Error
+              ? error.message
+              : "FINAL_ENTRY_INPUT_MISSING",
+          );
+        }
+        if (economics !== null) {
+          finalizedAt = at;
+          acceptedAt = new Date(at.getTime() + latencyMs);
+          const latestParams = await paramsAtOrBefore(tx, conditionId, at);
+          if (!latestParams?.tickSize || !latestParams.minOrderSize)
+            throw new PaperAcceptanceRejected(422, "UNKNOWN_MARKET_PARAMS");
+          const normalized = validateOrder(
+            input.draft,
+            {
+              tickSize: latestParams.tickSize,
+              minOrderSize: latestParams.minOrderSize,
+              negRisk: latestParams.negRisk,
+            },
+            at.getTime(),
+          );
+          if (!normalized.ok)
+            throw new PaperAcceptanceRejected(422, normalized.reason);
+          order = normalized.value;
+          const book = await bookAtOrBefore(tx, order.tokenId, at);
+          finalEvaluation = evaluateFinalEntry({
+            order,
+            conditionId,
+            accountId: "paper",
+            strategyId: "main",
+            economics,
+            book:
+              book === null
+                ? null
+                : {
+                    ...book,
+                    tokenId: order.tokenId,
+                    sourceTs: book.sourceTs?.toISOString() ?? null,
+                    receivedAt: book.receivedAt.toISOString(),
+                  },
+            fee: {
+              rate:
+                latestParams.takerFeeBps === null ||
+                parseScaled(latestParams.takerFeeBps) === null
+                  ? null
+                  : formatScaled(
+                      divRound(parseScaled(latestParams.takerFeeBps)!, 10_000n),
+                      9,
+                    ),
+              paramVersionId: latestParams.paramVersionId,
+              sourceTs: latestParams.sourceTs?.toISOString() ?? null,
+              receivedAt: latestParams.receivedAt?.toISOString() ?? null,
+              validFrom: latestParams.validFrom?.toISOString() ?? null,
+            },
+            evaluatedAt: at.toISOString(),
+          });
+          if (!finalEvaluation.ok)
+            throw new PaperAcceptanceRejected(422, finalEvaluation.reason);
+        }
+      }
+
       const resolutionGeneration = runtime.generation;
       const inserted = await tx.query(
         "INSERT INTO paper_orders (order_id, token_id, condition_id, side, order_type, " +
@@ -892,7 +981,7 @@ export async function acceptPaperOrder(
           input.policyReason ?? null,
           input.policyVersion ?? null,
           input.source,
-          now,
+          finalizedAt,
           acceptedAt,
           resolutionGeneration,
           input.decisionId ?? null,
@@ -903,7 +992,19 @@ export async function acceptPaperOrder(
         if (concurrentRetry !== null) return concurrentRetry;
         throw new PaperAcceptanceRejected(409, "FIN05_ACCEPTANCE_INCOMPLETE");
       }
-      const reservation = await reserveOrder(tx, input.orderId, now);
+      if (finalEvaluation !== null) {
+        const owner = await tx.query(
+          `SELECT account_id, strategy_id FROM paper_order_owners
+          WHERE order_id=$1 AND ownership_version=1 AND attribution_status='verified'`,
+          [input.orderId],
+        );
+        if (
+          owner.rows[0]?.["account_id"] !== "paper" ||
+          owner.rows[0]?.["strategy_id"] !== "main"
+        )
+          throw new PaperAcceptanceRejected(422, "FINAL_ENTRY_OWNER_MISMATCH");
+      }
+      const reservation = await reserveOrder(tx, input.orderId, finalizedAt);
       const acceptedEventInserted = await appendLedgerEvent(tx, {
         idempotencyKey: `${input.orderId}:accepted`,
         eventType: "order_accepted",
@@ -912,6 +1013,7 @@ export async function acceptPaperOrder(
         conditionId,
         payload: {
           reservation,
+          final_entry_evaluation: finalEvaluation?.evidence ?? null,
           acceptance_request: input,
           side: order.side,
           order_type: order.orderType,
@@ -928,7 +1030,7 @@ export async function acceptPaperOrder(
           intent: input.intent ?? null,
           override_veto: input.resolutionOverride ?? null,
         },
-        eventTs: now,
+        eventTs: finalizedAt,
       });
       if (!acceptedEventInserted) {
         throw new Error("PAPER_ACCEPTANCE_LEDGER_CONFLICT");
@@ -971,6 +1073,28 @@ export async function acceptPaperOrder(
       return { status: "rejected", httpStatus: 409, reason: error.message };
     }
     if (error instanceof PaperAcceptanceRejected) {
+      if (
+        (input.source === "portfolio" &&
+          error.reason.startsWith("FINAL_ENTRY")) ||
+        finalEvaluation !== null
+      ) {
+        const evidence =
+          (finalEvaluation as FinalOrderEvaluation | null)?.evidence ?? null;
+        await appendLedgerEvent(pool, {
+          idempotencyKey: `${input.orderId}:economic-rejection:${now.toISOString()}:${String(evidence?.["evaluation_id"] ?? error.reason)}`,
+          eventType: "order_rejected",
+          orderId: input.orderId,
+          tokenId: order.tokenId,
+          conditionId,
+          payload: {
+            reason: error.reason,
+            decision_id: input.decisionId ?? null,
+            final_entry_evaluation: evidence,
+            intent: input.intent ?? null,
+          },
+          eventTs: now,
+        });
+      }
       return {
         status: "rejected",
         httpStatus: error.httpStatus,

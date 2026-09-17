@@ -30,9 +30,14 @@ import { SCALE, formatScaled, mul, parseScaled } from "../fundamental/fixed.js";
 import type { PriceLevel } from "../types.js";
 import { takerFeePerShare } from "./policy.js";
 import type { FastArm, FastArmMode, FastConfig } from "./fastconfig.js";
-import type { OrderSide, OrderType } from "./validator.js";
+import { validateOrder, type OrderSide, type OrderType } from "./validator.js";
+import {
+  evaluateFinalEntry,
+  type EntryEconomics,
+  type FinalFee,
+} from "./finalorder.js";
 
-export const FAST_POLICY_VERSION = "0.1.0";
+export const FAST_POLICY_VERSION = "0.1.1";
 
 export const FAST_STRATEGY_ID = "fast_btc_updown";
 
@@ -98,6 +103,13 @@ export interface FastContext {
   readonly books: readonly FastBook[];
   readonly rtds: FastRtdsInputs;
   readonly state: FastStateInputs;
+  /** Paper requires model bounds/costs and recorded venue parameters. Shadow
+   * candidates retain their labelled assumptions and cannot authorize a fill. */
+  readonly finalEntry?: {
+    readonly economics: EntryEconomics;
+    readonly fee: FinalFee;
+    readonly minOrderSize: string;
+  };
 }
 
 export interface FastOrderPlan {
@@ -147,6 +159,7 @@ export interface FastDecision {
   readonly mode: FastArmMode;
   readonly asOf: FastAsOfInputs;
   readonly order?: FastOrderPlan;
+  readonly finalEntryEvaluation?: Record<string, unknown>;
 }
 
 function armMode(config: FastConfig, arm: FastArm): FastArmMode {
@@ -376,7 +389,7 @@ function marketableOrder(
  * significa que o braço nunca chegou a ver o sinal — que é exatamente o que o
  * aceite "braços exercitados" mede.
  */
-export function decideFastStrategyOrder(context: FastContext): FastDecision {
+function decideCandidate(context: FastContext): FastDecision {
   const { config, state, rtds, market, arm } = context;
 
   // --- Soberania: kill switch e disjuntores vêm antes de tudo (D6). ---
@@ -742,4 +755,65 @@ function decideArmD(
     arm,
     "FAST_D_CONTROL",
   );
+}
+
+/** The fast paper adapter shares the exact same entry gate as the broker. */
+export function decideFastStrategyOrder(context: FastContext): FastDecision {
+  const candidate = decideCandidate(context);
+  if (!candidate.order || candidate.mode !== "paper") return candidate;
+  const source = context.finalEntry;
+  if (!source)
+    return skip(context, "FINAL_ENTRY_INPUT_MISSING", candidate.asOf);
+  const plan = candidate.order;
+  if (
+    source.economics.strategyId !== FAST_STRATEGY_ID ||
+    source.economics.accountId !== "paper" ||
+    source.economics.marketSide !==
+      (plan.outcome === "affirmative" ? "YES" : "NO")
+  )
+    return skip(context, "FINAL_ENTRY_IDENTITY_MISMATCH", candidate.asOf);
+  const normalized = validateOrder(
+    { ...plan, size: plan.sizeShares },
+    {
+      tickSize: context.market.tickSize,
+      minOrderSize: source.minOrderSize,
+      negRisk: false,
+    },
+    context.nowMs,
+  );
+  if (!normalized.ok) return skip(context, normalized.reason, candidate.asOf);
+  const book = context.books.find((book) => book.tokenId === plan.tokenId);
+  const evaluation = evaluateFinalEntry({
+    order: normalized.value,
+    conditionId: context.market.conditionId,
+    accountId: "paper",
+    strategyId: FAST_STRATEGY_ID,
+    economics: source.economics,
+    book: book
+      ? {
+          tokenId: book.tokenId,
+          asks: book.asks,
+          bids: book.bids,
+          sourceTs: null,
+          receivedAt: new Date(book.asOfMs).toISOString(),
+        }
+      : null,
+    fee: source.fee,
+    evaluatedAt: new Date(context.nowMs).toISOString(),
+  });
+  if (!evaluation.ok)
+    return {
+      ...skip(context, evaluation.reason, candidate.asOf),
+      finalEntryEvaluation: evaluation.evidence,
+    };
+  return {
+    ...candidate,
+    order: {
+      ...plan,
+      sizeShares: normalized.value.size,
+      limitPrice: normalized.value.limitPrice,
+      worstPrice: normalized.value.worstPrice,
+    },
+    finalEntryEvaluation: evaluation.evidence,
+  };
 }

@@ -446,7 +446,12 @@ export async function bridgeTick(
         policyVersion: POLICY_VERSION,
         intent: {
           entry_contract_version: decision.contractVersion,
-          order_contract_version: 2,
+          order_contract_version: 3,
+          quote: {
+            book,
+            param_version_id: params.paramVersionId,
+            policy: policy.value,
+          },
           account_id: "paper",
           strategy_id: "main",
           condition_id: decision.conditionId,

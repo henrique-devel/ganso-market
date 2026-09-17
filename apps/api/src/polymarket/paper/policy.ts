@@ -12,16 +12,12 @@
 // taker markout at +1s is negative across every symbol.
 
 import type { PriceLevel } from "../types.js";
-import {
-  SCALE,
-  div,
-  formatScaled,
-  mul,
-  parseScaled,
-} from "../fundamental/fixed.js";
+import { SCALE, formatScaled, parseScaled } from "../fundamental/fixed.js";
+import { bookWalk, takerFeePerShare } from "../portfolio/ev.js";
+export { takerFeePerShare } from "../portfolio/ev.js";
 import type { OrderSide, OrderType } from "./validator.js";
 
-export const POLICY_VERSION = "1.0.1";
+export const POLICY_VERSION = "1.0.2";
 
 /** Marketable orders in crypto/finance suffer this match delay (B5). */
 export const TAKER_DELAY_MS = 250;
@@ -76,64 +72,6 @@ export interface PolicyDecision {
 export type PolicyResult =
   | { readonly ok: true; readonly value: PolicyDecision }
   | { readonly ok: false; readonly reason: string };
-
-interface BookWalk {
-  /** Price of the deepest level consumed (the executable worst price). */
-  readonly worstScaled: bigint;
-  /** VWAP of the walk, scaled. */
-  readonly vwapScaled: bigint;
-  readonly filled: boolean;
-}
-
-/** Walk the opposing side for `sizeScaled` shares; best-first levels. */
-function walkForSize(
-  levels: readonly PriceLevel[],
-  sizeScaled: bigint,
-): BookWalk | null {
-  let remaining = sizeScaled;
-  let notional = 0n;
-  let taken = 0n;
-  let worst = 0n;
-  for (const level of levels) {
-    const price = parseScaled(level.price);
-    const size = parseScaled(level.size);
-    if (
-      price === null ||
-      size === null ||
-      price <= 0n ||
-      price >= SCALE ||
-      size < 0n
-    ) {
-      return null;
-    }
-    if (remaining <= 0n) {
-      break;
-    }
-    const take = size < remaining ? size : remaining;
-    if (take > 0n) {
-      notional += mul(price, take);
-      taken += take;
-      worst = price;
-      remaining -= take;
-    }
-  }
-  if (taken === 0n) {
-    return { worstScaled: 0n, vwapScaled: 0n, filled: false };
-  }
-  return {
-    worstScaled: worst,
-    vwapScaled: div(notional, taken),
-    filled: remaining <= 0n,
-  };
-}
-
-/** Per-share taker fee at price p: rate x p x (1 - p). */
-export function takerFeePerShare(
-  rateScaled: bigint,
-  priceScaled: bigint,
-): bigint {
-  return mul(rateScaled, mul(priceScaled, SCALE - priceScaled));
-}
 
 /**
  * The deterministic decision. Every returned order has a limit price; the
@@ -213,8 +151,8 @@ export function decideOrderType(context: PolicyContext): PolicyResult {
     context.takerFeeRate === null ? null : parseScaled(context.takerFeeRate);
   if (rate !== null && rate >= 0n) {
     const opposing = context.side === "BUY" ? context.asks : context.bids;
-    const walk = walkForSize(opposing, size);
-    if (walk !== null && walk.filled) {
+    const walk = bookWalk(opposing, size);
+    if (walk !== null && walk.complete) {
       const worst = walk.worstScaled;
       // USD/share at 1e9. This policy uses the conservative worst price,
       // not VWAP, and never subtracts walk slippage a second time.

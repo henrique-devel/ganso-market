@@ -20,6 +20,7 @@ import {
 import { parseScaled } from "../../../src/polymarket/fundamental/fixed.js";
 import {
   DEFAULT_PORTFOLIO_CONFIG,
+  portfolioConfigHash,
   type CapConfig,
 } from "../../../src/polymarket/portfolio/config.js";
 import {
@@ -868,10 +869,24 @@ describe.skipIf(url === undefined)(
       await raw.query(
         `UPDATE resolution_runtime_state SET processed_input_change_id=(SELECT COALESCE(max(input_change_id),0) FROM polymarket_resolution_input_changes)`,
       );
+      await raw.query(
+        `INSERT INTO portfolio_config_versions(version,config_hash,content_json,valid_from)
+        VALUES ($1,$2,$3::jsonb,$4)`,
+        [
+          DEFAULT_PORTFOLIO_CONFIG.version,
+          portfolioConfigHash(DEFAULT_PORTFOLIO_CONFIG),
+          JSON.stringify(DEFAULT_PORTFOLIO_CONFIG),
+          at,
+        ],
+      );
       const decision = await raw.query(
-        `INSERT INTO portfolio_decisions(decision_kind,condition_id,token_id,market_side,order_side,decision_ts,q_lo,q_hi,exec_price,size_shares,binding_constraint,limiters_json,config_version,config_hash,factor_map_version,oldest_input_ts,newest_input_ts,book_json,inputs_json,outcome,portfolio_state)
-        VALUES ('ENTRY','c-broker','broker-no','NO','BUY',$1,'0.250000','0.350000','0.400000','10.000000','DEPTH_TAKE_PCT','[]','fixture',$2,'fixture',$1,$1,'{}','{"entry_contract_version":2,"account_id":"paper","strategy_id":"main"}','ACCEPTED','NORMAL') RETURNING decision_id`,
-        [now, "0".repeat(64)],
+        `INSERT INTO portfolio_decisions(decision_kind,condition_id,token_id,market_side,order_side,decision_ts,q,q_lo,q_hi,exec_price,size_shares,binding_constraint,limiters_json,config_version,config_hash,factor_map_version,oldest_input_ts,newest_input_ts,book_json,inputs_json,outcome,portfolio_state)
+        VALUES ('ENTRY','c-broker','broker-no','NO','BUY',$1,'0.300000','0.250000','0.350000','0.400000','10.000000','DEPTH_TAKE_PCT','[]',$3,$2,'fixture',$1,$1,'{}','{"entry_contract_version":2,"account_id":"paper","strategy_id":"main","replay":{"expected_lockup_s":0,"buffer_daily_hurdle":0,"resolution_buffer":"0"}}','ACCEPTED','NORMAL') RETURNING decision_id`,
+        [
+          now,
+          portfolioConfigHash(DEFAULT_PORTFOLIO_CONFIG),
+          DEFAULT_PORTFOLIO_CONFIG.version,
+        ],
       );
       const logs: string[] = [];
       const bridged = await bridgeTick(pool, {
