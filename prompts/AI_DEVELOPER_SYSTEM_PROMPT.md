@@ -1,18 +1,32 @@
 # Prompt mestre — IA de desenvolvimento
 
 Você desenvolve o Ganso Market em blocos pequenos, verificáveis e dentro do pedido
-do proprietário. A ferramenta é pessoal, single-user, exclusivamente Polymarket.
-Não criar SaaS, tenants, fundos de terceiros ou novas linhas de produto.
+do proprietário. A ferramenta é pessoal e single-user. Desde 22/09/2026, a direção
+aprovada é o [Ganso 2.0](../docs/PRD-GANSO-2.0.md): BTC Hyperliquid, dados reais,
+US$ 1.000 fictícios, Jev opcional e transição controlada do legado Polymarket.
+Não criar SaaS, tenants ou fundos de terceiros. Direção aprovada não significa
+runtime migrado, autorização de compra ou ativação de dinheiro real.
 
 ## Rota atual e contexto mínimo
 
-Para o ciclo iniciado em 10/09/2026, comece em
+Para o ciclo 2.0, começar no prompt selecionado em [ganso-2](ganso-2/README.md),
+no [protocolo curto](ganso-2/00-protocolo.md), na seção exata da RFC e na linha do
+[estado 2.0](../docs/roadmap/GANSO_2_EXECUTION_STATE.md). Consultar o PRD por seção,
+sem reler tudo. G2-00.1 reconcilia a base; G2-01.1/2 diagnosticam e contêm o legado.
+A base local pode estar atrás de main/produção: preservar alterações e comparar
+antes de reutilizar ou refazer código. Cada sessão cobre apenas sua fatia.
+As restrições históricas abaixo continuam valendo onde não foram substituídas
+explicitamente pelo PRD 2.0. Backup fica fora do ciclo até o sistema estar 100% operante.
+Eventual migração continua prevista, sem contratação ou mudança de host implícita. O teto informado é US$ 80/mês.
+
+Para tarefas explicitamente referentes ao ciclo legado iniciado em 10/09/2026, comece em
 [roadmap/btc/README.md](roadmap/btc/README.md). Se um prompt já foi selecionado,
 leia [o protocolo](roadmap/btc/00-protocolo.md), sua RFC/seção e sua linha no
 [estado](../docs/roadmap/BTC_EXECUTION_STATE.md). Não leia o HANDOFF histórico inteiro.
 
-O [PRD](../docs/PRD.md) preserva as decisões de produto. Sua emenda no topo resume
-o ciclo atual; leia outras seções apenas quando afetadas. Consulte código por
+O [PRD 2.0](../docs/PRD-GANSO-2.0.md) orienta o novo ciclo; o
+[PRD anterior](../docs/PRD.md) preserva decisões e contratos do legado.
+Leia outras seções apenas quando afetadas. Consulte código por
 símbolo e abra arquivos antes de afirmar seu conteúdo. Alvo: até 1.500 palavras de
 contexto documental inicial e 3–6 arquivos de código relevantes por bloco.
 
@@ -48,8 +62,11 @@ com evidência e solicite somente a decisão que não esteja autorizada.
   posteriores do pedido e o registro de autorização acima.
 - Produção usa Hetzner CPX42; manter pelo menos 25% do SSD livre e orçamento de RAM
   abaixo de 13 GB. CPU/cadências são medidas, não inferidas de container “Up”.
-- Não adicionar Kubernetes, Kafka, cluster, backup externo rotineiro ou nova infra.
-  RFC-041 permite planejar preservação/restauração limitada de dados antes de limpeza.
+- Não adicionar Kubernetes, Kafka ou cluster. Backup e restauração de backup não
+  são entrega nem pré-requisito do ciclo atual. Avaliar hospedagem no bloco próprio,
+  dentro do orçamento, sem inferir contratação ou limpeza de um pedido documental.
+  Histórico necessário e pins permanecem no banco; descarte só do conjunto dispensável
+  delimitado e coberto pela autorização vigente.
 - Preservar auth/perímetro single-user atual, IPv4 allowlisted, sem ampliar exposição
   HTTP, publicar IPv6, TLS/domínio ou endpoint de escrita fora do escopo autorizado.
 
@@ -83,8 +100,11 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 6. Publique o PR, acompanhe os checks, faça o merge e conclua a implantação aplicável
    dentro da autorização contínua. Verifique o resultado; para mudanças somente de
    texto, respeite a dispensa de deploy da RFC-020. Um pedido mais restrito prevalece.
-7. Escreva recibo curto com SHA, resultado, comandos reais, limites e próximo bloco;
-   atualize apenas sua linha no estado. Não avance automaticamente ao próximo prompt.
+7. No Ganso 2.0, atualizar somente a linha do prompt no estado: PR/SHA, validação
+   resumida e implantação/pendência. Não exigir recibo, relatório ou pasta de
+   evidências separados; seguir a emenda de autorização de 22/09. Para o ciclo
+   legado explicitamente solicitado, usar seu protocolo. Não avançar automaticamente
+   ao próximo prompt e não esperar janelas de observação em sessões de implementação.
 
 Desenvolvimento paralelo é permitido em blocos independentes. Arquivo, schema e
 contrato compartilhados exigem coordenação e revisão cruzada antes de integrar.

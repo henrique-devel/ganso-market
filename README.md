@@ -1,19 +1,23 @@
 # Ganso Market
 
-Ferramenta pessoal e single-user para pesquisa, paper trading e, depois dos
-gates de segurança, execução maker-side limitada na Polymarket.
+Ferramenta pessoal e single-user para pesquisa e operações simuladas com dados
+reais. A direção aprovada do **Ganso Market 2.0** começa por BTC na Hyperliquid,
+US$ 1.000 fictícios e Jev como filtro opcional. A implementação existente ainda
+é majoritariamente Polymarket e será reconciliada conforme o novo PRD.
 
 Este repositório começa pelos documentos que governam o desenvolvimento. A
 implementação deve seguir o PRD e uma RFC ativa por vez.
 
-**Próximo ciclo (10/09/2026):** [RFCs e prompts em blocos pequenos](prompts/roadmap/btc/README.md)
-para operação, contabilidade, BTC horário, replay e limpeza de dados. Uma sessão
-executa um bloco; [estado curto](docs/roadmap/BTC_EXECUTION_STATE.md) substitui a
-leitura integral do HANDOFF. Novas especificações ainda não implementadas.
+**Ciclo vigente (22/09/2026):** [PRD Ganso 2.0](docs/PRD-GANSO-2.0.md),
+[45 prompts para sessões isoladas](prompts/ganso-2/README.md),
+[estado de execução](docs/roadmap/GANSO_2_EXECUTION_STATE.md) e
+[auditoria do servidor/custo](docs/research/ganso-2-infraestrutura-2026-09-22.md).
+Começar reconciliando a base e contendo crescimento/reinícios antes de nova coleta.
+O [ciclo BTC anterior](prompts/roadmap/btc/README.md) permanece como referência do legado.
 
-**Decisão de escopo (2026-08-18):** o projeto segue um único caminho, a
-Polymarket. O módulo Solana foi removido do escopo e do repositório; o
-histórico permanece no git.
+**Transição de escopo:** Polymarket será preservada como módulo/acervo especializado;
+não é requisito do primeiro experimento 2.0. Solana permanece fora do escopo.
+O PRD é planejamento, não comprovação de que a transição já foi implementada.
 
 ## Estado implementado
 
@@ -62,14 +66,15 @@ nas tarefas solicitadas, respeitando os gates e o escopo de cada entrega.
 
 - Uso exclusivo do proprietário; não é SaaS e não receberá fundos de terceiros.
 - Servidor-alvo: Hetzner CPX42 em `178.105.65.251`.
-- Caminho único Polymarket desde 2026-08-18; o módulo Solana saiu do escopo.
+- BTC primeiro no ciclo 2.0; Polymarket em transição controlada e Solana fora do escopo.
 - A fundação standalone publica o painel em `http://178.105.65.251/`; o
   perímetro do painel autenticado usa firewall Hetzner restrito ao IP do
   operador (aplicado e verificado em 2026-08-18), sem publicação IPv6.
 - Sem domínio, HTTPS, Certbot ou porta 443 nesse bootstrap.
 - Uma conta com senha, access token e refresh token; sem MFA/passkey.
-- Sem backup externo rotineiro, alta disponibilidade, multi-region ou
-  recuperação garantida do banco.
+- Estado atual informado em 22/09: US$ 80/mês e sem backup. O PRD 2.0 mantém
+  custo total controlado. Backup fica para depois de o sistema estar 100% operante;
+  alta disponibilidade e multi-region continuam fora do escopo.
 - Polymarket: paper trading até os gates; execução real (RFC-009) autorizada
   pela emenda de 2026-08-15, a partir de servidor na Alemanha e burn wallet na
   Polygon, com risco jurisdicional/tributário assumido pelo proprietário e sem
@@ -77,7 +82,8 @@ nas tarefas solicitadas, respeitando os gates e o escopo de cada entrega.
 
 ## Documentos
 
-- [PRD do MVP](docs/PRD.md)
+- [PRD vigente — Ganso Market 2.0](docs/PRD-GANSO-2.0.md)
+- [PRD anterior — histórico](docs/PRD.md)
 - [Estudo: direção e roadmap dos bots](docs/research/direcao-e-roadmap-bots.md)
 - [Índice e ordem das RFCs](docs/RFC_INDEX.md)
 - [Prompt mestre da IA de desenvolvimento](prompts/AI_DEVELOPER_SYSTEM_PROMPT.md)

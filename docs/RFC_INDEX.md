@@ -2,7 +2,31 @@
 
 As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Cada uma delimita contexto, tarefas, artefatos, testes e condições de parada.
 
-## Ciclo atual — BTC, integridade econômica e capacidade (2026-09-10)
+## Ciclo vigente — Ganso 2.0 (22/09/2026)
+
+[PRD 2.0](PRD-GANSO-2.0.md) · [45 prompts pequenos](../prompts/ganso-2/README.md) · [acompanhamento único](roadmap/GANSO_2_EXECUTION_STATE.md).
+
+RFCs 042–052 aceitas para desenvolvimento nas sessões selecionadas, com autorização
+de código → PR → merge → produção. Ler contrato comum e só a seção do prompt.
+Registrar uma linha no acompanhamento; sem recibo ou evidência formal separada.
+A geração deste pacote não implementou seus blocos. Dependências do frontmatter
+orientam a execução; numeração da RFC não exige uma sequência linear completa.
+
+| RFC | Resultado | Sessões |
+|---|---|---|
+| [RFC-042](rfcs/RFC-042-ganso-2-base-e-passivo.md) | Base reconciliada e destino do legado | G2-00.1…2 |
+| [RFC-043](rfcs/RFC-043-ganso-2-contencao-operacional.md) | Contenção e estabilidade do legado | G2-01.1…4 |
+| [RFC-044](rfcs/RFC-044-ganso-2-preservacao-retencao.md) | Retenção e proteção do histórico | G2-02.1, .4 e .5 |
+| [RFC-045](rfcs/RFC-045-ganso-2-nucleo-perfis.md) | Núcleo neutro e perfil de serviços | G2-03.1…4 |
+| [RFC-046](rfcs/RFC-046-ganso-2-dados-hyperliquid.md) | Dados públicos BTC e qualidade | G2-04.1…4 |
+| [RFC-047](rfcs/RFC-047-ganso-2-conta-execucao-risco.md) | Conta perpétua, execução e risco | G2-05.1…10 |
+| [RFC-048](rfcs/RFC-048-ganso-2-mesa-operador.md) | Mesa e transações simuladas do operador | G2-06.1…4 |
+| [RFC-049](rfcs/RFC-049-ganso-2-estrategia-base.md) | Estratégia-base e experimento prospectivo | G2-07.1…3 |
+| [RFC-050](rfcs/RFC-050-ganso-2-jev-challenger.md) | Jev como filtro opcional e medido | G2-08.1…3 |
+| [RFC-051](rfcs/RFC-051-ganso-2-avaliacao-maturidade.md) | Replay, avaliação e maturidade | G2-09.1…5 |
+| [RFC-052](rfcs/RFC-052-ganso-2-custo-hospedagem.md) | Custo e eventual mudança de hospedagem | G2-10.1…3 |
+
+## Ciclo legado — BTC, integridade econômica e capacidade (2026-09-10)
 
 O proprietário solicitou as especificações e prompts pequenos deste bloco. Novas
 RFCs estão em `draft`: nenhuma implementação, limpeza ou ativação ocorre por criar

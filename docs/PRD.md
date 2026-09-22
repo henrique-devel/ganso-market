@@ -1,4 +1,11 @@
-# PRD v0.3 — Ganso Market
+# PRD v0.3 — Ganso Market (histórico)
+
+> **22/09/2026: nova direção aprovada.** O [PRD Ganso Market 2.0](PRD-GANSO-2.0.md)
+> passa a orientar o desenvolvimento: BTC Hyperliquid com US$ 1.000 fictícios,
+> dados reais, Jev opcional, encerramento do passivo e custo controlado.
+> As decisões exclusivas da Polymarket abaixo são históricas; contratos ainda
+> utilizados permanecem válidos até migração explícita. Este aviso não altera
+> serviços, banco, capital real ou perímetro. Entrada: [estado 2.0](roadmap/GANSO_2_EXECUTION_STATE.md).
 
 **Status:** escopo-base aprovado para desenvolvimento  
 **Data:** 2026-08-10 (v0.1); caminho único Polymarket (v0.2) e motor de quatro modelos (v0.3) em 2026-08-18  
