@@ -40,7 +40,7 @@ O [estado BTC anterior](BTC_EXECUTION_STATE.md) fica como histórico. Não alter
 
 | Sessão                                                        | Estado  | Entrega / validação / implantação                              |
 | ------------------------------------------------------------- | ------- | -------------------------------------------------------------- |
-| [G2-00.1](../../prompts/ganso-2/g2-00-1-base-reconciliada.md) | code-verified | Base 5162183 reconciliada em checkout isolado; 237 entradas locais/HEAD/índices preservados, 544 links e 45 dependências conferidos, diff/scan aprovados; PR/CI pendentes; deploy dispensado por texto. |
+| [G2-00.1](../../prompts/ganso-2/g2-00-1-base-reconciliada.md) | code-verified | [PR #201](https://github.com/henrique-devel/ganso-market/pull/201), base 5162183; 237 entradas locais/HEAD/índices preservados, 544 links e 45 dependências conferidos, diff/scan aprovados; integração e checks consultáveis no PR; deploy dispensado por texto. |
 | [G2-00.2](../../prompts/ganso-2/g2-00-2-destino-do-legado.md) | pending | Dar destino ao código e backlog herdados; ainda não executado. |
 
 ### G2-01 — Contenção e estabilidade do legado
