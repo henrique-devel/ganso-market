@@ -1,0 +1,1581 @@
+{
+  "captured_at": "2026-09-22T17:31:36.322726+00:00",
+  "purpose": "PRD baseline; read-only; no performance or strategy acceptance",
+  "host": {
+    "hostname": "ubuntu-16gb-fsn1-2-bot",
+    "cpus": 8,
+    "uptime": "17:31:36 up 36 days, 14:00,  2 users,  load average: 3.44, 1.48, 1.33",
+    "memory": {
+      "MemTotal_bytes": 16366653440,
+      "MemAvailable_bytes": 14381608960,
+      "SwapTotal_bytes": 0,
+      "SwapFree_bytes": 0
+    }
+  },
+  "release_sha": "f2f552801be2162515b0b4cf113a863c5726c672",
+  "filesystems": {
+    "/": {
+      "device": 2049,
+      "total_bytes": 322302373888,
+      "available_bytes": 99771445248,
+      "free_bytes": 112919810048
+    },
+    "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker": {
+      "device": 2049,
+      "total_bytes": 322302373888,
+      "available_bytes": 99771445248,
+      "free_bytes": 112919810048
+    }
+  },
+  "containers": [
+    {
+      "name": "/ganso-market-polymarket-resolution-1",
+      "image": "sha256:b43306b2a0081f7369aedc65804797f0d9fa567a51df1fc36f38ba62cb844fce",
+      "running": true,
+      "started_at": "2026-09-17T14:39:21.51639975Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 201326592,
+      "nano_cpus": 500000000,
+      "release_sha": "f2f552801be2162515b0b4cf113a863c5726c672"
+    },
+    {
+      "name": "/ganso-market-nginx-1",
+      "image": "sha256:6e01bfae6f7971512a5765fe2f52ca4267a4773c7f8b357a2d39e5300787cece",
+      "running": true,
+      "started_at": "2026-09-17T14:38:45.673005376Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 134217728,
+      "nano_cpus": 250000000
+    },
+    {
+      "name": "/ganso-market-web-1",
+      "image": "sha256:a8850de8b75dae37b1e1dd171307ee91594ee9f4c98cede56d80304e4de2d889",
+      "running": true,
+      "started_at": "2026-09-17T14:38:39.906107502Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 134217728,
+      "nano_cpus": 250000000
+    },
+    {
+      "name": "/ganso-market-api-1",
+      "image": "sha256:2f0437c7aa849b5cfd881ef5f7221686f6b1983f5349e9048241112b1ceefc97",
+      "running": true,
+      "started_at": "2026-09-17T14:38:39.926290472Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 402653184,
+      "nano_cpus": 750000000,
+      "release_sha": "f2f552801be2162515b0b4cf113a863c5726c672"
+    },
+    {
+      "name": "/ganso-market-market-engine-1",
+      "image": "sha256:4d5616467bfb83c5ad36e40adc6f4481031c133413b6446fc502b8ba0bc74d6c",
+      "running": true,
+      "started_at": "2026-09-17T14:38:39.891443362Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 536870912,
+      "nano_cpus": 1000000000
+    },
+    {
+      "name": "/ganso-market-polymarket-paper-1",
+      "image": "sha256:0944b32c235ceadb1e872b323aa54e7d9c0a9acafeb0c5be7055742c75a0508b",
+      "running": true,
+      "started_at": "2026-09-22T17:29:55.003346412Z",
+      "oom_killed": false,
+      "restart_count": 789,
+      "memory_limit_bytes": 268435456,
+      "nano_cpus": 500000000,
+      "release_sha": "627945767e248a212fab84811506d8fd78b64e5d"
+    },
+    {
+      "name": "/ganso-market-polymarket-portfolio-1",
+      "image": "sha256:2fde5ad3dce32d62ecc0ccf0f294af2e3fab6d4bfb5bab2107aac8898bf6bd0c",
+      "running": true,
+      "started_at": "2026-09-17T14:14:30.879697269Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 201326592,
+      "nano_cpus": 500000000,
+      "release_sha": "627945767e248a212fab84811506d8fd78b64e5d"
+    },
+    {
+      "name": "/ganso-market-polymarket-recorder-1",
+      "image": "sha256:1018b60a64f9ef62b354790c11f86b2ce73472a53a587058787a3917bde6299c",
+      "running": true,
+      "started_at": "2026-09-22T13:58:55.896220235Z",
+      "oom_killed": false,
+      "restart_count": 6,
+      "memory_limit_bytes": 872415232,
+      "nano_cpus": 500000000,
+      "release_sha": "8132cd357ffb47340e39af278a65dc06469edb0f"
+    },
+    {
+      "name": "/ganso-market-polymarket-estimator-1",
+      "image": "sha256:dd11e54719d5da42ff83e59ae3696a8de9fac0fb92b5d5f64924e81001ea1980",
+      "running": true,
+      "started_at": "2026-09-08T03:36:31.550768758Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 201326592,
+      "nano_cpus": 500000000,
+      "release_sha": "da6d56037604ade22182e40d2dd78256078be2b3"
+    },
+    {
+      "name": "/ganso-market-postgres-1",
+      "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+      "running": true,
+      "started_at": "2026-09-07T22:59:17.153994357Z",
+      "oom_killed": false,
+      "restart_count": 0,
+      "memory_limit_bytes": 1073741824,
+      "nano_cpus": 1000000000
+    }
+  ],
+  "docker_stats": "{\"BlockIO\":\"0B / 0B\",\"CPUPerc\":\"0.07%\",\"Container\":\"ed025b2303de\",\"ID\":\"ed025b2303de\",\"MemPerc\":\"77.50%\",\"MemUsage\":\"148.8MiB / 192MiB\",\"Name\":\"ganso-market-polymarket-resolution-1\",\"NetIO\":\"6.06GB / 3.69GB\",\"PIDs\":\"11\"}\n{\"BlockIO\":\"0B / 12.3kB\",\"CPUPerc\":\"0.00%\",\"Container\":\"d07405fca027\",\"ID\":\"d07405fca027\",\"MemPerc\":\"2.18%\",\"MemUsage\":\"2.789MiB / 128MiB\",\"Name\":\"ganso-market-nginx-1\",\"NetIO\":\"22kB / 15.4kB\",\"PIDs\":\"2\"}\n{\"BlockIO\":\"0B / 4.1kB\",\"CPUPerc\":\"0.00%\",\"Container\":\"19366db39701\",\"ID\":\"19366db39701\",\"MemPerc\":\"1.77%\",\"MemUsage\":\"2.266MiB / 128MiB\",\"Name\":\"ganso-market-web-1\",\"NetIO\":\"12kB / 3.37kB\",\"PIDs\":\"2\"}\n{\"BlockIO\":\"0B / 0B\",\"CPUPerc\":\"8.53%\",\"Container\":\"784a7063ba96\",\"ID\":\"784a7063ba96\",\"MemPerc\":\"13.15%\",\"MemUsage\":\"50.49MiB / 384MiB\",\"Name\":\"ganso-market-api-1\",\"NetIO\":\"3.49GB / 7.39MB\",\"PIDs\":\"11\"}\n{\"BlockIO\":\"0B / 0B\",\"CPUPerc\":\"0.00%\",\"Container\":\"718c65254363\",\"ID\":\"718c65254363\",\"MemPerc\":\"0.17%\",\"MemUsage\":\"884KiB / 512MiB\",\"Name\":\"ganso-market-market-engine-1\",\"NetIO\":\"1.3MB / 5.55kB\",\"PIDs\":\"2\"}\n{\"BlockIO\":\"0B / 0B\",\"CPUPerc\":\"0.01%\",\"Container\":\"7894ac18429b\",\"ID\":\"7894ac18429b\",\"MemPerc\":\"42.49%\",\"MemUsage\":\"108.8MiB / 256MiB\",\"Name\":\"ganso-market-polymarket-paper-1\",\"NetIO\":\"21.9MB / 2.59MB\",\"PIDs\":\"11\"}\n{\"BlockIO\":\"0B / 0B\",\"CPUPerc\":\"0.00%\",\"Container\":\"625c7dadb0c5\",\"ID\":\"625c7dadb0c5\",\"MemPerc\":\"24.37%\",\"MemUsage\":\"46.79MiB / 192MiB\",\"Name\":\"ganso-market-polymarket-portfolio-1\",\"NetIO\":\"3.89GB / 3.57GB\",\"PIDs\":\"11\"}\n{\"BlockIO\":\"0B / 5.23MB\",\"CPUPerc\":\"11.42%\",\"Container\":\"b186692367fb\",\"ID\":\"b186692367fb\",\"MemPerc\":\"37.65%\",\"MemUsage\":\"313.2MiB / 832MiB\",\"Name\":\"ganso-market-polymarket-recorder-1\",\"NetIO\":\"6.95GB / 7.48GB\",\"PIDs\":\"11\"}\n{\"BlockIO\":\"8.19kB / 0B\",\"CPUPerc\":\"0.37%\",\"Container\":\"4b44db049156\",\"ID\":\"4b44db049156\",\"MemPerc\":\"29.98%\",\"MemUsage\":\"57.57MiB / 192MiB\",\"Name\":\"ganso-market-polymarket-estimator-1\",\"NetIO\":\"30.4GB / 8.09GB\",\"PIDs\":\"11\"}\n{\"BlockIO\":\"17.7TB / 13TB\",\"CPUPerc\":\"31.54%\",\"Container\":\"983ad5a43444\",\"ID\":\"983ad5a43444\",\"MemPerc\":\"75.49%\",\"MemUsage\":\"773MiB / 1GiB\",\"Name\":\"ganso-market-postgres-1\",\"NetIO\":\"444GB / 284GB\",\"PIDs\":\"21\"}",
+  "docker_storage": "{\"Active\":\"10\",\"Reclaimable\":\"574.1MB (60%)\",\"Size\":\"945.9MB\",\"TotalCount\":\"288\",\"Type\":\"Images\"}\n{\"Active\":\"10\",\"Reclaimable\":\"0B (0%)\",\"Size\":\"133.4kB\",\"TotalCount\":\"11\",\"Type\":\"Containers\"}\n{\"Active\":\"2\",\"Reclaimable\":\"0B (0%)\",\"Size\":\"201.2GB\",\"TotalCount\":\"2\",\"Type\":\"Local Volumes\"}\n{\"Active\":\"0\",\"Reclaimable\":\"1.483GB\",\"Size\":\"1.483GB\",\"TotalCount\":\"701\",\"Type\":\"Build Cache\"}",
+  "database": {
+    "database_bytes": 200690038463,
+    "version": "18.4 (Debian 18.4-1.pgdg12+1)",
+    "connections": 22,
+    "idle_in_transaction": 0,
+    "oldest_idle_seconds": null,
+    "data_directory": "/var/lib/postgresql/18/docker",
+    "max_connections": "40",
+    "stats_reset": null
+  },
+  "largest_relations": [
+    {
+      "schemaname": "public",
+      "relname": "polymarket_book_deltas",
+      "bytes": 150007005184,
+      "n_live_tup": 425565745,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "polymarket_book_snapshots",
+      "bytes": 22945374208,
+      "n_live_tup": 17518780,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "polymarket_book_snapshots_full",
+      "bytes": 8639463424,
+      "n_live_tup": 5613268,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "portfolio_panel_snapshots",
+      "bytes": 3961995264,
+      "n_live_tup": 1468993,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "polymarket_trades",
+      "bytes": 3780485120,
+      "n_live_tup": 3576170,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "paper_feature_windows",
+      "bytes": 3218055168,
+      "n_live_tup": 3723990,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "polymarket_series_1m",
+      "bytes": 2742272000,
+      "n_live_tup": 6109145,
+      "n_dead_tup": 12
+    },
+    {
+      "schemaname": "public",
+      "relname": "fundamental_estimates",
+      "bytes": 1768718336,
+      "n_live_tup": 1476538,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "polymarket_oi_holders",
+      "bytes": 1027686400,
+      "n_live_tup": 320406,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "portfolio_decisions",
+      "bytes": 925696000,
+      "n_live_tup": 153820,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "polymarket_rtds_prices",
+      "bytes": 648953856,
+      "n_live_tup": 3178983,
+      "n_dead_tup": 0
+    },
+    {
+      "schemaname": "public",
+      "relname": "resolution_scores",
+      "bytes": 602062848,
+      "n_live_tup": 401397,
+      "n_dead_tup": 459
+    }
+  ],
+  "timers": "NEXT                        LEFT LAST                         PASSED UNIT                          ACTIVATES\nTue 2026-09-22 17:31:44 UTC   4s Tue 2026-09-22 17:31:06 UTC 34s ago ganso-recorder-watchdog.timer ganso-recorder-watchdog.service\nWed 2026-09-23 03:30:00 UTC   9h Tue 2026-09-22 03:30:01 UTC 14h ago ganso-shadow-replay.timer     ganso-shadow-replay.service\n\n2 timers listed.",
+  "capacity_series": {
+    "series.json": {
+      "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+      "grace_seconds": 3600,
+      "last_slot_due_utc": "2026-09-19T17:03:34.182494+00:00",
+      "period_seconds": 86400,
+      "slots": 8,
+      "start_epoch": 1789232614.182494,
+      "start_utc": "2026-09-12T17:03:34.182494+00:00",
+      "version": 1,
+      "window_end_utc": "2026-09-19T18:03:34.182494+00:00"
+    },
+    "sample-00.json": {
+      "attempt_utc": "2026-09-12T17:03:55.666555+00:00",
+      "delta": {
+        "reason": "PREVIOUS_UNAVAILABLE",
+        "valid": false
+      },
+      "due_utc": "2026-09-12T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.39227,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 201990098944,
+            "device": "8:1",
+            "free_bytes": 215138463744,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 98537690815,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 41478162905349
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-12T17:03:56.928776+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2015163165713",
+            "wal_records": 3386587534
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-12T17:03:55.668587+00:00",
+        "wal_segments": {
+          "allocated_bytes": 134217728,
+          "bytes": 134217728,
+          "count": 8,
+          "entries_seen": 10,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 0,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-01.json": {
+      "attempt_utc": "2026-09-13T17:03:41.101067+00:00",
+      "delta": {
+        "database_bytes_change": 1318346752,
+        "elapsed_seconds": 86385.43425893784,
+        "filesystem_available_bytes_change": {
+          "8:1:ext4:/dev/sda1": -951574528
+        },
+        "valid": true,
+        "wal_generated_bytes": 17949857730,
+        "wal_segments_bytes_change": 352321536,
+        "wal_status": "comparable"
+      },
+      "due_utc": "2026-09-13T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.396527,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 201038524416,
+            "device": "8:1",
+            "free_bytes": 214186889216,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 99856037567,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 44533070444805
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-13T17:03:42.331678+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2033113023443",
+            "wal_records": 3453073121
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-13T17:03:41.102846+00:00",
+        "wal_segments": {
+          "allocated_bytes": 486539264,
+          "bytes": 486539264,
+          "count": 29,
+          "entries_seen": 31,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 1,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-02.json": {
+      "attempt_utc": "2026-09-14T17:03:46.489933+00:00",
+      "delta": {
+        "database_bytes_change": 2064138240,
+        "elapsed_seconds": 86405.38951206207,
+        "filesystem_available_bytes_change": {
+          "8:1:ext4:/dev/sda1": -2259808256
+        },
+        "valid": true,
+        "wal_generated_bytes": 33456783365,
+        "wal_segments_bytes_change": -402653184,
+        "wal_status": "comparable"
+      },
+      "due_utc": "2026-09-14T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.396293,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 198778716160,
+            "device": "8:1",
+            "free_bytes": 211927080960,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 101920175807,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 47737221323013
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-14T17:03:47.727137+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2066569806808",
+            "wal_records": 3537278813
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-14T17:03:46.492358+00:00",
+        "wal_segments": {
+          "allocated_bytes": 83886080,
+          "bytes": 83886080,
+          "count": 5,
+          "entries_seen": 7,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 2,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-03.json": {
+      "attempt_utc": "2026-09-15T17:03:36.539479+00:00",
+      "delta": {
+        "database_bytes_change": 2288140288,
+        "elapsed_seconds": 86390.04948210716,
+        "filesystem_available_bytes_change": {
+          "8:1:ext4:/dev/sda1": -3110895616
+        },
+        "valid": true,
+        "wal_generated_bytes": 24050010039,
+        "wal_segments_bytes_change": 385875968,
+        "wal_status": "comparable"
+      },
+      "due_utc": "2026-09-15T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.59672,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 195667820544,
+            "device": "8:1",
+            "free_bytes": 208816185344,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 104208316095,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 50489281714437
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-15T17:03:37.936261+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2090619816847",
+            "wal_records": 3635928969
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-15T17:03:36.541840+00:00",
+        "wal_segments": {
+          "allocated_bytes": 469762048,
+          "bytes": 469762048,
+          "count": 28,
+          "entries_seen": 30,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 3,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-04.json": {
+      "attempt_utc": "2026-09-16T17:03:36.742997+00:00",
+      "delta": {
+        "database_bytes_change": 13325139968,
+        "elapsed_seconds": 86400.20299983025,
+        "filesystem_available_bytes_change": {
+          "8:1:ext4:/dev/sda1": -12374786048
+        },
+        "valid": true,
+        "wal_generated_bytes": 52498008014,
+        "wal_segments_bytes_change": -83886080,
+        "wal_status": "comparable"
+      },
+      "due_utc": "2026-09-16T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.498491,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 183293034496,
+            "device": "8:1",
+            "free_bytes": 196441399296,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 117533456063,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 53602593364229
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-16T17:03:38.030951+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2143117824861",
+            "wal_records": 3816768121
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-16T17:03:36.744840+00:00",
+        "wal_segments": {
+          "allocated_bytes": 385875968,
+          "bytes": 385875968,
+          "count": 23,
+          "entries_seen": 25,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 4,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-05.json": {
+      "attempt_utc": "2026-09-17T17:03:55.072666+00:00",
+      "delta": {
+        "database_bytes_change": 7690977280,
+        "elapsed_seconds": 86418.33037400246,
+        "filesystem_available_bytes_change": {
+          "8:1:ext4:/dev/sda1": -7521931264
+        },
+        "valid": true,
+        "wal_generated_bytes": 28579371575,
+        "wal_segments_bytes_change": -301989888,
+        "wal_status": "comparable"
+      },
+      "due_utc": "2026-09-17T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.402417,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 175771103232,
+            "device": "8:1",
+            "free_bytes": 188919468032,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 125224433343,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 55131314346245
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-17T17:03:56.247641+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2171697196436",
+            "wal_records": 3900798380
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-17T17:03:55.075214+00:00",
+        "wal_segments": {
+          "allocated_bytes": 83886080,
+          "bytes": 83886080,
+          "count": 5,
+          "entries_seen": 7,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 5,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-06.json": {
+      "attempt_utc": "2026-09-18T17:03:56.948315+00:00",
+      "delta": {
+        "database_bytes_change": 417161216,
+        "elapsed_seconds": 86401.87576699257,
+        "filesystem_available_bytes_change": {
+          "8:1:ext4:/dev/sda1": -442077184
+        },
+        "valid": true,
+        "wal_generated_bytes": 1873096494,
+        "wal_segments_bytes_change": 0,
+        "wal_status": "comparable"
+      },
+      "due_utc": "2026-09-18T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.399037,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": true,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "database": "ganso_market",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 175329026048,
+            "device": "8:1",
+            "free_bytes": 188477390848,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 125641594559,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 55972707514629
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-18T17:03:58.117532+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2173570292930",
+            "wal_records": 3902929944
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "system_identifier": "7675128138824745003",
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-18T17:03:56.950981+00:00",
+        "wal_segments": {
+          "allocated_bytes": 83886080,
+          "bytes": 83886080,
+          "count": 5,
+          "entries_seen": 7,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 6,
+      "status": "ok",
+      "version": 1
+    },
+    "sample-07.json": {
+      "attempt_utc": "2026-09-19T17:03:57.786237+00:00",
+      "delta": {
+        "reason": "PREVIOUS_UNAVAILABLE",
+        "valid": false
+      },
+      "due_utc": "2026-09-19T17:03:34.182494+00:00",
+      "elapsed_seconds": 1.200948,
+      "observation": {
+        "collector_sha256": "de757473c79d850201c1e4eceaea3daf9534df02efd2563fd8c2c30825bf36a3",
+        "complete": false,
+        "container": {
+          "id": "983ad5a43444a0e7ef1907dd060e592af50d4f7f8c23e805baf4ef4353f4a889",
+          "image": "sha256:526573c93ea530a230b553cc513075ab9d70b63bfd2300ef5eb5ad1cafbbc595",
+          "pid": 2262183,
+          "started": "2026-09-07T22:59:17.153994357Z"
+        },
+        "error": "CONTAINER_CHANGED",
+        "filesystems": {
+          "8:1:ext4:/dev/sda1": {
+            "available_bytes": 174861340672,
+            "device": "8:1",
+            "free_bytes": 188009705472,
+            "fstype": "ext4",
+            "mountpoint": "/",
+            "root": "/",
+            "source": "/dev/sda1",
+            "total_bytes": 322302373888
+          }
+        },
+        "floor_25_percent_passed": true,
+        "host_id": "ef9d087c50d5b19a1f0197991eaf8339f63f1470afdf5ff15483b868721fb386",
+        "hostname": "ubuntu-16gb-fsn1-2-bot",
+        "mapping_note": "fixed DB-04 paths measured; current SQL mapping not fully verified",
+        "sql": {
+          "budgets": {
+            "lock_timeout": "250ms",
+            "read_only": "on",
+            "statement_timeout": "1500ms"
+          },
+          "data_directory": "/var/lib/postgresql/18/docker",
+          "database": "ganso_market",
+          "database_bytes": 126058886847,
+          "db_stats": {
+            "stats_reset": null,
+            "temp_bytes": 56826422696197
+          },
+          "postmaster_start": "2026-09-07T22:59:17.372734+00:00",
+          "system_identifier": "7675128138824745003",
+          "tablespaces": [
+            {
+              "location": "",
+              "oid": "1663",
+              "spcname": "pg_default"
+            },
+            {
+              "location": "",
+              "oid": "1664",
+              "spcname": "pg_global"
+            }
+          ],
+          "utc": "2026-09-19T17:03:58.857873+00:00",
+          "wal": {
+            "stats_reset": "2026-08-17T22:17:04.734133+00:00",
+            "wal_bytes": "2175320572758",
+            "wal_records": 3905029615
+          }
+        },
+        "storage_identity": {
+          "filesystems": {
+            "8:1:ext4:/dev/sda1": {
+              "device": "8:1",
+              "fstype": "ext4",
+              "mountpoint": "/",
+              "root": "/",
+              "source": "/dev/sda1",
+              "total_bytes": 322302373888
+            }
+          },
+          "targets": {
+            "pg_default": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/base",
+              "container_realpath": "/var/lib/postgresql/18/docker/base",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pg_global": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/global",
+              "container_realpath": "/var/lib/postgresql/18/docker/global",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+              "volume": "ganso-market_postgres_data"
+            },
+            "pgdata": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker",
+              "container_realpath": "/var/lib/postgresql/18/docker",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+              "volume": "ganso-market_postgres_data"
+            },
+            "wal": {
+              "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+              "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+              "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+              "filesystem": "8:1:ext4:/dev/sda1",
+              "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+              "volume": "ganso-market_postgres_data"
+            }
+          }
+        },
+        "targets": {
+          "pg_default": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/base",
+            "container_realpath": "/var/lib/postgresql/18/docker/base",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/base",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pg_global": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/global",
+            "container_realpath": "/var/lib/postgresql/18/docker/global",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/global",
+            "volume": "ganso-market_postgres_data"
+          },
+          "pgdata": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker",
+            "container_realpath": "/var/lib/postgresql/18/docker",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker",
+            "volume": "ganso-market_postgres_data"
+          },
+          "wal": {
+            "container_mount_root": "/var/lib/docker/volumes/ganso-market_postgres_data/_data",
+            "container_path": "/var/lib/postgresql/18/docker/pg_wal",
+            "container_realpath": "/var/lib/postgresql/18/docker/pg_wal",
+            "filesystem": "8:1:ext4:/dev/sda1",
+            "host_realpath": "/var/lib/docker/volumes/ganso-market_postgres_data/_data/18/docker/pg_wal",
+            "volume": "ganso-market_postgres_data"
+          }
+        },
+        "utc": "2026-09-19T17:03:57.788251+00:00",
+        "wal_segments": {
+          "allocated_bytes": 83886080,
+          "bytes": 83886080,
+          "count": 5,
+          "entries_seen": 7,
+          "scope": "segment files only; excludes archive_status and other entries"
+        }
+      },
+      "slot": 7,
+      "status": "partial",
+      "version": 1
+    }
+  },
+  "ended_at": "2026-09-22T17:31:40.335637+00:00"
+}

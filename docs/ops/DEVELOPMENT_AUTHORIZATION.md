@@ -128,3 +128,52 @@ capital/caps/live/signer/perímetro, comprar infraestrutura nem executar compact
 sem os critérios e a autorização aplicáveis. A promoção do índice candidato de
 último trade continua dependente dos gates técnicos e da validação operacional;
 essa resposta não equivale a índice aplicado ou gate aprovado.
+
+<a id="ciclo-ganso-20--entrega-com-registro-minimo-22092026"></a>
+
+## Ciclo Ganso 2.0 — entrega com registro mínimo (22/09/2026)
+
+O proprietário aprovou o PRD 2.0 e solicitou prompts pequenos para sessões
+isoladas, reiterando expressamente autorização de **código, criação de PR,
+merge e produção** em cada fatia. Também dispensou evidência formal por sessão
+para não gastar tempo com documentação de execução.
+
+Para qualquer prompt selecionado em [prompts/ganso-2](../../prompts/ganso-2/README.md),
+estão autorizados implementação, branch/commit/push, criação e correção do PR,
+merge após os checks e implantação dos serviços afetados. Inclui migrations
+aditivas, configuração, restart seletivo, quiescência reversível e ativação paper
+explicitamente previstos no prompt. Não pedir novamente confirmação por etapa.
+Criar o pacote não manda executar todos os prompts nem iniciar novas sessões.
+
+**Emenda posterior do proprietário em 22/09:** seguir sem backup até o sistema
+estar 100% operante. Backup, restauração de backup, agenda, contratação e custo
+associados saem do escopo atual; não exigir essa frente para coletar, operar,
+fazer merge, implantar ou concluir o 2.0. Esta decisão substitui requisitos
+anteriores conflitantes. Retenção, pins e reconciliação após reinício permanecem.
+
+**Registro mínimo substitui o recibo obrigatório neste ciclo:** basta atualizar
+a linha do prompt em [GANSO_2_EXECUTION_STATE.md](../roadmap/GANSO_2_EXECUTION_STATE.md)
+com estado, PR/SHA quando houver, validação em uma frase e deploy/pendência.
+Não exigir relatório, recibo separado, screenshots, export de logs, pasta de
+evidências ou ensaio prolongado em toda entrega. Resultados do CI/PR e uma
+checagem operacional breve quando aplicável são suficientes para esse registro.
+Ausência de um documento de evidência não é motivo para bloquear ou refazer trabalho.
+
+Testes proporcionais e checks obrigatórios continuam; não inventar resultado ou
+ignorar falha para dispensar burocracia. O histórico financeiro, dados de fill,
+respostas Jev e métricas são requisitos funcionais do produto,
+não provas administrativas da sessão. Observação de sete dias e avaliação econômica
+ficam nos prompts próprios, sem impedir entrega dos outros componentes validados.
+
+Documentação segue a dispensa de deploy da RFC-020; não recriar serviços nem abrir
+PR vazio para uma consulta sem alterações. Restrições e recibos antigos permanecem
+históricos; a exigência antiga de anexar recibo por bloco não vale para Ganso 2.0.
+
+Permanecem o escopo paper, a banca fictícia de US$ 1.000 por cenário, os contratos
+financeiros e o teto total de planejamento de US$ 80/mês. Esta autorização de
+entrega não compra infraestrutura/API, cancela fornecedor, aumenta orçamento,
+ativa dinheiro real nem apaga conjunto de dados ainda não delimitado. Aplicar
+autorizações específicas já existentes sem perguntá-las de novo; quando faltar
+uma decisão desse tipo, preparar resultado concreto e pedir somente o que falta.
+Identidade SSH, proteções de branch e permissões efetivas das ferramentas continuam
+necessárias. Preservar trabalho local de outras sessões.
