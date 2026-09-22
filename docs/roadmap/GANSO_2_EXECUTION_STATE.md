@@ -41,7 +41,7 @@ O [estado BTC anterior](BTC_EXECUTION_STATE.md) fica como histórico. Não alter
 | Sessão                                                        | Estado  | Entrega / validação / implantação                              |
 | ------------------------------------------------------------- | ------- | -------------------------------------------------------------- |
 | [G2-00.1](../../prompts/ganso-2/g2-00-1-base-reconciliada.md) | code-verified | [PR #201](https://github.com/henrique-devel/ganso-market/pull/201), base 5162183; 237 entradas locais/HEAD/índices preservados, 544 links e 45 dependências conferidos, diff/scan aprovados; integração e checks consultáveis no PR; deploy dispensado por texto. |
-| [G2-00.2](../../prompts/ganso-2/g2-00-2-destino-do-legado.md) | code-verified | Base ab76a7c; 49 blocos/11 famílias em 21 destinos, consumidores e dependências de código/Compose/CI/health/timers conferidos; 68 links, escopo do diff e scan aprovados; PR/integração pendentes; deploy dispensado por texto. |
+| [G2-00.2](../../prompts/ganso-2/g2-00-2-destino-do-legado.md) | code-verified | [PR #202](https://github.com/henrique-devel/ganso-market/pull/202), inventário 78a09f2/base ab76a7c; 49 blocos/11 famílias em 21 destinos, consumidores e dependências de código/Compose/CI/health/timers conferidos; 68 links, escopo do diff e scan aprovados; integração e checks consultáveis no PR; deploy dispensado por texto. |
 
 ### G2-01 — Contenção e estabilidade do legado
 
