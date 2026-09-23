@@ -31,7 +31,7 @@ def bytes_from_display(value: str) -> int:
 
 def main() -> None:
     ids_result = subprocess.run(
-        ["docker", "compose", "--profile", "model", "ps", "--quiet"],
+        ["docker", "compose", "--profile", "*", "ps", "--status", "running", "--quiet"],
         check=True,
         capture_output=True,
         text=True,

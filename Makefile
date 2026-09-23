@@ -37,7 +37,7 @@ help:
 	@echo "  make resolution-logs acompanha os logs do risco de resolução"
 	@echo "  make resolution-down encerra o risco de resolução"
 	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
-	@echo "  make server-health  verifica frontend, API, banco e engine"
+	@echo "  make server-health  verifica frontend, API e banco"
 	@echo "  make server-status  mostra o estado dos containers"
 	@echo "  make server-logs    acompanha os logs do runtime"
 	@echo "  make server-update  reconstrói e atualiza o runtime"
@@ -178,19 +178,7 @@ server-logs:
 	$(SERVER_COMPOSE) logs --follow --tail 100
 
 server-update: server-config
-	$(SERVER_COMPOSE) pull --ignore-buildable
-	$(SERVER_COMPOSE) build --pull
-# RFC-020 D1: the database is not part of the release. A bare --force-recreate
-# recreated every default service, postgres included, costing 1,5-12,7 s without
-# a database per merge and one crash per profile worker (the pg pool had no
-# error handler). Three steps instead: bring postgres up WITHOUT
-# --force-recreate (image is pinned by digest and the config hash does not
-# move, so Compose leaves it alone), apply migrations, then recreate only the
-# code services. --no-deps keeps that last step from dragging migrate — and
-# through it postgres — back in via depends_on.
-	$(SERVER_COMPOSE) up --detach --wait --wait-timeout 180 postgres
-	$(SERVER_COMPOSE) run --rm migrate
-	$(SERVER_COMPOSE) up --detach --force-recreate --no-deps --remove-orphans --wait --wait-timeout 180 api web nginx market-engine
+	@SERVER_ENV="$(SERVER_ENV)" $(PYTHON) deploy/server_update.py
 	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
 
 server-down:

@@ -201,8 +201,30 @@ services:
     pids_limit: 64
     logging: *default-logging
 
+  # G2-03.3: prepared only. Even an explicit profile has zero replicas.
+  # G2-04.4 must supply a real collector before changing this guard.
+  btc-worker:
+    profiles: ["btc"]
+    scale: 0
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["node", "--max-old-space-size=160", "apps/api/dist/btc-worker.js"]
+    environment:
+      GANSO_BTC_WORKER_CONFIG_FILE: /etc/ganso/btc-worker.json
+    volumes:
+      - ./config/btc-worker.json:/etc/ganso/btc-worker.json:ro
+    networks:
+      - backend
+    restart: "no"
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *default-logging
+
   polymarket-recorder:
     profiles: ["polymarket"]
+    scale: 0
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -226,7 +248,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10s
     # 832m, not 1024m: the 192m released here funds the RFC-013 portfolio
     # engine below, and the recorder measured 230 MiB in production on
@@ -244,6 +266,7 @@ services:
   # database — so it joins only the internal backend network.
   polymarket-estimator:
     profiles: ["polymarket"]
+    scale: 0
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -270,7 +293,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10s
     # RFC-012 decision (2026-08-24): the estimator (39 MiB measured in
     # production) cedes 384 -> 192 MiB to fund the new polymarket-resolution
@@ -288,6 +311,7 @@ services:
   # is already in the database.
   polymarket-resolution:
     profiles: ["polymarket"]
+    scale: 0
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -319,7 +343,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10s
     mem_limit: 192m
     cpus: 0.5
@@ -332,6 +356,7 @@ services:
   # already in the database, so it joins only the internal backend network.
   polymarket-paper:
     profiles: ["polymarket"]
+    scale: 0
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -359,7 +384,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10s
     mem_limit: 256m
     cpus: 0.5
@@ -373,6 +398,7 @@ services:
   # backend network — it makes no outbound connection of its own.
   polymarket-portfolio:
     profiles: ["polymarket"]
+    scale: 0
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -411,7 +437,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10s
     mem_limit: 192m
     cpus: 0.5

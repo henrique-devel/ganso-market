@@ -106,7 +106,7 @@ jobs:
           docker version
           docker compose version
 
-      - name: Exercise the complete Compose runtime
+      - name: Exercise the effective runtime and inactive BTC profile
         run: make integration
 
   deploy:
@@ -199,7 +199,7 @@ jobs:
           set -eu
           # Health is gated on the server: remote-deploy.sh runs
           # deploy/healthcheck.sh (localhost /, /api/health/live, /api/health/ready
-          # and the engine) during the deploy step above, and a failure there
+          # with PostgreSQL readiness) during the deploy step above, and a failure there
           # fails the SSH command and this job. The public gateway (port 80) is
           # firewalled to the operator IP, so it is intentionally NOT reachable
           # from the CI runner and is no longer curled here (see

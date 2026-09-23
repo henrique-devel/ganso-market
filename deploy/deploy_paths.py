@@ -16,10 +16,11 @@ green check next to it; a false deploy only costs what today already costs.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 # Prefixes whose contents never reach a running container. Everything under
 # them is documentation or agent configuration; `config/` is deliberately NOT
@@ -66,6 +67,84 @@ def classify(paths: list[str]) -> tuple[bool, str]:
             shown = f"{shown}, … (+{len(code) - 5})"
         return True, f"{len(code)} de {len(cleaned)} arquivos fora das listas de texto: {shown}"
     return False, f"{SKIP_MESSAGE} ({len(cleaned)} arquivos)"
+
+
+# Candidate services are intersected with running containers on the host.
+# A profile name or an explicit Compose service must never activate a worker.
+LEGACY = {
+    f"polymarket-{name}" for name in ("recorder", "estimator", "resolution", "paper", "portfolio")
+}
+NODE_SERVICES = {"api", "btc-worker", *LEGACY}
+CODE_SERVICES = {*NODE_SERVICES, "web", "nginx", "market-engine", "model-worker"}
+
+
+def affected_services(paths: list[str]) -> set[str]:
+    if not paths:
+        return CODE_SERVICES | {"migrate"}
+    selected: set[str] = set()
+    for path in paths:
+        if is_text_path(path):
+            continue
+        if path.startswith(("apps/api/src/btc-worker", "apps/api/src/btc/", "config/btc-worker")):
+            selected.add("btc-worker")
+        elif any(path == f"apps/api/src/{name}.ts" for name in LEGACY):
+            selected.add(Path(path).stem)
+        elif path.startswith("apps/api/src/polymarket/"):
+            selected.update({"api", *LEGACY})
+        elif path.startswith("apps/api/"):
+            selected.update(NODE_SERVICES)
+        elif path.startswith("apps/web/"):
+            selected.add("web")
+        elif path.startswith("services/market-engine/"):
+            selected.add("market-engine")
+        elif path.startswith("workers/model-worker/"):
+            selected.add("model-worker")
+        elif path.startswith(("migrations/", "infra/migrations/")):
+            selected.add("migrate")
+        elif path.startswith("infra/nginx/"):
+            selected.add("nginx")
+        elif path == "docker-compose.yml":
+            selected.update(CODE_SERVICES | {"migrate"})
+        elif path.startswith(("deploy/", "scripts/", ".github/")) or path == "Makefile":
+            # Operational scripts are invoked from the synchronized release.
+            continue
+        else:
+            # Shared config, dependencies and unknown paths fail conservative.
+            selected.update(CODE_SERVICES | {"migrate"})
+    return selected
+
+
+def changed_tree_files(previous: Path, release: Path) -> list[str]:
+    """Compare the actual deployed tree, including missed releases/deletions.
+
+    Ignore exactly the local state excluded by the release synchronizer.
+    Errors propagate to the caller, which falls back to all running services.
+    """
+
+    def inventory(root: Path) -> dict[str, str]:
+        files: dict[str, str] = {}
+        for directory, dirs, names in os.walk(root):
+            relative = Path(directory).relative_to(root)
+            dirs[:] = [
+                name
+                for name in dirs
+                if name
+                not in {".git", ".deploy", "node_modules", ".venv", "__pycache__", "dist", "target"}
+                and (relative / name).as_posix() != "infra/secrets/local"
+            ]
+            for name in names:
+                path = (relative / name).as_posix()
+                if path in {".env", "deploy/server.env", "deploy/release-sha"}:
+                    continue
+                files[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+        return files
+
+    if not previous.is_dir() or not release.is_dir():
+        raise ValueError("deployed tree unavailable")
+    before, after = inventory(previous), inventory(release)
+    return sorted(
+        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+    )
 
 
 def changed_files(before: str, sha: str, *, repository_root: str | None = None) -> list[str]:
@@ -116,6 +195,12 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.output:
         with open(arguments.output, "a", encoding="utf-8") as handle:
             handle.write(f"deploy={'true' if deploy else 'false'}\n")
+            try:
+                paths = changed_files(arguments.before, arguments.sha)
+            except Exception:
+                paths = []
+            services = affected_services(paths) if deploy else set()
+            handle.write(f"services={','.join(sorted(services))}\n")
     return 0
 
 

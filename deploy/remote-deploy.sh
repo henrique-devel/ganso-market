@@ -62,7 +62,7 @@ sync_code() {
 }
 
 rollback_release() {
-  sync_code "$backup_dir" "$project_dir" && (cd "$project_dir" && make server-up)
+  sync_code "$backup_dir" "$project_dir" && (cd "$project_dir" && SERVER_DEPLOY_PREVIOUS="$release_dir" make server-update)
 }
 
 prune_backups() {
@@ -158,7 +158,7 @@ sync_code "$project_dir" "$backup_dir" || fail "não foi possível criar o backu
 
 apply_release() {
   sync_code "$release_dir" "$project_dir" || return 1
-  (cd "$project_dir" && make server-update)
+  (cd "$project_dir" && SERVER_DEPLOY_PREVIOUS="$backup_dir" make server-update)
 }
 
 deployment_started=1
