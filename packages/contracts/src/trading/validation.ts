@@ -231,6 +231,7 @@ export function parseTradingIntent(
     "Decision predates experiment",
   );
   sameInstrument(intent, instrument);
+  knownInputs(intent, [instrument.origin], intent.decision.decided_at);
   assertTradingQuantum(intent.terms.quantity, instrument.quantity_step);
   assertTradingQuantum(intent.terms.limit_price, instrument.tick_size);
   return intent;
@@ -247,6 +248,7 @@ export function parseTradingOrder(
   const instrument = parseTradingContract("instrument", instrumentValue);
   sameScope(order, intent);
   sameInstrument(order, instrument);
+  knownInputs(order, [instrument.origin], order.accepted_at);
   requireContract(
     order.intent_id === intent.intent_id &&
       order.decision_id === intent.decision.decision_id &&
@@ -281,6 +283,7 @@ export function parseTradingExecution(
   const instrument = parseTradingContract("instrument", instrumentValue);
   sameScope(execution, order);
   sameInstrument(execution, instrument);
+  knownInputs(execution, [instrument.origin], execution.executed_at);
   assertTradingQuantum(order.terms.quantity, instrument.quantity_step);
   assertTradingQuantum(order.terms.limit_price, instrument.tick_size);
   requireContract(

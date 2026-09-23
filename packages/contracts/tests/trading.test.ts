@@ -347,6 +347,12 @@ describe("identity, provenance and modes", () => {
   it("rejects ownership, decision, metadata and order-term drift", () => {
     const f = fixtures();
     expect(() =>
+      trading.parseTradingIntent(f.intent, f.account, f.experiment, {
+        ...f.instrument,
+        origin: { ...f.instrument.origin, received_at: t2 },
+      }),
+    ).toThrow("Data was unavailable at event time");
+    expect(() =>
       trading.parseTradingIntent(
         f.intent,
         { ...f.account, experiment_id: "other" },
