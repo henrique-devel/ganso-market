@@ -100,6 +100,38 @@ describe("BTC collector admission and terminal refusal", () => {
       await expect(collector.tick()).rejects.toThrow("STOPPED");
     },
   );
+  it("timestamps a capture after health discovers a gap at a clock boundary", async () => {
+    const { deps, state } = fixture();
+    let clock = start;
+    deps.feed.status = () => {
+      state.gaps = [
+        {
+          epoch: 1,
+          channel: "trades",
+          reason: "silence",
+          detected_at: ++clock,
+          after_source_at: null,
+          resumed_at: null,
+          recovery: "pending",
+        },
+      ];
+      return state;
+    };
+    deps.now = () => iso(clock);
+    const capture = vi.fn(
+      async (batch: {
+        capturedAt: string;
+        health: { gaps: { detected_at: number }[] };
+      }) => {
+        expect(batch.health.gaps[0]!.detected_at).toBeLessThanOrEqual(
+          Date.parse(batch.capturedAt),
+        );
+        return { stored: 1, duplicates: 0 };
+      },
+    );
+    await createCollector({ ...deps, capture }).tick();
+    expect(capture).toHaveBeenCalledOnce();
+  });
   it("keeps HOLD and reports logical, physical and cluster WAL separately", async () => {
     const { deps, collector } = fixture();
     deps.capacity.mockResolvedValueOnce(sample).mockResolvedValueOnce({

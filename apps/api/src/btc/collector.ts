@@ -99,13 +99,16 @@ export function createCollector(deps: {
           throw new Error("BTC_COLLECTOR_BUFFER_OVERFLOW");
         const events = deps.feed.drain();
         pendingEvents = events.length;
+        // status() can discover a silence gap. Stamp the capture afterwards so
+        // newly detected gaps never appear to come from its future.
+        const health = deps.feed.status();
         const at = deps.now();
         const result = await deps.capture({
           sessionId: deps.sessionId,
           capturedAt: at,
           metadata: deps.metadata(),
           events,
-          health: deps.feed.status(),
+          health,
         });
         pendingEvents = 0;
         lastCaptureAt = at;
