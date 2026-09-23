@@ -60,31 +60,6 @@ services:
     pids_limit: 64
     logging: *default-logging
 
-  market-engine:
-    build:
-      context: .
-      dockerfile: services/market-engine/Dockerfile
-    environment:
-      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
-      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets:
-      - postgres_password
-    volumes:
-      - ./config/runtime.json:/etc/ganso/runtime.json:ro
-    expose:
-      - "8081"
-    networks:
-      - backend
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    restart: unless-stopped
-    stop_grace_period: 10s
-    mem_limit: 512m
-    cpus: 1.0
-    pids_limit: 128
-    logging: *default-logging
-
   api:
     build:
       context: .
@@ -163,41 +138,6 @@ services:
     stop_grace_period: 5s
     mem_limit: 128m
     cpus: 0.25
-    pids_limit: 64
-    logging: *default-logging
-
-  model-worker:
-    profiles: ["model"]
-    build:
-      context: .
-      dockerfile: workers/model-worker/Dockerfile
-    environment:
-      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
-    volumes:
-      - ./config/runtime.json:/etc/ganso/runtime.json:ro
-    expose:
-      - "8090"
-    networks:
-      - backend
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/live', timeout=2)",
-        ]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
-    restart: unless-stopped
-    stop_grace_period: 10s
-    # RFC-011 decision (2026-08-23): the stub worker cedes memory to the new
-    # polymarket-paper service. 96m, not 128m: the compose policy cap is a
-    # strict < 4 GiB and 128m would land the aggregate exactly on the cap.
-    mem_limit: 96m
-    cpus: 0.5
     pids_limit: 64
     logging: *default-logging
 

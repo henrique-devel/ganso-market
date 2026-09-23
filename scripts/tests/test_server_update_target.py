@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "deploy"))
@@ -64,12 +66,73 @@ class ServerUpdateTests(unittest.TestCase):
         selected = update.select_running(
             affected_services(["unknown.bin"]), self.services, self.running
         )
-        self.assertEqual(selected, {"api", "web", "nginx", "market-engine", "migrate"})
+        self.assertEqual(selected, {"api", "web", "nginx", "migrate"})
 
     def test_text_and_operational_scripts_do_not_recreate_services(self) -> None:
         self.assertEqual(
             affected_services(["docs/test.md", "Makefile", "deploy/healthcheck.sh"]), set()
         )
+
+    def test_removed_artifacts_have_no_image_consumer(self) -> None:
+        candidates = affected_services(
+            [
+                "services/market-engine/src/main.rs",
+                "workers/model-worker/Dockerfile",
+                "Cargo.toml",
+                "Cargo.lock",
+                "rust-toolchain.toml",
+                "config/runtime.json",
+            ]
+        )
+        self.assertEqual(update.select_running(candidates, self.services, self.running), {"api"})
+
+    def test_retirement_scopes_identity_stops_once_and_keeps_data(self) -> None:
+        state = {
+            "Id": "a" * 64,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "fixture",
+                    "com.docker.compose.service": "market-engine",
+                }
+            },
+            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+            "State": {"Running": True},
+        }
+        calls = []
+
+        def docker(args):
+            calls.append(args)
+            if args[1] == "ps":
+                self.assertIn("label=com.docker.compose.project=fixture", args)
+                return state["Id"] if args[-1].endswith("=market-engine") else ""
+            self.assertEqual(args[-1], state["Id"])
+            if args[1] == "inspect":
+                return json.dumps([state])
+            if args[1] == "update":
+                state["HostConfig"]["RestartPolicy"]["Name"] = "no"
+            elif args[1] == "stop":
+                state["State"]["Running"] = False
+            else:
+                self.fail(f"unexpected mutation {args}")
+            return ""
+
+        with patch.object(update, "run", side_effect=docker):
+            update.retire_stubs("fixture")
+            update.retire_stubs("fixture")
+        self.assertEqual(sum(c[1] == "stop" for c in calls), 1)
+        self.assertEqual(sum(c[1] == "update" for c in calls), 1)
+
+    def test_retirement_rejects_foreign_identity_before_mutation(self) -> None:
+        for labels in ({}, {"com.docker.compose.project": "other"}):
+            state = {"Id": "a" * 64, "Config": {"Labels": labels}}
+            with patch.object(update, "run", side_effect=[state["Id"], json.dumps([state])]) as run:
+                with self.assertRaises(SystemExit):
+                    update.retire_stubs("fixture")
+                self.assertEqual(
+                    [call.args[0][1] for call in run.call_args_list], ["ps", "inspect"]
+                )
+        with self.assertRaises(ValueError):
+            update.retire_stubs("")
 
     def test_compose_delta_normalizes_mounts_without_restarting_unchanged_core(self) -> None:
         before = {

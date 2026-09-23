@@ -21,14 +21,19 @@ O PRD é planejamento, não comprovação de que a transição já foi implement
 
 ## Estado implementado
 
-- `market-engine` em Rust, limitado a bootstrap e health;
 - API Fastify com autenticação single-user (RFC-002), o recorder Polymarket
-  (dados públicos, RFC-007) ativo em produção e o modelo fundamental
+  (dados públicos, RFC-007) preservado e o modelo fundamental
   (RFC-010), que produz apenas estimativas `q` com intervalo de incerteza;
 - web React/Vite com login e health real;
-- `model-worker` Python opcional, sem modelo;
 - PostgreSQL com migrations versionadas;
 - Nginx em loopback no desenvolvimento e modo standalone direto na porta 80.
+
+G2-03.4 retirou os stubs `market-engine`/`model-worker` e a toolchain Rust
+após confirmar ausência de consumidores de negócio. O código anterior permanece
+no Git em `a6e381685eea5996d39850910c7fca9ae27f2ba1`; contratos de health/correlação
+continuam em `packages/contracts` e na API. Python continua necessário aos scripts
+operacionais. Nenhuma migration, volume ou dado Polymarket foi retirado.
+Os cinco workers legados seguem parados e BTC permanece inativo até G2-04.4.
 
 O modo operacional é `paper`: há decisões, ordens simuladas, ledger, posições,
 replay e painel. Não há executor/signer de ordens reais. A estratégia fast tem

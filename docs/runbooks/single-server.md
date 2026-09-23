@@ -2,19 +2,18 @@
 
 Este modo executa somente o Ganso Market em um host Ubuntu dedicado. A máquina
 precisa de Docker Engine, Docker Compose, Git, Make, Python 3, `curl` e `rsync`;
-Node, Rust, PostgreSQL e Nginx são fornecidos pelos containers.
+Node, PostgreSQL e Nginx são fornecidos pelos containers.
 
 O deploy não instala nem altera firewall, domínio, certificado, proxy externo
 ou ferramenta de observabilidade. O único bind no host é o gateway Nginx em
-`0.0.0.0:80`; PostgreSQL, API, engine e worker não publicam portas próprias.
+`0.0.0.0:80`; PostgreSQL, API e workers não publicam portas próprias.
 
 ## Estado funcional atual
 
-A implementação existente é a fundação do projeto: frontend, healthchecks,
-PostgreSQL, API e engine, mais a autenticação single-user (RFC-002) e o
-recorder Polymarket (RFC-007). Não existem estratégia, wallet, ordens ou
-execução. O perímetro do painel autenticado (firewall Hetzner ou TLS) é
-responsabilidade do operador — ver o runbook de perímetro.
+O núcleo ativo contém frontend, PostgreSQL, API/autenticação e Nginx.
+Os cinco workers Polymarket estão aposentados operacionalmente; suas leituras,
+replay e histórico permanecem. BTC fica inativo até G2-04.4. O perímetro do painel
+é responsabilidade do operador — ver o runbook de perímetro. Somente paper.
 
 ## 1. Preparar um Ubuntu novo
 
@@ -86,15 +85,24 @@ G2-03.3 mantém `btc-worker` e os cinco `polymarket-*` em perfil, escala zero e
 `restart: no`. O entrypoint BTC somente valida configuração paper desabilitada e
 termina; tentativa de habilitar falha. Não é um serviço pronto e não tem health
 fictício. Coleta depende de G2-04.4; não usar `--scale` para contornar o bloqueio.
-O overlay e os timers inibidos de G2-01.2 continuam vigentes. Engine permanece
-instalado até G2-03.4, mas sua ausência não bloqueia a readiness PostgreSQL da API.
+O overlay e os timers inibidos de G2-01.2 continuam vigentes.
+
+G2-03.4 removeu `market-engine` e `model-worker` do Compose, código, configuração
+e toolchain (base histórica `a6e3816`). Depois da atualização dos consumidores,
+`server-update` localiza somente esses dois serviços pelos labels exatos de
+projeto/serviço, revalida o ID, aplica `restart=no` e para os containers. O passo
+é idempotente e preserva containers, imagens, volumes e dados; não usa prune nem
+remoção genérica de órfãos. Serviços fora dessa lista não são aposentados.
+Os contratos compartilhados e Python operacional permanecem. A readiness da API
+continua dependente somente do PostgreSQL.
 
 O gate mantém memória combinada <4 GiB, CPU ≤7 e oito conexões PostgreSQL de
 reserva (máximo 40). Com todos os perfis declarados e os seis workers em escala
-zero: 2400 MiB, 4 CPUs, orçamento de 7 conexões; a projeção de um worker BTC
+zero: 1792 MiB, 2,5 CPUs, orçamento de 5 conexões; a projeção de um worker BTC
 completo soma 256 MiB/0,5 CPU/2 conexões, sem ativá-lo. O host valida ainda pelo
 menos 512 MiB e 1 CPU de reserva sobre os limites do runtime efetivo. O smoke
-usa o perfil BTC inativo e comprova readiness com engine parado e PG interrompido.
+usa o perfil BTC inativo, ensaia a parada dos dois stubs por labels, verifica
+auth sem eles e comprova readiness 503/200 ao interromper/retomar PostgreSQL.
 
 A seleção usa a cópia de código já existente no ciclo de deploy; não instala
 comando root novo nem cria rotina de backup. Cópia ausente ou SHA divergente
@@ -124,7 +132,7 @@ motivo.
 
 O workflow `.github/workflows/ci-cd.yml` roda `make verify` e o smoke completo
 do Compose em pull requests, pushes para `main` e execuções manuais. O deploy
-acontece somente em `main`, depois dos dois gates, no environment GitHub
+acontece somente em `main`, depois dos gates source, PostgreSQL e Compose, no environment GitHub
 `production`.
 
 Ativação única:

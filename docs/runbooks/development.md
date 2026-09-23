@@ -2,9 +2,8 @@
 
 ## Pré-requisitos
 
-- Rust 1.96.1 com `rustfmt` e `clippy`;
 - Node.js 24–26 e npm 11;
-- Python 3.9+ para tooling local (imagem runtime 3.13.14);
+- Python 3.9+ para scripts operacionais e tooling local;
 - Docker Engine com Compose v2;
 - Make e curl.
 
@@ -29,19 +28,18 @@ o arquivo para Git, logs, fixtures ou chat. O diretório fica em `0700`; o
 arquivo fica em `0644` para que os UIDs não-root dos containers consigam ler o
 bind mount. Fora desse diretório privado, o arquivo não é acessível no host.
 
-O worker opcional sobe somente com:
-
-```sh
-docker compose --profile model up --build --detach
-```
+O perfil padrão contém PostgreSQL, migrador, API, web e Nginx. Os stubs
+engine/model-worker foram retirados em G2-03.4 (histórico Git em `a6e3816`).
+BTC e os cinco workers Polymarket permanecem com escala zero e `restart: no`;
+não ativar esses perfis para testar o ambiente. Python/Ruff continuam necessários.
 
 ## Comandos canônicos
 
 | Comando               | Efeito                                           |
 | --------------------- | ------------------------------------------------ |
 | `make install`        | instala dependências fixadas e usa lockfiles     |
-| `make format`         | formata Rust, TypeScript/JSON/CSS e Python       |
-| `make lint`           | TypeScript check, Clippy e Ruff                  |
+| `make format`         | formata TypeScript/JSON/CSS e Python       |
+| `make lint`           | TypeScript check e Ruff                  |
 | `make test`           | testes unitários sem mainnet/serviço externo     |
 | `make build`          | compila todos os componentes                     |
 | `make verify`         | executa gates locais e valida Compose            |

@@ -137,10 +137,11 @@ sobrescrito pelo cliente psql; na amostra apareceu `psql`. O JSON guarda somente
 campos selecionados; não publicar inspect/env/log bruto/credenciais.
 Os contadores não são uma fotografia atômica: usar UTC de cada par para taxas.
 
-`check_runtime_memory.py` solicita só profile model; no host retornou dez
-containers, mas conferir a lista de IDs com `--profile polymarket --profile model
-ps --quiet` a cada janela. Seu agregado ~1,323 GiB desconta cache de modo diferente
-de memory.current. Resultado verde isolado não prova folga do PG.
+Na medição histórica, `check_runtime_memory.py` retornou dez containers e
+~1,323 GiB. A implementação atual inclui todos os perfis e somente containers
+ativos; conferir a lista com `docker compose --profile '*' ps --status running
+--quiet`. Os stubs foram retirados em G2-03.4. Docker stats desconta cache de modo
+diferente de memory.current; resultado verde isolado não prova folga do PG.
 
 Janela futura: reservar **50 min**, sem deploy/build/retention manual concorrente:
 15 min baseline passivo + até10 min um build + até5 min verificação/rollback +

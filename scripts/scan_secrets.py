@@ -103,7 +103,6 @@ def scan(root: Path, secret_dir: Path) -> list[Finding]:
             continue
         for reason, pattern in _patterns():
             if reason == "solana-private-key-base58-shape" and relative.name in {
-                "Cargo.lock",
                 "package-lock.json",
             }:
                 continue

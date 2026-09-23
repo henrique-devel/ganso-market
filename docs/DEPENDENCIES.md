@@ -24,30 +24,16 @@ nos manifests/lockfiles ou tags completas de imagem. O projeto é pessoal e
 
 Fonte: metadados do [registro npm](https://www.npmjs.com/).
 
-## Rust diretas
-
-| Crate                        |            Versão | Licença           |
-| ---------------------------- | ----------------: | ----------------- |
-| axum                         |             0.8.9 | MIT               |
-| tokio                        |            1.53.1 | MIT               |
-| tokio-postgres               |            0.7.18 | MIT OR Apache-2.0 |
-| serde / serde_json           | 1.0.229 / 1.0.151 | MIT OR Apache-2.0 |
-| time                         |            0.3.55 | MIT OR Apache-2.0 |
-| tracing / tracing-subscriber |   0.1.44 / 0.3.23 | MIT               |
-| uuid                         |            1.24.0 | Apache-2.0 OR MIT |
-| tempfile (testes)            |            3.24.0 | MIT OR Apache-2.0 |
-| tower (testes)               |             0.5.3 | MIT               |
-
-Fonte: metadados do [crates.io](https://crates.io/).
+Os stubs `market-engine`/`model-worker` foram removidos em G2-03.4, assim como
+Cargo/Rust e suas imagens exclusivas. O inventário anterior permanece no Git
+em `a6e3816`; contratos compartilhados e Python operacional foram preservados.
 
 ## Python e imagens
 
 | Dependência                   |            Versão/tag | Licença upstream                |
 | ----------------------------- | --------------------: | ------------------------------- |
 | Ruff (desenvolvimento)        |                0.16.2 | MIT                             |
-| Python                        | 3.13.14-slim-bookworm | PSF-2.0                         |
 | Node.js                       | 24.19.0-bookworm-slim | MIT                             |
-| Rust                          |       1.96.1-bookworm | MIT OR Apache-2.0               |
 | PostgreSQL                    |         18.4-bookworm | PostgreSQL License              |
 | Nginx                         |     1.30.4-alpine3.24 | BSD-2-Clause                    |
 | Debian Bookworm / Alpine 3.24 |            tags acima | múltiplas, por pacote da imagem |
@@ -59,7 +45,7 @@ resolvam os mesmos bytes.
 
 ## Transitivas
 
-`package-lock.json` e `Cargo.lock` fixam as árvores transitivas. Depois de
+`package-lock.json` fixa a árvore transitiva JavaScript. Depois de
 instalar/atualizar dependências, execute:
 
 ```sh
