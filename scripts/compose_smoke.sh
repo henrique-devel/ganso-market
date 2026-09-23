@@ -77,13 +77,30 @@ fi
 
 # The unfinished worker is a disabled one-off check, never a ready service.
 docker compose run --rm --no-deps btc-worker
-if docker compose --profile '*' ps --status running --services | grep -E '^(btc-worker|polymarket-|model-worker)' >/dev/null; then
-  echo "compose smoke failed: an inactive business/model worker is running" >&2
+if docker compose --profile '*' ps --status running --services | grep -E '^(btc-worker|polymarket-|model-worker|market-engine)' >/dev/null; then
+  echo "compose smoke failed: an inactive or retired worker is running" >&2
   exit 1
 fi
-# No business consumer: engine unavailability must not gate the core.
-docker compose stop market-engine
+# Exercise retirement of real old-style Compose orphans using the already
+# built API image, no network/mounts, no business logic and no new image pull.
+project="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+api_image="$(docker inspect --format '{{.Image}}' "$(docker compose ps --quiet api)")"
+for service in market-engine model-worker; do
+  docker run --detach --network none --restart unless-stopped \
+    --label "com.docker.compose.project=$project" \
+    --label "com.docker.compose.service=$service" \
+    "$api_image" node -e 'setInterval(() => {}, 1000)' >/dev/null
+done
+python3 - "$project" <<'PY_RETIRE'
+import sys
+sys.path.insert(0, "deploy")
+from server_update import retire_stubs
+retire_stubs(sys.argv[1])
+retire_stubs(sys.argv[1])  # idempotent; keeps the stopped containers
+PY_RETIRE
 wait_for_code 200 "$gateway/api/health/ready"
+wait_for_code 401 "$gateway/api/auth/session"
+wait_for_code 401 "$gateway/api/polymarket/overview"
 
 docker compose run --rm --no-deps migrate
 python3 scripts/check_runtime_memory.py

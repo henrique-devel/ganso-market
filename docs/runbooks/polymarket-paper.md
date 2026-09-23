@@ -75,7 +75,9 @@ docker compose --env-file deploy/server.env --profile polymarket up --build --de
 
 O perfil produtivo fica contido por configuração do host, preservada pelo CD.
 Esta operação usa o broker existente; não troca imagens nem aplica migrations.
-API, PostgreSQL, web, nginx, market-engine, volumes e histórico permanecem.
+API, PostgreSQL, web, nginx, volumes e histórico permanecem. Os stubs
+market-engine/model-worker foram retirados em G2-03.4; a cessão de memória
+acima é histórica.
 Não executar `down`, `rm`, `prune`, limpeza de dados ou rearm automático.
 
 ### Ordem e gate financeiro

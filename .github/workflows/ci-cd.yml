@@ -43,11 +43,6 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@1fbea72663f6d4c03efaab13560c8a24cfd2a7cc # v1.9.0
-        with:
-          cache: false
-
       - name: Install locked dependencies
         run: make install
 

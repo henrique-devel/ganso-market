@@ -33,8 +33,6 @@ describe("loadConfig", () => {
           },
           services: {
             api: { bind_address: "127.0.0.1", port: 3100 },
-            market_engine: { bind_address: "127.0.0.1", port: 8081 },
-            model_worker: { bind_address: "127.0.0.1", port: 8090 },
           },
           logging: { level: "debug" },
         }),

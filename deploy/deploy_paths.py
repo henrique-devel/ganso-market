@@ -75,7 +75,7 @@ LEGACY = {
     f"polymarket-{name}" for name in ("recorder", "estimator", "resolution", "paper", "portfolio")
 }
 NODE_SERVICES = {"api", "btc-worker", *LEGACY}
-CODE_SERVICES = {*NODE_SERVICES, "web", "nginx", "market-engine", "model-worker"}
+CODE_SERVICES = {*NODE_SERVICES, "web", "nginx"}
 
 
 def affected_services(paths: list[str]) -> set[str]:
@@ -95,10 +95,15 @@ def affected_services(paths: list[str]) -> set[str]:
             selected.update(NODE_SERVICES)
         elif path.startswith("apps/web/"):
             selected.add("web")
-        elif path.startswith("services/market-engine/"):
-            selected.add("market-engine")
-        elif path.startswith("workers/model-worker/"):
-            selected.add("model-worker")
+        elif path == "config/runtime.json":
+            selected.update(NODE_SERVICES)
+        elif path.startswith(("services/market-engine/", "workers/model-worker/")) or path in {
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+        }:
+            # G2-03.4: retired artifacts have no remaining image consumers.
+            continue
         elif path.startswith(("migrations/", "infra/migrations/")):
             selected.add("migrate")
         elif path.startswith("infra/nginx/"):

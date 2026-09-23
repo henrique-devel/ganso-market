@@ -125,29 +125,32 @@ describe("RFC-023 D1 — services.api.statement_timeout_ms", () => {
     ).rejects.toThrow(/starting with/);
   });
 
-  it("does not accept statement_timeout_ms on the other services", async () => {
-    await expect(
-      loadConfig({
-        env: {
-          [API_CONFIG_FILE_ENV]: "/config/runtime.json",
-          [API_SECRET_FILE_ENV]: "/secrets/postgres_password",
-        },
-        readTextFile: memoryReader({
-          "/config/runtime.json": JSON.stringify({
-            schema_version: 1,
-            services: {
-              api: VALID,
-              model_worker: {
-                port: 8090,
-                statement_timeout_ms: { ceiling: 1_000, default: 500 },
+  it.each(["model_worker", "market_engine"])(
+    "rejects retired service config %s",
+    async (name) => {
+      await expect(
+        loadConfig({
+          env: {
+            [API_CONFIG_FILE_ENV]: "/config/runtime.json",
+            [API_SECRET_FILE_ENV]: "/secrets/postgres_password",
+          },
+          readTextFile: memoryReader({
+            "/config/runtime.json": JSON.stringify({
+              schema_version: 1,
+              services: {
+                api: VALID,
+                [name]: {
+                  port: 8090,
+                  statement_timeout_ms: { ceiling: 1_000, default: 500 },
+                },
               },
-            },
+            }),
+            "/secrets/postgres_password": "unit-test-password\n",
           }),
-          "/secrets/postgres_password": "unit-test-password\n",
         }),
-      }),
-    ).rejects.toThrow(/statement_timeout_ms is not allowed/);
-  });
+      ).rejects.toThrow(new RegExp(`services.${name} is not allowed`));
+    },
+  );
 
   it("fails closed with QUERY_TIMEOUT_UNDECLARED when the key is absent", async () => {
     const config = await load({ bind_address: "0.0.0.0", port: 3000 });

@@ -272,52 +272,34 @@ function parseNonSecretConfig(text: string): PartialNonSecretConfig {
   }
   if (root.services !== undefined) {
     const services = requireObject(root.services, "services");
-    rejectUnknownKeys(
-      services,
-      ["api", "market_engine", "model_worker"],
-      "services",
-    );
-    for (const serviceName of [
-      "api",
-      "market_engine",
-      "model_worker",
-    ] as const) {
-      if (services[serviceName] === undefined) {
-        continue;
-      }
-      const service = requireObject(
-        services[serviceName],
-        `services.${serviceName}`,
-      );
+    rejectUnknownKeys(services, ["api"], "services");
+    if (services.api !== undefined) {
+      const service = requireObject(services.api, "services.api");
       rejectUnknownKeys(
         service,
-        serviceName === "api"
-          ? ["bind_address", "port", "statement_timeout_ms"]
-          : ["bind_address", "port"],
-        `services.${serviceName}`,
+        ["bind_address", "port", "statement_timeout_ms"],
+        "services.api",
       );
       const parsedService: NonNullable<PartialNonSecretConfig["server"]> = {};
       if (service.bind_address !== undefined) {
         parsedService.host = parseNonEmptyString(
           service.bind_address,
-          `services.${serviceName}.bind_address`,
+          "services.api.bind_address",
         );
       }
       if (service.port !== undefined) {
         parsedService.port = parseInteger(
           service.port,
-          `services.${serviceName}.port`,
+          "services.api.port",
           1,
           65_535,
         );
       }
-      if (serviceName === "api") {
-        result.server = parsedService;
-        if (service.statement_timeout_ms !== undefined) {
-          result.statementBudgets = parseStatementBudgets(
-            service.statement_timeout_ms,
-          );
-        }
+      result.server = parsedService;
+      if (service.statement_timeout_ms !== undefined) {
+        result.statementBudgets = parseStatementBudgets(
+          service.statement_timeout_ms,
+        );
       }
     }
   }

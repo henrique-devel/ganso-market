@@ -48,7 +48,6 @@ doctor:
 
 install: doctor
 	npm ci
-	cargo fetch --locked
 	$(PYTHON) -m venv $(VENV)
 	$(VENV)/bin/pip install --disable-pip-version-check -r requirements-dev.txt
 
@@ -57,24 +56,19 @@ init-secrets:
 
 format:
 	npm run format
-	cargo fmt --all
-	$(RUFF) format workers scripts deploy
+	$(RUFF) format scripts deploy
 
 format-check:
 	npm run format:check
-	cargo fmt --all --check
-	$(RUFF) format --check workers scripts deploy
+	$(RUFF) format --check scripts deploy
 
 lint:
 	npm run lint
-	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-	$(RUFF) check workers scripts deploy
+	$(RUFF) check scripts deploy
 	@for file in deploy/*.sh infra/migrations/*.sh scripts/*.sh; do sh -n "$$file"; done
 
 test:
 	npm test
-	cargo test --workspace --all-targets --locked
-	$(PYTHON) -m unittest discover -s workers/model-worker/tests -v
 	$(PYTHON) -m unittest discover -s scripts/tests -v
 
 # O gate rápido acima pode omitir PG sem GANSO_TEST_DATABASE_URL.
@@ -84,8 +78,7 @@ test-postgres:
 
 build:
 	npm run build
-	cargo build --workspace --locked
-	$(PYTHON) -m compileall -q workers/model-worker/src scripts deploy
+	$(PYTHON) -m compileall -q scripts deploy
 
 contracts-check:
 	npm run test --workspace @ganso-market/contracts
@@ -116,7 +109,7 @@ resource-check:
 	$(PYTHON) scripts/check_runtime_memory.py
 
 down:
-	docker compose --profile model --profile polymarket down --remove-orphans
+	docker compose --profile btc --profile polymarket down --remove-orphans
 
 recorder-up: init-secrets
 	docker compose --profile polymarket up --build --detach polymarket-recorder
@@ -182,4 +175,4 @@ server-update: server-config
 	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
 
 server-down:
-	$(SERVER_COMPOSE) --profile model down --remove-orphans
+	$(SERVER_COMPOSE) --profile btc --profile polymarket down --remove-orphans

@@ -1,10 +1,11 @@
-# Fundação do runtime — RFC-001
+# Fundação do runtime — RFC-001 / G2-03.4
 
 ## Escopo
 
-Esta arquitetura implementa somente bootstrap, contratos, configuração,
-persistência fundacional e observabilidade. Auth, coleta de dados de mercado, modelos,
-paper broker, wallet, signer e qualquer execução pertencem a RFCs posteriores e não têm caminho oculto nesta base.
+Os contratos e convenções da fundação continuam compartilhados. O núcleo ativo
+inclui autenticação single-user e leitura histórica Polymarket; os workers
+legados e BTC permanecem inativos. Os stubs Rust/Python sem função de negócio
+foram retirados em G2-03.4, preservados no Git em `a6e3816`.
 
 O runtime continua single-user e o único valor válido de `execution_mode` é
 `paper`.
@@ -13,18 +14,15 @@ O runtime continua single-user e o único valor válido de `execution_mode` é
 
 | Processo        | Runtime                     | Responsabilidade nesta RFC             | Dependência obrigatória |
 | --------------- | --------------------------- | -------------------------------------- | ----------------------- |
-| `market-engine` | Rust                        | bootstrap, contracts internos e health | PostgreSQL              |
-| `api`           | Node.js/Fastify             | health interno; auth retorna 404       | PostgreSQL              |
+| `api`           | Node.js/Fastify             | health, auth e leitura histórica       | PostgreSQL              |
 | `web`           | React estático              | renderizar health real da API          | API                     |
-| `model-worker`  | Python, profile `model`     | health; nenhum modelo                  | nenhuma                 |
 | `migrate`       | cliente PostgreSQL one-shot | aplicar migrations versionadas         | PostgreSQL              |
 | `nginx`         | Nginx                       | gateway local para web e health da API | API e web               |
 
-Ordem de boot: `postgres (healthy) -> migrate (sucesso) -> api/market-engine`;
-Nginx aguarda API e web saudáveis. O worker é opcional e não participa do
-caminho crítico.
+Ordem de boot: `postgres (healthy) -> migrate (sucesso) -> api`;
+Nginx aguarda API e web saudáveis. Perfis BTC e Polymarket têm escala zero.
 
-PostgreSQL, engine, worker e endpoints `/metrics` não publicam portas no host.
+PostgreSQL, workers e endpoints `/metrics` não publicam portas no host.
 A rede `backend` é interna; a rede `edge` permite o bind do gateway, mas nenhum
 container nela publica porta por conta própria. O único bind no host é o Nginx
 em `127.0.0.1:8080`; nesta RFC o endereço não pode ser sobrescrito por ambiente.
@@ -88,8 +86,8 @@ do secret ou strings de conexão.
 
 ## Recursos
 
-Os limites do Compose somam menos de 4 GiB mesmo contando o worker opcional e o
-migrator one-shot. `scripts/check_compose_policy.py` valida a soma e o isolamento
+Os limites do Compose somam menos de 4 GiB contando o runtime efetivo e o
+migrator one-shot, com projeção BTC separada. `scripts/check_compose_policy.py` valida a soma e o isolamento
 de portas a partir da configuração canônica do Compose. Isso é budget, não
 benchmark; RSS idle real é registrado apenas quando `make integration` ou
 `make resource-check` é executado com o daemon disponível.
@@ -99,6 +97,6 @@ benchmark; RSS idle real é registrado apenas quando `make integration` ou
 O modo de desenvolvimento mantém o Nginx em `127.0.0.1:8080`. Após o rebuild do
 servidor informado em 2026-08-14, o modo standalone pode publicar somente o
 Nginx em `0.0.0.0:80`, sem firewall gerenciado por este projeto, TLS, ACME,
-domínio ou porta 443. PostgreSQL, API, engine e worker continuam sem portas no
-host. Essa exceção serve apenas para a fundação atual, que não contém auth,
-wallet, tokens ou execução; esses recursos exigem uma nova revisão de perímetro.
+domínio ou porta 443. PostgreSQL, API e workers continuam sem portas no
+host. O painel autenticado usa o perímetro restrito descrito em
+[auth-perimeter](../runbooks/auth-perimeter.md).

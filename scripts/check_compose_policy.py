@@ -8,11 +8,10 @@ import subprocess
 
 FOUR_GIB = 4 * 1024**3
 # Existing pool maxima (database.ts and the five legacy entrypoints), plus
-# allowances for migration and engine probes. Eight slots stay unallocated.
+# an allowance for migration. Eight slots stay unallocated.
 CONNECTIONS = {
     "api": 4,
     "migrate": 1,
-    "market-engine": 2,
     "btc-worker": 2,
     "polymarket-recorder": 10,
     "polymarket-estimator": 4,

@@ -20,6 +20,47 @@ def run(args: list[str]) -> str:
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
+def retire_stubs(project: str) -> None:
+    """Stop only the two inventoried stubs, retaining containers and all data.
+
+    Removed services are Compose orphans, so use exact project/service labels
+    and recheck each immutable ID before touching it. Never use prune or rm.
+    """
+    if not project:
+        raise ValueError("retirement requires an explicit Compose project")
+    for service in ("market-engine", "model-worker"):
+        ids = run(
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--no-trunc",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+            ]
+        ).splitlines()
+        for container_id in ids:
+            state = json.loads(run(["docker", "inspect", container_id]))[0]
+            labels = state["Config"].get("Labels") or {}
+            if (
+                state["Id"] != container_id
+                or labels.get("com.docker.compose.project") != project
+                or labels.get("com.docker.compose.service") != service
+            ):
+                raise SystemExit("retirement: container identity mismatch")
+            if state["HostConfig"]["RestartPolicy"]["Name"] != "no":
+                run(["docker", "update", "--restart=no", container_id])
+            if state["State"]["Running"]:
+                run(["docker", "stop", "--time", "10", container_id])
+            after = json.loads(run(["docker", "inspect", container_id]))[0]
+            if after["State"]["Running"] or after["HostConfig"]["RestartPolicy"]["Name"] != "no":
+                raise SystemExit(f"retirement: {service} is not quiescent")
+            print(f"retired {service}: {container_id} stopped, restart=no; container/data kept")
+
+
 def commands(compose: list[str], selected: set[str], services: dict) -> list[list[str]]:
     """An empty selection emits no bare build/up, and PG is never a release target."""
     result: list[list[str]] = []
@@ -56,7 +97,7 @@ def select_running(candidates: set[str], services: dict, running: set[str]) -> s
     selected = {
         name
         for name in candidates & running
-        if name in CODE_SERVICES and services[name].get("scale", 1) != 0
+        if name in CODE_SERVICES and name in services and services[name].get("scale", 1) != 0
     }
     if "migrate" in candidates:
         selected.add("migrate")
@@ -119,7 +160,7 @@ def main() -> None:
             "server-update requires the existing healthy core; use server-up for bootstrap"
         )
     if "btc-worker" in running or any(name.startswith("polymarket-") for name in running):
-        raise SystemExit("server-update: unexpected business worker active during G2-03.3")
+        raise SystemExit("server-update: unexpected business worker active before G2-04.4")
     effective = {
         **model,
         "services": {
@@ -225,6 +266,9 @@ def main() -> None:
                 ]
             )
             verify_migrations(Path("migrations"), rows)
+    # Only after the selected consumers pass their update. Orphan removal is
+    # deliberately not delegated to Compose, which could affect other services.
+    retire_stubs(model["name"])
     after = run([*compose, "ps", "--quiet", "postgres"]).strip()
     if (
         run(["docker", "inspect", "--format", "{{.Id}} {{.State.StartedAt}}", after]).strip()
