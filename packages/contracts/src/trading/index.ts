@@ -12,3 +12,8 @@ export {
   assertInstrumentOrderConstraints,
   type TradingInstrumentMetadata,
 } from "./instrument-metadata.js";
+export type {
+  TradingMarketObservation,
+  TradingMarketData,
+  TradingBookLevel,
+} from "./market-data.js";
