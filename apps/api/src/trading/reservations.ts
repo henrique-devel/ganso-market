@@ -1,5 +1,5 @@
 /** Pure S3 arithmetic. USD6, BTC8, USD_PER_BTC6; all holds round UP.
- * Full notional collateral is deliberately conservative until S7/S8. A hold
+ * Full notional collateral remains the isolated 1x envelope. A hold
  * is neither a spot purchase nor a ledger expense. No wall-clock reclamation. */
 export const RESERVATION_VERSION = "btc.reservations.v1" as const;
 export interface ReservationOrder {
@@ -15,6 +15,8 @@ export interface ReservationOrder {
   fee_bps: number;
   margin_policy: "full_notional_v1";
   valid_until: string;
+  /** Required by S8 for new exposure; optional only for historical v1 replay. */
+  risk_plan?: { stop_price_usd_raw: string; entry_floor_usd_raw: string };
 }
 export interface Reservation {
   order: ReservationOrder;

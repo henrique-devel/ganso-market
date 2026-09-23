@@ -1,4 +1,14 @@
 import {
+  guardRiskOrderTx,
+  observeRiskTx,
+  riskTransaction,
+} from "./riskstore.js";
+import {
+  requireRisk,
+  grossExposure,
+  requireRiskCaps,
+} from "../trading/risk.js";
+import {
   parseTradingAmount,
   tradingIdempotencyKey,
   type TradingScope,
@@ -46,14 +56,13 @@ export async function readReservationsTx(
  * switch. Every writer takes exactly ONE owner row lock before reading orders,
  * ledger or reservation events. No order->owner inversion, nested transaction,
  * cross-account capital or clock-only release. Retry returns the original result.
- * Full risk/execution authorization remains gated on S8/S10. */
+ * S8 risk is enforced here; runtime execution remains gated on S10. */
 export async function applyReservation(
   pool: Pick<DatabasePool, "transaction">,
   scopeInput: TradingScope,
   input: ReservationCommand,
 ) {
-  return pool.transaction(async (tx) => {
-    await tx.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+  return riskTransaction(pool, scopeInput, async (tx) => {
     return applyReservationTx(tx, scopeInput, input);
   });
 }
@@ -88,6 +97,19 @@ export async function applyReservationTx(
   const now = (
     await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
   ).rows[0]!.now.toISOString();
+  if (request.action === "release") {
+    const active = (await readReservationsTx(tx, scope.account_id)).find(
+      (r) => r.order.order_id === request.order_id,
+    );
+    requireReservation(!!active, "ORDER_NOT_FOUND");
+    requireReservation(
+      request.reason !== "expired" || active.order.valid_until <= now,
+      "NOT_EXPIRED",
+    );
+    const result = release(active, request.reason);
+    await recordReservationTx(tx, scope.account_id, request, result, null, now);
+    return { status: "applied" as const, reservation: result };
+  }
   const ledger = await readLedgerAccountTx(tx, scope);
   requireReservation(
     !ledger.events.some((e) => e.recorded_at > now || e.occurred_at > now),
@@ -151,7 +173,12 @@ export async function applyReservationTx(
           0n,
       "INEXACT_ORDER",
     );
-    result = reserve(request.order, finance, pending);
+    await guardRiskOrderTx(tx, scope, request.order, true);
+    result = reserve(
+      request.order,
+      finance,
+      await readReservationsTx(tx, scope.account_id),
+    );
     if (request.order.intent === "open")
       await checkIsolatedOpening(
         [...pending, result],
@@ -165,13 +192,7 @@ export async function applyReservationTx(
   } else {
     const active = pending.find((r) => r.order.order_id === orderId);
     requireReservation(!!active, "ORDER_NOT_FOUND");
-    if (request.action === "release") {
-      requireReservation(
-        request.reason !== "expired" || active.order.valid_until <= now,
-        "NOT_EXPIRED",
-      );
-      result = release(active, request.reason);
-    } else {
+    {
       const managedIoc = await tx.query(
         "SELECT 1 FROM btc_ioc_intents WHERE account_id=$1 AND order_id=$2",
         [scope.account_id, orderId],
@@ -196,6 +217,7 @@ export async function applyReservationTx(
         request.fee_usd_raw,
         finance,
       );
+      await guardRiskOrderTx(tx, scope, active.order, false, true);
       if (active.order.intent === "open")
         await checkIsolatedOpening(pending, active.order.position_id, false);
       const exec = `reservation:${request.operation_id}`;
@@ -248,6 +270,19 @@ export async function applyReservationTx(
         ],
       };
       await beforeFill?.();
+      const guarded = await guardRiskOrderTx(
+        tx,
+        scope,
+        active.order,
+        false,
+        true,
+      );
+      if (active.order.intent === "open")
+        requireRisk(
+          BigInt(request.price_usd_raw) >=
+            BigInt(active.order.risk_plan!.entry_floor_usd_raw),
+          "ENTRY_FLOOR",
+        );
       const appended = await appendLedgerBatchTx(
         tx,
         identity,
@@ -257,6 +292,19 @@ export async function applyReservationTx(
       );
       requireReservation(appended.status === "appended", "LEDGER_COLLISION");
       if (active.order.intent === "open") {
+        const afterLedger = await readLedgerAccountTx(tx, scope);
+        const afterFinance = valueFinancials(
+          projectFinancials(afterLedger.projection, afterLedger.events),
+          guarded.market,
+        );
+        requireRiskCaps(
+          afterFinance.maintenance.equity_usd_raw!,
+          grossExposure(
+            afterFinance.positions,
+            afterFinance.maintenance.mark_price!.raw,
+            pending.map((r) => (r.order.order_id === orderId ? result : r)),
+          ),
+        );
         await checkIsolatedOpening(
           pending.map((r) => (r.order.order_id === orderId ? result : r)),
           active.order.position_id,
@@ -275,19 +323,46 @@ export async function applyReservationTx(
   }
   // Reservation journal and actual fill/fee commit together. Latest event is
   // the reservation projection: immutable history needs no mutable cache.
+  await recordReservationTx(
+    tx,
+    scope.account_id,
+    request,
+    result,
+    batch?.transaction_id ?? null,
+    now,
+  );
+  if (request.action === "consume") {
+    const completed = await observeRiskTx(tx, scope);
+    requireRisk(
+      completed.bookFresh &&
+        (result.order.intent === "reduce" ||
+          (completed.markFresh && completed.funding.usable_for_risk)),
+      "EXECUTION_DATA_CHANGED",
+    );
+  }
+  return { status: "applied" as const, reservation: result };
+}
+
+async function recordReservationTx(
+  tx: SqlExecutor,
+  accountId: string,
+  request: ReservationCommand,
+  result: Reservation,
+  transactionId: string | null,
+  now: string,
+) {
   await tx.query(
     `INSERT INTO btc_reservation_events(account_id,sequence,operation_id,order_id,action,request,reservation,ledger_transaction_id,recorded_at)
       SELECT $1,COALESCE(MAX(sequence),0)+1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8 FROM btc_reservation_events WHERE account_id=$1`,
     [
-      scope.account_id,
+      accountId,
       request.operation_id,
-      orderId,
+      result.order.order_id,
       request.action,
       JSON.stringify(request),
       JSON.stringify(result),
-      batch?.transaction_id ?? null,
+      transactionId,
       now,
     ],
   );
-  return { status: "applied" as const, reservation: result };
 }

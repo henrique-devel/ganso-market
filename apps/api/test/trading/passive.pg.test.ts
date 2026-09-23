@@ -18,10 +18,12 @@ import {
 } from "../../src/storage/btc-retention.js";
 import { ledgerScope } from "../../src/trading/ledger.js";
 import { createPgFixture } from "../pg-fixture.js";
-import { command, identity, iso } from "./ledger-fixture.js";
+import { command as ledgerCommand, identity, iso } from "./ledger-fixture.js";
 import { metadata } from "./bars-fixture.js";
 import { market, pricedFill } from "./valuation-fixture.js";
-import { order } from "./reservation-fixture.js";
+import { riskOrder as order, seedRiskFunding } from "./risk-fixture.js";
+const command = (...args: Parameters<typeof ledgerCommand>) =>
+  ledgerCommand(args[0], args[1], args[2] ?? scope, args[3] ?? Date.now());
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
 let hook: ((sql: string, tx: SqlExecutor) => Promise<void>) | null;
@@ -62,7 +64,7 @@ const submit = (
   action: "submit",
   operation_id: `submit:${id}`,
   order: order(id, {
-    quantity_btc_raw: "500000",
+    quantity_btc_raw: "50000",
     price_cap_usd_raw: "67000000000",
     ...changes,
   }),
@@ -105,19 +107,27 @@ async function capture(
   const at = Date.now(),
     m = market(at),
     id = ++captureSequence;
+  if (m.book!.payload.payload.kind === "book")
+    for (const level of [
+      ...m.book!.payload.payload.bids,
+      ...m.book!.payload.payload.asks,
+    ])
+      Object.assign(level.quantity, {
+        raw: (BigInt(level.quantity.raw) / 10n).toString(),
+      });
   if (options.bookTouch && m.book!.payload.payload.kind === "book")
     Object.assign(m.book!.payload.payload, {
       asks: [
         {
           price: { unit: "USD_PER_BTC", decimals: 6, raw: "64900000000" },
-          quantity: { unit: "BTC", decimals: 8, raw: "900000" },
+          quantity: { unit: "BTC", decimals: 8, raw: "90000" },
           orders: 1,
         },
       ],
       bids: [
         {
           price: { unit: "USD_PER_BTC", decimals: 6, raw: "64800000000" },
-          quantity: { unit: "BTC", decimals: 8, raw: "800000" },
+          quantity: { unit: "BTC", decimals: 8, raw: "80000" },
           orders: 1,
         },
       ],
@@ -164,6 +174,10 @@ async function capture(
     for (const [kind, payload, sourceAt, received] of events) {
       const key = `fixture:${kind}:${id}`;
       ids.push(key);
+      await tx.query(
+        "SELECT pg_sleep(GREATEST(0,LEAST(0.1,extract(epoch FROM $1::timestamptz-clock_timestamp()))))",
+        [iso(at)],
+      );
       await storeRetentionObjectTx(tx, {
         id: key,
         class: "raw",
@@ -219,6 +233,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
     lastCapture = Date.now() - 20;
     await createLedgerAccount(pool, identity());
     await seedMarginMetadata(pool);
+    await seedRiskFunding(pool);
     await withBtcRetentionTransaction(pool, (tx) =>
       storeRetentionObjectTx(tx, {
         id: "fixture:metadata",
@@ -247,41 +262,41 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
     await capture({ bookTouch: true });
     const r = await apply(advance());
     expect(r.fills).toEqual([]);
-    expect(r.orders[0]!.queue.ahead_btc_raw).toBe("600000");
+    expect(r.orders[0]!.queue.ahead_btc_raw).toBe("60000");
     expect(await count("btc_ledger_events")).toBe(1);
   });
   it("requires strictly posterior source AND receipt times", async () => {
     const s = await apply(submit());
     const at = Date.parse(s.orders[0]!.accepted_at);
-    await capture({ quantity: "0.02", tradeAt: at, receivedAt: at });
+    await capture({ quantity: "0.002", tradeAt: at, receivedAt: at });
     expect((await apply(advance())).fills).toEqual([]);
-    await capture({ quantity: "0.02", tradeAt: at - 1 });
+    await capture({ quantity: "0.002", tradeAt: at - 1 });
     expect((await apply(advance("a2"))).fills).toEqual([]);
   });
   it("burns queue on insufficient trade then persists a partial fill with fee and pins", async () => {
     await apply(submit());
-    await capture({ quantity: "0.004" });
+    await capture({ quantity: "0.0004" });
     const zero = await apply(advance());
     expect(zero.fills).toEqual([]);
-    expect(zero.orders[0]!.queue.ahead_btc_raw).toBe("200000");
-    const ids = await capture({ quantity: "0.003" });
+    expect(zero.orders[0]!.queue.ahead_btc_raw).toBe("20000");
+    const ids = await capture({ quantity: "0.0003" });
     const r = await apply(advance("a2"));
     expect(r.fills).toMatchObject([
       {
         order_id: "p1",
         price_usd_raw: "64900000000",
-        quantity_btc_raw: "100000",
-        fee_usd_raw: "9735",
+        quantity_btc_raw: "10000",
+        fee_usd_raw: "974",
       },
     ]);
     expect(r.orders[0]!.reservation).toMatchObject({
       status: "active",
-      remaining_btc_raw: "400000",
-      margin_usd_raw: "268000000",
+      remaining_btc_raw: "40000",
+      margin_usd_raw: "26800000",
     });
     const v = await readLedgerValuation(pool, scope, iso(Date.now()));
-    expect(v.balance_usd_raw).toBe("999990265");
-    expect(v.positions[0]!.quantity_btc_raw).toBe("100000");
+    expect(v.balance_usd_raw).toBe("999999026");
+    expect(v.positions[0]!.quantity_btc_raw).toBe("10000");
     const deps = (
       await fixture.pool.query(
         "SELECT dependency_id FROM btc_retention_dependencies WHERE object_id=$1",
@@ -289,36 +304,42 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
       )
     ).rows.map((r) => r.dependency_id);
     expect(deps).toEqual(expect.arrayContaining(ids));
-    expect(await count("btc_retention_pins")).toBe(3);
+    expect(await count("btc_retention_pins")).toBe(4);
   });
   it("deduplicates retries, new operations and same economic trade under a new observation", async () => {
     await apply(submit());
     const at = Date.now();
-    await capture({ quantity: "0.007", tradeAt: at, tid: 42 });
+    await capture({ quantity: "0.0007", tradeAt: at, tid: 42 });
     const a = await apply(advance());
     const before = await snapshot();
     expect(await apply(advance())).toEqual(a);
     expect(await snapshot()).toEqual(before);
-    await capture({ quantity: "0.007", tradeAt: at, tid: 42 });
+    await capture({ quantity: "0.0007", tradeAt: at, tid: 42 });
     expect((await apply(advance("restart"))).fills).toEqual([]);
     expect(await count("btc_passive_trades")).toBe(1);
     expect((await readLedgerAccount(pool, scope)).events).toHaveLength(3);
   });
   it("shares queue burn and volume FIFO across all same-account orders and concurrent callers", async () => {
-    await apply(submit("p1"));
-    await apply(submit("p2"));
-    await capture({ quantity: "0.018" });
+    await appendLedgerBatch(pool, scope, {
+      transaction_id: "seed",
+      events: [
+        command("seed", pricedFill("seed", "sell", "100000", "66000000000")),
+      ],
+    });
+    await apply(submit("p1", { intent: "reduce" }));
+    await apply(submit("p2", { intent: "reduce" }));
+    await capture({ quantity: "0.0018" });
     const [a, b] = await Promise.all([apply(advance()), apply(advance("a2"))]);
     expect(a.fills.map((f) => [f.order_id, f.quantity_btc_raw])).toEqual([
-      ["p1", "500000"],
-      ["p2", "100000"],
+      ["p1", "50000"],
+      ["p2", "10000"],
     ]);
     expect(b.fills).toEqual([]);
     expect(await count("btc_passive_trades")).toBe(1);
   });
   it("late cancellation reports filled state and cannot duplicate execution", async () => {
     await apply(submit());
-    await capture({ quantity: "0.02" });
+    await capture({ quantity: "0.002" });
     const r = await apply(advance());
     expect(r.orders[0]!.reservation.status).toBe("filled");
     expect(await apply(cancel())).toMatchObject({
@@ -330,16 +351,22 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
   });
   it("cancel first wins the serialized race with advance", async () => {
     await apply(submit());
-    await capture({ quantity: "0.02" });
+    await capture({ quantity: "0.002" });
     const rs = await Promise.all([apply(cancel()), apply(advance())]);
     expect(rs.flatMap((r) => r.fills)).toEqual([]);
     expect(await count("btc_ledger_events")).toBe(1);
   });
   it("replace loses priority even for size reduction and excludes old trade evidence", async () => {
-    await apply(submit("p1"));
-    await apply(submit("p2"));
-    await capture({ quantity: "0.02" });
-    const next = submit("p3", { quantity_btc_raw: "300000" });
+    await appendLedgerBatch(pool, scope, {
+      transaction_id: "seed",
+      events: [
+        command("seed", pricedFill("seed", "sell", "100000", "66000000000")),
+      ],
+    });
+    await apply(submit("p1", { intent: "reduce" }));
+    await apply(submit("p2", { intent: "reduce" }));
+    await capture({ quantity: "0.002" });
+    const next = submit("p3", { quantity_btc_raw: "30000", intent: "reduce" });
     const r = await apply({
       ...next,
       action: "replace",
@@ -355,8 +382,8 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
     expect(
       old.orders.find((s) => s.reservation.order.order_id === "p3")!.queue
         .ahead_btc_raw,
-    ).toBe("600000");
-    await capture({ quantity: "0.009" });
+    ).toBe("60000");
+    await capture({ quantity: "0.0009" });
     expect((await apply(advance("a2"))).fills.map((f) => f.order_id)).toEqual([
       "p3",
     ]);
@@ -383,23 +410,23 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
     { from: Date.now() - 30000 },
   ])("invalidates the queue on gap/restart/stale proof %j", async (options) => {
     await apply(submit());
-    await capture({ ...options, quantity: "0.02" });
+    await capture({ ...options, quantity: "0.002" });
     const r = await apply(advance());
     expect(r.fills).toEqual([]);
     expect(r.orders[0]!.reservation.status).toBe("cancelled");
-    await capture({ quantity: "0.02" });
+    await capture({ quantity: "0.002" });
     expect((await apply(advance("restart"))).fills).toEqual([]);
     expect(await count("btc_ledger_events")).toBe(1);
   });
   it("unknown finance never fabricates risk capacity", async () => {
     await apply(submit());
-    await capture({ quantity: "0.02", contextUnknown: true });
+    await capture({ quantity: "0.002", contextUnknown: true });
     expect((await apply(advance())).reason).toBe("finance_unavailable");
-    await expect(apply(submit("p2"))).rejects.toThrow("FINANCE_UNAVAILABLE");
+    await expect(apply(submit("p2"))).rejects.toThrow("REDUCE_ONLY");
   });
   it("expires without using already stored negotiations", async () => {
     await apply(submit("p1", { valid_until: iso(Date.now() + 180) }));
-    await capture({ quantity: "0.02" });
+    await capture({ quantity: "0.002" });
     await fixture.pool.query("SELECT pg_sleep(0.2)");
     const r = await apply(advance());
     expect(r.fills).toEqual([]);
@@ -407,7 +434,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
   });
   it("expiry after tentative fill rolls back ledger, queue and trade claims", async () => {
     await apply(submit("p1", { valid_until: iso(Date.now() + 300) }));
-    await capture({ quantity: "0.007" });
+    await capture({ quantity: "0.0007" });
     hook = async (sql, tx) => {
       if (sql.startsWith("INSERT INTO btc_reservation_events")) {
         hook = null;
@@ -422,7 +449,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
   });
   it("rolls back all financial effects and pins if the final trade claim fails", async () => {
     await apply(submit());
-    await capture({ quantity: "0.007" });
+    await capture({ quantity: "0.0007" });
     const before = await snapshot();
     hook = async (sql, tx) => {
       if (sql.startsWith("INSERT INTO btc_passive_trades"))
@@ -441,7 +468,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
         action: "consume",
         operation_id: "bypass",
         order_id: "p1",
-        quantity_btc_raw: "100000",
+        quantity_btc_raw: "10000",
         price_usd_raw: "64900000000",
         fee_usd_raw: "0",
       }),
@@ -456,9 +483,10 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
   it("counterfactual accounts independently consume prints, without pooled capital", async () => {
     const other = ledgerScope(identity("alternative"));
     await createLedgerAccount(pool, identity("alternative"));
+    await seedRiskFunding(pool, other);
     await apply(submit());
     await applyPassive(pool, other, submit());
-    await capture({ quantity: "0.02" });
+    await capture({ quantity: "0.002" });
     const a = await apply(advance()),
       b = await applyPassive(pool, other, advance());
     expect(a.fills).toEqual(b.fills);
@@ -475,7 +503,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
             pricedFill(
               "seed",
               side === "sell" ? "buy" : "sell",
-              "500000",
+              "50000",
               side === "sell" ? "64000000000" : "66000000000",
             ),
           ),
@@ -489,7 +517,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
         ),
       );
       await capture({
-        quantity: "0.02",
+        quantity: "0.002",
         side: side === "sell" ? "buy" : "sell",
         price: side === "sell" ? "65100" : "64900",
         contextUnknown: true,
@@ -498,7 +526,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
       expect(r.orders[0]!.reservation.status).toBe("filled");
       const v = await readLedgerValuation(pool, scope, iso(Date.now()));
       expect(v.positions[0]!.quantity_btc_raw).toBe("0");
-      expect(v.realized_pnl_usd_raw).toBe("5500000");
+      expect(v.realized_pnl_usd_raw).toBe("550000");
     },
   );
   it("rejects mixing IOC and passive liquidity models in either order", async () => {
@@ -506,7 +534,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
       action: "submit" as const,
       operation_id: "ioc",
       order: order("ioc", {
-        quantity_btc_raw: "100000",
+        quantity_btc_raw: "20000",
         price_cap_usd_raw: "67000000000",
       }),
       intent: {
@@ -530,18 +558,18 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
   });
   it("accumulates rounding across SQL partials instead of charging each poll", async () => {
     await apply(submit());
-    await capture({ quantity: "0.00601" });
+    await capture({ quantity: "0.00061" });
     const first = await apply(advance());
     await capture({ quantity: "0.00001" });
     const next = await apply(advance("next"));
     expect(first.fills[0]!.fee_usd_raw).toBe("98");
     expect(next.fills[0]!.fee_usd_raw).toBe("97");
     expect(next.orders[0]!.queue.charged_usd_raw).toBe("195");
-    expect(next.orders[0]!.reservation.remaining_btc_raw).toBe("498000");
+    expect(next.orders[0]!.reservation.remaining_btc_raw).toBe("48000");
   });
   it("does not infer continuity across a missing capture interval", async () => {
     await apply(submit());
-    await capture({ quantity: "0.02", from: Date.now() + 1 });
+    await capture({ quantity: "0.002", from: Date.now() + 1 });
     const result = await apply(advance());
     expect(result.fills).toEqual([]);
     expect(result.reason).toBe("capture_history_missing");
@@ -555,7 +583,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
   });
   it("protects queue, result and trade receipts against mutation and truncation", async () => {
     await apply(submit());
-    await capture({ quantity: "0.007" });
+    await capture({ quantity: "0.0007" });
     await apply(advance());
     const before = await snapshot();
     for (const table of [
@@ -583,7 +611,7 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
       order_id: "p1",
       reason: "cancelled",
     });
-    await capture({ quantity: "0.02" });
+    await capture({ quantity: "0.002" });
     expect((await apply(advance())).fills).toEqual([]);
     expect(await apply(cancel())).toMatchObject({
       reason: "already_terminal",

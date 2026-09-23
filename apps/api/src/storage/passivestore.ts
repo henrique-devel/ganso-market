@@ -1,3 +1,4 @@
+import { withRisk } from "./riskstore.js";
 import { createHash } from "node:crypto";
 import {
   assertInstrumentOrderConstraints,
@@ -25,7 +26,6 @@ import { lockableLedgerAccountTx, readLedgerAccountTx } from "./ledgerstore.js";
 import { applyReservationTx, readReservationsTx } from "./reservationstore.js";
 import { readValuationMarketTx } from "./valuationstore.js";
 import {
-  withBtcRetentionTransaction,
   storeRetentionObjectTx,
   pinRetentionObjectTx,
 } from "./btc-retention.js";
@@ -63,7 +63,11 @@ export async function applyPassive(
   validatePassiveCommand(input);
   const scope = { ...scopeInput },
     request: PassiveCommand = JSON.parse(JSON.stringify(input));
-  return withBtcRetentionTransaction(pool, async (tx) => {
+  return withRisk(
+    pool,
+    scope,
+    true,
+  )(async (tx) => {
     const identity = await lockableLedgerAccountTx(tx, scope, true);
     const prior = (
       await tx.query(

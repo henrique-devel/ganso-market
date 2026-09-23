@@ -37,7 +37,8 @@ export function validateReservationCommand(input: ReservationCommand): void {
         !!o &&
         keys(
           o,
-          "schema_version,order_id,position_id,source,intent,side,quantity_btc_raw,price_cap_usd_raw,fee_bps,margin_policy,valid_until",
+          "schema_version,order_id,position_id,source,intent,side,quantity_btc_raw,price_cap_usd_raw,fee_bps,margin_policy,valid_until" +
+            (o.risk_plan ? ",risk_plan" : ""),
         ),
       "COMMAND",
     );
@@ -55,6 +56,13 @@ export function validateReservationCommand(input: ReservationCommand): void {
         o.fee_bps <= 10_000 &&
         o.margin_policy === "full_notional_v1",
       "ORDER",
+    );
+    requireReservation(
+      !o.risk_plan ||
+        (keys(o.risk_plan, "stop_price_usd_raw,entry_floor_usd_raw") &&
+          raw(o.risk_plan.stop_price_usd_raw) &&
+          raw(o.risk_plan.entry_floor_usd_raw)),
+      "RISK_PLAN",
     );
     const at = Date.parse(o.valid_until);
     requireReservation(

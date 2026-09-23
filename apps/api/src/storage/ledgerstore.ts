@@ -1,3 +1,5 @@
+import { observeRiskTx, readRiskTx } from "./riskstore.js";
+import { requireRisk } from "../trading/risk.js";
 import type { TradingScope } from "@ganso-market/contracts/trading";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import { canonicalFingerprint } from "../trading/replay.js";
@@ -100,7 +102,28 @@ export async function appendLedgerBatchTx(
       "SELECT 1 FROM btc_order_acceptances WHERE account_id=$1 LIMIT 1",
       [id],
     );
-    if (managed.rowCount) throw new Error("BTC_LEDGER_RESERVATION_REQUIRED");
+    if (managed.rowCount || (await readRiskTx(tx, id)))
+      throw new Error("BTC_LEDGER_RESERVATION_REQUIRED");
+  }
+  const risk = await readRiskTx(tx, id);
+  const external =
+    risk && batch.events.some((e) => e.payload.event_type === "cash");
+  if (external) {
+    requireRisk(
+      batch.events.every(
+        (e) =>
+          e.payload.event_type === "cash" &&
+          Date.parse(recordedAt) - Date.parse(e.occurred_at) >= 0 &&
+          Date.parse(recordedAt) - Date.parse(e.occurred_at) <= 5000,
+      ),
+      "EXTERNAL_FLOW_TIME",
+    );
+    const before = await observeRiskTx(tx, ledgerScope(identity));
+    requireRisk(
+      before.finance.positions.every((p) => p.quantity_btc_raw === "0") ||
+        before.markFresh,
+      "EXTERNAL_FLOW_UNVALUED",
+    );
   }
   const history = await events(tx, id);
   const replay = history.length ? replayLedger(identity, history) : null;
@@ -143,6 +166,7 @@ export async function appendLedgerBatchTx(
     ON CONFLICT(account_id) DO UPDATE SET projection=EXCLUDED.projection`,
     [id, JSON.stringify(projection)],
   );
+  if (external) await observeRiskTx(tx, ledgerScope(identity));
   return { status: "appended" as const, events: next };
 }
 /** Library only: no route/worker calls this in S1. No migration seeds accounts.
