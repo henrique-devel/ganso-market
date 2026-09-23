@@ -173,7 +173,7 @@ describe.skipIf(!url)("financial reads on disposable PostgreSQL", () => {
     const before = await snapshot(),
       stored = await readLedgerAccount(pool, scope);
     const read = await readLedgerValuation(pool, scope, iso(at));
-    expect(read).toEqual(
+    expect(read).toMatchObject(
       valueFinancials(replayFinancials(id, [...stored.events].reverse()), m),
     );
     expect(read).toMatchObject({

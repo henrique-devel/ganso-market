@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabasePool, SqlExecutor } from "../../src/database.js";
 import {
   appendLedgerBatch,
+  appendLedgerBatchTx,
   createLedgerAccount,
   readLedgerAccount,
 } from "../../src/storage/ledgerstore.js";
@@ -174,10 +175,20 @@ describe.skipIf(!url)("account ledger on disposable PostgreSQL", () => {
   it("orders replay by committed sequence, retains funding time and liquidates without duplicate deltas", async () => {
     await createLedgerAccount(pool, identity());
     await appendLedgerBatch(pool, scope, batch());
-    await appendLedgerBatch(pool, scope, {
-      transaction_id: "fund",
-      events: [command("fund", funding())],
-    });
+    // Historical S1 replay compatibility. New public funding writes require S6.
+    await pool.transaction((tx) =>
+      appendLedgerBatchTx(
+        tx,
+        identity(),
+        {
+          transaction_id: "fund",
+          events: [command("fund", funding())],
+        },
+        new Date().toISOString(),
+        false,
+        true,
+      ),
+    );
     await appendLedgerBatch(pool, scope, {
       transaction_id: "close",
       events: [

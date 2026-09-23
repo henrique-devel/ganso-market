@@ -2,6 +2,7 @@ import type { TradingScope } from "@ganso-market/contracts/trading";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import {
   projectFinancials,
+  dailyFinancialCosts,
   valueFinancials,
   type MarketEvidence,
   type ValuationCapture,
@@ -11,6 +12,8 @@ import {
   type LedgerIdentityInput,
   type LedgerReplayEvent,
 } from "../trading/ledger.js";
+
+import { readFundingCoverageTx } from "./fundingstore.js";
 
 import { readLedgerAccountTx } from "./ledgerstore.js";
 
@@ -45,10 +48,29 @@ export async function readLedgerValuation(
     if (ledger.events.some((e) => e.recorded_at > asOf || e.occurred_at > asOf))
       throw new Error("BTC_VALUATION_BEFORE_LEDGER");
     const market = await readValuationMarketTx(tx, asOf);
-    return valueFinancials(replayFinancials(ledger.identity, ledger.events), {
-      as_of: asOf,
-      ...market,
-    });
+    const value = valueFinancials(
+      replayFinancials(ledger.identity, ledger.events),
+      {
+        as_of: asOf,
+        ...market,
+      },
+    );
+    const funding = await readFundingCoverageTx(
+      tx,
+      scope.account_id,
+      ledger.events,
+      asOf,
+    );
+    return {
+      ...value,
+      funding,
+      daily: dailyFinancialCosts(ledger.projection, ledger.events, asOf),
+      maintenance: {
+        ...value.maintenance,
+        usable_for_risk:
+          value.maintenance.usable_for_risk && funding.usable_for_risk,
+      },
+    };
   });
 }
 
