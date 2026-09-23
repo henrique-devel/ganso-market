@@ -101,6 +101,10 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
         "SELECT object_id FROM btc_retention_objects ORDER BY object_id",
       )
     ).rows.map((r) => r.object_id as string);
+    // Production statistics mostly see raw envelopes with 0/1 edges. Analyze
+    // that distribution: a missing-stats fixture hides the nested anti-join
+    // chosen for the rare large array (estimated as a single declared edge).
+    await fixture.pool.query("ANALYZE btc_retention_objects");
     const before = await retentionCapacity(pool);
     const started = performance.now();
     // storeRetentionObject sets the unchanged server statement_timeout='5s'.
