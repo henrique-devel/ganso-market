@@ -82,6 +82,24 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_funding_preserves_collector_and_selects_api_migration(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/funding.ts",
+                    "apps/api/src/storage/fundingstore.ts",
+                    "apps/api/src/storage/valuationstore.ts",
+                    "apps/api/src/storage/ledgerstore.ts",
+                    "apps/api/src/venues/hyperliquid/funding.ts",
+                    "apps/api/test/trading/funding.test.ts",
+                    "apps/api/test/trading/funding.pg.test.ts",
+                    "apps/api/test/trading/funding-fixture.ts",
+                    "migrations/0035_btc_funding.sql",
+                ]
+            ),
+            {"api", "migrate"},
+        )
+
     def test_retention_sql_guard_only_runs_migration(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(

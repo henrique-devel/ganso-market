@@ -53,6 +53,7 @@ export async function appendLedgerBatchTx(
   batch: LedgerBatch,
   recordedAt: string,
   reservedFill = false,
+  observedFunding = false,
 ) {
   const id = identity.account.account_id;
   // Validate even on retry; snapshot JSON is owned by this call, never mutable caller data.
@@ -73,8 +74,24 @@ export async function appendLedgerBatchTx(
     ).rows.map((row) => parseLedgerEvent(row.event));
     return { status: "duplicate" as const, events: committed };
   }
+  if (
+    !observedFunding &&
+    batch.events.some((e) => e.payload.event_type === "funding")
+  )
+    throw new Error("BTC_LEDGER_OBSERVED_FUNDING_REQUIRED");
+  const fills = batch.events.filter((e) => e.payload.event_type === "fill");
+  if (fills.length) {
+    const cutoff = (
+      await tx.query<{ cutoff: Date | null }>(
+        "SELECT MAX(cutoff) AS cutoff FROM btc_funding_results WHERE account_id=$1 AND status='settled'",
+        [id],
+      )
+    ).rows[0]!.cutoff;
+    if (cutoff && fills.some((e) => e.occurred_at <= cutoff.toISOString()))
+      throw new Error("BTC_LEDGER_SETTLED_FUNDING_CUTOFF");
+  }
   // Once S3 accepts an order, fills must consume its reservation atomically.
-  // Duplicate S1 batches above remain retryable. Funding/fees retain S1 semantics.
+  // Duplicate S1 batches above remain retryable; S6 owns new funding writes.
   if (
     !reservedFill &&
     batch.events.some((e) => e.payload.event_type === "fill")

@@ -400,3 +400,35 @@ export function valueFinancials(
     },
   };
 }
+
+/** Today's UTC realized PnL + incurred fees/funding, excluding capital flows.
+ * Late funding is assigned to occurred_at's day. S8 adds unrealized/anchors. */
+export function dailyFinancialCosts(
+  ledger: LedgerProjection,
+  events: readonly (FinancialEvent & { occurred_at: string })[],
+  asOf: string,
+) {
+  const day = asOf.slice(0, 10) + "T00:00:00.000Z";
+  const current = projectFinancials(
+    ledger,
+    events.filter((e) => e.occurred_at <= asOf),
+  );
+  const previous = projectFinancials(
+    ledger,
+    events.filter((e) => e.occurred_at < day),
+  );
+  const delta = (
+    key: "realized_pnl_usd_raw" | "fees_usd_raw" | "funding_usd_raw",
+  ) => BigInt(current[key]) - BigInt(previous[key]);
+  return {
+    day_start: day,
+    realized_pnl_usd_raw: delta("realized_pnl_usd_raw").toString(),
+    fees_usd_raw: delta("fees_usd_raw").toString(),
+    funding_usd_raw: delta("funding_usd_raw").toString(),
+    net_realized_costs_usd_raw: (
+      delta("realized_pnl_usd_raw") +
+      delta("fees_usd_raw") +
+      delta("funding_usd_raw")
+    ).toString(),
+  };
+}
