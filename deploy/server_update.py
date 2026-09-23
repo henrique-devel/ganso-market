@@ -87,6 +87,25 @@ def verify_migrations(directory: Path, rows: str) -> None:
             raise SystemExit(f"server-update: unapplied or mismatched migration {file.name}")
 
 
+def previous_release(root: Path) -> Path:
+    """Reuse the existing deploy's code snapshot, bound to the active SHA.
+
+    The forced command holds deploy.lock and finishes this snapshot before
+    copying the release. No new backup, install or root command is required.
+    Manual updates without a matching snapshot use the conservative fallback.
+    """
+    active = (root / ".deploy/current-sha").read_text().strip()
+    if len(active) != 40 or any(char not in "0123456789abcdef" for char in active):
+        raise ValueError("invalid active release SHA")
+    snapshots = sorted((root / ".deploy/backups").glob("????????T??????Z.??????"), reverse=True)
+    if not snapshots:
+        raise ValueError("no previous code snapshot")
+    previous = snapshots[0]
+    if previous.is_symlink() or (previous / "deploy/release-sha").read_text().strip() != active:
+        raise ValueError("latest code snapshot does not match the active release")
+    return previous
+
+
 def main() -> None:
     compose = ["docker", "compose", "--env-file", os.environ.get("SERVER_ENV", "deploy/server.env")]
     model = json.loads(run([*compose, "--profile", "*", "config", "--format", "json"]))
@@ -140,10 +159,8 @@ def main() -> None:
     maximum, used = map(int, pg.split("|"))
     if max(used, budget["connections"]) + 8 > maximum:
         raise SystemExit("server-update: PostgreSQL lacks eight reserved connections")
-    previous = os.environ.get("SERVER_DEPLOY_PREVIOUS")
     try:
-        if not previous:
-            raise ValueError("no previous tree supplied")
+        previous = previous_release(Path.cwd())
         paths = changed_tree_files(Path(previous), Path.cwd())
         other_paths = [path for path in paths if path != "docker-compose.yml"]
         candidates = affected_services(other_paths) if other_paths else set()

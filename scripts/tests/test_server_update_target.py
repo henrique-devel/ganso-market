@@ -100,6 +100,21 @@ class ServerUpdateTests(unittest.TestCase):
                 with self.subTest(rows=rows), self.assertRaises(SystemExit):
                     update.verify_migrations(root, rows)
 
+    def test_previous_snapshot_must_match_active_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshot = root / ".deploy/backups/20260923T000000Z.abcdef"
+            (snapshot / "deploy").mkdir(parents=True)
+            (root / ".deploy/current-sha").write_text("a" * 40)
+            (snapshot / "deploy/release-sha").write_text("a" * 40)
+            self.assertEqual(update.previous_release(root), snapshot)
+            # Never search past the latest snapshot: a stale match is unsafe.
+            newer = root / ".deploy/backups/20260923T010000Z.abcdef"
+            (newer / "deploy").mkdir(parents=True)
+            (newer / "deploy/release-sha").write_text("b" * 40)
+            with self.assertRaises(ValueError):
+                update.previous_release(root)
+
     def test_tree_comparison_includes_deleted_files_and_ignores_local_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             previous, release = Path(directory) / "before", Path(directory) / "after"

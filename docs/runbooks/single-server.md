@@ -69,7 +69,8 @@ dos arquivos e só depois execute `make server-update`.
 ### Deploy seletivo e perfis Ganso 2.0
 
 `server-update` compara os arquivos recebidos com a árvore efetivamente instalada
-(`SERVER_DEPLOY_PREVIOUS`, fornecido pelo comando remoto). O classificador calcula
+(última cópia de código já criada pelo comando remoto, cujo SHA deve coincidir
+com `.deploy/current-sha`). O classificador calcula
 candidatos e o host os cruza com os containers em execução; lista vazia não vira
 `up` genérico. Mudança no worker BTC seleciona `btc-worker`; compartilhados Node
 selecionam seus consumidores ativos. Texto dispensa deploy. Sem base verificável,
@@ -95,10 +96,10 @@ completo soma 256 MiB/0,5 CPU/2 conexões, sem ativá-lo. O host valida ainda pe
 menos 512 MiB e 1 CPU de reserva sobre os limites do runtime efetivo. O smoke
 usa o perfil BTC inativo e comprova readiness com engine parado e PG interrompido.
 
-Após integrar alteração em `deploy/remote-deploy.sh`, atualizar o comando forçado
-instalado pelo procedimento já descrito abaixo, preservando a chave e as opções
-SSH. O comando passa a árvore anterior ao Makefile tanto no deploy quanto no
-rollback; não mudar o perímetro nem reativar serviços aposentados.
+A seleção usa a cópia de código já existente no ciclo de deploy; não instala
+comando root novo nem cria rotina de backup. Cópia ausente ou SHA divergente
+aciona o fallback conservador. O lock do comando remoto impede duas publicações
+simultâneas de disputarem a seleção dessa cópia.
 
 **Cuidado com configs versionadas que nomeiam conteúdo da imagem.** O diretório
 `config/` é montado por bind e chega junto com o CD; o conteúdo que ele nomeia
