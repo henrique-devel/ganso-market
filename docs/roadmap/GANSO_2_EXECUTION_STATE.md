@@ -94,7 +94,7 @@ O [estado BTC anterior](BTC_EXECUTION_STATE.md) fica como histórico. Não alter
 
 | Sessão                                                               | Estado  | Entrega / validação / implantação                                            |
 | -------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------- |
-| [G2-05.1](../../prompts/ganso-2/g2-05-1-ledger-contas.md)            | pending | Persistir contas e eventos do perpétuo; ainda não executado.                 |
+| [G2-05.1](../../prompts/ganso-2/g2-05-1-ledger-contas.md) | code-verified | Código 40256ae: ledger paper tipado/append-only, gênese US$ 1.000 fictícios, caixa/posição fixed-point, idempotência/replay e migration 0029 sem seeds; 25 testes focados, make verify (2662 JS/219 Python), PostgreSQL (365 sem falhas/omissões) e Compose aprovados. Coordenação assume publicação sob autorização direta do proprietário; PR/merge/deploy pendentes. Pré-leitura SSH 23/09 08:37 UTC confirmou API saudável/schema 28, coletor 30db125 ativo/restart=no, HOLD/37.802 eventos/211 triggers e legado quiescente; deploy somente API/migration, contas/ordens inativas. |
 | [G2-05.2](../../prompts/ganso-2/g2-05-2-pnl-marcacao.md)             | pending | Calcular saldo, patrimônio e valor de encerramento; ainda não executado.     |
 | [G2-05.3](../../prompts/ganso-2/g2-05-3-reservas-atomicas.md)        | pending | Reservar margem e capacidade sem concorrência indevida; ainda não executado. |
 | [G2-05.4](../../prompts/ganso-2/g2-05-4-ioc-parcial-cancelamento.md) | pending | Executar IOC, parcial e cancelamento com custos; ainda não executado.        |

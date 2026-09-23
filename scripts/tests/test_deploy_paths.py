@@ -81,6 +81,24 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertNotIn("paths-ignore:", trigger)
 
 
+class LedgerDeploymentTests(unittest.TestCase):
+    def test_inactive_account_ledger_keeps_collector_running(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/ledger.ts",
+                    "apps/api/src/storage/ledgerstore.ts",
+                    "apps/api/src/storage/ledger-contract.ts",
+                    "apps/api/test/trading/ledger.test.ts",
+                    "apps/api/test/trading/ledger.pg.test.ts",
+                    "apps/api/test/trading/ledger-fixture.ts",
+                    "migrations/0029_btc_account_ledger.sql",
+                ]
+            ),
+            {"api", "migrate"},
+        )
+
+
 class TextPathTests(unittest.TestCase):
     def test_documentation_and_agent_trees_are_text(self) -> None:
         for path in (

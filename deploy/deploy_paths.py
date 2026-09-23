@@ -91,6 +91,16 @@ def affected_services(paths: list[str]) -> set[str]:
             selected.add(Path(path).stem)
         elif path.startswith("apps/api/src/polymarket/"):
             selected.update({"api", *LEGACY})
+        elif path in {
+            "apps/api/src/trading/ledger.ts",
+            "apps/api/src/storage/ledgerstore.ts",
+            "apps/api/src/storage/ledger-contract.ts",
+            "apps/api/test/trading/ledger.test.ts",
+            "apps/api/test/trading/ledger.pg.test.ts",
+            "apps/api/test/trading/ledger-fixture.ts",
+        }:
+            # S1 account ledger has no collector/legacy consumer. Preserve the feed.
+            selected.add("api")
         elif path.startswith("apps/api/"):
             selected.update(NODE_SERVICES)
         elif path.startswith("apps/web/"):
