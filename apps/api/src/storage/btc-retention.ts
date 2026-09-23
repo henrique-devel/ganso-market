@@ -8,7 +8,7 @@ import {
 } from "../trading/retention.js";
 
 type StorePool = Pick<DatabasePool, "transaction">;
-async function locked<T>(
+export async function withBtcRetentionTransaction<T>(
   pool: StorePool,
   run: (tx: SqlExecutor) => Promise<T>,
 ): Promise<T> {
@@ -33,7 +33,10 @@ async function capacity(tx: SqlExecutor) {
     `SELECT policy_version, hold, raw_bytes::text, total_bytes::text,
       raw_quota_bytes::text, total_quota_bytes::text,
       (pg_total_relation_size('btc_retention_objects') + pg_total_relation_size('btc_retention_dependencies')
-        + pg_total_relation_size('btc_retention_pins'))::text AS allocated_bytes
+        + pg_total_relation_size('btc_retention_pins')
+        + COALESCE(pg_total_relation_size(to_regclass('btc_market_records')),0)
+        + COALESCE(pg_total_relation_size(to_regclass('btc_market_bars')),0)
+        + COALESCE(pg_total_relation_size(to_regclass('btc_market_head')),0))::text AS allocated_bytes
       FROM btc_retention_policy WHERE dataset_id = $1`,
     [policy.datasetId],
   );
@@ -49,7 +52,7 @@ async function capacity(tx: SqlExecutor) {
   };
 }
 export async function retentionCapacity(pool: StorePool) {
-  return locked(pool, capacity);
+  return withBtcRetentionTransaction(pool, capacity);
 }
 /** Capacity failures roll back the whole capture. Callers must mark a gap/stop
  * admission; never silently truncate payload, skip dependencies or retry as financial. */
@@ -61,59 +64,67 @@ export async function storeRetentionObject(
   chargedBytes: string;
   nonessentialBlocked: boolean;
 }> {
+  return withBtcRetentionTransaction(pool, (tx) =>
+    storeRetentionObjectTx(tx, object),
+  );
+}
+/** Caller must hold withBtcRetentionTransaction; never use a pool as tx. */
+export async function storeRetentionObjectTx(
+  tx: SqlExecutor,
+  object: RetentionObject,
+) {
   validateRetentionObject(object);
   assertEvidenceJson(object.payload);
   assertEvidenceJson(object.identity);
   // JSON serialization has been checked for lossy values before the transaction.
   const payload = JSON.parse(JSON.stringify(object.payload)) as unknown;
   const dependencies = [...object.dependencies].sort();
-  return locked(pool, async (tx) => {
-    const prior = await tx.query(
-      `SELECT class, identity, recorded_at, payload, dependencies, charged_bytes::text
+  const prior = await tx.query(
+    `SELECT class, identity, recorded_at, payload, dependencies, charged_bytes::text
       FROM btc_retention_objects WHERE object_id = $1`,
-      [object.id],
-    );
-    const row = prior.rows[0];
-    if (row) {
-      if (
-        row.class !== object.class ||
-        new Date(row.recorded_at).getTime() !== object.recordedAt.getTime() ||
-        canonicalFingerprint(row.identity) !==
-          canonicalFingerprint(object.identity) ||
-        canonicalFingerprint(row.payload) !== canonicalFingerprint(payload) ||
-        canonicalFingerprint(row.dependencies) !==
-          canonicalFingerprint(dependencies)
-      ) {
-        throw new Error("BTC_RETENTION_IDEMPOTENCY_CONFLICT");
-      }
-      return {
-        status: "duplicate",
-        chargedBytes: row.charged_bytes as string,
-        nonessentialBlocked: (await capacity(tx)).nonessentialBlocked,
-      };
+    [object.id],
+  );
+  const row = prior.rows[0];
+  if (row) {
+    if (
+      row.class !== object.class ||
+      new Date(row.recorded_at).getTime() !== object.recordedAt.getTime() ||
+      canonicalFingerprint(row.identity) !==
+        canonicalFingerprint(object.identity) ||
+      canonicalFingerprint(row.payload) !== canonicalFingerprint(payload) ||
+      canonicalFingerprint(row.dependencies) !==
+        canonicalFingerprint(dependencies)
+    ) {
+      throw new Error("BTC_RETENTION_IDEMPOTENCY_CONFLICT");
     }
-    const result = await tx.query(
-      `INSERT INTO btc_retention_objects
-      (object_id, dataset_id, policy_version, class, identity, recorded_at, payload, dependencies, charged_bytes)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb,$8::text[],1) RETURNING charged_bytes::text`,
-      [
-        object.id,
-        policy.datasetId,
-        policy.version,
-        object.class,
-        JSON.stringify(object.identity),
-        object.recordedAt,
-        JSON.stringify(payload),
-        dependencies,
-      ],
-    );
     return {
-      status: "stored",
-      chargedBytes: result.rows[0]!.charged_bytes as string,
+      status: "duplicate" as const,
+      chargedBytes: row.charged_bytes as string,
       nonessentialBlocked: (await capacity(tx)).nonessentialBlocked,
     };
-  });
+  }
+  const result = await tx.query(
+    `INSERT INTO btc_retention_objects
+      (object_id, dataset_id, policy_version, class, identity, recorded_at, payload, dependencies, charged_bytes)
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb,$8::text[],1) RETURNING charged_bytes::text`,
+    [
+      object.id,
+      policy.datasetId,
+      policy.version,
+      object.class,
+      JSON.stringify(object.identity),
+      object.recordedAt,
+      JSON.stringify(payload),
+      dependencies,
+    ],
+  );
+  return {
+    status: "stored" as const,
+    chargedBytes: result.rows[0]!.charged_bytes as string,
+    nonessentialBlocked: (await capacity(tx)).nonessentialBlocked,
+  };
 }
+
 /** Pins are permanent in v1. Releasing evidence requires a future explicit procedure. */
 export async function pinRetentionObject(
   pool: StorePool,
@@ -121,25 +132,32 @@ export async function pinRetentionObject(
   objectId: string,
   reason: string,
 ) {
-  return locked(pool, async (tx) => {
-    const prior = await tx.query(
-      "SELECT object_id, reason FROM btc_retention_pins WHERE pin_id = $1",
-      [pinId],
-    );
-    if (prior.rows[0]) {
-      if (
-        prior.rows[0].object_id !== objectId ||
-        prior.rows[0].reason !== reason
-      )
-        throw new Error("BTC_RETENTION_PIN_CONFLICT");
-      return;
-    }
-    await tx.query(
-      "INSERT INTO btc_retention_pins(pin_id, object_id, reason) VALUES ($1,$2,$3)",
-      [pinId, objectId, reason],
-    );
-  });
+  return withBtcRetentionTransaction(pool, (tx) =>
+    pinRetentionObjectTx(tx, pinId, objectId, reason),
+  );
 }
+/** Caller must hold withBtcRetentionTransaction; shares the capture transaction. */
+export async function pinRetentionObjectTx(
+  tx: SqlExecutor,
+  pinId: string,
+  objectId: string,
+  reason: string,
+) {
+  const prior = await tx.query(
+    "SELECT object_id, reason FROM btc_retention_pins WHERE pin_id = $1",
+    [pinId],
+  );
+  if (prior.rows[0]) {
+    if (prior.rows[0].object_id !== objectId || prior.rows[0].reason !== reason)
+      throw new Error("BTC_RETENTION_PIN_CONFLICT");
+    return;
+  }
+  await tx.query(
+    "INSERT INTO btc_retention_pins(pin_id, object_id, reason) VALUES ($1,$2,$3)",
+    [pinId, objectId, reason],
+  );
+}
+
 const candidates = `WITH RECURSIVE protected(object_id) AS (
     SELECT object_id FROM btc_retention_objects WHERE expires_at IS NULL
     UNION
@@ -172,7 +190,7 @@ export async function retainBtcBatch(
   ) {
     throw new Error("BTC_RETENTION_SCOPE_REFUSED");
   }
-  return locked(pool, async (tx) => {
+  return withBtcRetentionTransaction(pool, async (tx) => {
     const selected = await tx.query(candidates, [
       options.datasetId,
       options.policyVersion,
