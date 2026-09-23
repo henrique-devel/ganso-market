@@ -1,4 +1,8 @@
-import type { TradingScope } from "@ganso-market/contracts/trading";
+import type {
+  TradingInstrumentMetadata,
+  TradingScope,
+} from "@ganso-market/contracts/trading";
+import { projectIsolatedMargin } from "../trading/margin.js";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import {
   projectFinancials,
@@ -64,6 +68,9 @@ export async function readLedgerValuation(
     return {
       ...value,
       funding,
+      isolation: (
+        await readIsolatedMarginTx(tx, ledger, { as_of: asOf, ...market })
+      ).isolation,
       daily: dailyFinancialCosts(ledger.projection, ledger.events, asOf),
       maintenance: {
         ...value.maintenance,
@@ -97,4 +104,34 @@ export async function readValuationMarketTx(tx: SqlExecutor, asOf: string) {
     )
   ).rows[0]!;
   return row;
+}
+
+/** Latest metadata observation only; no fallback across version changes. */
+export async function readIsolatedMarginTx(
+  tx: SqlExecutor,
+  ledger: Awaited<ReturnType<typeof readLedgerAccountTx>>,
+  market: { as_of: string } & Awaited<ReturnType<typeof readValuationMarketTx>>,
+) {
+  const metadata =
+    (
+      await tx.query<{ object_id: string; payload: TradingInstrumentMetadata }>(
+        `SELECT r.object_id,o.payload FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
+     WHERE r.kind='metadata' AND r.received_at <= $1 ORDER BY r.received_at DESC,r.object_id LIMIT 1`,
+        [market.as_of],
+      )
+    ).rows[0] ?? null;
+  const finance = valueFinancials(
+    projectFinancials(ledger.projection, ledger.events),
+    market,
+  );
+  const isolation = projectIsolatedMargin(
+    finance,
+    ledger.events,
+    finance.maintenance.usable_for_risk
+      ? finance.maintenance.mark_price!.raw
+      : null,
+    metadata?.payload ?? null,
+    market.as_of,
+  );
+  return { finance, isolation, metadata };
 }

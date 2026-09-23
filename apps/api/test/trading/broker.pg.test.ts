@@ -1,3 +1,4 @@
+import { seedMarginMetadata } from "./margin-fixture.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SqlExecutor } from "../../src/database.js";
 import { applyIoc } from "../../src/storage/brokerstore.js";
@@ -173,6 +174,7 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     hook = null;
     captureSequence = 0;
     await createLedgerAccount(pool, identity());
+    await seedMarginMetadata(pool);
     await withBtcRetentionTransaction(pool, (tx) =>
       storeRetentionObjectTx(tx, {
         id: "fixture:metadata",
