@@ -136,3 +136,94 @@ Interfaces verificadas em 2026-09-11: [Docker exec](https://docs.docker.com/refe
 [pg.Client](https://node-postgres.com/apis/client) e
 [systemd KillMode](https://github.com/systemd/systemd/blob/main/man/systemd.kill.xml).
 `unhealthy` isolado não substitui o mecanismo ativo de recuperação implementado.
+
+## G2-01.2 — supervisão durante a quiescência
+
+A parada seletiva está no [runbook paper](polymarket-paper.md#g2-012--quiescência-operacional-do-legado).
+Somente `ganso-recorder-watchdog.timer` e `ganso-shadow-replay.timer` são
+inibidos, com seus respectivos `.service`. Preservar os arquivos das unidades,
+o estado em `/var/lib/ganso/recorder-watchdog` e os resultados em
+`/var/lib/ganso/shadow-replay`.
+
+Antes de parar os produtores:
+
+1. Conferir `ganso-shadow-replay.service` inativo. Se estiver executando, não
+   supor que matar o cliente Docker encerra o processo dentro da API; aguardar
+   término ou interromper o job identificado e confirmar suas consultas encerradas.
+2. Criar `/var/lib/ganso/legacy-quiescence/active` (root:root 0600) e preservar
+   `/var/lib/ganso/recorder-watchdog/maintenance` (0600, diretório 0700).
+3. Para cada uma das quatro unidades, instalar como root:root 0644
+   `/etc/systemd/system/<unidade>.d/50-legacy-quiescence.conf`:
+
+   ```ini
+   [Unit]
+   ConditionPathExists=!/var/lib/ganso/legacy-quiescence/active
+   ```
+
+4. `systemctl daemon-reload`; desabilitar/parar **os dois timers**, depois parar
+   **os dois services**. Verificar `inactive`. O drop-in impede reativação mesmo
+   se o instalador original copiar novamente a unidade e tentar habilitar o
+   timer; o marker de manutenção também inibe chamada direta ao watchdog.
+   Não desinstalar/reinstalar unidades como reversão implícita.
+
+### Capacidade sem recuperação legada
+
+A série DATA-01 existente terminou em 19/09/2026: oito slots (sete completos,
+um parcial). Não reiniciar nem sobrescrever essa série. `capacity_series.py
+--status` continua disponível para consulta. A agenda do watchdog não é mais
+responsável pela observação de espaço.
+
+Instalar `/etc/systemd/system/ganso-capacity-monitor.service` (0644):
+
+```ini
+[Unit]
+Description=Ganso G2-01.2 capacidade do volume, sem recuperar produtores
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/df -B1 --output=size,used,avail,pcent,target /var/lib/docker
+User=root
+Group=root
+TimeoutStartSec=10s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=32M
+CPUQuota=5%
+StandardOutput=journal
+StandardError=journal
+```
+
+E `/etc/systemd/system/ganso-capacity-monitor.timer` (0644):
+
+```ini
+[Unit]
+Description=Observar capacidade Ganso sem watchdog do recorder
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1h
+AccuracySec=1min
+Persistent=false
+Unit=ganso-capacity-monitor.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Validar com `systemd-analyze verify`, recarregar, habilitar somente esse timer e
+executar uma amostra com `systemctl start ganso-capacity-monitor.service`.
+`journalctl -u ganso-capacity-monitor.service` fornece a medição; não há alerta
+externo nem estimativa automática de crescimento. Operação consulta o disponível
+(piso de 25%); G2-10.1 avaliará a capacidade. Nenhuma consulta/escrita no banco,
+reset da série, backup ou restart de container é realizado por esse monitor.
+
+### Retomada
+
+Retirar os quatro drop-ins e o marker `legacy-quiescence/active` somente após
+reconciliar a operação e escolher os serviços a retomar. Retirar também
+`recorder-watchdog/maintenance` quando o recorder estiver saudável. Recarregar
+systemd e habilitar apenas o timer necessário; shadow replay permanece desligado
+até decisão explícita. O monitor de capacidade pode continuar independente.
+A remoção dos markers não rearma o kill switch financeiro.
