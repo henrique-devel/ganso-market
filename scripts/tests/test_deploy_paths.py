@@ -82,6 +82,23 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_financial_reads_preserve_collector_and_database(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/valuation.ts",
+                    "apps/api/src/storage/valuationstore.ts",
+                    "apps/api/src/storage/ledgerstore.ts",
+                    "apps/api/test/trading/valuation.test.ts",
+                    "apps/api/test/trading/valuation.pg.test.ts",
+                    "apps/api/test/trading/valuation-fixture.ts",
+                    "deploy/deploy_paths.py",
+                    "scripts/tests/test_deploy_paths.py",
+                ]
+            ),
+            {"api"},
+        )
+
     def test_inactive_account_ledger_keeps_collector_running(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(

@@ -157,17 +157,24 @@ export async function appendLedgerBatch(
 export async function readLedgerAccount(pool: Store, scope: TradingScope) {
   return pool.transaction(async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const identity = await account(tx, scope);
-    const history = await events(tx, scope.account_id);
-    const row = (
-      await tx.query(
-        "SELECT projection FROM btc_ledger_projections WHERE account_id=$1",
-        [scope.account_id],
-      )
-    ).rows[0];
-    const projection = row?.projection as LedgerProjection | undefined;
-    const replay = replayLedger(identity, history);
-    same(projection ?? null, replay, "PROJECTION_MISMATCH");
-    return { identity, events: history, projection: replay };
+    return readLedgerAccountTx(tx, scope);
   });
+}
+/** Reuse an already read-only, repeatable snapshot for S2 market/ledger reads. */
+export async function readLedgerAccountTx(
+  tx: SqlExecutor,
+  scope: TradingScope,
+) {
+  const identity = await account(tx, scope);
+  const history = await events(tx, scope.account_id);
+  const row = (
+    await tx.query(
+      "SELECT projection FROM btc_ledger_projections WHERE account_id=$1",
+      [scope.account_id],
+    )
+  ).rows[0];
+  const projection = row?.projection as LedgerProjection | undefined;
+  const replay = replayLedger(identity, history);
+  same(projection ?? null, replay, "PROJECTION_MISMATCH");
+  return { identity, events: history, projection: replay };
 }
