@@ -117,6 +117,10 @@ def affected_services(paths: list[str]) -> set[str]:
         }:
             # Account financial reads have no collector/legacy consumer. Preserve the feed.
             selected.add("api")
+        elif path == "apps/api/test/trading/retention.pg.test.ts":
+            # SQL guard coverage has no image/runtime consumer. Its additive
+            # migration is selected independently; preserve stopped collectors.
+            continue
         elif path.startswith("apps/api/"):
             selected.update(NODE_SERVICES)
         elif path.startswith("apps/web/"):

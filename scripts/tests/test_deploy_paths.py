@@ -82,6 +82,19 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_retention_sql_guard_only_runs_migration(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "migrations/0032_btc_retention_bulk_dependency_guard.sql",
+                    "apps/api/test/trading/retention.pg.test.ts",
+                    "deploy/deploy_paths.py",
+                    "scripts/tests/test_deploy_paths.py",
+                ]
+            ),
+            {"migrate"},
+        )
+
     def test_ioc_preserves_collector_and_selects_api_migration(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
