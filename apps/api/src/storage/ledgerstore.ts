@@ -20,7 +20,7 @@ function same(a: unknown, b: unknown, code: string) {
   if (canonicalFingerprint(a) !== canonicalFingerprint(b))
     throw new Error(`BTC_LEDGER_${code}`);
 }
-async function account(
+export async function lockableLedgerAccountTx(
   tx: SqlExecutor,
   scope: TradingScope,
   lock = false,
@@ -46,11 +46,13 @@ async function events(tx: SqlExecutor, id: string): Promise<LedgerEvent[]> {
     )
   ).rows.map((row) => parseLedgerEvent(row.event));
 }
-async function appendTx(
+/** Internal adapter seam: caller must hold the account row lock first. */
+export async function appendLedgerBatchTx(
   tx: SqlExecutor,
   identity: LedgerIdentity,
   batch: LedgerBatch,
   recordedAt: string,
+  reservedFill = false,
 ) {
   const id = identity.account.account_id;
   // Validate even on retry; snapshot JSON is owned by this call, never mutable caller data.
@@ -70,6 +72,18 @@ async function appendTx(
       )
     ).rows.map((row) => parseLedgerEvent(row.event));
     return { status: "duplicate" as const, events: committed };
+  }
+  // Once S3 accepts an order, fills must consume its reservation atomically.
+  // Duplicate S1 batches above remain retryable. Funding/fees retain S1 semantics.
+  if (
+    !reservedFill &&
+    batch.events.some((e) => e.payload.event_type === "fill")
+  ) {
+    const managed = await tx.query(
+      "SELECT 1 FROM btc_order_acceptances WHERE account_id=$1 LIMIT 1",
+      [id],
+    );
+    if (managed.rowCount) throw new Error("BTC_LEDGER_RESERVATION_REQUIRED");
   }
   const history = await events(tx, id);
   const replay = history.length ? replayLedger(identity, history) : null;
@@ -132,9 +146,14 @@ export async function createLedgerAccount(pool: Store, input: LedgerIdentity) {
         JSON.stringify(identity),
       ],
     );
-    const stored = await account(tx, scope, true);
+    const stored = await lockableLedgerAccountTx(tx, scope, true);
     same(stored, identity, "IDENTITY_COLLISION");
-    return appendTx(tx, stored, genesisBatch(stored), new Date().toISOString());
+    return appendLedgerBatchTx(
+      tx,
+      stored,
+      genesisBatch(stored),
+      new Date().toISOString(),
+    );
   });
 }
 /** Entire batch, sequence assignment and projection commit on one connection.
@@ -149,8 +168,8 @@ export async function appendLedgerBatch(
   const batch: LedgerBatch = JSON.parse(JSON.stringify(input));
   const scope = { ...scopeInput };
   return pool.transaction(async (tx) => {
-    const identity = await account(tx, scope, true);
-    return appendTx(tx, identity, batch, recordedAt);
+    const identity = await lockableLedgerAccountTx(tx, scope, true);
+    return appendLedgerBatchTx(tx, identity, batch, recordedAt);
   });
 }
 /** One consistent snapshot; reads do not rebuild or mutate the stored projection. */
@@ -165,7 +184,7 @@ export async function readLedgerAccountTx(
   tx: SqlExecutor,
   scope: TradingScope,
 ) {
-  const identity = await account(tx, scope);
+  const identity = await lockableLedgerAccountTx(tx, scope);
   const history = await events(tx, scope.account_id);
   const row = (
     await tx.query(
