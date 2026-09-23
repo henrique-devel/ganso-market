@@ -1,5 +1,5 @@
 import type { TradingScope } from "@ganso-market/contracts/trading";
-import type { DatabasePool } from "../database.js";
+import type { DatabasePool, SqlExecutor } from "../database.js";
 import {
   projectFinancials,
   valueFinancials,
@@ -44,32 +44,35 @@ export async function readLedgerValuation(
     const ledger = await readLedgerAccountTx(tx, scope);
     if (ledger.events.some((e) => e.recorded_at > asOf || e.occurred_at > asOf))
       throw new Error("BTC_VALUATION_BEFORE_LEDGER");
-    const latest: {
-      book: MarketEvidence | null;
-      context: MarketEvidence | null;
-    } = { book: null, context: null };
-    for (const kind of ["book", "context"] as const) {
-      latest[kind] =
-        (
-          await tx.query<MarketEvidence>(
-            `SELECT r.object_id,o.payload FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
-        WHERE r.kind=$1 AND r.received_at <= $2 ORDER BY ${kind === "context" ? "r.received_at DESC" : "r.source_at DESC"},r.object_id LIMIT 1`,
-            [kind, asOf],
-          )
-        ).rows[0] ?? null;
-    }
-    const capture =
-      (
-        await tx.query<{ payload: ValuationCapture }>(
-          `SELECT o.payload FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
-      WHERE r.kind='capture' AND r.received_at <= $1 ORDER BY r.received_at DESC,r.object_id LIMIT 1`,
-          [asOf],
-        )
-      ).rows[0]?.payload ?? null;
+    const market = await readValuationMarketTx(tx, asOf);
     return valueFinancials(replayFinancials(ledger.identity, ledger.events), {
       as_of: asOf,
-      ...latest,
-      capture,
+      ...market,
     });
   });
+}
+
+/** One SQL statement keeps context/book/capture coherent even in S3's READ
+ * COMMITTED writer, after its owner lock. No nested transaction or unlocked
+ * caller-supplied equity snapshot is accepted by reservation writes. */
+export async function readValuationMarketTx(tx: SqlExecutor, asOf: string) {
+  const row = (
+    await tx.query<{
+      context: MarketEvidence | null;
+      book: MarketEvidence | null;
+      capture: ValuationCapture | null;
+    }>(
+      `SELECT
+    (SELECT jsonb_build_object('object_id',r.object_id,'payload',o.payload)
+     FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
+     WHERE r.kind='context' AND r.received_at <= $1 ORDER BY r.received_at DESC,r.object_id LIMIT 1) AS context,
+    (SELECT jsonb_build_object('object_id',r.object_id,'payload',o.payload)
+     FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
+     WHERE r.kind='book' AND r.received_at <= $1 ORDER BY r.source_at DESC,r.object_id LIMIT 1) AS book,
+    (SELECT o.payload FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
+     WHERE r.kind='capture' AND r.received_at <= $1 ORDER BY r.received_at DESC,r.object_id LIMIT 1) AS capture`,
+      [asOf],
+    )
+  ).rows[0]!;
+  return row;
 }

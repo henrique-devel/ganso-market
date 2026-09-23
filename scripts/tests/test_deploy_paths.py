@@ -82,6 +82,26 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_reservations_only_recreate_api_and_run_additive_migration(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/reservations.ts",
+                    "apps/api/src/storage/reservationstore.ts",
+                    "apps/api/src/storage/reservation-contract.ts",
+                    "apps/api/src/storage/ledgerstore.ts",
+                    "apps/api/src/storage/valuationstore.ts",
+                    "apps/api/test/trading/reservations.test.ts",
+                    "apps/api/test/trading/reservations.pg.test.ts",
+                    "apps/api/test/trading/reservation-fixture.ts",
+                    "migrations/0030_btc_order_reservations.sql",
+                    "deploy/deploy_paths.py",
+                    "scripts/tests/test_deploy_paths.py",
+                ]
+            ),
+            {"api", "migrate"},
+        )
+
     def test_financial_reads_preserve_collector_and_database(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
