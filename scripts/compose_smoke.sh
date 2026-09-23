@@ -5,7 +5,7 @@ gateway_port="${GANSO_HTTP_PORT:-8080}"
 gateway="http://127.0.0.1:${gateway_port}"
 
 cleanup() {
-  docker compose --profile model down --remove-orphans >/dev/null 2>&1 || true
+  docker compose --profile btc down --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -25,7 +25,8 @@ wait_for_code() {
   return 1
 }
 
-docker compose --profile model up --build --detach
+python3 scripts/check_compose_policy.py
+docker compose --profile btc up --build --detach
 wait_for_code 200 "$gateway/api/health/live"
 wait_for_code 200 "$gateway/api/health/ready"
 curl --fail --silent --show-error "$gateway/" >/dev/null
@@ -74,27 +75,26 @@ if [ "$postgres_bindings" != "{}" ] && [ "$postgres_bindings" != "null" ]; then
   exit 1
 fi
 
-docker compose exec -T api node -e \
-  "Promise.all(['http://market-engine:8081/health/live','http://market-engine:8081/health/ready'].map(async u=>{const r=await fetch(u);if(!r.ok)throw new Error('engine health failed')})).catch(()=>process.exit(1))"
-docker compose exec -T model-worker python -c \
-  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=2)"
+# The unfinished worker is a disabled one-off check, never a ready service.
+docker compose run --rm --no-deps btc-worker
+if docker compose --profile '*' ps --status running --services | grep -E '^(btc-worker|polymarket-|model-worker)' >/dev/null; then
+  echo "compose smoke failed: an inactive business/model worker is running" >&2
+  exit 1
+fi
+# No business consumer: engine unavailability must not gate the core.
+docker compose stop market-engine
+wait_for_code 200 "$gateway/api/health/ready"
 
-docker compose run --rm migrate
+docker compose run --rm --no-deps migrate
 python3 scripts/check_runtime_memory.py
 
 docker compose stop postgres
 wait_for_code 503 "$gateway/api/health/ready"
 wait_for_code 200 "$gateway/api/health/live"
-docker compose exec -T api node -e \
-  "Promise.all([['http://market-engine:8081/health/live',200],['http://market-engine:8081/health/ready',503]].map(async ([u,s])=>{const r=await fetch(u);if(r.status!==s)throw new Error('engine degraded health mismatch')})).catch(()=>process.exit(1))"
-
 docker compose start postgres
 wait_for_code 200 "$gateway/api/health/ready"
-docker compose exec -T api node -e \
-  "fetch('http://market-engine:8081/health/ready').then(r=>{if(r.status!==200)process.exit(1)}).catch(()=>process.exit(1))"
-
-docker compose --profile model down --remove-orphans
-remaining="$(docker compose --profile model ps --quiet)"
+docker compose --profile btc down --remove-orphans
+remaining="$(docker compose --profile btc ps --quiet)"
 if [ -n "$remaining" ]; then
   echo "compose smoke failed: shutdown left running containers" >&2
   exit 1

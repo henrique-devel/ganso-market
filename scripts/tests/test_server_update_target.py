@@ -1,138 +1,130 @@
 from __future__ import annotations
 
-import shlex
-import subprocess
+import hashlib
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# RFC-020 D1: the deploy target must stop recreating PostgreSQL. Every merge to
-# main runs `make server-update` through deploy/remote-deploy.sh, and a
-# `--force-recreate` without a service list drags the database down with the
-# code: measured 2026-09-06, `docker inspect ganso-market-postgres-1` reported
-# Created=19:50:21.9Z, two seconds after the deploy backup, and the five profile
-# workers each logged one "Unhandled 'error' event" (terminating connection due
-# to administrator command) per deploy. The shape below is what makes that
-# impossible; `make -n` proves it without touching a container.
-DEFAULT_CODE_SERVICES = ("api", "web", "nginx", "market-engine")
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "deploy"))
+import server_update as update  # noqa: E402
+from deploy_paths import CODE_SERVICES, affected_services, changed_tree_files  # noqa: E402
 
 
-def server_update_commands() -> list[str]:
-    result = subprocess.run(
-        ["make", "-n", "server-update"],
-        check=False,
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-    if result.returncode != 0:
-        raise AssertionError(
-            f"`make -n server-update` failed ({result.returncode}): {result.stderr}"
-        )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-def compose_commands(lines: list[str]) -> list[str]:
-    return [line for line in lines if "docker compose" in line]
-
-
-class ServerUpdateTargetTests(unittest.TestCase):
+class ServerUpdateTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.lines = server_update_commands()
-        self.compose = compose_commands(self.lines)
+        self.compose = ["docker", "compose", "--env-file", "deploy/server.env"]
+        self.services = {name: {"build": {"context": "."}} for name in CODE_SERVICES}
+        self.services["nginx"] = {}
+        self.services["btc-worker"]["scale"] = 0
+        self.running = {"api", "web", "nginx", "market-engine", "postgres"}
 
-    def test_force_recreate_appears_exactly_once(self) -> None:
-        recreating = [line for line in self.compose if "--force-recreate" in line]
+    def test_worker_change_targets_worker_but_never_activates_it(self) -> None:
+        candidates = affected_services(["apps/api/src/btc-worker.ts"])
+        self.assertEqual(candidates, {"btc-worker"})
+        self.assertEqual(update.select_running(candidates, self.services, self.running), set())
+        self.assertEqual(update.commands(self.compose, set(), self.services), [])
+        # Future completed worker: selection is correct once running and scaled.
+        self.services["btc-worker"]["scale"] = 1
+        self.running.add("btc-worker")
+        self.assertEqual(update.select_running(candidates, self.services, self.running), candidates)
+        commands = update.commands(self.compose, candidates, self.services)
+        self.assertEqual(commands[0][-1], "btc-worker")
+        self.assertEqual(commands[1][-1], "btc-worker")
 
+    def test_zero_scale_never_selects_even_a_running_worker(self) -> None:
+        self.running.add("btc-worker")
+        self.assertEqual(update.select_running({"btc-worker"}, self.services, self.running), set())
+
+    def test_shared_source_reaches_all_active_node_consumers(self) -> None:
+        self.services["btc-worker"]["scale"] = 1
+        self.running.add("btc-worker")
+        candidates = affected_services(["apps/api/src/database.ts"])
         self.assertEqual(
-            len(recreating),
-            1,
-            f"exactly one --force-recreate expected, got: {recreating}",
+            update.select_running(candidates, self.services, self.running), {"api", "btc-worker"}
         )
 
-    def test_force_recreate_names_services_and_never_postgres(self) -> None:
-        # The regression assert. On the pre-RFC-020 Makefile this line is
-        # `up --detach --force-recreate --remove-orphans --wait ...` with no
-        # service list at all, so Compose recreates every default service —
-        # postgres included.
-        recreating = [line for line in self.compose if "--force-recreate" in line]
+    def test_api_recreate_excludes_postgres_and_dependencies_and_reloads_gateway(self) -> None:
+        commands = update.commands(self.compose, {"api", "postgres"}, self.services)
+        recreating = [command for command in commands if "up" in command]
         self.assertEqual(len(recreating), 1)
-        arguments = shlex.split(recreating[0])
-        services = [
-            argument
-            for argument in arguments[arguments.index("up") + 1 :]
-            if not argument.startswith("--")
-            and arguments[arguments.index(argument) - 1] != "--wait-timeout"
-        ]
+        self.assertIn("--no-deps", recreating[0])
+        self.assertEqual(recreating[0][-1], "api")
+        self.assertNotIn("postgres", [arg for command in commands for arg in command])
+        self.assertEqual(commands[-2][-1], "-t")
+        self.assertEqual(commands[-1][-2:], ["-s", "reload"])
 
-        self.assertTrue(
-            services,
-            "--force-recreate must carry an explicit service list, "
-            f"otherwise it recreates every default service: {recreating[0]}",
+    def test_migration_is_one_off_without_pg_dependency_before_recreate(self) -> None:
+        commands = update.commands(self.compose, {"api", "migrate"}, self.services)
+        self.assertEqual(commands[1][-4:], ["run", "--rm", "--no-deps", "migrate"])
+        self.assertIn("up", commands[2])
+
+    def test_unknown_path_updates_only_running_code(self) -> None:
+        selected = update.select_running(
+            affected_services(["unknown.bin"]), self.services, self.running
         )
-        self.assertNotIn(
-            "postgres",
-            services,
-            f"postgres must never be force-recreated: {recreating[0]}",
-        )
-        self.assertEqual(sorted(services), sorted(DEFAULT_CODE_SERVICES))
+        self.assertEqual(selected, {"api", "web", "nginx", "market-engine", "migrate"})
 
-    def test_force_recreate_does_not_drag_dependencies(self) -> None:
-        # api, market-engine and the profile workers declare
-        # `depends_on: migrate: service_completed_successfully`
-        # (docker-compose.yml:104-106), so --force-recreate with a service list
-        # would pull migrate — and through it postgres — back in.
-        recreating = [line for line in self.compose if "--force-recreate" in line][0]
-
-        self.assertIn("--no-deps", recreating)
-
-    def test_postgres_is_brought_up_without_recreating_it(self) -> None:
-        postgres_ups = [
-            line
-            for line in self.compose
-            if " up " in f" {line} " and shlex.split(line)[-1] == "postgres"
-        ]
-
+    def test_text_and_operational_scripts_do_not_recreate_services(self) -> None:
         self.assertEqual(
-            len(postgres_ups),
-            1,
-            f"postgres must be brought up exactly once, got: {postgres_ups}",
+            affected_services(["docs/test.md", "Makefile", "deploy/healthcheck.sh"]), set()
         )
-        self.assertNotIn("--force-recreate", postgres_ups[0])
-        self.assertIn("--wait", postgres_ups[0])
 
-    def test_migrate_runs_literally_and_before_any_code_service(self) -> None:
-        # `run --rm migrate`, not `up`: migrate has restart: "no" and exits
-        # (docker-compose.yml:57), and `run` propagates the exit code so make
-        # stops on a failed migration.
-        migrate_lines = [
-            index for index, line in enumerate(self.compose) if "run --rm migrate" in line
-        ]
-
+    def test_compose_delta_normalizes_mounts_without_restarting_unchanged_core(self) -> None:
+        before = {
+            "api": {"volumes": [{"source": "/old/config/runtime.json"}]},
+            "postgres": {"image": "pinned"},
+        }
+        after = {
+            "api": {"volumes": [{"source": "/new/config/runtime.json"}]},
+            "postgres": {"image": "pinned"},
+            "btc-worker": {"scale": 0},
+        }
         self.assertEqual(
-            len(migrate_lines),
-            1,
-            f"expected exactly one literal `run --rm migrate`, got: {self.compose}",
+            update.changed_compose_services(before, after, Path("/old"), Path("/new")),
+            {"btc-worker"},
+        )
+        after["postgres"]["image"] = "other"
+        self.assertIn(
+            "postgres", update.changed_compose_services(before, after, Path("/old"), Path("/new"))
         )
 
-        postgres_index = next(
-            index
-            for index, line in enumerate(self.compose)
-            if " up " in f" {line} " and shlex.split(line)[-1] == "postgres"
-        )
-        recreate_index = next(
-            index for index, line in enumerate(self.compose) if "--force-recreate" in line
-        )
+    def test_missing_or_stale_migration_mount_is_detected_before_consumers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "0027_new.sql").write_text("SELECT 1;")
+            checksum = hashlib.sha256((root / "0027_new.sql").read_bytes()).hexdigest()
+            update.verify_migrations(root, "27|" + checksum)
+            for rows in ("", "26|" + checksum, "27|stale"):
+                with self.subTest(rows=rows), self.assertRaises(SystemExit):
+                    update.verify_migrations(root, rows)
 
-        self.assertLess(postgres_index, migrate_lines[0])
-        self.assertLess(migrate_lines[0], recreate_index)
+    def test_previous_snapshot_must_match_active_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshot = root / ".deploy/backups/20260923T000000Z.abcdef"
+            (snapshot / "deploy").mkdir(parents=True)
+            (root / ".deploy/current-sha").write_text("a" * 40)
+            (snapshot / "deploy/release-sha").write_text("a" * 40)
+            self.assertEqual(update.previous_release(root), snapshot)
+            # Never search past the latest snapshot: a stale match is unsafe.
+            newer = root / ".deploy/backups/20260923T010000Z.abcdef"
+            (newer / "deploy").mkdir(parents=True)
+            (newer / "deploy/release-sha").write_text("b" * 40)
+            with self.assertRaises(ValueError):
+                update.previous_release(root)
 
-    def test_healthcheck_still_closes_the_target(self) -> None:
-        self.assertTrue(
-            any("deploy/healthcheck.sh" in line for line in self.lines),
-            "server-update must still end on deploy/healthcheck.sh",
-        )
+    def test_tree_comparison_includes_deleted_files_and_ignores_local_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            previous, release = Path(directory) / "before", Path(directory) / "after"
+            for root in (previous, release):
+                (root / "deploy").mkdir(parents=True)
+                (root / "deploy/release-sha").write_text(str(root))
+            (previous / "deploy/server.env").write_text("private")
+            (previous / "deleted.ts").write_text("old")
+            (release / "new.ts").write_text("new")
+            self.assertEqual(changed_tree_files(previous, release), ["deleted.ts", "new.ts"])
 
 
 if __name__ == "__main__":
