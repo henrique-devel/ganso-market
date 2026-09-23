@@ -6,7 +6,7 @@ import {
   formatScaled,
   parseScaled,
   SCALE,
-} from "../fundamental/fixed.js";
+} from "../../trading/fixed.js";
 import {
   applyFinancialMarks,
   replayFinancialLedger,
