@@ -223,12 +223,12 @@ describe("bounded opt-in public transport", () => {
     expect(feed.status().channels.trades.status).toBe("awaiting");
     expect(feed.status().instrument.activity).toBe("unknown");
   });
-  it("bounds retries across successful reconnects and cleans up every timer", () => {
+  it("bounds operator and transport reconnects and cleans up every timer", () => {
     const feed = startFeed();
     for (const delay of [1000, 2000, 4000]) {
       current().open();
       current().ack();
-      current().terminate();
+      feed.reconnect();
       vi.advanceTimersByTime(delay);
     }
     current().open();

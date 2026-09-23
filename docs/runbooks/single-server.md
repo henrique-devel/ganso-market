@@ -81,10 +81,11 @@ usa `run --rm --no-deps`, com bind novo; conferir versão/checksum antes de troc
 consumidores quando houver SQL novo. API/web atualizados provocam `nginx -t` e
 reload para resolver o IP atual dos upstreams. ID e início do banco são conferidos.
 
-G2-03.3 mantém `btc-worker` e os cinco `polymarket-*` em perfil, escala zero e
-`restart: no`. O entrypoint BTC somente valida configuração paper desabilitada e
-termina; tentativa de habilitar falha. Não é um serviço pronto e não tem health
-fictício. Coleta depende de G2-04.4; não usar `--scale` para contornar o bloqueio.
+Os cinco `polymarket-*` continuam em perfil, escala zero e `restart: no`.
+G2-04.4 implementa somente o coletor público BTC, desabilitado/escala zero por
+padrão. Ativação operacional e limites seguem [btc-collector.md](btc-collector.md);
+configuração/overlay explícitos permitem um coletor ativo, sem estratégia/ordens.
+Deploy pode atualizá-lo quando já ativo; um coletor parado não é reativado.
 O overlay e os timers inibidos de G2-01.2 continuam vigentes.
 
 G2-03.4 removeu `market-engine` e `model-worker` do Compose, código, configuração

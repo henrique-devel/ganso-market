@@ -175,6 +175,10 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
   connect();
   return {
     stop: () => stop(),
+    // Operator transport probe uses the same bounded retry/gap path as a failure.
+    reconnect: () => {
+      if (!stopped) socket?.terminate();
+    },
     drain: (): TradingMarketData[] => machine.drain(Date.now()),
     status: () => ({
       ...machine.status(Date.now()),
