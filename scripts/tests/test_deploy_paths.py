@@ -82,6 +82,23 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_ioc_preserves_collector_and_selects_api_migration(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/broker.ts",
+                    "apps/api/src/storage/brokerstore.ts",
+                    "apps/api/src/storage/broker-contract.ts",
+                    "apps/api/src/storage/reservationstore.ts",
+                    "apps/api/test/trading/broker.test.ts",
+                    "apps/api/test/trading/broker.pg.test.ts",
+                    "migrations/0031_btc_ioc_execution.sql",
+                    "deploy/deploy_paths.py",
+                ]
+            ),
+            {"api", "migrate"},
+        )
+
     def test_reservations_only_recreate_api_and_run_additive_migration(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
