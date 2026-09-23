@@ -154,6 +154,7 @@ export function createDatabasePool(
     run: (tx: SqlExecutor) => Promise<T>,
   ): Promise<T> {
     const client = await pool.connect();
+    let reusable = false;
     const tx: SqlExecutor = {
       async query<R extends QueryResultRow>(
         text: string,
@@ -170,16 +171,21 @@ export function createDatabasePool(
       await client.query("BEGIN");
       const value = await run(tx);
       await client.query("COMMIT");
+      reusable = true;
       return value;
     } catch (error) {
       try {
         await client.query("ROLLBACK");
+        reusable = true;
       } catch {
-        // A failed rollback must not mask the original error.
+        // Preserve the original error, but never pool an unconfirmed rollback.
+        // pg's client timeout can leave SQL running and remove a queued
+        // ROLLBACK before it is sent. Reusing that connection would retain the
+        // open transaction and its locks; destroying it makes PostgreSQL abort.
       }
       throw error;
     } finally {
-      client.release();
+      client.release(!reusable);
     }
   }
 
