@@ -255,7 +255,36 @@ describe("RFC-023 D1 — readOnly", () => {
 
     expect(statements).toContain("ROLLBACK");
     expect(client.release).toHaveBeenCalledOnce();
+    expect(client.release).toHaveBeenCalledWith(false);
   });
+
+  it.each(["BEGIN", "body", "COMMIT"])(
+    "preserves the %s error and destroys the client if rollback fails",
+    async (phase) => {
+      const failure = new Error(`${phase} failed`);
+      const rollbackFailure = new Error("rollback failed");
+      const client = {
+        query: vi.fn(async (text: string) => {
+          if (text === "ROLLBACK") throw rollbackFailure;
+          if (text === phase) throw failure;
+          return { rows: [], rowCount: 0 };
+        }),
+        release: vi.fn(),
+      };
+      const pool = createDatabasePool(config(), { queryTimeoutMs: 4_000 });
+      pools[0]?.connect.mockResolvedValue(client);
+
+      await expect(
+        pool.transaction(async () => {
+          if (phase === "body") throw failure;
+          return "ok";
+        }),
+      ).rejects.toBe(failure);
+
+      expect(client.query).toHaveBeenCalledWith("ROLLBACK");
+      expect(client.release).toHaveBeenCalledExactlyOnceWith(true);
+    },
+  );
 
   it("refuses a budget that is not a positive integer", async () => {
     const pool = createDatabasePool(config(), { queryTimeoutMs: 4_000 });
