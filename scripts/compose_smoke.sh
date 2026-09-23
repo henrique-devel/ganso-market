@@ -75,7 +75,7 @@ if [ "$postgres_bindings" != "{}" ] && [ "$postgres_bindings" != "null" ]; then
   exit 1
 fi
 
-# The unfinished worker is a disabled one-off check, never a ready service.
+# Default config still exits disabled without connecting or writing.
 docker compose run --rm --no-deps btc-worker
 if docker compose --profile '*' ps --status running --services | grep -E '^(btc-worker|polymarket-|model-worker|market-engine)' >/dev/null; then
   echo "compose smoke failed: an inactive or retired worker is running" >&2

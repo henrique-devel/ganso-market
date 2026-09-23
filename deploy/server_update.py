@@ -159,8 +159,8 @@ def main() -> None:
         raise SystemExit(
             "server-update requires the existing healthy core; use server-up for bootstrap"
         )
-    if "btc-worker" in running or any(name.startswith("polymarket-") for name in running):
-        raise SystemExit("server-update: unexpected business worker active before G2-04.4")
+    if any(name.startswith("polymarket-") for name in running):
+        raise SystemExit("server-update: legacy business worker must remain quiescent")
     effective = {
         **model,
         "services": {
