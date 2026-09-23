@@ -72,7 +72,7 @@ O [estado BTC anterior](BTC_EXECUTION_STATE.md) fica como histórico. Não alter
 
 | Sessão                                                           | Estado  | Entrega / validação / implantação                                  |
 | ---------------------------------------------------------------- | ------- | ------------------------------------------------------------------ |
-| [G2-03.1](../../prompts/ganso-2/g2-03-1-contratos-neutros.md)    | pending | Definir tipos e fronteiras do núcleo BTC; ainda não executado.     |
+| [G2-03.1](../../prompts/ganso-2/g2-03-1-contratos-neutros.md) | code-verified | [PR #211](https://github.com/henrique-devel/ganso-market/pull/211), código 4fe7ef9; contratos `trading.v1` de BTC/conta/experimento/intenção/ordem/execução/origem e ledger perpétuo; unidades, UTC, quantização, ownership, idempotência e modo paper validados em 101 testes do pacote, check/build, imports públicos e scan; CI/merge e implantação da biblioteca sem consumidor ativo pendentes; nenhum worker ligado. |
 | [G2-03.2](../../prompts/ganso-2/g2-03-2-extrair-primitivas.md)   | pending | Extrair primitivas financeiras reutilizáveis; ainda não executado. |
 | [G2-03.3](../../prompts/ganso-2/g2-03-3-perfis-ci-deploy.md)     | pending | Preparar perfil BTC, CI e deploy seletivo; ainda não executado.    |
 | [G2-03.4](../../prompts/ganso-2/g2-03-4-remover-base-sem-uso.md) | pending | Retirar stubs e dependências sem consumidor; ainda não executado.  |

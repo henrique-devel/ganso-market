@@ -9,7 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./schemas/v1/*": "./schemas/v1/*.schema.json"
+    "./schemas/v1/*": "./schemas/v1/*.schema.json",
+    "./trading": {
+      "types": "./dist/trading/index.d.ts",
+      "import": "./dist/trading/index.js"
+    }
   },
   "files": [
     "dist",
