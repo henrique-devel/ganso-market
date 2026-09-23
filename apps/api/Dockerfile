@@ -6,6 +6,7 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 RUN npm ci --workspace @ganso-market/api --include-workspace-root
+COPY packages/contracts packages/contracts
 COPY apps/api apps/api
 RUN npm run build --workspace @ganso-market/api
 
@@ -18,6 +19,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 RUN npm ci --omit=dev --workspace @ganso-market/api --include-workspace-root=false \
     && npm cache clean --force
+COPY --from=build /workspace/packages/contracts/dist packages/contracts/dist
 COPY --from=build /workspace/apps/api/dist apps/api/dist
 # RFC-010 provenance. `git archive` rewrites this file to the exact commit SHA
 # of the deployed revision (see .gitattributes export-subst), and baking it into

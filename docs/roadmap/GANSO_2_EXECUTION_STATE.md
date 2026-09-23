@@ -83,7 +83,7 @@ O [estado BTC anterior](BTC_EXECUTION_STATE.md) fica como histórico. Não alter
 
 | Sessão                                                          | Estado  | Entrega / validação / implantação                                               |
 | --------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------- |
-| [G2-04.1](../../prompts/ganso-2/g2-04-1-instrumento-e-sdk.md)   | pending | Integrar metadados do instrumento e adaptador público; ainda não executado.     |
+| [G2-04.1](../../prompts/ganso-2/g2-04-1-instrumento-e-sdk.md) | implemented | Adaptador público inerte com SDK MIT 0.33.3 fixado, instrumento/metadados BTC versionados e parâmetros com fontes de 23/09/2026; precisão/mínimo, USDC/USDT, taxas de referência, margem e funding, desconhecidos explícitos. 41 testes focados e make verify aprovados (2583 JS source/218 Python); consulta pública meta confirmou BTC/tabela 56. PR, gates PostgreSQL/Compose e implantação pendentes. |
 | [G2-04.2](../../prompts/ganso-2/g2-04-2-feed-e-gaps.md)         | pending | Coletar livro, trades, mark e funding com gaps explícitos; ainda não executado. |
 | [G2-04.3](../../prompts/ganso-2/g2-04-3-barras-persistencia.md) | pending | Persistir dados necessários e formar barras fechadas; ainda não executado.      |
 | [G2-04.4](../../prompts/ganso-2/g2-04-4-ativar-coletor.md)      | pending | Ativar coleta BTC com limites no servidor; ainda não executado.                 |
