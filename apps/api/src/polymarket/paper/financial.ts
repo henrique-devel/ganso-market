@@ -1,10 +1,16 @@
+import { compositeKey } from "../../trading/identity.js";
+import {
+  canonicalFingerprint,
+  compareReplayOrder,
+  utcBucketStart,
+} from "../../trading/replay.js";
 import {
   SCALE,
   divRound,
   formatScaled,
   mul,
   parseScaled,
-} from "../fundamental/fixed.js";
+} from "../../trading/fixed.js";
 import { OWNERSHIP_VERSION, type AttributedLedgerEvent } from "./ownership.js";
 
 export const FINANCIAL_VERSION = "financial-v2" as const;
@@ -13,7 +19,7 @@ export function financialOwnerKey(
   accountId: string,
   strategyId: string,
 ): string {
-  return JSON.stringify([accountId, strategyId]);
+  return compositeKey([accountId, strategyId]);
 }
 
 export interface FinancialCapital {
@@ -134,19 +140,9 @@ function timestamp(value: Date, field: string): number {
   return time;
 }
 
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    const serialized = JSON.stringify(value);
-    if (serialized === undefined) return fail("INVALID_PAYLOAD");
-    return serialized;
-  }
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-    .join(",")}}`;
-}
+// Preserve the legacy failure code at the domain boundary.
+const canonical = (value: unknown): string =>
+  canonicalFingerprint(value, () => fail("INVALID_PAYLOAD"));
 
 function fingerprint(event: AttributedLedgerEvent): string {
   return canonical({
@@ -158,14 +154,6 @@ function fingerprint(event: AttributedLedgerEvent): string {
     payload: event.payload,
     eventTs: timestamp(event.eventTs, "EVENT_TS"),
   });
-}
-
-function bucketStart(at: Date, weekly: boolean): string {
-  const start = new Date(at);
-  start.setUTCHours(0, 0, 0, 0);
-  if (weekly)
-    start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
-  return start.toISOString().slice(0, 10);
 }
 
 function addBucket(
@@ -257,7 +245,7 @@ export function replayFinancialLedger(
         fingerprint: content,
         ownerKey: key,
       });
-    const associationKey = JSON.stringify([event.idempotencyKey, key]);
+    const associationKey = compositeKey([event.idempotencyKey, key]);
     const association = canonical(event.owner);
     const previousAssociation = attributed.get(associationKey);
     if (previousAssociation !== undefined) {
@@ -270,12 +258,7 @@ export function replayFinancialLedger(
   }
   ordered.sort(
     (a, b) =>
-      a.eventTs.getTime() - b.eventTs.getTime() ||
-      (a.idempotencyKey < b.idempotencyKey
-        ? -1
-        : a.idempotencyKey > b.idempotencyKey
-          ? 1
-          : 0) ||
+      compareReplayOrder(a, b) ||
       financialOwnerKey(a.owner.accountId, a.owner.strategyId).localeCompare(
         financialOwnerKey(b.owner.accountId, b.owner.strategyId),
       ),
@@ -283,7 +266,7 @@ export function replayFinancialLedger(
   const acceptances = new Map<string, AttributedLedgerEvent>();
   for (const event of ordered) {
     if (event.eventType === "order_accepted" && event.orderId !== null) {
-      const key = JSON.stringify([
+      const key = compositeKey([
         event.orderId,
         financialOwnerKey(event.owner.accountId, event.owner.strategyId),
       ]);
@@ -333,7 +316,7 @@ export function replayFinancialLedger(
       if (position.resolvedAt !== null) fail("FILL_AFTER_RESOLUTION");
       if (event.orderId !== null) {
         const accepted = acceptances.get(
-          JSON.stringify([event.orderId, ownerKey]),
+          compositeKey([event.orderId, ownerKey]),
         );
         if (
           accepted !== undefined &&
@@ -404,8 +387,8 @@ export function replayFinancialLedger(
       position.lastEventId = event.eventId;
     position.lastEventTs = event.eventTs;
     owner.positions.set(event.tokenId, position);
-    addBucket(owner.daily, bucketStart(event.eventTs, false), realizedDelta);
-    addBucket(owner.weekly, bucketStart(event.eventTs, true), realizedDelta);
+    addBucket(owner.daily, utcBucketStart(event.eventTs, false), realizedDelta);
+    addBucket(owner.weekly, utcBucketStart(event.eventTs, true), realizedDelta);
   }
 
   const output = new Map<string, FinancialOwnerState>();
@@ -490,7 +473,7 @@ export function applyFinancialMarks(
   const cutoff = asOf === undefined ? Infinity : timestamp(asOf, "AS_OF");
   const byPosition = new Map<string, FinancialMark>();
   for (const mark of marks) {
-    const key = JSON.stringify([mark.accountId, mark.strategyId, mark.tokenId]);
+    const key = compositeKey([mark.accountId, mark.strategyId, mark.tokenId]);
     if (byPosition.has(key)) fail("DUPLICATE_MARK");
     byPosition.set(key, mark);
   }
@@ -503,7 +486,7 @@ export function applyFinancialMarks(
     for (const [tokenId, position] of owner.positions) {
       const shares = money(position.shares, "SHARES");
       const mark = byPosition.get(
-        JSON.stringify([owner.accountId, owner.strategyId, tokenId]),
+        compositeKey([owner.accountId, owner.strategyId, tokenId]),
       );
       let value: bigint | null =
         shares === 0n || position.markValueSignedUsd === null
