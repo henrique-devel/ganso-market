@@ -269,7 +269,8 @@ export async function applyIoc(
             ]);
             const used = (
               await tx.query(
-                "SELECT result FROM btc_ioc_results WHERE account_id=$1 AND result->>'book_key'=$2",
+                `SELECT result FROM btc_ioc_results WHERE account_id=$1 AND result->>'book_key'=$2
+                 UNION ALL SELECT result FROM btc_margin_results WHERE account_id=$1 AND result->>'book_key'=$2`,
                 [scope.account_id, result.book_key],
               )
             ).rows.flatMap((r) => {

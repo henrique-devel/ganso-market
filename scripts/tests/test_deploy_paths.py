@@ -82,6 +82,21 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_isolated_margin_selects_only_api_and_migration(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/margin.ts",
+                    "apps/api/src/storage/marginstore.ts",
+                    "apps/api/test/trading/margin.test.ts",
+                    "apps/api/test/trading/margin.pg.test.ts",
+                    "apps/api/test/trading/margin-fixture.ts",
+                    "migrations/0036_btc_isolated_margin.sql",
+                ]
+            ),
+            {"api", "migrate"},
+        )
+
     def test_funding_preserves_collector_and_selects_api_migration(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(

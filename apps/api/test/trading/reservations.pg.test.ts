@@ -1,3 +1,4 @@
+import { seedMarginMetadata } from "./margin-fixture.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SqlExecutor } from "../../src/database.js";
 import { applyReservation } from "../../src/storage/reservationstore.js";
@@ -140,6 +141,7 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
     fixture = await createPgFixture(url);
     failure = null;
     await createLedgerAccount(pool, identity());
+    await seedMarginMetadata(pool);
   });
   afterEach(async () => {
     await fixture?.dispose();

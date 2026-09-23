@@ -19,7 +19,11 @@ import {
   lockableLedgerAccountTx,
   readLedgerAccountTx,
 } from "./ledgerstore.js";
-import { readValuationMarketTx } from "./valuationstore.js";
+import { requireMargin } from "../trading/margin.js";
+import {
+  readIsolatedMarginTx,
+  readValuationMarketTx,
+} from "./valuationstore.js";
 import {
   validateReservationCommand,
   type ReservationCommand,
@@ -95,6 +99,39 @@ export async function applyReservationTx(
     market,
   );
   const pending = await readReservationsTx(tx, scope.account_id);
+  const checkIsolatedOpening = async (
+    orders: readonly Reservation[],
+    positionId: string,
+    accepting: boolean,
+  ) => {
+    const current = await readLedgerAccountTx(tx, scope);
+    const { isolation } = await readIsolatedMarginTx(tx, current, market);
+    requireMargin(isolation.metadata_valid, "METADATA_UNAVAILABLE");
+    requireMargin(isolation.compatible, "INCOMPATIBLE_HISTORY");
+    requireMargin(
+      !isolation.positions.some(
+        (p) => p.liquidatable || p.deficit_usd_raw !== "0",
+      ),
+      "INSOLVENT_POSITION",
+    );
+    if (accepting)
+      requireMargin(
+        !isolation.positions.some(
+          (p) => p.position_id === positionId && p.quantity_btc_raw === "0",
+        ),
+        "POSITION_ID_REUSE",
+      );
+    const held = orders
+      .filter((r) => r.status === "active")
+      .reduce(
+        (n, r) => n + BigInt(r.margin_usd_raw) + BigInt(r.fee_usd_raw),
+        0n,
+      );
+    requireReservation(
+      held <= BigInt(isolation.free_cash_usd_raw),
+      "MARGIN_UNAVAILABLE",
+    );
+  };
   const orderId =
     request.action === "reserve" ? request.order.order_id : request.order_id;
   let result: Reservation,
@@ -115,6 +152,12 @@ export async function applyReservationTx(
       "INEXACT_ORDER",
     );
     result = reserve(request.order, finance, pending);
+    if (request.order.intent === "open")
+      await checkIsolatedOpening(
+        [...pending, result],
+        request.order.position_id,
+        true,
+      );
     await tx.query(
       "INSERT INTO btc_order_acceptances(account_id,order_id,request,accepted_at) VALUES($1,$2,$3::jsonb,$4)",
       [scope.account_id, orderId, JSON.stringify(request.order), now],
@@ -153,6 +196,8 @@ export async function applyReservationTx(
         request.fee_usd_raw,
         finance,
       );
+      if (active.order.intent === "open")
+        await checkIsolatedOpening(pending, active.order.position_id, false);
       const exec = `reservation:${request.operation_id}`;
       const event = (
         suffix: string,
@@ -212,6 +257,11 @@ export async function applyReservationTx(
       );
       requireReservation(appended.status === "appended", "LEDGER_COLLISION");
       if (active.order.intent === "open") {
+        await checkIsolatedOpening(
+          pending.map((r) => (r.order.order_id === orderId ? result : r)),
+          active.order.position_id,
+          false,
+        );
         const after = await readLedgerAccountTx(tx, scope);
         requireOpeningCapacity(
           valueFinancials(
