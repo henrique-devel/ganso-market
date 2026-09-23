@@ -132,6 +132,19 @@ class LedgerDeploymentTests(unittest.TestCase):
             {"api", "migrate"},
         )
 
+    def test_passive_library_only_deploys_api_and_additive_schema(self) -> None:
+        paths = [
+            "apps/api/src/trading/passive.ts",
+            "apps/api/src/storage/passivestore.ts",
+            "apps/api/src/storage/passive-contract.ts",
+            "apps/api/src/storage/reservationstore.ts",
+            "apps/api/src/storage/brokerstore.ts",
+            "apps/api/test/trading/passive.test.ts",
+            "apps/api/test/trading/passive.pg.test.ts",
+            "migrations/0034_btc_passive_execution.sql",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+
     def test_financial_reads_preserve_collector_and_database(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
