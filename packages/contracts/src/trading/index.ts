@@ -8,3 +8,7 @@ export {
   tradingIdempotencyKey,
   tradingDataKey,
 } from "./validation.js";
+export {
+  assertInstrumentOrderConstraints,
+  type TradingInstrumentMetadata,
+} from "./instrument-metadata.js";

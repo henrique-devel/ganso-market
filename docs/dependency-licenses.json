@@ -45,6 +45,24 @@
     {
       "ecosystem": "npm",
       "license": "MIT",
+      "name": "@nktkas/hyperliquid",
+      "version": "0.33.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@nktkas/rews",
+      "version": "4.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@noble/hashes",
+      "version": "2.4.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
       "name": "@oxc-project/types",
       "version": "0.143.0"
     },
@@ -425,6 +443,12 @@
       "license": "MIT",
       "name": "csstype",
       "version": "3.2.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "decimal.js",
+      "version": "10.6.0"
     },
     {
       "ecosystem": "npm",
@@ -965,6 +989,12 @@
       "license": "MIT",
       "name": "undici-types",
       "version": "7.18.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "valibot",
+      "version": "1.5.0"
     },
     {
       "ecosystem": "npm",

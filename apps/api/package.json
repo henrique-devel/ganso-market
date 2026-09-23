@@ -16,9 +16,14 @@
     "fast-backtest": "node dist/fast-backtest-cli.js",
     "polymarket-recorder": "node dist/polymarket-recorder.js",
     "polymarket-estimator": "node dist/polymarket-estimator.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "precheck": "npm run build --workspace @ganso-market/contracts",
+    "prebuild": "npm run build --workspace @ganso-market/contracts",
+    "pretest": "npm run build --workspace @ganso-market/contracts"
   },
   "dependencies": {
+    "@ganso-market/contracts": "0.1.0",
+    "@nktkas/hyperliquid": "0.33.3",
     "fastify": "5.11.3",
     "hash-wasm": "4.12.0",
     "pg": "8.23.0",
