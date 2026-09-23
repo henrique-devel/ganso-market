@@ -98,8 +98,13 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/test/trading/ledger.test.ts",
             "apps/api/test/trading/ledger.pg.test.ts",
             "apps/api/test/trading/ledger-fixture.ts",
+            "apps/api/src/trading/valuation.ts",
+            "apps/api/src/storage/valuationstore.ts",
+            "apps/api/test/trading/valuation.test.ts",
+            "apps/api/test/trading/valuation.pg.test.ts",
+            "apps/api/test/trading/valuation-fixture.ts",
         }:
-            # S1 account ledger has no collector/legacy consumer. Preserve the feed.
+            # Account financial reads have no collector/legacy consumer. Preserve the feed.
             selected.add("api")
         elif path.startswith("apps/api/"):
             selected.update(NODE_SERVICES)
