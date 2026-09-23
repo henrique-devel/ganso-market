@@ -2,6 +2,9 @@
 # Only ephemeral Docker resources; never read server.env or local secrets.
 set -eu
 cd "$(dirname "$0")/.."
+# Adapter fixtures use the public workspace exports, which point at built contracts.
+# The dedicated PG job starts from a clean checkout and does not run API pretest.
+npm run build --workspace @ganso-market/contracts
 umask 077
 scratch="$(mktemp -d)"
 container=""
