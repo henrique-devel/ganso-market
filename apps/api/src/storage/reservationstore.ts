@@ -137,6 +137,14 @@ export async function applyReservationTx(
         !managedIoc.rowCount || !!beforeFill,
         "IOC_BROKER_REQUIRED",
       );
+      const managedPassive = await tx.query(
+        "SELECT 1 FROM btc_passive_events WHERE account_id=$1 AND order_id=$2 LIMIT 1",
+        [scope.account_id, orderId],
+      );
+      requireReservation(
+        !managedPassive.rowCount || !!beforeFill,
+        "PASSIVE_BROKER_REQUIRED",
+      );
       requireReservation(active.order.valid_until > now, "EXPIRED");
       result = consume(
         active,

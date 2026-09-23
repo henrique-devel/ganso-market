@@ -72,6 +72,15 @@ export async function applyIoc(
     const dependencies = new Set<string>();
     let intent: IocIntent;
     if (request.action === "submit") {
+      requireIoc(
+        !(
+          await tx.query(
+            "SELECT 1 FROM btc_passive_events WHERE account_id=$1 LIMIT 1",
+            [scope.account_id],
+          )
+        ).rowCount,
+        "SEPARATE_PASSIVE_SCENARIO_REQUIRED",
+      );
       intent = request.intent;
       requireIoc(
         intent.decision_at <= now &&
