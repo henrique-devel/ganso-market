@@ -9,7 +9,7 @@ timer, conexão externa, contratação ou executor live.
 
 ## Contrato de escrita
 
-Usar `storeRetentionObject` de `apps/api/src/trading/retentionstore.ts` com
+Usar `storeRetentionObject` de `apps/api/src/storage/btc-retention.ts` com
 um `DatabasePool` transacional. A identidade segue instrumento/versão de
 `trading.v1`, sempre `mode=paper`; decisão e financeiro incluem conta/experimento.
 O payload do feed deve conservar sua `TradingDataIdentity` completa, timestamps,

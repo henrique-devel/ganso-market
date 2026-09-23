@@ -10,7 +10,7 @@ import {
   retainBtcBatch,
   retentionCapacity,
   storeRetentionObject,
-} from "../../src/trading/retentionstore.js";
+} from "../../src/storage/btc-retention.js";
 
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;

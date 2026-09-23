@@ -1,11 +1,11 @@
 import type { DatabasePool, SqlExecutor } from "../database.js";
-import { canonicalFingerprint } from "./replay.js";
+import { canonicalFingerprint } from "../trading/replay.js";
 import {
   BTC_RETENTION_POLICY as policy,
   validateRetentionObject,
   assertEvidenceJson,
   type RetentionObject,
-} from "./retention.js";
+} from "../trading/retention.js";
 
 type StorePool = Pick<DatabasePool, "transaction">;
 async function locked<T>(
