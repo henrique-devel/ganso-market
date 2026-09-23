@@ -2,7 +2,9 @@
 
 Atualizado em **22/09/2026**. [PRD vigente](../PRD-GANSO-2.0.md) · [Roteiro dos prompts](../../prompts/ganso-2/README.md) · [Protocolo enxuto](../../prompts/ganso-2/00-protocolo.md).
 
-Direção aprovada: BTC Hyperliquid, dados reais, US$ 1.000 fictícios por cenário e Jev opcional. Referência de custo informada: US$ 80/mês, sem backup. **11 RFCs e 45 prompts preparados; nenhum prompt de implementação foi executado nesta preparação.** Código→PR→merge→produção está autorizado quando a sessão for selecionada. Sem recibo ou evidência formal obrigatória por sessão.
+Direção aprovada: BTC Hyperliquid, dados reais, US$ 1.000 fictícios por cenário e Jev opcional. Referência de custo informada: US$ 80/mês, sem backup. **11 RFCs e 45 prompts; execução registrada até G2-01.3, integrada pelos PRs #201–206 (main 597756b).** Código→PR→merge→produção está autorizado quando a sessão for selecionada. Sem recibo ou evidência formal obrigatória por sessão.
+
+G2-00.1, G2-00.2 e G2-01.1 estão `code-verified`; G2-01.2 está `production-verified`; G2-01.3 foi encerrado como `superseded` pela aposentadoria verificada do paper. **Próxima sessão na sequência: G2-01.4**, ainda pendente, para investigar transações ociosas e pools compartilhados. O marco G2-01 permanece aberto até essa entrega; a aposentadoria do paper não comprova correção da origem do timeout.
 
 ## Como atualizar
 
@@ -28,7 +30,7 @@ Versões relidas via SSH com identidade fixada, às **23:07 UTC**: release em `/
 
 **FIN-07** já integrado pelos PRs [197](https://github.com/henrique-devel/ganso-market/pull/197), [199](https://github.com/henrique-devel/ganso-market/pull/199) e [200](https://github.com/henrique-devel/ganso-market/pull/200), com contratos financeiros por dono e migration 0026 na main; os 319 testes do fecho são históricos. **EXEC-05** tem recibo/fixture/resultados preservados localmente, ausentes na main consultada; a falha antiga antecede a correção FIN-07 e não comprova falha atual nem novo aceite integrado. A [issue 198](https://github.com/henrique-devel/ganso-market/issues/198) continua aberta: PR 199 corrigiu a inicialização da resolução, mas a origem da transação ociosa ainda precisa de investigação. Esta sessão não executou nova prova financeira.
 
-Banco ~186,91 GiB, disco 30,96% disponível e 789 reinícios do paper pertencem à coleta histórica: **revalidar capacidade em G2-01.1 e priorizar contenção G2-01.2**. Não são medições operacionais desta sessão.
+Banco ~186,91 GiB, disco 30,96% disponível e 789 reinícios do paper pertencem à coleta inicial, já revalidada em G2-01.1: banco 190,59 GiB, disco 29,71% disponível e 938 reinícios. A contenção G2-01.2 foi aplicada e verificada; G2-01.3 confirmou o paper parado, com 950 reinícios históricos, sem reativação dos workers. As janelas e métricas de cada execução estão nas linhas abaixo; não representam uma nova coleta nesta atualização. A prioridade residual é G2-01.4.
 
 O [estado BTC anterior](BTC_EXECUTION_STATE.md) fica como histórico. Não alterar suas linhas em massa para aparentar conclusão do 2.0. A [auditoria](../research/ganso-2-infraestrutura-2026-09-22.md) e a coleta existente são referências, não novos relatórios exigidos.
 
