@@ -82,6 +82,99 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     await fixture?.dispose();
   });
 
+  it("validates a full 36,865-input bar inside the existing SQL write budget", async () => {
+    // Worst permitted builder fan-in: 32,768 trades + 4,096 captures + metadata.
+    // Realistic incompressible event IDs expose repeated array detoasting/scanning.
+    const size = 36_865;
+    for (let start = 0; start < size; start += 1000) {
+      await fixture.pool.query(
+        `INSERT INTO btc_retention_objects
+        (object_id,dataset_id,policy_version,class,identity,recorded_at,payload,charged_bytes)
+        SELECT 'fixture:event:' || md5(i::text) || md5(('second:' || i)::text),
+          'btc-paper-v1','btc-retention-v1','raw',$1,clock_timestamp(),'{}',1
+        FROM generate_series($2::int,$3::int) i`,
+        [identity, start, Math.min(start + 999, size - 1)],
+      );
+    }
+    const dependencies = (
+      await fixture.pool.query(
+        "SELECT object_id FROM btc_retention_objects ORDER BY object_id",
+      )
+    ).rows.map((r) => r.object_id as string);
+    const before = await retentionCapacity(pool);
+    const started = performance.now();
+    // storeRetentionObject sets the unchanged server statement_timeout='5s'.
+    const result = await storeRetentionObject(pool, {
+      ...object("large-bar", "bar", dependencies),
+      payload: { input_ids: dependencies, source: "disposable-fan-in-fixture" },
+    });
+    console.info(
+      `retention large-bar: inputs=${size}, elapsed_ms=${Math.round(performance.now() - started)}`,
+    );
+    expect(result.status).toBe("stored");
+    expect(
+      (
+        await fixture.pool.query(
+          "SELECT count(*)::int n FROM btc_retention_dependencies WHERE object_id='large-bar'",
+        )
+      ).rows[0]!.n,
+    ).toBe(size);
+    expect(
+      BigInt((await retentionCapacity(pool)).total_bytes) -
+        BigInt(before.total_bytes),
+    ).toBe(BigInt(result.chargedBytes));
+    expect(
+      (
+        await storeRetentionObject(pool, {
+          ...object("large-bar", "bar", dependencies),
+          // The exact retry timestamp is taken from the immutable committed envelope.
+          recordedAt: (
+            await fixture.pool.query(
+              "SELECT recorded_at FROM btc_retention_objects WHERE object_id='large-bar'",
+            )
+          ).rows[0]!.recorded_at,
+          payload: {
+            input_ids: dependencies,
+            source: "disposable-fan-in-fixture",
+          },
+        })
+      ).status,
+    ).toBe("duplicate");
+    await expect(
+      fixture.pool.query(
+        "DELETE FROM btc_retention_dependencies WHERE object_id='large-bar'",
+      ),
+    ).rejects.toThrow("IMMUTABLE");
+  }, 30_000);
+  it("checks each owner's declared edges in multi-row inserts without allowing forged links", async () => {
+    await storeRetentionObject(pool, object("a"));
+    await storeRetentionObject(pool, object("b"));
+    await storeRetentionObject(pool, object("pa", "bar", ["a"]));
+    await storeRetentionObject(pool, object("pb", "bar", ["b"]));
+    const before = await retentionCapacity(pool);
+    await expect(
+      fixture.pool.query(
+        "INSERT INTO btc_retention_dependencies(object_id,dependency_id) VALUES('pa','b'),('pb','a')",
+      ),
+    ).rejects.toThrow("UNKNOWN_DEPENDENCY");
+    expect(
+      (
+        await fixture.pool.query(
+          "SELECT object_id,dependency_id FROM btc_retention_dependencies ORDER BY object_id",
+        )
+      ).rows,
+    ).toEqual([
+      { object_id: "pa", dependency_id: "a" },
+      { object_id: "pb", dependency_id: "b" },
+    ]);
+    await fixture.pool.query(
+      "INSERT INTO btc_retention_dependencies(object_id,dependency_id) VALUES('pa','a') ON CONFLICT DO NOTHING",
+    );
+    expect((await retentionCapacity(pool)).total_bytes).toBe(
+      before.total_bytes,
+    );
+  });
+
   it("starts empty with versioned defaults and HOLD, preserving all rows until explicit release", async () => {
     expect(await retentionCapacity(pool)).toMatchObject({
       policy_version: policy.version,
