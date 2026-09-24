@@ -32,6 +32,14 @@ const pool = {
   async transaction<T>(run: (tx: SqlExecutor) => Promise<T>) {
     const client = await fixture.pool.connect();
     try {
+      // Keep the database's real retention clock at/after the fixed app clock.
+      // A fast runner must not fabricate future durable evidence; this wait is
+      // at most the test's 170 ms latency, never an assertion about SQL speed.
+      if (clockOverride)
+        await client.query(
+          "SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp())))",
+          [clockOverride],
+        );
       await client.query("BEGIN");
       const tx: SqlExecutor = {
         async query(sql, params) {
