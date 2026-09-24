@@ -26,7 +26,7 @@ import {
   readIsolatedMarginTx,
 } from "./valuationstore.js";
 import { readFundingCoverageTx } from "./fundingstore.js";
-import { withBtcRetentionTransaction } from "./btc-retention.js";
+import { recoveryTransaction } from "./recoverystore.js";
 
 const clock = async (tx: SqlExecutor) =>
   (
@@ -358,16 +358,7 @@ export async function riskTransaction<T>(
       return { error };
     }
   };
-  const committedReads = {
-    transaction: <U>(runTx: (tx: SqlExecutor) => Promise<U>) =>
-      pool.transaction(async (tx) => {
-        await tx.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
-        return runTx(tx);
-      }),
-  };
-  const result = retention
-    ? await withBtcRetentionTransaction(committedReads, execute)
-    : await committedReads.transaction(execute);
+  const result = await recoveryTransaction(pool, scope, execute, retention);
   if (result.error) throw result.error;
   return result.value as T;
 }

@@ -1,3 +1,7 @@
+import {
+  recoverAccount,
+  recoveryTransaction,
+} from "../../src/storage/recoverystore.js";
 import { ledgerScope, replayLedger } from "../../src/trading/ledger.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabasePool, SqlExecutor } from "../../src/database.js";
@@ -175,8 +179,9 @@ describe.skipIf(!url)("account ledger on disposable PostgreSQL", () => {
   it("orders replay by committed sequence, retains funding time and liquidates without duplicate deltas", async () => {
     await createLedgerAccount(pool, identity());
     await appendLedgerBatch(pool, scope, batch());
-    // Historical S1 replay compatibility. New public funding writes require S6.
-    await pool.transaction((tx) =>
+    // Historical S1 replay fixture; public funding requires S6. Keep even this
+    // internal seam inside S9 ownership and atomic checkpointing.
+    await recoveryTransaction(pool, scope, (tx) =>
       appendLedgerBatchTx(
         tx,
         identity(),
@@ -352,8 +357,9 @@ describe.skipIf(!url)("account ledger on disposable PostgreSQL", () => {
       projections: 1,
     });
   });
-  it("reads detect corrupted projections without silently repairing them", async () => {
+  it("reads and an already booted worker detect corruption without silently repairing it", async () => {
     await createLedgerAccount(pool, identity());
+    await recoverAccount(pool, scope);
     await fixture.pool.query(
       `UPDATE btc_ledger_projections SET projection=jsonb_set(projection,'{cash_usd_raw}','"0"')`,
     );

@@ -130,8 +130,13 @@ describe.skipIf(!url)(
         paused.daily_anchor_usd_raw,
       );
       await f.capture();
+      // S9 requires actual loss of the old lease before a new worker boots.
+      await f.pool.query(
+        "UPDATE btc_recovery_heads SET lease_until=clock_timestamp()-interval '1 second'",
+      );
+      f.poolAdapter = { transaction: f.poolAdapter.transaction };
       const recovered = await applyRisk(
-        { transaction: f.poolAdapter.transaction },
+        f.poolAdapter,
         { ...scope },
         { action: "observe", operation_id: "restart", reason: "restart" },
       );

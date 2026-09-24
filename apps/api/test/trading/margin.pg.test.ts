@@ -101,9 +101,13 @@ async function capture(
     at?: number;
   } = {},
 ) {
-  if (options.at === undefined)
-    await fixture.pool.query("SELECT pg_sleep(0.002)");
-  const at = options.at ?? Date.now(),
+  // Fixture timestamp comes from the same clock as the envelope guard; host
+  // and Docker clocks can differ slightly. Explicit historical cuts stay exact.
+  const at =
+      options.at ??
+      (
+        await fixture.pool.query("SELECT clock_timestamp() AS now")
+      ).rows[0].now.getTime(),
     m = market(at);
   if (
     m.context!.payload.payload.kind !== "mark_funding" ||
@@ -332,19 +336,22 @@ describe.skipIf(!url)(
       expect(a.market_id).not.toBe(b.market_id);
       expect(a.after).toEqual(b.after);
     });
-    it("concurrent retries and reconstructed callers never duplicate fills/fees", async () => {
+    it("concurrent retries never duplicate fills/fees and a second worker is excluded", async () => {
       await seed();
       await capture();
       const [a, b, c] = await Promise.all([apply(), apply(), apply("another")]);
       expect(a).toEqual(b);
       expect(c.status).toBe("flat");
       const saved = await snapshot();
-      expect(
-        await liquidateIsolatedPosition(
+      await expect(
+        liquidateIsolatedPosition(
           { transaction: pool.transaction },
           { ...scope },
           { ...request() },
         ),
+      ).rejects.toThrow("BTC_RECOVERY_OWNED");
+      expect(
+        await liquidateIsolatedPosition(pool, { ...scope }, { ...request() }),
       ).toEqual(a);
       expect(await snapshot()).toEqual(saved);
     });
