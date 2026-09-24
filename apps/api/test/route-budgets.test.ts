@@ -146,13 +146,17 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
   });
 
   it("does not hand a read budget to a published write", () => {
-    // The kill-switch rearm is the only POST the perimeter publishes. A budget
-    // for it would mean it had been routed through the READ ONLY executor.
+    // Published writes must never be routed through the GET READ ONLY executor.
     const publishedWrites = routes.filter(
       (route) => route.method === "POST" && isPublished(route, locations),
     );
     expect(publishedWrites.map((route) => route.url)).toEqual([
       "/polymarket/paper/kill-switch/rearm",
+      "/trading/preview",
+      "/trading/submit",
+      "/trading/cancel",
+      "/trading/close",
+      "/trading/pause",
     ]);
     for (const write of publishedWrites) {
       expect(budgets[write.url], write.url).toBeUndefined();

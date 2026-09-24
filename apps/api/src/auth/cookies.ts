@@ -2,8 +2,8 @@ export const REFRESH_COOKIE_NAME = "ganso_refresh";
 export const CSRF_COOKIE_NAME = "ganso_csrf";
 
 // Browser-visible path of the auth endpoints (nginx maps /api/auth/* to the
-// API's /auth/*). Cookies are scoped here so they are never sent to unrelated
-// routes.
+// API's /auth/*). The HttpOnly refresh stays here; the non-secret CSRF
+// cookie uses / so the SPA can read it and send it to authenticated commands.
 export const AUTH_COOKIE_PATH = "/api/auth";
 
 export interface CookieAttributes {
@@ -40,7 +40,7 @@ export function serializeCookie(
 ): string {
   const segments = [
     `${name}=${value}`,
-    `Path=${AUTH_COOKIE_PATH}`,
+    `Path=${name === CSRF_COOKIE_NAME ? "/" : AUTH_COOKIE_PATH}`,
     "SameSite=Strict",
     `Max-Age=${String(attributes.maxAgeSeconds)}`,
   ];

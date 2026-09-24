@@ -71,8 +71,16 @@ class NginxPerimeterTests(unittest.TestCase):
         expected = {
             f"/api/trading/{name}" for name in ("accounts", "account", "positions", "orders")
         }
+        commands = {
+            f"/api/trading/{name}" for name in ("preview", "submit", "cancel", "close", "pause")
+        }
         published = {spec.split()[-1] for spec, _ in locations() if "/api/trading" in spec}
-        self.assertEqual(published, expected)
+        self.assertEqual(published, expected | commands)
+        for path in commands:
+            body = next(body for spec, body in locations() if spec == f"= {path}")
+            self.assertEqual(re.findall(r"\$request_method\s*!=\s*(\w+)", body), ["POST"])
+            self.assertIn("return 404", body)
+            self.assertIn("proxy_set_header Host $http_host", body)
         for path in expected:
             body = next(body for spec, body in locations() if spec == f"= {path}")
             self.assertEqual(re.findall(r"\$request_method\s*!=\s*(\w+)", body), ["GET"])

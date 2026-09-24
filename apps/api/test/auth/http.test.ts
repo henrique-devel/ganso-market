@@ -122,7 +122,10 @@ describe("auth routes", () => {
     expect(refresh).toContain("SameSite=Strict");
     expect(refresh).toContain("Path=/api/auth");
     expect(refresh).not.toContain("Secure");
-    expect(csrf).toBeDefined();
+    expect(csrf).toContain("Path=/;");
+    expect(cookies).toContain(
+      "ganso_csrf=; Path=/api/auth; SameSite=Strict; Max-Age=0",
+    );
     expect(csrf).not.toContain("HttpOnly");
     await app.close();
   });
