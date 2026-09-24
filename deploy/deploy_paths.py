@@ -95,6 +95,8 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/src/storage/recoverystore.ts",
             "apps/api/src/storage/recovery-audit.ts",
             "apps/api/test/trading/recovery.pg.test.ts",
+            "apps/api/test/trading/acceptance.pg.test.ts",
+            "apps/api/test/trading/acceptance-fixture.ts",
             "apps/api/src/trading/risk.ts",
             "apps/api/src/storage/riskstore.ts",
             "apps/api/test/trading/risk.test.ts",

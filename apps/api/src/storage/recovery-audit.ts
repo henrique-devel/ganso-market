@@ -178,6 +178,8 @@ export async function auditRecoveryTx(
       [id],
     )
   ).rows;
+  // Qualify the numeric input column: unqualified ORDER BY sequence resolves
+  // to the text output alias and sorts 1,10,2, rejecting valid long histories.
   const reservations = (
     await tx.query<{
       sequence: string;
@@ -185,7 +187,7 @@ export async function auditRecoveryTx(
       reservation: Reservation;
       ledger_transaction_id: string | null;
     }>(
-      "SELECT sequence::text,request,reservation,ledger_transaction_id FROM btc_reservation_events WHERE account_id=$1 ORDER BY sequence",
+      "SELECT sequence::text,request,reservation,ledger_transaction_id FROM btc_reservation_events WHERE account_id=$1 ORDER BY btc_reservation_events.sequence",
       [id],
     )
   ).rows;
@@ -312,7 +314,7 @@ export async function auditRecoveryTx(
       checkpoint: RiskCheckpoint;
       request: { action: string };
     }>(
-      "SELECT sequence::text,checkpoint,request FROM btc_risk_events WHERE account_id=$1 ORDER BY sequence",
+      "SELECT sequence::text,checkpoint,request FROM btc_risk_events WHERE account_id=$1 ORDER BY btc_risk_events.sequence",
       [id],
     )
   ).rows;
