@@ -138,4 +138,42 @@ describe("S8 fixed account risk policy", () => {
     expect(recovered.high_water_usd_raw).toBe("1000000000");
     expect(recovered.reasons).toEqual([]);
   });
+  it("an unvalued external flow remains halted after recapitalization", () => {
+    const base = initial();
+    const drained = riskCheckpoint({
+      previous: base,
+      now,
+      equity: "0",
+      external: "-1000000000",
+      initial_anchor: "0",
+      daily_anchor: "0",
+      sequence: "2",
+      usable: true,
+      accounting: true,
+    });
+    const restored = riskCheckpoint({
+      previous: drained,
+      now,
+      equity: "1000000000",
+      external: "0",
+      initial_anchor: "0",
+      daily_anchor: "0",
+      sequence: "3",
+      usable: true,
+      accounting: true,
+    });
+    const observed = riskCheckpoint({
+      previous: restored,
+      now,
+      equity: "1000000000",
+      external: "0",
+      initial_anchor: "0",
+      daily_anchor: "0",
+      sequence: "3",
+      usable: true,
+      accounting: true,
+    });
+    expect(observed.state).toBe("HALTED");
+    expect(observed.reasons).toContain("external_flow_unvalued");
+  });
 });

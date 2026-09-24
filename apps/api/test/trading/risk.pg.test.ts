@@ -256,6 +256,36 @@ describe.skipIf(!url)(
       await expect(risk("rearm")).rejects.toThrow("REARM_CONDITIONS");
     });
 
+    it("rejects draining equity instead of allowing capital to reset loss anchors", async () => {
+      await reserve();
+      await consume();
+      await f.capture({ mark: "49000000000" });
+      await risk();
+      const before = (await state())!,
+        ledger = await readLedgerAccount(f.poolAdapter, scope);
+      await expect(
+        appendLedgerBatch(f.poolAdapter, scope, {
+          transaction_id: "drain",
+          events: [
+            command(
+              "drain",
+              {
+                event_type: "cash",
+                reason: "transfer",
+                delta: usd("-983935000"),
+              },
+              scope,
+              Date.now(),
+            ),
+          ],
+        }),
+      ).rejects.toThrow("EXTERNAL_FLOW_EQUITY");
+      expect(await readLedgerAccount(f.poolAdapter, scope)).toEqual(ledger);
+      expect((await state())!.daily_anchor_usd_raw).toBe(
+        before.daily_anchor_usd_raw,
+      );
+      expect((await state())!.reasons).toContain("daily_loss");
+    });
     it("drawdown uses the persisted maximum even without a daily loss", async () => {
       await reserve();
       await consume();

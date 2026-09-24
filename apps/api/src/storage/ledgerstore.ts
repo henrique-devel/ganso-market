@@ -1,4 +1,4 @@
-import { observeRiskTx, readRiskTx } from "./riskstore.js";
+import { observeRiskTx, readRiskTx, riskTransaction } from "./riskstore.js";
 import { requireRisk } from "../trading/risk.js";
 import type { TradingScope } from "@ganso-market/contracts/trading";
 import type { DatabasePool, SqlExecutor } from "../database.js";
@@ -124,6 +124,14 @@ export async function appendLedgerBatchTx(
         before.markFresh,
       "EXTERNAL_FLOW_UNVALUED",
     );
+    const equity = BigInt(before.finance.maintenance.equity_usd_raw!);
+    const delta = batch.events.reduce(
+      (n, e) =>
+        n +
+        (e.payload.event_type === "cash" ? BigInt(e.payload.delta.raw) : 0n),
+      0n,
+    );
+    requireRisk(equity > 0n && equity + delta > 0n, "EXTERNAL_FLOW_EQUITY");
   }
   const history = await events(tx, id);
   const replay = history.length ? replayLedger(identity, history) : null;
@@ -208,7 +216,7 @@ export async function appendLedgerBatch(
   materializeLedgerBatch(input, "0", recordedAt);
   const batch: LedgerBatch = JSON.parse(JSON.stringify(input));
   const scope = { ...scopeInput };
-  return pool.transaction(async (tx) => {
+  return riskTransaction(pool, scope, async (tx) => {
     const identity = await lockableLedgerAccountTx(tx, scope, true);
     return appendLedgerBatchTx(tx, identity, batch, recordedAt);
   });

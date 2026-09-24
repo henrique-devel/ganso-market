@@ -93,6 +93,12 @@ export function riskCheckpoint(input: {
         daily = flowAnchor(BigInt(daily), before, delta).toString();
     }
   }
+  // An unvalued flow cannot be repaired by observing a later positive balance.
+  if (
+    p?.reasons.includes("external_flow_unvalued") &&
+    !reasons.includes("external_flow_unvalued")
+  )
+    reasons.push("external_flow_unvalued");
   if (!(p?.history_complete ?? input.history_complete ?? true))
     reasons.push("history_unobserved");
   if (!input.accounting) reasons.push("accounting_inconsistent");
