@@ -42,23 +42,35 @@ async function checkpoint(tx: SqlExecutor, id: string, generation: string) {
     ],
   );
 }
-async function cancelRestartQueues(
+async function settleRestartOrders(
   tx: SqlExecutor,
   id: string,
   generation: string,
 ) {
-  // Observed venue queue priority cannot survive a worker outage. Persist a
-  // cancellation; retain every historical queue/trade receipt and original pin.
+  // Expiry releases by a durable transition, never a clock-only projection.
+  // Observed passive queue priority cannot survive a worker outage. Keep every
+  // historical queue/trade receipt and original pin; valid IOC holds remain.
+  const now = (
+    await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
+  ).rows[0]!.now.toISOString();
   const rows = (
-    await tx.query<{ reservation: Reservation }>(
-      `SELECT DISTINCT ON (r.order_id) r.reservation FROM btc_reservation_events r
-     WHERE r.account_id=$1 AND EXISTS (SELECT 1 FROM btc_passive_events p WHERE p.account_id=r.account_id AND p.order_id=r.order_id)
-     ORDER BY r.order_id,r.sequence DESC`,
+    await tx.query<{ reservation: Reservation; passive: boolean }>(
+      `SELECT DISTINCT ON (r.order_id) r.reservation,
+       EXISTS (SELECT 1 FROM btc_passive_events p WHERE p.account_id=r.account_id AND p.order_id=r.order_id) AS passive
+       FROM btc_reservation_events r WHERE r.account_id=$1
+       ORDER BY r.order_id,r.sequence DESC`,
       [id],
     )
   ).rows;
-  for (const { reservation } of rows) {
+  for (const { reservation, passive } of rows) {
     if (reservation.status !== "active") continue;
+    const reason =
+      reservation.order.valid_until <= now
+        ? "expired"
+        : passive
+          ? "cancelled"
+          : null;
+    if (!reason) continue;
     const operation = `recovery:${createHash("sha256")
       .update(canonicalFingerprint([generation, reservation.order.order_id]))
       .digest("hex")}`;
@@ -66,7 +78,7 @@ async function cancelRestartQueues(
       action: "release",
       operation_id: operation,
       order_id: reservation.order.order_id,
-      reason: "cancelled",
+      reason,
     };
     await tx.query(
       `INSERT INTO btc_reservation_events(account_id,sequence,operation_id,order_id,action,request,reservation,recorded_at)
@@ -76,7 +88,7 @@ async function cancelRestartQueues(
         operation,
         reservation.order.order_id,
         JSON.stringify(request),
-        JSON.stringify(release(reservation, "cancelled")),
+        JSON.stringify(release(reservation, reason)),
       ],
     );
   }
@@ -158,7 +170,7 @@ export async function recoveryTransaction<T>(
             [id, JSON.stringify(projection)],
           );
         }
-        await cancelRestartQueues(tx, id, head.generation);
+        await settleRestartOrders(tx, id, head.generation);
         await checkpoint(tx, id, head.generation);
       }
     } catch (error) {

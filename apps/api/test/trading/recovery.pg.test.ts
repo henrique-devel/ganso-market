@@ -583,4 +583,24 @@ describe.skipIf(!url)("S9 durable recovery on disposable PostgreSQL", () => {
       "PROJECTION_MISMATCH",
     );
   });
+  it("releases expired holds on boot through a durable transition and retries it once", async () => {
+    stableOrder = { ...stableOrder, valid_until: iso(Date.now() + 1500) };
+    await reserve();
+    await f.pool.query("SELECT pg_sleep(1.6)");
+    await expire();
+    w = worker();
+    await recoverAccount(w.pool, scope);
+    expect((await orders())[0]).toMatchObject({
+      status: "expired",
+      remaining_btc_raw: "0",
+      margin_usd_raw: "0",
+      fee_usd_raw: "0",
+    });
+    const saved = await snapshot();
+    await expire();
+    w = worker();
+    await recoverAccount(w.pool, scope);
+    expect(await snapshot()).toEqual(saved);
+    expect((await ledger()).projection.last_sequence).toBe("1");
+  });
 });

@@ -101,9 +101,13 @@ async function capture(
     at?: number;
   } = {},
 ) {
-  if (options.at === undefined)
-    await fixture.pool.query("SELECT pg_sleep(0.002)");
-  const at = options.at ?? Date.now(),
+  // Fixture timestamp comes from the same clock as the envelope guard; host
+  // and Docker clocks can differ slightly. Explicit historical cuts stay exact.
+  const at =
+      options.at ??
+      (
+        await fixture.pool.query("SELECT clock_timestamp() AS now")
+      ).rows[0].now.getTime(),
     m = market(at);
   if (
     m.context!.payload.payload.kind !== "mark_funding" ||
