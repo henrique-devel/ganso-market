@@ -1,3 +1,4 @@
+import { registerTradingCommandRoutes } from "./trading-commandapi.js";
 import { registerTradingReadRoutes } from "./trading-readapi.js";
 import { randomUUID } from "node:crypto";
 
@@ -245,6 +246,10 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     // with the route's `SET LOCAL statement_timeout`. The auth service and the
     // readiness probe keep the raw pool — the first writes sessions, and the
     // second must answer even when a budget would not apply.
+    registerTradingCommandRoutes(app, {
+      pool: options.pool,
+      authService: options.authService,
+    });
     const readPool = budgetedPool(options.pool);
     registerTradingReadRoutes(app, {
       pool: readPool,

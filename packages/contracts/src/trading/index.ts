@@ -32,3 +32,9 @@ export type {
   DeskPositionPage,
   DeskOrder,
 } from "./desk.js";
+export type {
+  DeskCommand,
+  DeskCommandEnvelope,
+  DeskCommandPreview,
+  DeskCommandReceipt,
+} from "./commands.js";

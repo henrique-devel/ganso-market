@@ -386,66 +386,72 @@ export async function applyRisk(
   );
   const request = { ...input },
     scope = { ...scopeInput };
-  return riskTransaction(pool, scope, async (tx) => {
-    const prior = (
-      await tx.query<{ request: RiskCommand; checkpoint: RiskCheckpoint }>(
-        "SELECT request,checkpoint FROM btc_risk_events WHERE account_id=$1 AND operation_id=$2",
-        [scope.account_id, request.operation_id],
-      )
-    ).rows[0];
-    if (prior) {
-      requireRisk(
-        canonicalFingerprint(prior.request) === canonicalFingerprint(request),
-        "IDEMPOTENCY_COLLISION",
-      );
-      return prior.checkpoint;
-    }
-    const observed = await observeRiskTx(tx, scope),
-      checkpoint = { ...observed.checkpoint };
-    if (request.action === "rearm") {
-      requireRisk(checkpoint.reasons.length === 0, "REARM_CONDITIONS");
-      const pending = await ordersTx(tx, scope.account_id);
-      requireRiskCaps(
-        checkpoint.equity_usd_raw!,
-        grossExposure(
-          observed.finance.positions,
-          observed.finance.maintenance.mark_price!.raw,
-          pending,
-        ),
-      );
-      const { isolation } = await readIsolatedMarginTx(
-        tx,
-        observed.ledger,
-        observed.market,
-      );
-      requireRisk(
-        isolation.metadata_valid &&
-          isolation.compatible &&
-          !isolation.positions.some(
-            (p) => p.liquidatable || p.deficit_usd_raw !== "0",
-          ),
-        "REARM_MARGIN",
-      );
-      requireRisk(
-        observed.finance.positions.filter((p) => p.quantity_btc_raw !== "0")
-          .length <= 1,
-        "SINGLE_POSITION",
-      );
-      checkpoint.state = "NORMAL";
-    } else if (request.action === "halt") checkpoint.state = "HALTED";
-    else if (request.action === "reduce_only" && checkpoint.state !== "HALTED")
-      checkpoint.state = "REDUCE_ONLY";
-    await journal(
-      tx,
-      scope.account_id,
-      checkpoint,
-      { policy: RISK_POLICY },
-      request,
+  return riskTransaction(pool, scope, (tx) => applyRiskTx(tx, scope, request));
+}
+/** Caller owns the risk/recovery transaction and account lock. */
+export async function applyRiskTx(
+  tx: SqlExecutor,
+  scope: TradingScope,
+  request: RiskCommand,
+) {
+  const prior = (
+    await tx.query<{ request: RiskCommand; checkpoint: RiskCheckpoint }>(
+      "SELECT request,checkpoint FROM btc_risk_events WHERE account_id=$1 AND operation_id=$2",
+      [scope.account_id, request.operation_id],
+    )
+  ).rows[0];
+  if (prior) {
+    requireRisk(
+      canonicalFingerprint(prior.request) === canonicalFingerprint(request),
+      "IDEMPOTENCY_COLLISION",
     );
-    if (checkpoint.state !== "NORMAL")
-      await cancelIncreases(tx, scope.account_id, checkpoint.observed_at);
-    return checkpoint;
-  });
+    return prior.checkpoint;
+  }
+  const observed = await observeRiskTx(tx, scope),
+    checkpoint = { ...observed.checkpoint };
+  if (request.action === "rearm") {
+    requireRisk(checkpoint.reasons.length === 0, "REARM_CONDITIONS");
+    const pending = await ordersTx(tx, scope.account_id);
+    requireRiskCaps(
+      checkpoint.equity_usd_raw!,
+      grossExposure(
+        observed.finance.positions,
+        observed.finance.maintenance.mark_price!.raw,
+        pending,
+      ),
+    );
+    const { isolation } = await readIsolatedMarginTx(
+      tx,
+      observed.ledger,
+      observed.market,
+    );
+    requireRisk(
+      isolation.metadata_valid &&
+        isolation.compatible &&
+        !isolation.positions.some(
+          (p) => p.liquidatable || p.deficit_usd_raw !== "0",
+        ),
+      "REARM_MARGIN",
+    );
+    requireRisk(
+      observed.finance.positions.filter((p) => p.quantity_btc_raw !== "0")
+        .length <= 1,
+      "SINGLE_POSITION",
+    );
+    checkpoint.state = "NORMAL";
+  } else if (request.action === "halt") checkpoint.state = "HALTED";
+  else if (request.action === "reduce_only" && checkpoint.state !== "HALTED")
+    checkpoint.state = "REDUCE_ONLY";
+  await journal(
+    tx,
+    scope.account_id,
+    checkpoint,
+    { policy: RISK_POLICY },
+    request,
+  );
+  if (checkpoint.state !== "NORMAL")
+    await cancelIncreases(tx, scope.account_id, checkpoint.observed_at);
+  return checkpoint;
 }
 
 export const withRisk =

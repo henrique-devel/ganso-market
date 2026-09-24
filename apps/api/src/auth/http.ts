@@ -34,7 +34,7 @@ function jsonError(
 // Every mutating request must originate from the same site: Origin must be
 // present and its host must equal the Host header (AUTH-11). Returns a reason
 // code when the check fails.
-function sameOriginViolation(request: FastifyRequest): string | null {
+export function sameOriginViolation(request: FastifyRequest): string | null {
   const host = request.headers.host;
   if (typeof host !== "string" || host.length === 0) {
     return "HOST_HEADER_MISSING";
@@ -55,7 +55,7 @@ function sameOriginViolation(request: FastifyRequest): string | null {
   return null;
 }
 
-function csrfValid(request: FastifyRequest): boolean {
+export function csrfValid(request: FastifyRequest): boolean {
   const header = request.headers["x-csrf-token"];
   const jar = parseCookies(request.headers.cookie);
   const cookie = jar.get(CSRF_COOKIE_NAME);
@@ -90,6 +90,8 @@ function setSessionCookies(
       httpOnly: false,
       secure: cookieSecure,
     }),
+    // Remove the former narrower cookie to avoid duplicate-name ambiguity.
+    `${CSRF_COOKIE_NAME}=; Path=${AUTH_COOKIE_PATH}; SameSite=Strict; Max-Age=0`,
   ]);
 }
 
@@ -97,6 +99,8 @@ function clearSessionCookies(reply: FastifyReply): void {
   reply.header("set-cookie", [
     clearCookie(REFRESH_COOKIE_NAME, true),
     clearCookie(CSRF_COOKIE_NAME, false),
+    // Remove the former narrower cookie to avoid duplicate-name ambiguity.
+    `${CSRF_COOKIE_NAME}=; Path=${AUTH_COOKIE_PATH}; SameSite=Strict; Max-Age=0`,
   ]);
 }
 
