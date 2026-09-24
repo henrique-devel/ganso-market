@@ -82,6 +82,15 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_financial_acceptance_only_selects_api(self) -> None:
+        paths = [
+            "apps/api/src/storage/recovery-audit.ts",
+            "apps/api/test/trading/acceptance.pg.test.ts",
+            "apps/api/test/trading/acceptance-fixture.ts",
+            "docs/roadmap/GANSO_2_EXECUTION_STATE.md",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"api"})
+
     def test_recovery_preserves_collector_and_selects_api_migration(self) -> None:
         paths = [
             "apps/api/src/storage/recoverystore.ts",
