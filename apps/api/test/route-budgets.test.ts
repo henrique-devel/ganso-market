@@ -38,7 +38,10 @@ function publishedLocations(): PublishedLocation[] {
       continue;
     }
     const body = block.slice(0, block.indexOf("\n        }"));
-    const pass = /proxy_pass\s+http:\/\/api:3000(\/polymarket\S*?);/.exec(body);
+    const pass =
+      /proxy_pass\s+http:\/\/api:3000(\/(?:polymarket|trading)\S*?);/.exec(
+        body,
+      );
     if (pass === null) {
       continue;
     }

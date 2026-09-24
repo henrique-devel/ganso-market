@@ -1,3 +1,4 @@
+import { buildDeskProjection } from "./desk-projection.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { TradingScope } from "@ganso-market/contracts/trading";
 import type { DatabasePool, SqlExecutor } from "../database.js";
@@ -170,6 +171,16 @@ export async function recoveryTransaction<T>(
             [id, JSON.stringify(projection)],
           );
         }
+        const ledger = await readLedgerAccountTx(tx, scope);
+        await tx.query(
+          "UPDATE btc_ledger_projections SET desk_projection=$2::jsonb WHERE account_id=$1",
+          [
+            id,
+            JSON.stringify(
+              buildDeskProjection(ledger.projection, ledger.events),
+            ),
+          ],
+        );
         await settleRestartOrders(tx, id, head.generation);
         await checkpoint(tx, id, head.generation);
       }

@@ -17,3 +17,18 @@ export type {
   TradingMarketData,
   TradingBookLevel,
 } from "./market-data.js";
+export type {
+  DeskEnvelope,
+  DeskReason,
+  DeskPage,
+  DeskAccount,
+  DeskQuality,
+  DeskMarket,
+  DeskMark,
+  DeskMargin,
+  DeskBalances,
+  DeskAccountView,
+  DeskPosition,
+  DeskPositionPage,
+  DeskOrder,
+} from "./desk.js";

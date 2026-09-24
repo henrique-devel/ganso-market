@@ -1,3 +1,4 @@
+import { registerTradingReadRoutes } from "./trading-readapi.js";
 import { randomUUID } from "node:crypto";
 
 import Fastify, { LogController, type FastifyInstance } from "fastify";
@@ -245,6 +246,11 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     // readiness probe keep the raw pool — the first writes sessions, and the
     // second must answer even when a budget would not apply.
     const readPool = budgetedPool(options.pool);
+    registerTradingReadRoutes(app, {
+      pool: readPool,
+      authService: options.authService,
+      clock,
+    });
     registerPolymarketReadRoutes(app, {
       pool: readPool,
       authService: options.authService,

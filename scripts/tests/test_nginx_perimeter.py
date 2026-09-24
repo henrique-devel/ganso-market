@@ -67,6 +67,17 @@ def locations() -> list[tuple[str, str]]:
 
 
 class NginxPerimeterTests(unittest.TestCase):
+    def test_desk_reads_are_exact_and_get_only(self) -> None:
+        expected = {
+            f"/api/trading/{name}" for name in ("accounts", "account", "positions", "orders")
+        }
+        published = {spec.split()[-1] for spec, _ in locations() if "/api/trading" in spec}
+        self.assertEqual(published, expected)
+        for path in expected:
+            body = next(body for spec, body in locations() if spec == f"= {path}")
+            self.assertEqual(re.findall(r"\$request_method\s*!=\s*(\w+)", body), ["GET"])
+            self.assertIn("return 404", body)
+
     def test_rearm_is_published_as_an_exact_path(self) -> None:
         exact = [spec for spec, _ in locations() if spec == f"= {REARM}"]
         self.assertEqual(

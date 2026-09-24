@@ -153,6 +153,9 @@ const SAMPLE_PARAMS: Readonly<Record<string, string>> = {
  * is what lets the assertion below actually check them.
  */
 const SAMPLE_QUERY: Readonly<Record<string, () => string>> = {
+  "/trading/account": () => "?account_id=manual",
+  "/trading/positions": () => "?account_id=manual",
+  "/trading/orders": () => "?account_id=manual",
   // `from` is relative to the real clock because the window ceiling is, and a
   // fixed date here would age into a 400 the day after it was written.
   "/polymarket/series": () =>
