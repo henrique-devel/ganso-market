@@ -178,13 +178,7 @@ export function maintenanceMargin(
  * No partial withdrawal: retain budget and realized PnL until entirely flat.
  * Raw ledger balance includes insolvency; free buckets do NOT absorb that debt.
  * Rounding residual explicitly reconciles per-position floors to account floor. */
-export function projectIsolatedMargin(
-  finance: MarginFinance,
-  events: readonly MarginEvent[],
-  mark: string | null,
-  meta: MarginMetadata | null,
-  asOf: string,
-) {
+export function projectMarginBasis(events: readonly MarginEvent[]) {
   const budgets = new Map<
     string,
     { allocated: bigint; charges: bigint; q: bigint; closed: boolean }
@@ -224,6 +218,37 @@ export function projectIsolatedMargin(
       else b.charges += BigInt(p.delta.raw) * SCALE;
     }
   }
+  return {
+    capital_usd14_raw: capital.toString(),
+    compatible,
+    positions: [...budgets].map(([position_id, b]) => ({
+      position_id,
+      allocated_usd14_raw: b.allocated.toString(),
+      charges_usd14_raw: b.charges.toString(),
+    })),
+  };
+}
+export type MarginBasis = ReturnType<typeof projectMarginBasis>;
+
+/** Values a durable basis without reading or replaying ledger events. */
+export function valueMarginBasis(
+  finance: MarginFinance,
+  basis: MarginBasis,
+  mark: string | null,
+  meta: MarginMetadata | null,
+  asOf: string,
+) {
+  const capital = BigInt(basis.capital_usd14_raw),
+    compatible = basis.compatible;
+  const budgets = new Map(
+    basis.positions.map((p) => [
+      p.position_id,
+      {
+        allocated: BigInt(p.allocated_usd14_raw),
+        charges: BigInt(p.charges_usd14_raw),
+      },
+    ]),
+  );
   const metadataValid = validMarginMetadata(meta, finance.ledger.scope, asOf);
   let allocated = 0n,
     released = 0n,
@@ -289,5 +314,20 @@ export function projectIsolatedMargin(
       (free + open - debt)
     ).toString(),
   };
+}
+export function projectIsolatedMargin(
+  finance: MarginFinance,
+  events: readonly MarginEvent[],
+  mark: string | null,
+  meta: MarginMetadata | null,
+  asOf: string,
+) {
+  return valueMarginBasis(
+    finance,
+    projectMarginBasis(events),
+    mark,
+    meta,
+    asOf,
+  );
 }
 export type IsolatedMargin = ReturnType<typeof projectIsolatedMargin>;

@@ -184,11 +184,20 @@ function validAmount(
     /^[1-9][0-9]{0,77}$/.test(value.raw)
   );
 }
+type ValuationQuality =
+  | "fresh"
+  | "missing"
+  | "incompatible"
+  | "future"
+  | "stale"
+  | "feed_unavailable"
+  | "source_time_unproven"
+  | "invalid";
 function quality(
   projection: FinancialProjection,
   market: ValuationMarket,
   kind: "book" | "context",
-) {
+): ValuationQuality {
   const row = market[kind],
     now = time(market.as_of),
     event = row?.payload;

@@ -24,12 +24,22 @@ const command = (...args: Parameters<typeof ledgerCommand>) =>
   ledgerCommand(args[0], args[1], args[2] ?? scope, args[3] ?? Date.now());
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
+// Latency assertions use a controlled application clock, independent of SQL/CI speed.
+let clockOverride: string | null = null;
 let hook: ((sql: string, tx: SqlExecutor) => Promise<void>) | null;
 const scope = ledgerScope(identity());
 const pool = {
   async transaction<T>(run: (tx: SqlExecutor) => Promise<T>) {
     const client = await fixture.pool.connect();
     try {
+      // Keep the database's real retention clock at/after the fixed app clock.
+      // A fast runner must not fabricate future durable evidence; this wait is
+      // at most the test's 170 ms latency, never an assertion about SQL speed.
+      if (clockOverride)
+        await client.query(
+          "SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp())))",
+          [clockOverride],
+        );
       await client.query("BEGIN");
       const tx: SqlExecutor = {
         async query(sql, params) {
@@ -39,7 +49,12 @@ const pool = {
               return { rows: r.rows, rowCount: r.rowCount ?? 0 };
             },
           });
-          const r = await client.query(sql, params ? [...params] : []);
+          const r =
+            clockOverride && sql === "SELECT clock_timestamp() AS now"
+              ? await client.query("SELECT $1::timestamptz AS now", [
+                  clockOverride,
+                ])
+              : await client.query(sql, params ? [...params] : []);
           return { rows: r.rows, rowCount: r.rowCount ?? 0 };
         },
       };
@@ -176,6 +191,7 @@ async function snapshot() {
 }
 describe.skipIf(!url)("S4 IOC atomic SQL", () => {
   beforeEach(async () => {
+    clockOverride = null;
     fixture = await createPgFixture(url);
     hook = null;
     captureSequence = 0;
@@ -251,9 +267,12 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     expect(await count("btc_ledger_events")).toBe(3);
   });
   it("waits for configured latency and never uses a pre-arrival book", async () => {
-    await apply(submit("o1", {}, 150));
+    const request = submit("o1", {}, 150);
+    if (request.action !== "submit") throw new Error("fixture");
+    clockOverride = request.intent.decision_at;
+    await apply(request);
     expect((await apply(execute())).status).toBe("waiting");
-    await fixture.pool.query("SELECT pg_sleep(0.17)");
+    clockOverride = iso(Date.parse(request.intent.decision_at) + 170);
     expect(await apply(execute())).toMatchObject({
       status: "cancelled",
       reason: "book_before_eligible_time",
@@ -261,10 +280,14 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     });
   });
   it("can retry a waiting operation with a newly observed eligible book", async () => {
-    await apply(submit("o1", {}, 120));
+    const request = submit("o1", {}, 120);
+    if (request.action !== "submit") throw new Error("fixture");
+    clockOverride = request.intent.decision_at;
+    await apply(request);
     expect((await apply(execute())).status).toBe("waiting");
-    await fixture.pool.query("SELECT pg_sleep(0.14)");
-    await capture();
+    const eligible = Date.parse(request.intent.decision_at) + 140;
+    clockOverride = iso(eligible);
+    await capture({ at: eligible });
     expect((await apply(execute())).fills).toHaveLength(1);
   });
   it.each(["stale", "unknown"])(

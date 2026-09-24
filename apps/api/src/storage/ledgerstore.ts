@@ -1,3 +1,4 @@
+import { buildDeskProjection } from "./desk-projection.js";
 import { observeRiskTx, readRiskTx, riskTransaction } from "./riskstore.js";
 import { requireRisk } from "../trading/risk.js";
 import type { TradingScope } from "@ganso-market/contracts/trading";
@@ -170,9 +171,13 @@ export async function appendLedgerBatchTx(
     );
   }
   await tx.query(
-    `INSERT INTO btc_ledger_projections(account_id,projection) VALUES($1,$2::jsonb)
-    ON CONFLICT(account_id) DO UPDATE SET projection=EXCLUDED.projection`,
-    [id, JSON.stringify(projection)],
+    `INSERT INTO btc_ledger_projections(account_id,projection,desk_projection) VALUES($1,$2::jsonb,$3::jsonb)
+    ON CONFLICT(account_id) DO UPDATE SET projection=EXCLUDED.projection,desk_projection=EXCLUDED.desk_projection`,
+    [
+      id,
+      JSON.stringify(projection),
+      JSON.stringify(buildDeskProjection(projection, [...history, ...next])),
+    ],
   );
   if (external) await observeRiskTx(tx, ledgerScope(identity));
   return { status: "appended" as const, events: next };
