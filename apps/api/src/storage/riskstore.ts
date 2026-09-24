@@ -355,11 +355,7 @@ export async function riskTransaction<T>(
         });
         await cancelIncreases(tx, scope.account_id, now);
       } else await observeRiskTx(tx, scope);
-      return {
-        error: inconsistent
-          ? new RiskRefusal("ACCOUNTING_INCONSISTENT")
-          : error,
-      };
+      return { error };
     }
   };
   const committedReads = {

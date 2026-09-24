@@ -353,7 +353,7 @@ describe.skipIf(!url)(
         "UPDATE btc_ledger_projections SET projection=jsonb_set(projection,'{cash_usd_raw}','\"1\"'::jsonb) WHERE account_id=$1",
         [scope.account_id],
       );
-      await expect(consume("exit")).rejects.toThrow("ACCOUNTING_INCONSISTENT");
+      await expect(consume("exit")).rejects.toThrow("PROJECTION_MISMATCH");
       expect((await state())!.state).toBe("HALTED");
       await applyReservation(f.poolAdapter, scope, {
         action: "release",
@@ -364,7 +364,7 @@ describe.skipIf(!url)(
       expect(
         (await orders()).find((o) => o.order.order_id === "exit")!.status,
       ).toBe("cancelled");
-      await expect(risk("rearm")).rejects.toThrow("ACCOUNTING_INCONSISTENT");
+      await expect(risk("rearm")).rejects.toThrow("PROJECTION_MISMATCH");
     });
     it("observed funding triggers the daily limit once, without waiting for an order", async () => {
       const { ledgerScope } = await import("../../src/trading/ledger.js");
