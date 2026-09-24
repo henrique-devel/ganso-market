@@ -1,3 +1,4 @@
+import { withRecovery } from "./recoverystore.js";
 import { observeRiskTx, readRiskTx } from "./riskstore.js";
 import { createHash } from "node:crypto";
 import {
@@ -27,7 +28,6 @@ import {
   readValuationMarketTx,
 } from "./valuationstore.js";
 import {
-  withBtcRetentionTransaction,
   storeRetentionObjectTx,
   pinRetentionObjectTx,
 } from "./btc-retention.js";
@@ -77,7 +77,11 @@ export async function liquidateIsolatedPosition(
   );
   const request = { ...input },
     scope = { ...scopeInput };
-  return withBtcRetentionTransaction(pool, async (tx) => {
+  return withRecovery(
+    pool,
+    scope,
+    true,
+  )(async (tx) => {
     const identity = await lockableLedgerAccountTx(tx, scope, true);
     const previous = (
       await tx.query(

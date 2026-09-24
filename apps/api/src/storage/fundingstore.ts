@@ -1,3 +1,4 @@
+import { withRecovery } from "./recoverystore.js";
 import { observeRiskTx, readRiskTx } from "./riskstore.js";
 import { createHash } from "node:crypto";
 import {
@@ -35,7 +36,6 @@ import {
   type LedgerCommand,
 } from "./ledger-contract.js";
 import {
-  withBtcRetentionTransaction,
   storeRetentionObjectTx,
   pinRetentionObjectTx,
 } from "./btc-retention.js";
@@ -113,7 +113,11 @@ export async function reconcileFunding(
   }
   const request: FundingCommand = JSON.parse(JSON.stringify(input)),
     scope = { ...scopeInput };
-  return withBtcRetentionTransaction(pool, async (tx) => {
+  return withRecovery(
+    pool,
+    scope,
+    true,
+  )(async (tx) => {
     const identity = await lockableLedgerAccountTx(tx, scope, true);
     const now = (
       await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")

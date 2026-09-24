@@ -332,19 +332,22 @@ describe.skipIf(!url)(
       expect(a.market_id).not.toBe(b.market_id);
       expect(a.after).toEqual(b.after);
     });
-    it("concurrent retries and reconstructed callers never duplicate fills/fees", async () => {
+    it("concurrent retries never duplicate fills/fees and a second worker is excluded", async () => {
       await seed();
       await capture();
       const [a, b, c] = await Promise.all([apply(), apply(), apply("another")]);
       expect(a).toEqual(b);
       expect(c.status).toBe("flat");
       const saved = await snapshot();
-      expect(
-        await liquidateIsolatedPosition(
+      await expect(
+        liquidateIsolatedPosition(
           { transaction: pool.transaction },
           { ...scope },
           { ...request() },
         ),
+      ).rejects.toThrow("BTC_RECOVERY_OWNED");
+      expect(
+        await liquidateIsolatedPosition(pool, { ...scope }, { ...request() }),
       ).toEqual(a);
       expect(await snapshot()).toEqual(saved);
     });

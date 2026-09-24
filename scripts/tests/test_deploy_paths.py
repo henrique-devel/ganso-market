@@ -82,6 +82,18 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_recovery_preserves_collector_and_selects_api_migration(self) -> None:
+        paths = [
+            "apps/api/src/storage/recoverystore.ts",
+            "apps/api/src/storage/recovery-audit.ts",
+            "apps/api/src/storage/riskstore.ts",
+            "apps/api/src/storage/fundingstore.ts",
+            "apps/api/src/storage/marginstore.ts",
+            "apps/api/test/trading/recovery.pg.test.ts",
+            "migrations/0038_btc_recovery.sql",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+
     def test_risk_selects_only_api_and_migration(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
