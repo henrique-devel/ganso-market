@@ -82,6 +82,21 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_risk_selects_only_api_and_migration(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/trading/risk.ts",
+                    "apps/api/src/storage/riskstore.ts",
+                    "apps/api/test/trading/risk.test.ts",
+                    "apps/api/test/trading/risk.pg.test.ts",
+                    "apps/api/test/trading/risk-fixture.ts",
+                    "migrations/0037_btc_risk.sql",
+                ]
+            ),
+            {"api", "migrate"},
+        )
+
     def test_isolated_margin_selects_only_api_and_migration(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(

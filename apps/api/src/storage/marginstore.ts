@@ -1,3 +1,4 @@
+import { observeRiskTx, readRiskTx } from "./riskstore.js";
 import { createHash } from "node:crypto";
 import {
   parseTradingAmount,
@@ -339,6 +340,7 @@ export async function liquidateIsolatedPosition(
         evidenceId,
       ],
     );
+    if (await readRiskTx(tx, scope.account_id)) await observeRiskTx(tx, scope);
     return result;
   });
 }

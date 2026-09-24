@@ -17,10 +17,18 @@ import {
 import { ledgerScope } from "../../src/trading/ledger.js";
 import { positionMargin } from "../../src/trading/reservations.js";
 import { createPgFixture } from "../pg-fixture.js";
-import { command, fill, identity, iso, usd } from "./ledger-fixture.js";
+import {
+  command as ledgerCommand,
+  fill,
+  identity,
+  iso,
+  usd,
+} from "./ledger-fixture.js";
 import { health, metadata } from "./bars-fixture.js";
 import { market, pricedFill } from "./valuation-fixture.js";
-import { order } from "./reservation-fixture.js";
+import { riskOrder as order, seedRiskFunding } from "./risk-fixture.js";
+const command = (...args: Parameters<typeof ledgerCommand>) =>
+  ledgerCommand(args[0], args[1], args[2] ?? scope, args[3] ?? Date.now());
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
 let failure: string | null = null;
@@ -56,14 +64,14 @@ const accept = (
 const take = (
   order_id = "order:1",
   operation_id = "fill:1",
-  quantity_btc_raw = "400000",
+  quantity_btc_raw = "40000",
 ): ReservationCommand => ({
   action: "consume",
   operation_id,
   order_id,
   quantity_btc_raw,
   price_usd_raw: "65000000000",
-  fee_usd_raw: "260000",
+  fee_usd_raw: "26000",
 });
 const apply = (r: ReservationCommand) => applyReservation(pool, scope, r);
 async function capture(quality = "fresh") {
@@ -103,6 +111,10 @@ async function capture(quality = "fresh") {
       ["capture", m.capture],
     ] as const) {
       const id = `synthetic:${kind}:${at}`;
+      await tx.query(
+        "SELECT pg_sleep(GREATEST(0,LEAST(0.1,extract(epoch FROM $1::timestamptz-clock_timestamp()))))",
+        [iso(at)],
+      );
       await storeRetentionObjectTx(tx, {
         id,
         class: "raw",
@@ -142,11 +154,12 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
     failure = null;
     await createLedgerAccount(pool, identity());
     await seedMarginMetadata(pool);
+    await seedRiskFunding(pool);
   });
   afterEach(async () => {
     await fixture?.dispose();
   });
-  it("serializes simultaneous orders that together exceed capital, including pending fees", async () => {
+  it("serializes simultaneous orders and preserves the single-entry policy", async () => {
     await capture();
     const attempts = await Promise.allSettled([
       apply(accept()),
@@ -157,7 +170,7 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
       attempts
         .filter((r) => r.status === "rejected")
         .map((r) => String(r.reason)),
-    ).toEqual([expect.stringContaining("MARGIN_UNAVAILABLE")]);
+    ).toEqual([expect.stringContaining("NO_PYRAMIDING")]);
     expect(
       (
         await fixture.pool.query(
@@ -173,12 +186,12 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
       apply(
         accept(
           order("fees", {
-            quantity_btc_raw: "100000",
+            quantity_btc_raw: "10000",
             price_cap_usd_raw: "349350000000",
           }),
         ),
       ),
-    ).rejects.toThrow("MARGIN_UNAVAILABLE");
+    ).rejects.toThrow("NO_PYRAMIDING");
     expect(await snapshot()).toEqual(before);
   });
   it("retries acceptance/consumption once and refuses collisions and foreign owners", async () => {
@@ -208,21 +221,18 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
   it("never borrows between experiments and scopes identical IDs to their owner", async () => {
     await capture();
     await createLedgerAccount(pool, identity("other"));
+    await seedRiskFunding(pool, ledgerScope(identity("other")));
     const other = ledgerScope(identity("other")),
       request = accept();
     await Promise.all([apply(request), applyReservation(pool, other, request)]);
-    await expect(apply(accept(order("more")))).rejects.toThrow(
-      "MARGIN_UNAVAILABLE",
-    );
+    await expect(apply(accept(order("more")))).rejects.toThrow("NO_PYRAMIDING");
     await applyReservation(pool, other, {
       action: "release",
       operation_id: "cancel",
       order_id: "order:1",
       reason: "cancelled",
     });
-    await expect(apply(accept(order("more")))).rejects.toThrow(
-      "MARGIN_UNAVAILABLE",
-    );
+    await expect(apply(accept(order("more")))).rejects.toThrow("NO_PYRAMIDING");
     await expect(applyReservation(pool, other, take())).rejects.toThrow(
       "ORDER_CLOSED",
     );
@@ -232,13 +242,13 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
     async (side) => {
       await appendLedgerBatch(pool, scope, {
         transaction_id: "initial",
-        events: [command("initial", pricedFill("initial", side))],
+        events: [command("initial", pricedFill("initial", side, "100000"))],
       });
       await capture("degraded");
       const a = order("a", {
         intent: "reduce",
         side: side === "buy" ? "sell" : "buy",
-        quantity_btc_raw: "600000",
+        quantity_btc_raw: "60000",
       });
       const results = await Promise.allSettled([
         apply(accept(a)),
@@ -251,14 +261,14 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
           .map((r) => String(r.reason)),
       ).toEqual([expect.stringContaining("INVENTORY_UNAVAILABLE")]);
       const winner = results[0]!.status === "fulfilled" ? "a" : "b";
-      await apply(take(winner, "partial", "400000"));
+      await apply(take(winner, "partial", "40000"));
       await expect(
         apply(
           accept(
             order("too-much", {
               ...a,
               order_id: "too-much",
-              quantity_btc_raw: "500000",
+              quantity_btc_raw: "50000",
             }),
           ),
         ),
@@ -270,14 +280,14 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
     await apply(accept());
     const b = await apply(take());
     expect(b.reservation).toMatchObject({
-      margin_usd_raw: "390000000",
-      fee_usd_raw: "390000",
-      remaining_btc_raw: "600000",
+      margin_usd_raw: "39000000",
+      fee_usd_raw: "39000",
+      remaining_btc_raw: "60000",
     });
     const f = await readLedgerValuation(pool, scope, iso(Date.now()));
-    expect(positionMargin(f)).toBe(260_000_000n);
-    expect(f.balance_usd_raw).toBe("999740000");
-    expect(f.ledger.positions[0]!.quantity_btc_raw).toBe("400000");
+    expect(positionMargin(f)).toBe(26_000_000n);
+    expect(f.balance_usd_raw).toBe("999974000");
+    expect(f.ledger.positions[0]!.quantity_btc_raw).toBe("40000");
     await apply({
       action: "release",
       operation_id: "cancel",
@@ -322,9 +332,7 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
       }),
     ).rejects.toThrow("NOT_EXPIRED");
     await new Promise((r) => setTimeout(r, 450));
-    await expect(apply(accept(order("b")))).rejects.toThrow(
-      "MARGIN_UNAVAILABLE",
-    );
+    await expect(apply(accept(order("b")))).rejects.toThrow("NO_PYRAMIDING");
     await expect(apply(take())).rejects.toThrow("EXPIRED");
     const expiry: ReservationCommand = {
       action: "release",
@@ -341,7 +349,7 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
     async (quality) => {
       if (quality !== "missing") await capture(quality);
       const before = await snapshot();
-      await expect(apply(accept())).rejects.toThrow("FINANCE_UNAVAILABLE");
+      await expect(apply(accept())).rejects.toThrow("REDUCE_ONLY");
       expect(await snapshot()).toEqual(before);
     },
   );
@@ -375,7 +383,7 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
       ],
     });
     const loss = await snapshot();
-    await expect(apply(take())).rejects.toThrow("MARGIN_UNAVAILABLE");
+    await expect(apply(take())).rejects.toThrow("ORDER_CLOSED");
     expect(await snapshot()).toEqual(loss);
   });
   it("takes the owner lock before any order lock; concurrent fill/cancel/accept terminate without deadlock", async () => {
@@ -396,7 +404,7 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
         order_id: "order:1",
         reason: "cancelled",
       }),
-      apply(accept(order("small", { quantity_btc_raw: "100000" }))),
+      apply(accept(order("small", { quantity_btc_raw: "10000" }))),
     ]).then((r) => {
       settled = true;
       return r;
@@ -423,10 +431,10 @@ describe.skipIf(!url)("S3 atomic reservations on real PostgreSQL", () => {
     const results = await running;
     expect(
       results.filter((r) => r.status === "fulfilled").length,
-    ).toBeGreaterThanOrEqual(2);
+    ).toBeGreaterThanOrEqual(1);
     for (const r of results)
       if (r.status === "rejected")
-        expect(String(r.reason)).toContain("ORDER_CLOSED");
+        expect(String(r.reason)).toMatch(/ORDER_CLOSED|NO_PYRAMIDING/);
     const latest = (
       await fixture.pool.query(
         "SELECT reservation FROM btc_reservation_events WHERE order_id='order:1' ORDER BY sequence DESC LIMIT 1",

@@ -16,10 +16,12 @@ import {
 } from "../../src/storage/btc-retention.js";
 import { ledgerScope } from "../../src/trading/ledger.js";
 import { createPgFixture } from "../pg-fixture.js";
-import { command, identity, iso } from "./ledger-fixture.js";
+import { command as ledgerCommand, identity, iso } from "./ledger-fixture.js";
 import { metadata } from "./bars-fixture.js";
 import { market, pricedFill } from "./valuation-fixture.js";
-import { order } from "./reservation-fixture.js";
+import { riskOrder as order, seedRiskFunding } from "./risk-fixture.js";
+const command = (...args: Parameters<typeof ledgerCommand>) =>
+  ledgerCommand(args[0], args[1], args[2] ?? scope, args[3] ?? Date.now());
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
 let hook: ((sql: string, tx: SqlExecutor) => Promise<void>) | null;
@@ -104,7 +106,7 @@ async function capture(
           decimals: 6,
           raw: options.price ?? "65100000000",
         },
-        quantity: { unit: "BTC", decimals: 8, raw: options.depth ?? "600000" },
+        quantity: { unit: "BTC", decimals: 8, raw: options.depth ?? "60000" },
         orders: 1,
       },
     ],
@@ -126,6 +128,10 @@ async function capture(
     ] as const) {
       const id = `fixture:${kind}:${++captureSequence}`;
       ids.push(id);
+      await tx.query(
+        "SELECT pg_sleep(GREATEST(0,LEAST(0.1,extract(epoch FROM $1::timestamptz-clock_timestamp()))))",
+        [iso(at)],
+      );
       await storeRetentionObjectTx(tx, {
         id,
         class: "raw",
@@ -175,6 +181,7 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     captureSequence = 0;
     await createLedgerAccount(pool, identity());
     await seedMarginMetadata(pool);
+    await seedRiskFunding(pool);
     await withBtcRetentionTransaction(pool, (tx) =>
       storeRetentionObjectTx(tx, {
         id: "fixture:metadata",
@@ -199,8 +206,8 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     expect(result.fills).toEqual([
       {
         price_usd_raw: "65100000000",
-        quantity_btc_raw: "600000",
-        fee_usd_raw: "175770",
+        quantity_btc_raw: "60000",
+        fee_usd_raw: "17577",
       },
     ]);
     expect(result.reservation).toMatchObject({
@@ -209,9 +216,9 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
       remaining_btc_raw: "0",
     });
     const v = await readLedgerValuation(pool, scope, iso(Date.now()));
-    expect(v.balance_usd_raw).toBe("999824230");
-    expect(v.positions[0]!.quantity_btc_raw).toBe("600000");
-    expect(v.positions[0]!.cost_usd14_raw).toBe("39060000000000000");
+    expect(v.balance_usd_raw).toBe("999982423");
+    expect(v.positions[0]!.quantity_btc_raw).toBe("60000");
+    expect(v.positions[0]!.cost_usd14_raw).toBe("3906000000000000");
     const deps = (
       await fixture.pool.query(
         "SELECT dependency_id FROM btc_retention_dependencies WHERE object_id=$1",
@@ -219,7 +226,7 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
       )
     ).rows.map((r) => r.dependency_id);
     expect(deps).toEqual(expect.arrayContaining(ids));
-    expect(await count("btc_retention_pins")).toBe(2);
+    expect(await count("btc_retention_pins")).toBe(3);
     const before = await snapshot();
     expect(await apply(execute())).toEqual(result);
     expect(await snapshot()).toEqual(before);
@@ -234,7 +241,7 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
   });
   it("fills full IOC and cancel afterward reports effective filled state", async () => {
     await apply(submit());
-    await capture({ depth: "2000000" });
+    await capture({ depth: "200000" });
     expect((await apply(execute())).status).toBe("filled");
     expect(await apply(cancel())).toMatchObject({
       status: "filled",
@@ -278,7 +285,7 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     await apply(submit());
     await capture({ context: "unknown" });
     expect((await apply(execute())).reason).toBe("finance_unavailable");
-    await expect(apply(submit("o2"))).rejects.toThrow("FINANCE_UNAVAILABLE");
+    await expect(apply(submit("o2"))).rejects.toThrow("REDUCE_ONLY");
   });
   it("expires during SQL processing and rolls back an already written fill/fee", async () => {
     await apply(submit("o1", { valid_until: iso(Date.now() + 350) }));
@@ -324,15 +331,21 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
   });
   it("serializes execution first against cancellation without reversing the fill", async () => {
     await apply(submit());
-    await capture({ depth: "1000000" });
+    await capture({ depth: "100000" });
     const results = await Promise.all([apply(execute()), apply(cancel())]);
     expect(results.every((r) => r.status === "filled")).toBe(true);
     expect(await count("btc_ledger_events")).toBe(3);
   });
   it("shares finite depth across competing same-account orders and retries", async () => {
-    await apply(submit("o1", { quantity_btc_raw: "600000" }));
-    await apply(submit("o2", { quantity_btc_raw: "600000" }));
-    await capture({ depth: "900000" });
+    await appendLedgerBatch(pool, scope, {
+      transaction_id: "seed",
+      events: [
+        command("seed", pricedFill("seed", "sell", "120000", "65100000000")),
+      ],
+    });
+    await apply(submit("o1", { quantity_btc_raw: "60000", intent: "reduce" }));
+    await apply(submit("o2", { quantity_btc_raw: "60000", intent: "reduce" }));
+    await capture({ depth: "90000" });
     const results = await Promise.all([
       apply(execute("o1")),
       apply(execute("o2")),
@@ -343,15 +356,16 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
       .slice(0, 2)
       .flatMap((r) => r.fills)
       .reduce((n, f) => n + BigInt(f.quantity_btc_raw), 0n);
-    expect(q).toBe(900000n);
+    expect(q).toBe(90000n);
     expect(results[0]!.book_key).toBe(results[1]!.book_key);
     expect(
       (await readLedgerValuation(pool, scope, iso(Date.now()))).balance_usd_raw,
-    ).toBe("999736345");
+    ).toBe("999973634");
   });
   it("makes independently funded alternate markets explicit", async () => {
     const other = ledgerScope(identity("alternate"));
     await createLedgerAccount(pool, identity("alternate"));
+    await seedRiskFunding(pool, other);
     await apply(submit());
     await applyIoc(pool, other, submit());
     await capture();
@@ -365,13 +379,13 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     await appendLedgerBatch(pool, scope, {
       transaction_id: "seed",
       events: [
-        command("seed", pricedFill("seed", "buy", "600000", "64000000000")),
+        command("seed", pricedFill("seed", "buy", "60000", "64000000000")),
       ],
     });
     const request = submit("o1", {
       intent: "reduce",
       side: "sell",
-      quantity_btc_raw: "600000",
+      quantity_btc_raw: "60000",
     });
     if (request.action !== "submit") throw new Error("fixture");
     request.intent.limit_price_usd_raw = "64900000000";
@@ -379,17 +393,17 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     await capture({ context: "unknown" });
     const r = await apply(execute());
     expect(r.status).toBe("filled");
-    expect(r.fills[0]!.fee_usd_raw).toBe("175230");
+    expect(r.fills[0]!.fee_usd_raw).toBe("17523");
     const v = await readLedgerValuation(pool, scope, iso(Date.now()));
     expect(v.positions[0]!.quantity_btc_raw).toBe("0");
-    expect(v.realized_pnl_usd_raw).toBe("5400000");
-    expect(v.balance_usd_raw).toBe("1005224770");
+    expect(v.realized_pnl_usd_raw).toBe("540000");
+    expect(v.balance_usd_raw).toBe("1000522477");
     await expect(
       apply(
         submit("o2", {
           intent: "reduce",
           side: "sell",
-          quantity_btc_raw: "100000",
+          quantity_btc_raw: "20000",
         }),
       ),
     ).rejects.toThrow("INVENTORY_UNAVAILABLE");
@@ -401,7 +415,7 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
         action: "consume",
         operation_id: "bypass",
         order_id: "o1",
-        quantity_btc_raw: "100000",
+        quantity_btc_raw: "20000",
         price_usd_raw: "65100000000",
         fee_usd_raw: "29295",
       }),
@@ -412,14 +426,14 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     await appendLedgerBatch(pool, scope, {
       transaction_id: "seed",
       events: [
-        command("seed", pricedFill("seed", "sell", "600000", "66000000000")),
+        command("seed", pricedFill("seed", "sell", "60000", "66000000000")),
       ],
     });
     await apply(
       submit("o1", {
         intent: "reduce",
         side: "buy",
-        quantity_btc_raw: "600000",
+        quantity_btc_raw: "60000",
       }),
     );
     await capture({ context: "unknown" });
@@ -427,8 +441,8 @@ describe.skipIf(!url)("S4 IOC atomic SQL", () => {
     expect(result.status).toBe("filled");
     const v = await readLedgerValuation(pool, scope, iso(Date.now()));
     expect(v.positions[0]!.quantity_btc_raw).toBe("0");
-    expect(v.realized_pnl_usd_raw).toBe("5400000");
-    expect(v.balance_usd_raw).toBe("1005224230");
+    expect(v.realized_pnl_usd_raw).toBe("540000");
+    expect(v.balance_usd_raw).toBe("1000522423");
   });
   it("rolls back ledger, reservation, depth and evidence on an insert failure", async () => {
     await apply(submit());

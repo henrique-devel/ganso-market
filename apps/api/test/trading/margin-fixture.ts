@@ -28,6 +28,10 @@ export async function seedMarginMetadata(
 ) {
   const id = `fixture:margin-metadata:${at}`;
   await withBtcRetentionTransaction(pool, async (tx) => {
+    await tx.query(
+      "SELECT pg_sleep(GREATEST(0,LEAST(0.1,extract(epoch FROM $1::timestamptz-clock_timestamp()))))",
+      [iso(at)],
+    );
     await storeRetentionObjectTx(tx, {
       id,
       class: "raw",

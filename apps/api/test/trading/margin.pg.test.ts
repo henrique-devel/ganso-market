@@ -25,7 +25,7 @@ import { ledgerScope } from "../../src/trading/ledger.js";
 import { createPgFixture } from "../pg-fixture.js";
 import { command, identity, iso, usd } from "./ledger-fixture.js";
 import { market, pricedFill } from "./valuation-fixture.js";
-import { order } from "./reservation-fixture.js";
+import { riskOrder as order, seedRiskFunding } from "./risk-fixture.js";
 import { seedMarginMetadata, marginMetadata } from "./margin-fixture.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
@@ -404,8 +404,9 @@ describe.skipIf(!url)(
       expect(r.after.positions[0]!.residual_usd_raw).toBe("19433000");
       expect(r.after.free_cash_usd_raw).toBe("379433000");
     });
-    it("cancels reservations of the liquidated position atomically, preserving others", async () => {
+    it("cancels reservations of the liquidated position atomically, preserving other reduce-only exits", async () => {
       await seed();
+      await seed("sell", scope, "other", "0", Date.now() - 1900, "100000");
       await capture({
         mark: "64000000000",
         bid: "63900000000",
@@ -425,7 +426,9 @@ describe.skipIf(!url)(
         action: "reserve",
         operation_id: "reserve-other",
         order: order("other", {
-          position_id: "new",
+          position_id: "other",
+          intent: "reduce",
+          side: "buy",
           quantity_btc_raw: "100000",
         }),
       });
@@ -440,16 +443,19 @@ describe.skipIf(!url)(
       expect(
         reservations.find((r) => r.order.order_id === "other")!.status,
       ).toBe("active");
-      await expect(
-        applyReservation(pool, scope, {
-          action: "consume",
-          operation_id: "late",
-          order_id: "other",
-          quantity_btc_raw: "100000",
-          price_usd_raw: "65000000000",
-          fee_usd_raw: "0",
-        }),
-      ).rejects.toThrow("INSOLVENT_POSITION");
+      await applyReservation(pool, scope, {
+        action: "consume",
+        operation_id: "late",
+        order_id: "other",
+        quantity_btc_raw: "100000",
+        price_usd_raw: "65000000000",
+        fee_usd_raw: "0",
+      });
+      expect(
+        (await readLedgerAccount(pool, scope)).projection.positions.find(
+          (p) => p.position_id === "other",
+        )!.quantity_btc_raw,
+      ).toBe("0");
     });
     it.each(["missing", "old", "version"])(
       "blocks opening without usable %s margin metadata",
@@ -484,6 +490,7 @@ describe.skipIf(!url)(
       },
     );
     it("rechecks metadata on fill after a valid acceptance", async () => {
+      await seedRiskFunding(pool);
       await capture({ mark: "64000000000" });
       await applyReservation(pool, scope, {
         action: "reserve",
@@ -499,8 +506,8 @@ describe.skipIf(!url)(
           action: "consume",
           operation_id: "fill",
           order_id: "order:1",
-          quantity_btc_raw: "1000000",
-          price_usd_raw: "64000000000",
+          quantity_btc_raw: "100000",
+          price_usd_raw: "65000000000",
           fee_usd_raw: "0",
         }),
       ).rejects.toThrow("METADATA_UNAVAILABLE");
