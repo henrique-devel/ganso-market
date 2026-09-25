@@ -264,6 +264,47 @@ describe.skipIf(!url)(
           .quantity_btc_raw,
       ).toBe("50000");
     });
+    it("creates the first real CLI identity atomically and repeats without reallocating genesis", async () => {
+      const fresh = await acceptanceFixture(url, () => now);
+      try {
+        const worker = fresh.worker();
+        await seedMarginMetadata(worker.pool);
+        await fresh.pool.query(
+          "INSERT INTO auth_accounts(username,password_hash) VALUES('activation-owner','fixture-only')",
+        );
+        const a = await activateManualDesk(
+          worker.pool,
+          "activation-owner",
+          "ioc",
+        );
+        const b = await activateManualDesk(
+          worker.pool,
+          "activation-owner",
+          "ioc",
+        );
+        expect(a.account_id).toBe("manual");
+        expect(b.genesis).toBe("duplicate");
+        const rows = await fresh.pool.query(
+          "SELECT identity FROM btc_ledger_accounts",
+        );
+        expect(rows.rows).toHaveLength(1);
+        const ledger = await readLedgerAccount(
+          worker.pool,
+          ledgerScope(rows.rows[0].identity),
+        );
+        expect(ledger.projection.cash_usd_raw).toBe("1000000000");
+        expect(ledger.events).toHaveLength(1);
+        expect(
+          (
+            await fresh.pool.query(
+              "SELECT enabled,broker FROM btc_desk_controls",
+            )
+          ).rows,
+        ).toEqual([{ enabled: true, broker: "ioc" }]);
+      } finally {
+        await fresh.dispose();
+      }
+    });
     it("funding poll skips settled hours and does not fabricate a settlement oracle", async () => {
       const fetch = vi.fn();
       await fundDeskAccount(pool, "manual", fetch);
