@@ -40,6 +40,7 @@ const tables = [
   "btc_funding_results",
   "btc_margin_results",
   "btc_risk_events",
+  "btc_desk_exits",
 ] as const;
 const receipts = [
   "btc_ioc_results",

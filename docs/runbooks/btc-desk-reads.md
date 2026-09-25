@@ -1,5 +1,8 @@
 # Consultas da mesa BTC paper
 
+Operação e ativação G2-06.3: [ticket manual e consumidor](btc-manual-ticket.md).
+As referências à ausência do consumidor abaixo descrevem o rollout original.
+
 Contrato `trading.desk.v1` (G2-06.1). Usa a sessão Bearer do owner e o perímetro
 HTTP existente. Respostas têm `Cache-Control: no-store`, `SIMULAÇÃO`, `mode: paper`,
 `as_of` UTC e unidades explícitas; dinheiro/quantidade/preço são inteiros decimais

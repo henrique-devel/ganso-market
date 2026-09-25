@@ -91,7 +91,17 @@ def affected_services(paths: list[str]) -> set[str]:
             selected.add(Path(path).stem)
         elif path.startswith("apps/api/src/polymarket/"):
             selected.update({"api", *LEGACY})
+        elif path == "packages/contracts/src/trading/desk.ts":
+            selected.update({"api", "web"})
         elif path in {
+            "apps/api/src/main.ts",
+            "apps/api/src/desk-activate-cli.ts",
+            "apps/api/src/trading-readapi.ts",
+            "apps/api/src/storage/desk-commandstore.ts",
+            "apps/api/src/storage/desk-consumer.ts",
+            "apps/api/src/storage/desk-worker.ts",
+            "apps/api/test/trading/desk-consumer.pg.test.ts",
+            "apps/api/test/trading/commands.pg.test.ts",
             "apps/api/src/storage/recoverystore.ts",
             "apps/api/src/storage/recovery-audit.ts",
             "apps/api/test/trading/recovery.pg.test.ts",

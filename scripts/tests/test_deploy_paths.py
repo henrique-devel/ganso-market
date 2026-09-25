@@ -82,6 +82,23 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_manual_ticket_preserves_running_collector(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services([
+                "apps/api/src/main.ts",
+                "apps/api/src/desk-activate-cli.ts",
+                "apps/api/src/storage/desk-consumer.ts",
+                "apps/api/src/storage/desk-commandstore.ts",
+                "apps/api/src/storage/desk-worker.ts",
+                "apps/api/src/trading-readapi.ts",
+                "apps/api/test/trading/desk-consumer.pg.test.ts",
+                "packages/contracts/src/trading/desk.ts",
+                "apps/web/src/BtcDesk.tsx",
+                "migrations/0041_btc_desk_runtime.sql",
+            ]),
+            {"api", "web", "migrate"},
+        )
+
     def test_financial_acceptance_only_selects_api(self) -> None:
         paths = [
             "apps/api/src/storage/recovery-audit.ts",

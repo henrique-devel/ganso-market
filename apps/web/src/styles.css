@@ -218,6 +218,7 @@ h1 {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin: 0 0 1.5rem;
 }
