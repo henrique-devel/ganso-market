@@ -104,6 +104,7 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/src/trading-readapi.ts",
             "apps/api/src/storage/desk-history.ts",
             "apps/api/test/trading/desk.test.ts",
+            "apps/api/test/route-budgets.runtime.test.ts",
             "apps/api/test/trading/desk.pg.test.ts",
             "apps/api/src/storage/desk-commandstore.ts",
             "apps/api/src/storage/desk-consumer.ts",

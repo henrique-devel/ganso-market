@@ -189,6 +189,7 @@ class ServerUpdateTests(unittest.TestCase):
                 [
                     "apps/api/src/storage/desk-history.ts",
                     "apps/api/test/trading/desk.test.ts",
+                    "apps/api/test/route-budgets.runtime.test.ts",
                     "apps/api/test/trading/desk.pg.test.ts",
                     "packages/contracts/src/trading/history.ts",
                     "migrations/0042_btc_operation_reads.sql",
