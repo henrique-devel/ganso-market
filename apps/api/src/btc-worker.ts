@@ -133,13 +133,9 @@ export async function runBtcWorker() {
         hold: retention.hold,
       };
     }
-    const checkedCapacity = () =>
-      observe("capacity", async () => {
-        const sample = await capacity();
-        assertCollectorCapacity(sample);
-        return sample;
-      });
-    await checkedCapacity();
+    await observe("capacity", async () => {
+      assertCollectorCapacity(await capacity());
+    });
     const adapter = createHyperliquidPublicAdapter();
     let metadata = await observe("metadata", () => adapter.getBtcMetadata());
     if (stopRequested) return;
@@ -149,7 +145,7 @@ export async function runBtcWorker() {
       sessionId: randomUUID(),
       metadata: () => metadata,
       now: () => new Date().toISOString(),
-      capacity: checkedCapacity,
+      capacity: () => observe("capacity", capacity),
       capture: (batch) =>
         observe("capture", () => captureBtcMarketBatch(pool, batch, true)),
       closeBars: (at) =>
