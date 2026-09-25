@@ -87,7 +87,11 @@ def affected_services(paths: list[str]) -> set[str]:
     for path in paths:
         if is_text_path(path):
             continue
-        if path.startswith(("apps/api/src/btc-worker", "apps/api/src/btc/", "config/btc-worker")):
+        if path.startswith(("apps/api/src/btc-worker", "apps/api/src/btc/", "config/btc-worker")) or path in {
+            "apps/api/test/btc-worker.test.ts",
+            "apps/api/test/btc-worker-runtime.test.ts",
+            "apps/api/test/btc-runtime-diagnostics.test.ts",
+        }:
             selected.add("btc-worker")
         elif any(path == f"apps/api/src/{name}.ts" for name in LEGACY):
             selected.add(Path(path).stem)
