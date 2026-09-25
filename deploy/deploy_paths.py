@@ -101,6 +101,13 @@ def affected_services(paths: list[str]) -> set[str]:
         elif path in {
             "config/trading/baseline.json",
             "apps/api/src/storage/baseline-manifest.ts",
+            "apps/api/src/trading/strategies/baseline.ts",
+            "apps/api/src/storage/baseline-inputs.ts",
+            "apps/api/src/storage/baseline-policy.ts",
+            "apps/api/src/storage/baseline-exits.ts",
+            "apps/api/test/trading/baseline-fixture.ts",
+            "apps/api/test/trading/baseline-policy.test.ts",
+            "apps/api/test/trading/baseline-exits.test.ts",
             "apps/api/test/trading/baseline-manifest.test.ts",
             "apps/api/src/main.ts",
             "apps/api/src/desk-activate-cli.ts",
