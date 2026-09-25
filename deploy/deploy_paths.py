@@ -99,6 +99,9 @@ def affected_services(paths: list[str]) -> set[str]:
         }:
             selected.update({"api", "web"})
         elif path in {
+            "config/trading/baseline.json",
+            "apps/api/src/storage/baseline-manifest.ts",
+            "apps/api/test/trading/baseline-manifest.test.ts",
             "apps/api/src/main.ts",
             "apps/api/src/desk-activate-cli.ts",
             "apps/api/src/trading-readapi.ts",

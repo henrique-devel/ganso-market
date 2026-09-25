@@ -82,6 +82,18 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_inactive_baseline_contract_preserves_collector(self) -> None:
+        paths = [
+            "config/trading/baseline.json",
+            "apps/api/src/storage/baseline-manifest.ts",
+            "apps/api/test/trading/baseline-manifest.test.ts",
+            "docs/contracts/btc-baseline-manifest-v1.md",
+            "deploy/deploy_paths.py",
+            "scripts/tests/test_deploy_paths.py",
+        ]
+        self.assertTrue(deploy_paths.classify(paths)[0])
+        self.assertEqual(deploy_paths.affected_services(paths), {"api"})
+
     def test_manual_ticket_preserves_running_collector(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
