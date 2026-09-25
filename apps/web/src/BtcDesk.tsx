@@ -17,6 +17,7 @@ import {
   TicketError,
   type PendingTicket,
 } from "./btc-ticket.js";
+import { AccountCondition, reasonLabel } from "./BtcOperations.tsx";
 import "./btc-desk.css";
 const storage = "ganso.manual.pending.v1";
 const saved = (): PendingTicket | null => {
@@ -37,8 +38,10 @@ const quality = (q: string | undefined) =>
 export function BtcDesk({
   accessToken,
   onUnauthorized,
+  accountId = "manual",
 }: {
   accessToken: string;
+  accountId?: string;
   onUnauthorized: () => void;
 }) {
   const [account, setAccount] = useState<DeskAccountView | null>(null),
@@ -79,15 +82,21 @@ export function BtcDesk({
           if (!r.ok)
             throw new Error(
               r.status === 404
-                ? "Conta manual ainda não ativada."
+                ? "Conta ainda não disponível."
                 : "Leitura indisponível. Aguarde a atualização.",
             );
           return r.json() as Promise<T>;
         };
         const [a, o, p] = await Promise.all([
-          get<DeskAccountView>("account?account_id=manual"),
-          get<DeskPage<DeskOrder>>("orders?account_id=manual&limit=100"),
-          get<DeskPage<DeskPosition>>("positions?account_id=manual&limit=100"),
+          get<DeskAccountView>(
+            `account?account_id=${encodeURIComponent(accountId)}`,
+          ),
+          get<DeskPage<DeskOrder>>(
+            `orders?account_id=${encodeURIComponent(accountId)}&limit=100`,
+          ),
+          get<DeskPage<DeskPosition>>(
+            `positions?account_id=${encodeURIComponent(accountId)}&limit=100`,
+          ),
         ]);
         if (alive) {
           setAccount(a);
@@ -112,7 +121,7 @@ export function BtcDesk({
       alive = false;
       clearTimeout(timer);
     };
-  }, [accessToken, onUnauthorized, revision]);
+  }, [accessToken, onUnauthorized, revision, accountId]);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -140,7 +149,7 @@ export function BtcDesk({
   const operational =
     !!ticket?.enabled && !!ticket.consumer_ready && freshRead && !readError;
   const transact = async (command?: DeskCommand) => {
-    if (inFlight.current) return;
+    if (inFlight.current || accountId !== "manual") return;
     inFlight.current = true;
     setBusy(true);
     setMessage("");
@@ -160,7 +169,9 @@ export function BtcDesk({
     } catch (e) {
       setPreview(null);
       setMessage(
-        e instanceof TicketError ? `Prévia recusada: ${e.code}` : String(e),
+        e instanceof TicketError
+          ? `Prévia recusada · ${reasonLabel(e.code)}: ${e.code}`
+          : String(e),
       );
       if (e instanceof TicketError && e.code === "AUTH_UNAUTHENTICATED")
         onUnauthorized();
@@ -201,7 +212,7 @@ export function BtcDesk({
       setPreview(null);
       if (e instanceof TicketError) {
         setMessage(
-          `${e.ambiguous ? "Resultado indeterminado. Verifique/reenvie a mesma intenção." : "Comando recusado"}: ${e.code}`,
+          `${e.ambiguous ? "Resultado indeterminado. Verifique/reenvie a mesma intenção." : "Comando recusado"} · ${reasonLabel(e.code)}: ${e.code}`,
         );
         if (e.ambiguous || pending.ambiguous) {
           const uncertain = { ...attempted, ambiguous: true };
@@ -282,8 +293,8 @@ export function BtcDesk({
   return (
     <section className="btc-desk" aria-label="Mesa BTC simulada">
       <header>
-        <p className="btc-badge">SIMULAÇÃO · MANUAL</p>
-        <h2>Ticket BTC / USD</h2>
+        <p className="btc-badge">SIMULAÇÃO · {accountId}</p>
+        <h2>Mesa BTC / USD</h2>
         <p>
           Fonte real: Hyperliquid mainnet · saldo exclusivamente fictício ·
           margem isolada 1×
@@ -315,6 +326,7 @@ export function BtcDesk({
           {age(ticket?.consumer_at)} {ticket?.consumer_reason}
         </span>
       </div>
+      <AccountCondition account={account} />
       {readError && <p role="alert">{readError}</p>}
       <div className="btc-balances">
         <p>
@@ -332,217 +344,225 @@ export function BtcDesk({
           </strong>
         </p>
       </div>
-      <div className="btc-columns">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-        >
-          <fieldset disabled={busy || !!pending}>
-            <legend>Nova ordem simulada</legend>
-            <label>
-              Lado
-              <select
-                value={side}
-                onChange={(e) => setSide(e.target.value as "buy" | "sell")}
-              >
-                <option value="buy">Comprar / abrir long</option>
-                <option value="sell">Vender / abrir short</option>
-              </select>
-            </label>
-            <label>
-              Tipo
-              <select value={ticket?.broker ?? "ioc"} disabled>
-                <option value="ioc">
-                  Limite IOC · executa e cancela o restante
-                </option>
-                <option value="passive">Limite passiva · fila observada</option>
-              </select>
-            </label>
-            <small>
-              Regime fixo desta conta; cenários não compartilham capital.
-            </small>
-            <label>
-              Informar por
-              <select value={unit} onChange={(e) => setUnit(e.target.value)}>
-                <option>BTC</option>
-                <option value="USD">Nocional USD</option>
-              </select>
-            </label>
-            <label>
-              {unit === "BTC"
-                ? "Quantidade BTC"
-                : "Nocional USD (arredonda para baixo)"}
-              <input
-                inputMode="decimal"
-                value={size}
-                onChange={(e) => setSize(e.target.value)}
-                required
-              />
-            </label>
-            <button type="button" onClick={reference} disabled={!freshRead}>
-              Usar referência do livro
-            </button>
-            <label>
-              Preço limite USD (compra: teto; venda: piso)
-              <input
-                inputMode="decimal"
-                value={limit}
-                onChange={(e) => setLimit(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Teto de preço para reserva e execução USD
-              <input
-                inputMode="decimal"
-                value={cap}
-                onChange={(e) => setCap(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Piso planejado da entrada USD
-              <input
-                inputMode="decimal"
-                value={floor}
-                onChange={(e) => setFloor(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Stop de proteção USD
-              <input
-                inputMode="decimal"
-                value={stop}
-                onChange={(e) => setStop(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Validade
-              <select
-                value={seconds}
-                onChange={(e) => setSeconds(e.target.value)}
-              >
-                <option value="30">30 segundos</option>
-                <option value="60">1 minuto</option>
-                <option value="300">5 minutos</option>
-                <option value="3600">1 hora</option>
-              </select>
-            </label>
-            <p>
-              Exposição até 25%; risco planejado até 0,25%; pausa diária em 1,5%
-              e drawdown em 5%. Stop depende de livro válido e pode sofrer
-              slippage.
-            </p>
-            <button
-              disabled={!operational || !bookFresh || !markFresh || !!pending}
-              type="submit"
-            >
-              Calcular prévia
-            </button>
-          </fieldset>
-        </form>
-        <aside className="btc-preview" aria-label="Prévia da intenção">
-          <h3>Prévia e confirmação</h3>
-          {pending &&
-            (pending.command.action === "submit" ||
-              pending.command.action === "close") && (
+      {accountId === "manual" && (
+        <div className="btc-columns">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit();
+            }}
+          >
+            <fieldset disabled={busy || !!pending}>
+              <legend>Nova ordem simulada</legend>
+              <label>
+                Lado
+                <select
+                  value={side}
+                  onChange={(e) => setSide(e.target.value as "buy" | "sell")}
+                >
+                  <option value="buy">Comprar / abrir long</option>
+                  <option value="sell">Vender / abrir short</option>
+                </select>
+              </label>
+              <label>
+                Tipo
+                <select value={ticket?.broker ?? "ioc"} disabled>
+                  <option value="ioc">
+                    Limite IOC · executa e cancela o restante
+                  </option>
+                  <option value="passive">
+                    Limite passiva · fila observada
+                  </option>
+                </select>
+              </label>
+              <small>
+                Regime fixo desta conta; cenários não compartilham capital.
+              </small>
+              <label>
+                Informar por
+                <select value={unit} onChange={(e) => setUnit(e.target.value)}>
+                  <option>BTC</option>
+                  <option value="USD">Nocional USD</option>
+                </select>
+              </label>
+              <label>
+                {unit === "BTC"
+                  ? "Quantidade BTC"
+                  : "Nocional USD (arredonda para baixo)"}
+                <input
+                  inputMode="decimal"
+                  value={size}
+                  onChange={(e) => setSize(e.target.value)}
+                  required
+                />
+              </label>
+              <button type="button" onClick={reference} disabled={!freshRead}>
+                Usar referência do livro
+              </button>
+              <label>
+                Preço limite USD (compra: teto; venda: piso)
+                <input
+                  inputMode="decimal"
+                  value={limit}
+                  onChange={(e) => setLimit(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Teto de preço para reserva e execução USD
+                <input
+                  inputMode="decimal"
+                  value={cap}
+                  onChange={(e) => setCap(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Piso planejado da entrada USD
+                <input
+                  inputMode="decimal"
+                  value={floor}
+                  onChange={(e) => setFloor(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Stop de proteção USD
+                <input
+                  inputMode="decimal"
+                  value={stop}
+                  onChange={(e) => setStop(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Validade
+                <select
+                  value={seconds}
+                  onChange={(e) => setSeconds(e.target.value)}
+                >
+                  <option value="30">30 segundos</option>
+                  <option value="60">1 minuto</option>
+                  <option value="300">5 minutos</option>
+                  <option value="3600">1 hora</option>
+                </select>
+              </label>
               <p>
-                Limite US$ {displayRaw(pending.command.limit_price_usd_raw)} ·
-                teto US$ {displayRaw(pending.command.price_cap_usd_raw)} ·
-                válida até{" "}
-                {new Date(pending.command.valid_until).toLocaleTimeString(
-                  "pt-BR",
-                )}
-              </p>
-            )}
-          {pending && (
-            <p>
-              {pending.command.action === "submit"
-                ? pending.command.side === "buy"
-                  ? "Comprar"
-                  : "Vender"
-                : pending.command.action === "close"
-                  ? "Encerrar posição"
-                  : pending.command.action === "cancel"
-                    ? "Cancelar ordem"
-                    : "Pausar novas exposições"}{" "}
-              · conta manual
-            </p>
-          )}
-          {preview?.estimate && (
-            <dl>
-              <dt>Quantidade</dt>
-              <dd>{displayRaw(preview.estimate.quantity_btc_raw, 8)} BTC</dd>
-              <dt>Nocional máximo</dt>
-              <dd>
-                US$ {displayRaw(preview.estimate.maximum_notional_usd_raw)}
-              </dd>
-              <dt>Margem reservada</dt>
-              <dd>
-                US$ {displayRaw(preview.estimate.reserved_margin_usd_raw)}
-              </dd>
-              <dt>Reserva de taxas</dt>
-              <dd>US$ {displayRaw(preview.estimate.reserved_fees_usd_raw)}</dd>
-              <dt>Risco / dados</dt>
-              <dd>
-                {preview.estimate.risk_state ?? "a validar"} · marca{" "}
-                {quality(preview.estimate.mark_quality)} · livro{" "}
-                {quality(preview.estimate.book_quality)}
-              </dd>
-            </dl>
-          )}
-          {preview && (
-            <>
-              <p>
-                Taxa pública base, sem descontos. Prévia válida até{" "}
-                {new Date(preview.expires_at).toLocaleTimeString("pt-BR")}.
+                Exposição até 25%; risco planejado até 0,25%; pausa diária em
+                1,5% e drawdown em 5%. Stop depende de livro válido e pode
+                sofrer slippage.
               </p>
               <button
-                disabled={busy || now >= Date.parse(preview.expires_at)}
-                onClick={() => void confirm()}
+                disabled={!operational || !bookFresh || !markFresh || !!pending}
+                type="submit"
               >
-                Confirmar simulação
+                Calcular prévia
               </button>
-            </>
-          )}
-          {pending && (
-            <button disabled={busy} onClick={() => void transact()}>
-              Verificar / repetir a mesma intenção
-            </button>
-          )}
-          {pending && !pending.attempted && (
+            </fieldset>
+          </form>
+          <aside className="btc-preview" aria-label="Prévia da intenção">
+            <h3>Prévia e confirmação</h3>
+            {pending &&
+              (pending.command.action === "submit" ||
+                pending.command.action === "close") && (
+                <p>
+                  Limite US$ {displayRaw(pending.command.limit_price_usd_raw)} ·
+                  teto US$ {displayRaw(pending.command.price_cap_usd_raw)} ·
+                  válida até{" "}
+                  {new Date(pending.command.valid_until).toLocaleTimeString(
+                    "pt-BR",
+                  )}
+                </p>
+              )}
+            {pending && (
+              <p>
+                {pending.command.action === "submit"
+                  ? pending.command.side === "buy"
+                    ? "Comprar"
+                    : "Vender"
+                  : pending.command.action === "close"
+                    ? "Encerrar posição"
+                    : pending.command.action === "cancel"
+                      ? "Cancelar ordem"
+                      : "Pausar novas exposições"}{" "}
+                · conta manual
+              </p>
+            )}
+            {preview?.estimate && (
+              <dl>
+                <dt>Quantidade</dt>
+                <dd>{displayRaw(preview.estimate.quantity_btc_raw, 8)} BTC</dd>
+                <dt>Nocional máximo</dt>
+                <dd>
+                  US$ {displayRaw(preview.estimate.maximum_notional_usd_raw)}
+                </dd>
+                <dt>Margem reservada</dt>
+                <dd>
+                  US$ {displayRaw(preview.estimate.reserved_margin_usd_raw)}
+                </dd>
+                <dt>Reserva de taxas</dt>
+                <dd>
+                  US$ {displayRaw(preview.estimate.reserved_fees_usd_raw)}
+                </dd>
+                <dt>Risco / dados</dt>
+                <dd>
+                  {preview.estimate.risk_state ?? "a validar"} · marca{" "}
+                  {quality(preview.estimate.mark_quality)} · livro{" "}
+                  {quality(preview.estimate.book_quality)}
+                </dd>
+              </dl>
+            )}
+            {preview && (
+              <>
+                <p>
+                  Taxa pública base, sem descontos. Prévia válida até{" "}
+                  {new Date(preview.expires_at).toLocaleTimeString("pt-BR")}.
+                </p>
+                <button
+                  disabled={busy || now >= Date.parse(preview.expires_at)}
+                  onClick={() => void confirm()}
+                >
+                  Confirmar simulação
+                </button>
+              </>
+            )}
+            {pending && (
+              <button disabled={busy} onClick={() => void transact()}>
+                Verificar / repetir a mesma intenção
+              </button>
+            )}
+            {pending && !pending.attempted && (
+              <button
+                disabled={busy}
+                onClick={() => {
+                  setPending(null);
+                  setPreview(null);
+                }}
+              >
+                Descartar prévia
+              </button>
+            )}
+            <p role="status" aria-live="polite">
+              {message}
+            </p>
             <button
-              disabled={busy}
-              onClick={() => {
-                setPending(null);
-                setPreview(null);
-              }}
+              disabled={busy || !!pending}
+              onClick={() =>
+                void transact({ account_id: "manual", action: "pause" })
+              }
             >
-              Descartar prévia
+              Pausar novas exposições
             </button>
-          )}
-          <p role="status" aria-live="polite">
-            {message}
-          </p>
-          <button
-            disabled={busy || !!pending}
-            onClick={() =>
-              void transact({ account_id: "manual", action: "pause" })
-            }
-          >
-            Pausar novas exposições
-          </button>
-        </aside>
-      </div>
+          </aside>
+        </div>
+      )}
       <h3>Posições e saída</h3>
-      <p>
-        Para encerrar, preencha preço limite, teto de proteção e validade no
-        ticket. A saída reduz a posição existente.
-      </p>
+      {accountId === "manual" && (
+        <p>
+          Para encerrar, preencha preço limite, teto de proteção e validade no
+          ticket. A saída reduz a posição existente.
+        </p>
+      )}
       <div className="btc-table">
         <table>
           <thead>
@@ -560,15 +580,17 @@ export function BtcDesk({
                 <td>{displayRaw(p.quantity_btc_raw, 8)}</td>
                 <td>{displayRaw(p.collateral_usd_raw)}</td>
                 <td>
-                  {p.quantity_btc_raw !== "0" ? (
+                  {p.quantity_btc_raw !== "0" && accountId === "manual" ? (
                     <button
                       disabled={!operational || busy || !!pending}
                       onClick={() => close(p)}
                     >
                       Encerrar
                     </button>
-                  ) : (
+                  ) : p.quantity_btc_raw === "0" ? (
                     "Encerrada"
+                  ) : (
+                    "Somente leitura"
                   )}
                 </td>
               </tr>
@@ -614,7 +636,7 @@ export function BtcDesk({
                   }
                 </td>
                 <td>
-                  {o.status === "active" && (
+                  {o.status === "active" && accountId === "manual" && (
                     <button
                       disabled={busy || !!pending}
                       onClick={() =>

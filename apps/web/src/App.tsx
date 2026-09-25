@@ -1,4 +1,4 @@
-import { BtcDesk } from "./BtcDesk.tsx";
+import { BtcWorkspace } from "./BtcOperations.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -206,13 +206,8 @@ export function LoginPanel({
   );
 }
 
-// RFC-026 D5: seis telas, teclas 1–6, faixa fixa acima de todas.
-//
-// A `4` fica reservada à tela Sombra da RFC-029 e aparece desabilitada em vez
-// de ausente: uma tecla que não faz nada e não se explica é lida como defeito,
-// e renumerar depois moveria as outras cinco debaixo dos dedos de quem opera.
 type Tela =
-  "btc" | "mesa" | "carteira" | "decisoes" | "sombra" | "resolucao" | "sistema";
+  "mesa" | "carteira" | "decisoes" | "sombra" | "resolucao" | "sistema";
 
 export interface Aba {
   readonly chave: Tela;
@@ -222,15 +217,7 @@ export interface Aba {
   readonly nota?: string;
 }
 
-/**
- * Exportado para que a lista de abas seja verificável, e não só visível.
- *
- * A `4` ficou desabilitada de 2026-09-05 a 2026-09-09 esperando esta RFC, e
- * nesse intervalo nenhum teste falhava se ela voltasse a ser desabilitada por
- * acidente. Agora falha.
- */
 export const TELAS: readonly Aba[] = [
-  { chave: "btc", tecla: "0", rotulo: "BTC · Simulação", disponivel: true },
   { chave: "mesa", tecla: "1", rotulo: "Mesa", disponivel: true },
   { chave: "carteira", tecla: "2", rotulo: "Carteira", disponivel: true },
   { chave: "decisoes", tecla: "3", rotulo: "Decisões", disponivel: true },
@@ -250,6 +237,12 @@ export const TELAS: readonly Aba[] = [
 const SECOES_CARTEIRA: readonly Section[] = ["posicoes", "ordens", "estado"];
 const SECOES_SISTEMA: readonly Section[] = ["gates", "exposicao"];
 
+export const BTC_TELAS = [
+  "Mesa",
+  "Operações",
+  "Experimentos",
+  "Sistema",
+] as const;
 function Dashboard({
   session,
   onLogout,
@@ -259,10 +252,87 @@ function Dashboard({
   onLogout: () => void;
   onUnauthorized: () => void;
 }>) {
+  const [tab, setTab] = useState<(typeof BTC_TELAS)[number] | "Acervo legado">(
+    "Mesa",
+  );
+  const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
+  useEffect(() => {
+    if (tab !== "Sistema") return;
+    let alive = true;
+    const refresh = async () => {
+      const value = await fetchDashboardStatus(
+        fetch,
+        AbortSignal.timeout(5000),
+      );
+      if (alive) setStatus(value);
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [tab]);
+  return (
+    <main className="shell shell--wide">
+      <header className="header">
+        <p className="btc-badge">SIMULAÇÃO · BTC</p>
+        <h1>Ganso Market</h1>
+        <p>Dados reais Hyperliquid · saldo fictício · cenários independentes</p>
+        <p>
+          Sessão de <strong>{session.username}</strong>.{" "}
+          <button type="button" className="logout" onClick={onLogout}>
+            Sair
+          </button>
+        </p>
+      </header>
+      <nav className="tabs" aria-label="Navegação principal">
+        {[...BTC_TELAS, "Acervo legado" as const].map((t) => (
+          <button
+            type="button"
+            key={t}
+            className={tab === t ? "tab tab--active" : "tab"}
+            aria-current={tab === t ? "page" : undefined}
+            onClick={() => setTab(t)}
+          >
+            {t}
+          </button>
+        ))}
+      </nav>
+      <BtcWorkspace
+        accessToken={session.accessToken}
+        onUnauthorized={onUnauthorized}
+        tab={tab}
+      />
+      {tab === "Sistema" && (
+        <section className="btc-desk">
+          <h2>Sistema</h2>
+          <StatusPanel status={status} />
+          <p>
+            A saúde da API não certifica frescor do mercado, warmup ou prontidão
+            para enviar ordens. Consulte a conta na Mesa.
+          </p>
+        </section>
+      )}
+      {tab === "Acervo legado" && (
+        <LegacyDashboard session={session} onUnauthorized={onUnauthorized} />
+      )}
+      <BuildFooter releaseSha={null} />
+    </main>
+  );
+}
+
+function LegacyDashboard({
+  session,
+  onUnauthorized,
+}: Readonly<{
+  session: AuthenticatedSession;
+  onUnauthorized: () => void;
+}>) {
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
   // A Mesa é o padrão (RFC-026 D5): a primeira coisa na tela é o mercado com
   // nome, escada e livro — não uma lista de hashes para rolar.
-  const [tela, setTela] = useState<Tela>("btc");
+  const [tela, setTela] = useState<Tela>("mesa");
   const { ligado: engenheiro, alternar: alternarEngenheiro } =
     useModoEngenheiroState();
   const mounted = useRef(true);
@@ -363,28 +433,20 @@ function Dashboard({
 
   return (
     <ModoEngenheiroProvider ligado={engenheiro}>
-      <main className="shell shell--wide">
+      <section aria-label="Acervo Polymarket">
         <header className="header">
-          <p className="eyebrow">Painel do operador</p>
-          <h1>Ganso Market</h1>
-          <p className="scope">
-            Dados reais de mercado. Operações BTC simuladas com saldo fictício;
-            modo paper.
-          </p>
-          <p className="session">
-            Sessão de <strong>{session.username}</strong>.{" "}
-            <button className="logout" type="button" onClick={onLogout}>
-              Sair
-            </button>
+          <p className="btc-badge">ACERVO · POLYMARKET</p>
+          <h2>Laboratório legado</h2>
+          <p>
+            Histórico preservado. Estes resultados pertencem ao legado
+            Polymarket e não representam as contas BTC.
           </p>
         </header>
-        {tela !== "btc" && (
-          <PnlBand
-            overview={overview}
-            performance={performance}
-            degraded={degraded}
-          />
-        )}
+        <PnlBand
+          overview={overview}
+          performance={performance}
+          degraded={degraded}
+        />
         <nav className="tabs" aria-label="Telas do painel">
           {TELAS.map((aba) => (
             <button
@@ -412,13 +474,9 @@ function Dashboard({
             <kbd>?</kbd> Engenheiro
           </button>
         </nav>
-        {tela === "btc" ? (
-          <BtcDesk
-            accessToken={session.accessToken}
-            onUnauthorized={onUnauthorized}
-          />
-        ) : tela === "mesa" ? (
+        {tela === "mesa" ? (
           <Mesa
+            archive
             accessToken={session.accessToken}
             onUnauthorized={onUnauthorized}
             overview={overview}
@@ -467,10 +525,6 @@ function Dashboard({
                 lista vier cheia, existem mercados fora dela — a tela não mostra
                 &quot;todos&quot;, mostra a página.
               </p>
-              <p className="scope">
-                Os filtros por resultado e por mercado do log de decisões chegam
-                no PR 2 desta RFC.
-              </p>
             </aside>
           </div>
         ) : (
@@ -506,7 +560,7 @@ function Dashboard({
           </>
         )}
         <BuildFooter releaseSha={overview?.release_sha ?? null} />
-      </main>
+      </section>
     </ModoEngenheiroProvider>
   );
 }

@@ -45,7 +45,8 @@
           "/trading/accounts": 1500,
           "/trading/account": 1500,
           "/trading/positions": 1500,
-          "/trading/orders": 1500
+          "/trading/orders": 1500,
+          "/trading/operation": 1500
         }
       }
     }

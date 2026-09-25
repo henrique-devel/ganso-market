@@ -1,0 +1,139 @@
+{
+  "schema_version": "trading.desk.v1",
+  "simulation": "SIMULAÇÃO",
+  "mode": "paper",
+  "as_of": "2026-09-25T02:00:00.000Z",
+  "units": {
+    "money": "USD/6",
+    "quantity": "BTC/8",
+    "price": "USD_PER_BTC/6",
+    "cost_basis": "USD/14"
+  },
+  "scope": {
+    "account_id": "manual",
+    "experiment_id": "fixture:manual",
+    "instrument_id": "hyperliquid:mainnet:BTC",
+    "instrument_version": "fixture:v1",
+    "mode": "paper"
+  },
+  "view": "events",
+  "order": {
+    "order_id": "fixture:partial",
+    "position_id": "fixture:position",
+    "source": "manual",
+    "intent": "open",
+    "side": "buy",
+    "quantity_btc_raw": "100000",
+    "price_cap_usd_raw": "65000000000",
+    "valid_until": "2026-09-25T02:01:00.000Z",
+    "fee_bps": 10,
+    "risk_plan": {
+      "stop_price_usd_raw": "64800000000",
+      "entry_floor_usd_raw": "64900000000"
+    }
+  },
+  "accepted_at": "2026-09-25T02:00:00.000Z",
+  "broker": "ioc",
+  "execution_input": {
+    "limit_price_usd_raw": "65000000000",
+    "fee_metadata_id": "fixture:metadata",
+    "decision_at": "2026-09-25T01:59:59.000Z",
+    "latency_ms": 250
+  },
+  "decision_evidence_id": "fixture:decision",
+  "protective_exit": {
+    "reason": "stop_triggered",
+    "triggered_at": "2026-09-25T02:00:10.000Z"
+  },
+  "events": [
+    {
+      "sequence": "1",
+      "operation_id": "fixture:reserve",
+      "action": "reserve",
+      "reason": null,
+      "recorded_at": "2026-09-25T02:00:00.000Z",
+      "status": "active",
+      "remaining_btc_raw": "100000",
+      "ledger": []
+    },
+    {
+      "sequence": "2",
+      "operation_id": "fixture:consume",
+      "action": "consume",
+      "reason": null,
+      "recorded_at": "2026-09-25T02:00:01.000Z",
+      "status": "active",
+      "remaining_btc_raw": "60000",
+      "ledger": [
+        {
+          "event_id": "fixture:fill",
+          "sequence": "2",
+          "occurred_at": "2026-09-25T02:00:01.000Z",
+          "payload": {
+            "event_type": "fill",
+            "execution_id": "fixture:execution",
+            "order_id": "fixture:partial",
+            "position_id": "fixture:position",
+            "side": "buy",
+            "quantity": {
+              "unit": "BTC",
+              "decimals": 8,
+              "raw": "40000"
+            },
+            "price": {
+              "unit": "USD_PER_BTC",
+              "decimals": 6,
+              "raw": "65000000000"
+            }
+          },
+          "account_id": "manual",
+          "experiment_id": "fixture:manual",
+          "instrument_id": "hyperliquid:mainnet:BTC",
+          "instrument_version": "fixture:v1",
+          "mode": "paper",
+          "schema_version": "trading.v1",
+          "idempotency_key": "fixture:fixture:fill",
+          "transaction_id": "fixture:execution",
+          "cause_id": "fixture:consume",
+          "recorded_at": "2026-09-25T02:00:01.000Z"
+        },
+        {
+          "event_id": "fixture:fee",
+          "sequence": "3",
+          "occurred_at": "2026-09-25T02:00:01.000Z",
+          "payload": {
+            "event_type": "fee",
+            "execution_id": "fixture:execution",
+            "delta": {
+              "unit": "USD",
+              "decimals": 6,
+              "raw": "-26000"
+            }
+          },
+          "account_id": "manual",
+          "experiment_id": "fixture:manual",
+          "instrument_id": "hyperliquid:mainnet:BTC",
+          "instrument_version": "fixture:v1",
+          "mode": "paper",
+          "schema_version": "trading.v1",
+          "idempotency_key": "fixture:fixture:fee",
+          "transaction_id": "fixture:execution",
+          "cause_id": "fixture:consume",
+          "recorded_at": "2026-09-25T02:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "sequence": "3",
+      "operation_id": "fixture:cancel",
+      "action": "release",
+      "reason": "cancelled",
+      "recorded_at": "2026-09-25T02:00:02.000Z",
+      "status": "cancelled",
+      "remaining_btc_raw": "0",
+      "ledger": []
+    }
+  ],
+  "receipts": [],
+  "next_cursor": null
+}

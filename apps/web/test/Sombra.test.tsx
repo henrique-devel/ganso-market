@@ -496,11 +496,7 @@ describe("a aba da tela", () => {
 
   it("as outras cinco teclas não se mexeram", () => {
     // Renumerar moveria as telas debaixo dos dedos de quem opera.
-    expect(
-      TELAS.filter((aba) => aba.chave !== "btc").map(
-        (aba) => `${aba.tecla}:${aba.chave}`,
-      ),
-    ).toEqual([
+    expect(TELAS.map((aba) => `${aba.tecla}:${aba.chave}`)).toEqual([
       "1:mesa",
       "2:carteira",
       "3:decisoes",

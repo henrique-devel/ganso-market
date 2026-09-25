@@ -76,6 +76,12 @@ export interface DeskBalances {
   readonly equity_usd_raw: string | null;
 }
 export interface DeskAccountView extends DeskEnvelope {
+  /** Latest non-duplicate receipt for the current UTC hour; null means unobserved. */
+  readonly funding?: {
+    status: "pending" | "settled" | "conflict";
+    reason: string;
+    period_hour: string;
+  } | null;
   readonly ticket?: {
     broker: "ioc" | "passive" | null;
     enabled: boolean;

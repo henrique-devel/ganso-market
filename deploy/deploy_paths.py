@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -91,12 +93,18 @@ def affected_services(paths: list[str]) -> set[str]:
             selected.add(Path(path).stem)
         elif path.startswith("apps/api/src/polymarket/"):
             selected.update({"api", *LEGACY})
-        elif path == "packages/contracts/src/trading/desk.ts":
+        elif path in {
+            "packages/contracts/src/trading/desk.ts",
+            "packages/contracts/src/trading/history.ts",
+        }:
             selected.update({"api", "web"})
         elif path in {
             "apps/api/src/main.ts",
             "apps/api/src/desk-activate-cli.ts",
             "apps/api/src/trading-readapi.ts",
+            "apps/api/src/storage/desk-history.ts",
+            "apps/api/test/trading/desk.test.ts",
+            "apps/api/test/trading/desk.pg.test.ts",
             "apps/api/src/storage/desk-commandstore.ts",
             "apps/api/src/storage/desk-consumer.ts",
             "apps/api/src/storage/desk-worker.ts",
@@ -185,6 +193,21 @@ def affected_services(paths: list[str]) -> set[str]:
     return selected
 
 
+def changed_runtime_services(previous: Path, release: Path) -> set[str]:
+    """Only an API route-budget change can exempt other runtime consumers."""
+    try:
+        configs = [
+            json.loads((root / "config/runtime.json").read_text()) for root in (previous, release)
+        ]
+        for config in configs:
+            routes = config["services"]["api"]["statement_timeout_ms"].pop("routes")
+            if not isinstance(routes, dict):
+                return NODE_SERVICES
+        return {"api"} if configs[0] == configs[1] else NODE_SERVICES
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return NODE_SERVICES
+
+
 def changed_tree_files(previous: Path, release: Path) -> list[str]:
     """Compare the actual deployed tree, including missed releases/deletions.
 
@@ -207,7 +230,16 @@ def changed_tree_files(previous: Path, release: Path) -> list[str]:
                 path = (relative / name).as_posix()
                 if path in {".env", "deploy/server.env", "deploy/release-sha"}:
                     continue
-                files[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+                content = (root / path).read_bytes()
+                if path == "packages/contracts/src/trading/index.ts":
+                    # Named type re-exports are erased by tsc. Their source files
+                    # are classified separately; runtime exports stay conservative.
+                    content = re.sub(
+                        rb'export type \{[A-Za-z0-9_, \r\n]*\} from "\./[a-z-]+\.js";\s*',
+                        b"",
+                        content,
+                    )
+                files[path] = hashlib.sha256(content).hexdigest()
         return files
 
     if not previous.is_dir() or not release.is_dir():

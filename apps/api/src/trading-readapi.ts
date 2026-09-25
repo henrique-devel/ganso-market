@@ -1,5 +1,7 @@
+import { readOperationTx, HistoryCursorError } from "./storage/desk-history.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
+  DeskOperation,
   DeskEnvelope,
   DeskReason,
   DeskPage,
@@ -44,6 +46,8 @@ function parameters(request: FastifyRequest, kind: string, paged = true) {
   const allowed = [
     ...(kind === "accounts" ? [] : ["account_id"]),
     ...(paged ? ["limit", "cursor"] : []),
+    ...(kind === "operation" ? ["order_id", "view"] : []),
+    ...(kind === "orders" ? ["position_id"] : []),
   ];
   if (Object.keys(q).some((k) => !allowed.includes(k))) invalid();
   const account = kind === "accounts" ? null : q.account_id;
@@ -55,6 +59,27 @@ function parameters(request: FastifyRequest, kind: string, paged = true) {
   const rawLimit = q.limit ?? "50";
   if (typeof rawLimit !== "string" || !/^(?:[1-9][0-9]?|100)$/.test(rawLimit))
     invalid();
+  const order = q.order_id ?? null,
+    position = q.position_id ?? null;
+  const view = q.view ?? "events";
+  if (
+    kind === "operation" &&
+    (typeof order !== "string" ||
+      !idPattern.test(order) ||
+      !["events", "receipts"].includes(String(view)))
+  )
+    invalid();
+  if (
+    position !== null &&
+    (typeof position !== "string" || !idPattern.test(position))
+  )
+    invalid();
+  const cursorKind =
+    kind === "operation"
+      ? `${kind}:${String(order)}:${String(view)}`
+      : position
+        ? `${kind}:${String(position)}`
+        : kind;
   let after = "";
   if (q.cursor !== undefined) {
     if (
@@ -71,7 +96,7 @@ function parameters(request: FastifyRequest, kind: string, paged = true) {
         !Array.isArray(decoded) ||
         decoded.length !== 4 ||
         decoded[0] !== "desk.v1" ||
-        decoded[1] !== kind ||
+        decoded[1] !== cursorKind ||
         decoded[2] !== account ||
         typeof decoded[3] !== "string" ||
         !idPattern.test(decoded[3])
@@ -82,9 +107,19 @@ function parameters(request: FastifyRequest, kind: string, paged = true) {
       invalid();
     }
   }
+  if (
+    kind === "operation" &&
+    view === "events" &&
+    after &&
+    !/^[1-9][0-9]{0,17}$/.test(after)
+  )
+    invalid();
   return {
     account: account as string | null,
-    kind,
+    kind: cursorKind,
+    order: order as string,
+    position: position as string | null,
+    view: view as "events" | "receipts",
     after,
     limit: Number(rawLimit),
   };
@@ -351,6 +386,8 @@ export function registerTradingReadRoutes(
           },
         );
       } catch (e) {
+        if (e instanceof HistoryCursorError)
+          return error(reply, 400, "TRADING_INVALID_QUERY");
         if (e instanceof ReadError) return error(reply, e.status, e.code);
         request.log.error(
           { reason_code: "TRADING_READ_UNAVAILABLE" },
@@ -406,8 +443,22 @@ export function registerTradingReadRoutes(
       ).rows[0];
       const market = await readValuationMarketTx(tx, env.as_of);
       const b = market.book?.payload.payload;
+      const funding =
+        (
+          await tx.query<{
+            status: "pending" | "settled" | "conflict";
+            reason: string;
+            period_hour: string;
+          }>(
+            `SELECT status,result->>'reason' AS reason,result->>'period_hour' AS period_hour
+        FROM btc_funding_results WHERE account_id=$1 AND period_hour=date_trunc('hour',$2::timestamptz)
+        AND status <> 'duplicate' ORDER BY sequence DESC LIMIT 1`,
+            [p.account, env.as_of],
+          )
+        ).rows[0] ?? null;
       return {
         ...view,
+        funding,
         ticket: {
           broker: c?.broker ?? null,
           enabled: c?.enabled ?? false,
@@ -468,8 +519,10 @@ export function registerTradingReadRoutes(
             recorded_at: Date;
           }>(
             `SELECT reservation,filled_btc_raw::text,sequence::text,recorded_at FROM btc_desk_orders
-       WHERE account_id=$1 AND order_id > $2 ORDER BY order_id LIMIT $3`,
-            [p.account, p.after, p.limit + 1],
+       WHERE account_id=$1 AND order_id > $2 ${p.position ? "AND reservation->'order'->>'position_id'=$4" : ""} ORDER BY order_id LIMIT $3`,
+            p.position
+              ? [p.account, p.after, p.limit + 1, p.position]
+              : [p.account, p.after, p.limit + 1],
           )
         ).rows.map(
           ({
@@ -504,5 +557,34 @@ export function registerTradingReadRoutes(
         };
       },
     ),
+  );
+  app.get(
+    "/trading/operation",
+    { preHandler: guard },
+    handler("operation", true, async (tx, p, env): Promise<DeskOperation> => {
+      const owner = await accountTx(tx, p.account!);
+      // Passive receipts use sequence cursors; IOC receipts use operation ids.
+      const result = await readOperationTx(
+        tx,
+        p.account!,
+        p.order,
+        p.view,
+        p.after,
+        p.limit,
+      );
+      if (!result) throw new ReadError(404, "TRADING_ORDER_NOT_FOUND");
+      const { after, ...detail } = result;
+      return {
+        ...env,
+        ...detail,
+        scope: ledgerScope(owner.identity),
+        view: p.view,
+        next_cursor: after
+          ? Buffer.from(
+              JSON.stringify(["desk.v1", p.kind, p.account, after]),
+            ).toString("base64url")
+          : null,
+      };
+    }),
   );
 }
