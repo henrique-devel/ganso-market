@@ -52,10 +52,11 @@ describe.skipIf(!url)(
   "manual desk consumer on disposable PostgreSQL only",
   () => {
     beforeEach(async () => {
-      now = Date.now() - 60000;
+      // Always exercise a different hour from the database wall clock.
+      now = Math.floor(Date.now() / 3600000) * 3600000 - 60000;
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(now);
-      f = await acceptanceFixture(url, () => now);
+      f = await acceptanceFixture(url, () => now, true);
       const w = f.worker();
       pool = Object.assign(w.pool, {
         readOnly: <T>(_ms: number, run: (tx: SqlExecutor) => Promise<T>) =>
@@ -155,10 +156,19 @@ describe.skipIf(!url)(
         expect((await reservations()).every((r) => r.status !== "active")).toBe(
           true,
         );
-        await f.pool.query(
-          "UPDATE btc_recovery_heads SET lease_until=clock_timestamp()-interval '1 second'",
-        );
+        const previousGeneration = (
+          await f.pool.query("SELECT generation FROM btc_recovery_heads")
+        ).rows[0].generation;
+        await f.pool.query("UPDATE btc_recovery_heads SET lease_until=$1", [
+          iso(now - 1000),
+        ]);
         await consumeDeskAccount(pool, "manual");
+        expect(
+          BigInt(
+            (await f.pool.query("SELECT generation FROM btc_recovery_heads"))
+              .rows[0].generation,
+          ),
+        ).toBe(BigInt(previousGeneration) + 1n);
         expect((await readLedgerAccount(pool, scope)).projection).toEqual(
           final.projection,
         );
@@ -211,9 +221,9 @@ describe.skipIf(!url)(
         (await readLedgerAccount(pool, scope)).projection.positions[0]!
           .quantity_btc_raw,
       ).toBe("100000");
-      await f.pool.query(
-        "UPDATE btc_recovery_heads SET lease_until=clock_timestamp()-interval '1 second'",
-      );
+      await f.pool.query("UPDATE btc_recovery_heads SET lease_until=$1", [
+        iso(now - 1000),
+      ]);
       tick();
       await f.capture(pool);
       await consumeDeskAccount(pool, "manual");
@@ -309,6 +319,12 @@ describe.skipIf(!url)(
       const fetch = vi.fn();
       await fundDeskAccount(pool, "manual", fetch);
       expect(fetch).not.toHaveBeenCalled();
+      const receipt = await f.pool.query(
+        "SELECT period_hour FROM btc_funding_results WHERE account_id='manual' AND status='settled'",
+      );
+      expect(receipt.rows[0].period_hour.toISOString()).toBe(
+        iso(Math.floor(now / 3600000) * 3600000),
+      );
     });
   },
 );
