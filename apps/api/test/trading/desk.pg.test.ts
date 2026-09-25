@@ -5,6 +5,7 @@ import {
   withBtcRetentionTransaction,
 } from "../../src/storage/btc-retention.js";
 import { applyPassive } from "../../src/storage/passivestore.js";
+import { PAPER_FUNDING_MODEL } from "../../src/trading/funding.js";
 import { reconcileFunding } from "../../src/storage/fundingstore.js";
 import { applyIoc } from "../../src/storage/brokerstore.js";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -578,23 +579,32 @@ describe.skipIf(!url)("desk projections on disposable PostgreSQL", () => {
     ).toBe(400);
     expect(await snapshot()).toEqual(before);
   });
-  it("shows a pending funding receipt without substituting zero or settling it on read", async () => {
-    await createLedgerAccount(fixture.poolAdapter, identity());
-    await seedMarginMetadata(fixture.poolAdapter);
-    await fixture.capture();
-    const period = iso(Math.floor(Date.now() / 3_600_000) * 3_600_000);
-    const result = await reconcileFunding(fixture.poolAdapter, scope, {
-      operation_id: "pending:history",
-      period_hour: period,
-      observation: null,
-      oracle_object_id: null,
-    });
-    expect(result.status).toBe("pending");
-    now = Date.now() + 1;
-    const before = await snapshot();
-    expect((await request("account?account_id=manual")).json().funding).toEqual(
-      { status: "pending", reason: result.reason, period_hour: period },
-    );
-    expect(await snapshot()).toEqual(before);
-  });
+  it.each([undefined, PAPER_FUNDING_MODEL])(
+    "shows pending funding model %s without substituting zero or settling it on read",
+    async (model) => {
+      await createLedgerAccount(fixture.poolAdapter, identity());
+      await seedMarginMetadata(fixture.poolAdapter);
+      await fixture.capture();
+      const period = iso(Math.floor(Date.now() / 3_600_000) * 3_600_000);
+      const result = await reconcileFunding(fixture.poolAdapter, scope, {
+        ...(model ? { model_version: model } : {}),
+        operation_id: "pending:history",
+        period_hour: period,
+        observation: null,
+        oracle_object_id: null,
+      });
+      expect(result.status).toBe("pending");
+      now = Date.now() + 1;
+      const before = await snapshot();
+      expect(
+        (await request("account?account_id=manual")).json().funding,
+      ).toEqual({
+        status: "pending",
+        reason: result.reason,
+        period_hour: period,
+        model_version: model ?? null,
+      });
+      expect(await snapshot()).toEqual(before);
+    },
+  );
 });

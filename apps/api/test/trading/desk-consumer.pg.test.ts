@@ -21,6 +21,8 @@ import {
 import { activateManualDesk } from "../../src/desk-activate-cli.js";
 import { hashToken } from "../../src/auth/tokens.js";
 import { readReservationsTx } from "../../src/storage/reservationstore.js";
+import { seedPaperOracle } from "./funding-fixture.js";
+import { PAPER_FUNDING_MODEL } from "../../src/trading/funding.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let f: Awaited<ReturnType<typeof acceptanceFixture>>, now: number;
 let pool: Pick<DatabasePool, "transaction" | "readOnly">;
@@ -315,6 +317,89 @@ describe.skipIf(!url)(
         await fresh.dispose();
       }
     });
+    it.each(["buy", "sell"] as const)(
+      "consumer settles eligible %s with late exact rate and historical paper evidence across restart",
+      async (side) => {
+        await command(open(side));
+        tick();
+        await f.capture(pool, { depth: "200000" });
+        await consumeDeskAccount(pool, "manual");
+        const cut = Math.floor(now / 3600000) * 3600000 + 3600000 + 76;
+        now = cut - 2000;
+        vi.setSystemTime(now);
+        await f.capture(pool);
+        await seedPaperOracle(pool, scope, "paper-precut", now, "65000000000");
+        await consumeDeskAccount(pool, "manual");
+        now = cut + 2000;
+        vi.setSystemTime(now);
+        await f.capture(pool);
+        const missing = async () => ({
+          source: "hyperliquid:mainnet:fundingHistory",
+          received_at: iso(now),
+          rows: [],
+        });
+        await fundDeskAccount(pool, "manual", missing);
+        await fundDeskAccount(pool, "manual", missing);
+        expect(
+          (
+            await f.pool.query(
+              "SELECT count(*)::int n FROM btc_funding_results WHERE status='pending'",
+            )
+          ).rows[0].n,
+        ).toBe(1);
+        const fetch = async () => ({
+          source: "hyperliquid:mainnet:fundingHistory",
+          received_at: iso(now),
+          rows: [
+            {
+              coin: "BTC",
+              time: cut,
+              fundingRate: "0.00001234567",
+              premium: "0",
+            },
+          ],
+        });
+        await fundDeskAccount(pool, "manual", fetch);
+        const receipt = (
+          await f.pool.query(
+            "SELECT result FROM btc_funding_results WHERE result->>'reason'='paper_pre_cut_snapshot'",
+          )
+        ).rows[0].result;
+        expect(receipt).toMatchObject({
+          model_version: PAPER_FUNDING_MODEL,
+          price_evidence: { object_id: "paper-precut", source_timestamp: null },
+          positions: [{ delta_usd_raw: side === "buy" ? "-1605" : "1604" }],
+        });
+        await fundDeskAccount(pool, "manual", fetch);
+        const before = await readLedgerAccount(pool, scope);
+        expect(
+          before.events.filter((e) => e.payload.event_type === "funding"),
+        ).toHaveLength(1);
+        await f.pool.query("UPDATE btc_recovery_heads SET lease_until=$1", [
+          iso(now - 1000),
+        ]);
+        await consumeDeskAccount(pool, "manual");
+        expect((await readLedgerAccount(pool, scope)).projection).toEqual(
+          before.projection,
+        );
+        expect(
+          (await f.pool.query("SELECT ready FROM btc_desk_runtime")).rows[0]
+            .ready,
+        ).toBe(true);
+        const risk = (
+          await f.pool.query(
+            "SELECT checkpoint,evidence FROM btc_risk_events ORDER BY sequence DESC LIMIT 1",
+          )
+        ).rows[0];
+        expect(risk.evidence.funding.usable_for_risk).toBe(true);
+        expect(risk.evidence.finance.funding_usd_raw).toBe(
+          side === "buy" ? "-1605" : "1604",
+        );
+        // A prior funding-data pause stays sticky under S8; settlement never rearms risk.
+        expect(risk.checkpoint.state).toBe("REDUCE_ONLY");
+        expect(risk.checkpoint.reasons).not.toContain("data_unavailable");
+      },
+    );
     it("funding poll skips settled hours and does not fabricate a settlement oracle", async () => {
       const fetch = vi.fn();
       await fundDeskAccount(pool, "manual", fetch);

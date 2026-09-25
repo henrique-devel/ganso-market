@@ -122,7 +122,16 @@ const payload = {
       position_id: id,
       period_start: timestamp,
       period_end: timestamp,
-      rate: amount("RATE"),
+      rate: {
+        oneOf: [
+          amount("RATE"),
+          exact({
+            unit: { const: "RATE" },
+            decimals: { const: 18 },
+            raw: { type: "string", pattern: "^(?:0|-?[1-9][0-9]*)$" },
+          }),
+        ],
+      },
       delta: amount("USD"),
       origin: data,
     }),

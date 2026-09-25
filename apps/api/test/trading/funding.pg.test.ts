@@ -18,8 +18,9 @@ import {
 import { ledgerScope, replayLedger } from "../../src/trading/ledger.js";
 import { dailyFinancialCosts } from "../../src/trading/valuation.js";
 import { identity, iso, command, fill, funding } from "./ledger-fixture.js";
-import { cut, request } from "./funding-fixture.js";
+import { cut, request, seedPaperOracle } from "./funding-fixture.js";
 import { market } from "./valuation-fixture.js";
+import { PAPER_FUNDING_MODEL } from "../../src/trading/funding.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
 let fail: string | null;
@@ -125,6 +126,177 @@ describe.skipIf(!url)("funding on disposable PostgreSQL", () => {
   });
   afterEach(async () => {
     await fixture?.dispose();
+  });
+  it.each([
+    ["buy", "0.00001234567", "-7902"],
+    ["sell", "0.00001234567", "7901"],
+    ["buy", "-0.00001234567", "7901"],
+    ["sell", "-0.00001234567", "-7902"],
+  ] as const)(
+    "paper %s rate %s preserves precision, pinned evidence and restart replay",
+    async (side, rate, delta) => {
+      await fillAt("open", cut - 1, side);
+      await seedPaperOracle(pool, scope, "precut", cut - 2000);
+      const cmd = {
+        ...request("paper", rate),
+        model_version: PAPER_FUNDING_MODEL,
+        oracle_object_id: "precut",
+      };
+      const result = await reconcile(cmd);
+      expect(result).toMatchObject({
+        status: "settled",
+        reason: "paper_pre_cut_snapshot",
+        model_version: PAPER_FUNDING_MODEL,
+        rate: { decimals: 18 },
+        price_evidence: {
+          source_timestamp: null,
+          quality: "unknown",
+          receipt_age_ms: 2000,
+        },
+        positions: [{ delta_usd_raw: delta }],
+      });
+      expect(await reconcile(cmd)).toEqual(result);
+      expect((await reconcile({ ...cmd, operation_id: "retry" })).status).toBe(
+        "duplicate",
+      );
+      const ledger = await readLedgerAccount(pool, scope);
+      expect(ledger.projection.cash_usd_raw).toBe(
+        (1000000000n + BigInt(delta)).toString(),
+      );
+      expect(replayLedger(identity(), ledger.events)).toEqual(
+        ledger.projection,
+      );
+      expect(replayFinancials(identity(), ledger.events).funding_usd_raw).toBe(
+        delta,
+      );
+      expect(
+        dailyFinancialCosts(ledger.projection, ledger.events, iso(cut + 1000))
+          .funding_usd_raw,
+      ).toBe(delta);
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT dependency_id FROM btc_retention_dependencies WHERE object_id=$1",
+            [result.evidence_id],
+          )
+        ).rows,
+      ).toEqual([{ dependency_id: "precut" }]);
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT 1 FROM btc_retention_pins WHERE object_id=$1",
+            [result.evidence_id],
+          )
+        ).rowCount,
+      ).toBe(1);
+      await seedPaperOracle(
+        pool,
+        scope,
+        "correction",
+        cut - 1000,
+        "64000000001",
+      );
+      expect(
+        (
+          await reconcile({
+            ...cmd,
+            operation_id: "correction",
+            oracle_object_id: "correction",
+          })
+        ).status,
+      ).toBe("conflict");
+      expect((await readLedgerAccount(pool, scope)).projection).toEqual(
+        ledger.projection,
+      );
+    },
+  );
+  it.each([cut - 5001, cut + 1])(
+    "paper refuses out-of-window/future response %s",
+    async (at) => {
+      await fillAt("open", cut - 1);
+      await seedPaperOracle(pool, scope, "invalid", at);
+      expect(
+        await reconcile({
+          ...request(),
+          model_version: PAPER_FUNDING_MODEL,
+          oracle_object_id: "invalid",
+        }),
+      ).toMatchObject({
+        status: "pending",
+        reason: "missing_pre_cut_snapshot",
+      });
+    },
+  );
+  it.each([
+    { cache_status: "Hit from cloudfront" },
+    { requested_at: iso(cut - 10000) },
+    { server_date: new Date(cut + 2000).toUTCString() },
+  ])("paper refuses invalid HTTP evidence %s", async (patch) => {
+    await fillAt("open", cut - 1);
+    await seedPaperOracle(
+      pool,
+      scope,
+      "invalid",
+      cut - 1000,
+      "64000000000",
+      patch,
+    );
+    expect(
+      await reconcile({
+        ...request(),
+        model_version: PAPER_FUNDING_MODEL,
+        oracle_object_id: "invalid",
+      }),
+    ).toMatchObject({ status: "pending", reason: "missing_pre_cut_snapshot" });
+  });
+  it.each([cut - 1, cut, cut + 1])(
+    "paper open/close at %s preserves the economic cutoff",
+    async (at) => {
+      await seedPaperOracle(pool, scope, "precut", cut - 5000);
+      await fillAt("open", cut - 2000);
+      await fillAt("close", at, "sell");
+      const r = await reconcile({
+        ...request(),
+        model_version: PAPER_FUNDING_MODEL,
+        oracle_object_id: "precut",
+      });
+      expect(r.status).toBe(at === cut ? "pending" : "settled");
+      expect(
+        (await readLedgerAccount(pool, scope)).projection.cash_usd_raw,
+      ).toBe(at > cut ? "999936000" : "1000000000");
+    },
+  );
+  it("explicit model upgrade resolves legacy precision/oracle pending without rewriting receipts", async () => {
+    await fillAt("open", cut - 1);
+    const original = await reconcile({
+      ...request("legacy", "0.00001234567"),
+      oracle_object_id: null,
+    });
+    expect(original.reason).toBe("inexact_RATE9");
+    await seedPaperOracle(pool, scope, "precut", cut - 1);
+    expect(
+      await reconcile({
+        ...request("paper", "0.00001234567"),
+        model_version: PAPER_FUNDING_MODEL,
+        oracle_object_id: "precut",
+      }),
+    ).toMatchObject({ status: "settled" });
+    expect(
+      await reconcile({
+        ...request("legacy", "0.00001234567"),
+        oracle_object_id: null,
+      }),
+    ).toEqual(original);
+  });
+  it("paper precision overflow is pending and never rounds an unrepresentable final rate", async () => {
+    await fillAt("open", cut - 1);
+    expect(
+      await reconcile({
+        ...request("paper", "0.0000123456789012345"),
+        model_version: PAPER_FUNDING_MODEL,
+        oracle_object_id: null,
+      }),
+    ).toMatchObject({ status: "pending", reason: "inexact_RATE18" });
   });
   it.each([
     ["buy", "0.0001", "999936000"],

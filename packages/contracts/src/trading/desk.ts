@@ -81,6 +81,7 @@ export interface DeskAccountView extends DeskEnvelope {
     status: "pending" | "settled" | "conflict";
     reason: string;
     period_hour: string;
+    model_version?: string | null;
   } | null;
   readonly ticket?: {
     broker: "ioc" | "passive" | null;

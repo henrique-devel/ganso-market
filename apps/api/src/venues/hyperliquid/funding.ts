@@ -1,6 +1,5 @@
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { fundingHistory } from "@nktkas/hyperliquid/api/info";
-import { parseScaled } from "../../trading/fixed.js";
 import { FUNDING_HOUR_MS } from "../../trading/funding.js";
 
 // Official sources checked 2026-09-23:
@@ -28,6 +27,7 @@ export function parseFinalFunding(
   row: unknown,
   periodHour: string,
   receivedAt: string,
+  decimals: 9 | 18 = 9,
 ) {
   const hour = fundingHour(periodHour),
     received = fundingTime(receivedAt);
@@ -49,13 +49,26 @@ export function parseFinalFunding(
   const at = p.time as number;
   if (at < hour || at >= hour + FUNDING_HOUR_MS || at > received)
     throw new Error("BTC_FUNDING_HISTORY_TIME");
-  const rate = parseScaled(p.fundingRate);
-  if (rate !== null && (rate > 40_000_000n || rate < -40_000_000n))
+  // Compare the complete decimal before any scale conversion, including rates
+  // too precise for the selected ledger representation. Never round a rate.
+  const [whole, fraction = ""] = p.fundingRate.replace(/^-/, "").split(".");
+  const coefficient =
+    BigInt(whole! + fraction) * (p.fundingRate.startsWith("-") ? -1n : 1n);
+  const denominator = 10n ** BigInt(fraction.length);
+  if (
+    coefficient * 100n > 4n * denominator ||
+    coefficient * 100n < -4n * denominator
+  )
     throw new Error("BTC_FUNDING_RATE_RANGE");
+  const scale = 10n ** BigInt(decimals);
+  const rate =
+    (coefficient * scale) % denominator === 0n
+      ? (coefficient * scale) / denominator
+      : null;
   return {
     cutoff: new Date(at).toISOString(),
     rate_raw: rate?.toString() ?? null,
-    precision: rate === null ? "inexact_RATE9" : "exact",
+    precision: rate === null ? `inexact_RATE${decimals}` : "exact",
   };
 }
 /** Explicit bounded free public read only. No timer, retry, background polling,

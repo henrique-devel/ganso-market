@@ -302,6 +302,7 @@ export async function auditRecoveryTx(
               p.quantity_btc_raw,
               r.oracle_usd_raw,
               payload.rate.raw,
+              payload.rate.decimals,
             ),
         "FUNDING_DELTA",
       );
