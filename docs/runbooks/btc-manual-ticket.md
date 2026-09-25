@@ -52,7 +52,7 @@ A migration não ativa nada. A ativação autorizada da conta manual IOC é:
 
 ```sh
 docker compose --env-file deploy/server.env exec -T api \
-  node dist/desk-activate-cli.js NOME_DO_OWNER ioc
+  node apps/api/dist/desk-activate-cli.js NOME_DO_OWNER ioc
 ```
 
 O CLI exige owner já existente, metadata real, cria `manual`/`manual:paper:v1`,
