@@ -110,11 +110,11 @@ function page<T>(
         : null,
   };
 }
-function accountDto(identity: LedgerIdentity): DeskAccount {
+function accountDto(identity: LedgerIdentity, enabled = false): DeskAccount {
   return {
     account: identity.account,
     scope: ledgerScope(identity),
-    status: "disabled",
+    status: enabled ? "enabled" : "disabled",
     strategy_version: identity.experiment.strategy_version,
     started_at: identity.experiment.started_at,
   };
@@ -123,13 +123,14 @@ async function accountTx(tx: SqlExecutor, id: string) {
   const row = (
     await tx.query<{
       identity: LedgerIdentity;
+      enabled: boolean;
       projection: LedgerProjection | null;
       desk_projection: DeskProjection | null;
       last_sequence: string | null;
     }>(
-      `SELECT a.identity,p.projection,p.desk_projection,
+      `SELECT a.identity,c.enabled,p.projection,p.desk_projection,
       (SELECT sequence::text FROM btc_ledger_events e WHERE e.account_id=a.account_id ORDER BY sequence DESC LIMIT 1) AS last_sequence
-     FROM btc_ledger_accounts a LEFT JOIN btc_ledger_projections p USING(account_id) WHERE a.account_id=$1`,
+     FROM btc_ledger_accounts a LEFT JOIN btc_ledger_projections p USING(account_id) LEFT JOIN btc_desk_controls c USING(account_id) WHERE a.account_id=$1`,
       [id],
     )
   ).rows[0];
@@ -145,7 +146,7 @@ async function financialTx(
     stored = row.desk_projection;
   const empty: DeskAccountView = {
     ...envelope,
-    account: accountDto(row.identity),
+    account: accountDto(row.identity, row.enabled),
     status: "unavailable",
     reason_codes: [
       { component: "projection", code: "BTC_DESK_PROJECTION_UNAVAILABLE" },
@@ -234,7 +235,7 @@ async function financialTx(
   const { maintenance: mark, closing: book } = finance;
   const view: DeskAccountView = {
     ...envelope,
-    account: accountDto(row.identity),
+    account: accountDto(row.identity, row.enabled),
     status: reasons.length ? "unavailable" : "available",
     reason_codes: reasons,
     ledger_sequence: row.last_sequence,
@@ -367,11 +368,11 @@ export function registerTradingReadRoutes(
       true,
       async (tx, p, env): Promise<DeskPage<DeskAccount>> => {
         const rows = (
-          await tx.query<{ identity: LedgerIdentity }>(
-            "SELECT identity FROM btc_ledger_accounts WHERE account_id > $1 ORDER BY account_id LIMIT $2",
+          await tx.query<{ identity: LedgerIdentity; enabled: boolean }>(
+            "SELECT a.identity,c.enabled FROM btc_ledger_accounts a LEFT JOIN btc_desk_controls c USING(account_id) WHERE account_id > $1 ORDER BY account_id LIMIT $2",
             [p.after, p.limit + 1],
           )
-        ).rows.map((r) => accountDto(r.identity));
+        ).rows.map((r) => accountDto(r.identity, r.enabled));
         return {
           ...env,
           scope: null,
@@ -385,11 +386,45 @@ export function registerTradingReadRoutes(
   app.get(
     "/trading/account",
     { preHandler: guard },
-    handler(
-      "account",
-      false,
-      async (tx, p, env) => (await financialTx(tx, p.account!, env)).view,
-    ),
+    handler("account", false, async (tx, p, env) => {
+      const { view } = await financialTx(tx, p.account!, env);
+      const c = (
+        await tx.query<{
+          broker: "ioc" | "passive";
+          enabled: boolean;
+          ready: boolean;
+          observed_at: Date | null;
+          reason: string | null;
+          checkpoint: { state: string; reasons: string[] } | null;
+        }>(
+          `SELECT c.broker,c.enabled,(r.ready AND r.observed_at > clock_timestamp()-interval '5 seconds' AND h.status='ready' AND h.lease_until > clock_timestamp()) AS ready,
+          r.observed_at,r.reason,k.checkpoint FROM btc_desk_controls c LEFT JOIN btc_desk_runtime r USING(account_id)
+          LEFT JOIN btc_recovery_heads h USING(account_id)
+          LEFT JOIN LATERAL(SELECT checkpoint FROM btc_risk_events WHERE account_id=c.account_id ORDER BY sequence DESC LIMIT 1) k ON true WHERE c.account_id=$1`,
+          [p.account],
+        )
+      ).rows[0];
+      const market = await readValuationMarketTx(tx, env.as_of);
+      const b = market.book?.payload.payload;
+      return {
+        ...view,
+        ticket: {
+          broker: c?.broker ?? null,
+          enabled: c?.enabled ?? false,
+          consumer_ready: c?.ready ?? false,
+          consumer_at: c?.observed_at?.toISOString() ?? null,
+          consumer_reason: c?.reason ?? "not_activated",
+          risk_state: c?.checkpoint?.state ?? null,
+          risk_reasons: c?.checkpoint?.reasons ?? [],
+          bid_price_usd_raw:
+            b?.kind === "book" ? (b.bids[0]?.price.raw ?? null) : null,
+          ask_price_usd_raw:
+            b?.kind === "book" ? (b.asks[0]?.price.raw ?? null) : null,
+          quantity_step_btc_raw: (await accountTx(tx, p.account!)).identity
+            .instrument.quantity_step.raw,
+        },
+      };
+    }),
   );
   app.get(
     "/trading/positions",

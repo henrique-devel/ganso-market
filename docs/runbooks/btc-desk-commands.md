@@ -1,5 +1,8 @@
 # Comandos da mesa BTC paper
 
+Operação e ativação G2-06.3: [ticket manual e consumidor](btc-manual-ticket.md).
+As referências à ausência do consumidor abaixo descrevem o rollout original.
+
 G2-06.2, contrato `trading.commands.v1`. O gateway publica somente POST em
 `/api/trading/preview`, `/submit`, `/cancel`, `/close` e `/pause` sob o prefixo
 `/api/trading`. Exige Bearer vigente, Origin com o mesmo host/porta e double-submit

@@ -1,3 +1,4 @@
+import { withDeskWorker } from "./desk-worker.js";
 import { createHmac } from "node:crypto";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import { hashToken, timingSafeEqualHex } from "../auth/tokens.js";
@@ -139,12 +140,33 @@ async function accessTx(
     fail(403, "TRADING_PAPER_MANUAL_REQUIRED");
   return { ...row, ...session };
 }
-function requireEnabled(access: Access, command: DeskCommand) {
+async function requireEnabled(
+  tx: SqlExecutor,
+  access: Access,
+  command: DeskCommand,
+) {
   if (
     !access.enabled &&
     (command.action === "submit" || command.action === "close")
   )
     fail(409, "TRADING_COMMANDS_DISABLED");
+  if (command.action === "submit" || command.action === "close") {
+    const active = await tx.query(
+      `SELECT 1 FROM btc_desk_runtime r JOIN btc_recovery_heads h USING(account_id)
+      WHERE r.account_id=$1 AND r.ready AND r.observed_at > clock_timestamp()-interval '5 seconds'
+      AND h.status='ready' AND h.lease_until > clock_timestamp()`,
+      [command.account_id],
+    );
+    if (!active.rowCount) fail(409, "TRADING_CONSUMER_UNAVAILABLE");
+    if (command.action === "submit") {
+      const funding = await tx.query(
+        `SELECT 1 FROM btc_funding_results WHERE account_id=$1
+        AND period_hour=date_trunc('hour',clock_timestamp()) AND status='settled'`,
+        [command.account_id],
+      );
+      if (!funding.rowCount) fail(409, "TRADING_FUNDING_PENDING");
+    }
+  }
 }
 type Prepared = {
   order: ReservationOrder;
@@ -195,7 +217,7 @@ export async function previewDeskCommand(
       canonicalFingerprint(prior.request) !== canonicalFingerprint(command)
     )
       fail(409, "TRADING_IDEMPOTENCY_CONFLICT");
-    if (!prior) requireEnabled(access, command);
+    if (!prior) await requireEnabled(tx, access, command);
     const now = await clock(tx),
       expires = new Date(Date.parse(now) + 60000).toISOString();
     let prepared: Prepared | null = null,
@@ -346,15 +368,6 @@ export async function previewDeskCommand(
     };
   });
 }
-const workers = new WeakMap<
-  Pool,
-  Map<string, Pick<DatabasePool, "transaction">>
->();
-function commandWorkers(pool: Pool) {
-  let owners = workers.get(pool);
-  if (!owners) workers.set(pool, (owners = new Map()));
-  return owners;
-}
 /** One recovery/risk/retention transaction contains both financial effects and receipt.
  * The stable real pool is the worker identity; no request-specific pool or nested BEGIN. */
 export async function acceptDeskCommand(
@@ -420,7 +433,7 @@ export async function acceptDeskCommand(
             fail(409, "TRADING_IDEMPOTENCY_CONFLICT");
           return prior.result;
         }
-        requireEnabled(access, command);
+        await requireEnabled(tx, access, command);
         const now = await clock(tx);
         if (ticket.issued_at > now || ticket.expires_at <= now)
           fail(409, "TRADING_PREVIEW_EXPIRED");
@@ -546,21 +559,5 @@ export async function acceptDeskCommand(
       },
       true,
     );
-  const owners = commandWorkers(pool),
-    worker = owners.get(command.account_id) ?? pool;
-  owners.set(command.account_id, worker);
-  try {
-    return await execute(worker);
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "BTC_RECOVERY_FENCED")
-      throw error;
-    // A request-driven desk has no heartbeat. After an idle lease expires,
-    // retire that worker identity and let S9 audit a new generation. OWNED or
-    // blocked history still refuse; never retry SQL/unknown commit failures.
-    if (owners.get(command.account_id) === worker)
-      owners.set(command.account_id, {
-        transaction: pool.transaction.bind(pool),
-      });
-    return execute(owners.get(command.account_id)!);
-  }
+  return withDeskWorker(pool, command.account_id, execute);
 }

@@ -1,3 +1,4 @@
+import { BtcDesk } from "./BtcDesk.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -211,7 +212,7 @@ export function LoginPanel({
 // de ausente: uma tecla que não faz nada e não se explica é lida como defeito,
 // e renumerar depois moveria as outras cinco debaixo dos dedos de quem opera.
 type Tela =
-  "mesa" | "carteira" | "decisoes" | "sombra" | "resolucao" | "sistema";
+  "btc" | "mesa" | "carteira" | "decisoes" | "sombra" | "resolucao" | "sistema";
 
 export interface Aba {
   readonly chave: Tela;
@@ -229,6 +230,7 @@ export interface Aba {
  * acidente. Agora falha.
  */
 export const TELAS: readonly Aba[] = [
+  { chave: "btc", tecla: "0", rotulo: "BTC · Simulação", disponivel: true },
   { chave: "mesa", tecla: "1", rotulo: "Mesa", disponivel: true },
   { chave: "carteira", tecla: "2", rotulo: "Carteira", disponivel: true },
   { chave: "decisoes", tecla: "3", rotulo: "Decisões", disponivel: true },
@@ -260,7 +262,7 @@ function Dashboard({
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
   // A Mesa é o padrão (RFC-026 D5): a primeira coisa na tela é o mercado com
   // nome, escada e livro — não uma lista de hashes para rolar.
-  const [tela, setTela] = useState<Tela>("mesa");
+  const [tela, setTela] = useState<Tela>("btc");
   const { ligado: engenheiro, alternar: alternarEngenheiro } =
     useModoEngenheiroState();
   const mounted = useRef(true);
@@ -366,8 +368,8 @@ function Dashboard({
           <p className="eyebrow">Painel do operador</p>
           <h1>Ganso Market</h1>
           <p className="scope">
-            Estado operacional real. Não existe execução de ordens: o único modo
-            configurável é paper.
+            Dados reais de mercado. Operações BTC simuladas com saldo fictício;
+            modo paper.
           </p>
           <p className="session">
             Sessão de <strong>{session.username}</strong>.{" "}
@@ -376,11 +378,13 @@ function Dashboard({
             </button>
           </p>
         </header>
-        <PnlBand
-          overview={overview}
-          performance={performance}
-          degraded={degraded}
-        />
+        {tela !== "btc" && (
+          <PnlBand
+            overview={overview}
+            performance={performance}
+            degraded={degraded}
+          />
+        )}
         <nav className="tabs" aria-label="Telas do painel">
           {TELAS.map((aba) => (
             <button
@@ -408,7 +412,12 @@ function Dashboard({
             <kbd>?</kbd> Engenheiro
           </button>
         </nav>
-        {tela === "mesa" ? (
+        {tela === "btc" ? (
+          <BtcDesk
+            accessToken={session.accessToken}
+            onUnauthorized={onUnauthorized}
+          />
+        ) : tela === "mesa" ? (
           <Mesa
             accessToken={session.accessToken}
             onUnauthorized={onUnauthorized}

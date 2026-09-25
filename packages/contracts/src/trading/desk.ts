@@ -28,7 +28,7 @@ export interface DeskPage<T> extends DeskEnvelope {
 export interface DeskAccount {
   readonly account: TradingAccount;
   readonly scope: TradingScope;
-  readonly status: "disabled";
+  readonly status: "disabled" | "enabled";
   readonly strategy_version: string;
   readonly started_at: string;
 }
@@ -76,6 +76,18 @@ export interface DeskBalances {
   readonly equity_usd_raw: string | null;
 }
 export interface DeskAccountView extends DeskEnvelope {
+  readonly ticket?: {
+    broker: "ioc" | "passive" | null;
+    enabled: boolean;
+    consumer_ready: boolean;
+    consumer_at: string | null;
+    consumer_reason: string;
+    risk_state: string | null;
+    risk_reasons: string[];
+    bid_price_usd_raw: string | null;
+    ask_price_usd_raw: string | null;
+    quantity_step_btc_raw: string;
+  };
   readonly account: DeskAccount;
   readonly status: "available" | "unavailable";
   readonly reason_codes: readonly DeskReason[];

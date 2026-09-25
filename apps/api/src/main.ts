@@ -1,3 +1,4 @@
+import { startDeskConsumer } from "./storage/desk-consumer.js";
 import { createAuthService } from "./auth/service.js";
 import { createPostgresAuthStore } from "./auth/store.js";
 import { loadConfig, requireStatementBudgets, ConfigError } from "./config.js";
@@ -29,6 +30,10 @@ async function run(): Promise<void> {
     authService,
     pool,
   });
+  const stopDesk = startDeskConsumer(pool, (reason_code) =>
+    app.log.warn({ reason_code }, "paper_desk_consumer"),
+  );
+  app.addHook("onClose", stopDesk);
   const gracefulShutdown = createGracefulShutdown(app, pool);
   gracefulShutdown.install();
 

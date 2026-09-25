@@ -1,3 +1,4 @@
+import { consumeDeskAccount } from "../../src/storage/desk-consumer.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { beforeEach, afterEach, describe, it, expect } from "vitest";
@@ -114,6 +115,7 @@ describe.skipIf(!url)(
             return run(tx);
           }),
       });
+      await consumeDeskAccount(pool, "manual");
       app = Fastify();
       registerTradingCommandRoutes(app, {
         pool,
