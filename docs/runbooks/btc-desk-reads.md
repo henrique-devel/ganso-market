@@ -61,3 +61,42 @@ ficam indisponíveis até um append ou recuperação auditada explícitos; o GET
 faz esse backfill. No rollout G2-06.1 não se criam contas produtivas de teste.
 Rollback de código preserva a migration aditiva e todo o histórico; uma projeção
 que não acompanha a sequência corrente é recusada na leitura.
+
+## Operações e acervo (G2-06.4)
+
+Mesa, Operações, Experimentos e Sistema formam a navegação BTC; Acervo legado
+mantém os leitores Polymarket e Sombra, com identificação própria e sem rearme
+na interface. Seleção de conta é compartilhada entre as telas BTC, sem total
+entre cenários. Trocar de conta descarta a visualização anterior; uma intenção
+manual incerta continua guardada para retomada na conta manual.
+
+`GET /api/trading/operation?account_id=…&order_id=…` usa `trading.desk.v1`,
+com inputs aceitos, regime/limite/metadata persistidos, solicitação protetiva
+quando existente e páginas de eventos de reserva. Cada consumo traz os eventos
+financeiros de sua transação (fill/taxa com IDs e horários). `view=receipts`
+mostra motivos e evidências do broker, paginados por ID de operação no IOC e por
+sequência na passiva; não inferir cronologia pela ordenação de IDs IOC.
+`limit` 1–100 e `cursor` têm os mesmos limites das outras leituras. O cursor
+fica vinculado à conta, ordem e view. Ordem ausente retorna 404
+`TRADING_ORDER_NOT_FOUND`. Parâmetros inválidos retornam 400; não há POST.
+
+`GET /api/trading/orders` aceita também `position_id`, com cursor vinculado ao
+filtro. A ficha usa essa leitura para navegar entre abertura e reduções da mesma
+posição até os fills efetivos. Solicitação de saída não comprova posição zerada;
+reserva liberada não representa quantidade executada. Valores ausentes permanecem
+indisponíveis. Custos de uma página não são apresentados como total da operação.
+
+`account.funding` é o último recibo não duplicado da hora UTC da consulta, ou
+null se ausente. Não certifica liquidação de horas anteriores; risco e comandos
+continuam revalidando todas as dependências. Funding contabilizado no saldo não
+substitui esse estado. Oracle exato de settlement ausente com posição elegível
+permanece pendente. Diagnóstico de sinal/warmup e avaliação de experimentos ainda
+não são fornecidos por estas leituras. Recusas de prévia aparecem no ticket;
+sem registro persistido correspondente, não se inventa uma causa histórica.
+
+As consultas usam transação somente leitura, snapshot consistente, orçamento
+1,5 s e índices por conta/ordem. Migration 0042 adiciona somente dois índices.
+Deploy seleciona API/web/gateway e migration; preserva banco, coletor, consumidor
+manual após recuperação normal e todas as evidências. Rollback mantém schema e
+histórico. Reexportações exclusivamente de tipos no barrel de contratos não
+recriam o coletor; mudanças em exports de runtime continuam conservadoras.

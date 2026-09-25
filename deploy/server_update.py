@@ -10,7 +10,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from deploy_paths import CODE_SERVICES, affected_services, changed_tree_files
+from deploy_paths import (
+    CODE_SERVICES,
+    affected_services,
+    changed_runtime_services,
+    changed_tree_files,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from check_compose_policy import validate  # noqa: E402
@@ -203,8 +208,12 @@ def main() -> None:
     try:
         previous = previous_release(Path.cwd())
         paths = changed_tree_files(Path(previous), Path.cwd())
-        other_paths = [path for path in paths if path != "docker-compose.yml"]
+        other_paths = [
+            path for path in paths if path not in {"docker-compose.yml", "config/runtime.json"}
+        ]
         candidates = affected_services(other_paths) if other_paths else set()
+        if "config/runtime.json" in paths:
+            candidates.update(changed_runtime_services(Path(previous), Path.cwd()))
         if "docker-compose.yml" in paths:
             old = json.loads(
                 run(

@@ -69,7 +69,8 @@ def locations() -> list[tuple[str, str]]:
 class NginxPerimeterTests(unittest.TestCase):
     def test_desk_reads_are_exact_and_get_only(self) -> None:
         expected = {
-            f"/api/trading/{name}" for name in ("accounts", "account", "positions", "orders")
+            f"/api/trading/{name}"
+            for name in ("accounts", "account", "positions", "orders", "operation")
         }
         commands = {
             f"/api/trading/{name}" for name in ("preview", "submit", "cancel", "close", "pause")

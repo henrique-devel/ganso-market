@@ -1,6 +1,16 @@
+import { market } from "./valuation-fixture.js";
+import { health } from "./bars-fixture.js";
+import {
+  storeRetentionObjectTx,
+  withBtcRetentionTransaction,
+} from "../../src/storage/btc-retention.js";
+import { applyPassive } from "../../src/storage/passivestore.js";
+import { reconcileFunding } from "../../src/storage/fundingstore.js";
+import { applyIoc } from "../../src/storage/brokerstore.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
+  DeskOperation,
   DeskAccountView,
   DeskPage,
   DeskPosition,
@@ -348,6 +358,243 @@ describe.skipIf(!url)("desk projections on disposable PostgreSQL", () => {
       reserved_margin_usd_raw: "0",
       reserved_fees_usd_raw: "26000",
     });
+    const first = (
+      await request("operation?account_id=manual&order_id=a&limit=1")
+    ).json<DeskOperation>();
+    expect(first.order.risk_plan).toEqual(riskOrder("a").risk_plan);
+    expect(first.events[0]?.action).toBe("reserve");
+    expect(first.execution_input).toBeNull(); // No broker evidence in this reservation fixture.
+    const second = (
+      await request(
+        `operation?account_id=manual&order_id=a&limit=1&cursor=${first.next_cursor}`,
+      )
+    ).json<DeskOperation>();
+    expect(second.events[0]?.action).toBe("consume");
+    expect(second.events[0]?.ledger.map((e) => e.payload.event_type)).toEqual([
+      "fill",
+      "fee",
+    ]);
+    expect(second.events[0]?.ledger[0]?.payload).toMatchObject({
+      order_id: "a",
+      quantity: { raw: "40000" },
+    });
+    expect(second.events[0]?.ledger[1]?.payload).toMatchObject({
+      delta: { raw: "-26000" },
+    });
+    const third = (
+      await request(
+        `operation?account_id=manual&order_id=a&limit=1&cursor=${second.next_cursor}`,
+      )
+    ).json<DeskOperation>();
+    expect(third.events[0]).toMatchObject({
+      action: "release",
+      reason: "cancelled",
+    });
+    expect(third.next_cursor).toBeNull();
+    for (const suffix of ["order_id=b", "order_id=a&view=receipts"])
+      expect(
+        (
+          await request(
+            `operation?account_id=manual&${suffix}&cursor=${first.next_cursor}`,
+          )
+        ).statusCode,
+      ).toBe(400);
+    expect(
+      (await request("operation?account_id=manual&order_id=absent")).statusCode,
+    ).toBe(404);
+    const related = (
+      await request("orders?account_id=manual&position_id=position:a&limit=1")
+    ).json<DeskPage<DeskOrder>>();
+    expect(related.items.map((o) => o.order_id)).toEqual(["a"]);
+    const relatedNext = (
+      await request(
+        `orders?account_id=manual&position_id=position:a&limit=1&cursor=${related.next_cursor}`,
+      )
+    ).json<DeskPage<DeskOrder>>();
+    expect(relatedNext.items.map((o) => o.order_id)).toEqual(["c"]);
+    expect(
+      (
+        await request(
+          `orders?account_id=manual&position_id=position:b&cursor=${related.next_cursor}`,
+        )
+      ).statusCode,
+    ).toBe(400);
+    expect(await snapshot()).toEqual(before);
+  });
+  it("reads actual IOC receipts, refusal reasons and fills; an identical order id cannot cross accounts", async () => {
+    await createLedgerAccount(fixture.poolAdapter, identity());
+    const metadataId = await seedMarginMetadata(fixture.poolAdapter);
+    await fixture.capture();
+    await seedRiskFunding(fixture.poolAdapter);
+    const start = Date.now();
+    await applyIoc(fixture.poolAdapter, scope, {
+      action: "submit",
+      operation_id: "submit:history",
+      order: riskOrder("history", { price_cap_usd_raw: "65200000000" }),
+      intent: {
+        schema_version: "btc.ioc.v1",
+        decision_at: iso(start),
+        latency_ms: 0,
+        limit_price_usd_raw: "65100000000",
+        fee_metadata_id: metadataId,
+      },
+    });
+    await fixture.capture();
+    const result = await applyIoc(fixture.poolAdapter, scope, {
+      action: "execute",
+      operation_id: "execute:history",
+      order_id: "history",
+    });
+    expect(result.fills.length).toBeGreaterThan(0);
+    await createLedgerAccount(fixture.poolAdapter, identity("other"));
+    now = Date.now() + 1;
+    const before = await snapshot();
+    const receipts = (
+      await request(
+        "operation?account_id=manual&order_id=history&view=receipts&limit=1",
+      )
+    ).json<DeskOperation>();
+    expect(receipts.execution_input).toMatchObject({
+      fee_metadata_id: metadataId,
+      decision_at: iso(start),
+    });
+    expect(receipts.receipts[0]?.reason).toBe(result.reason);
+    expect(receipts.receipts[0]?.evidence_id).toBe(result.evidence_id);
+    const next = (
+      await request(
+        `operation?account_id=manual&order_id=history&view=receipts&limit=1&cursor=${receipts.next_cursor}`,
+      )
+    ).json<DeskOperation>();
+    expect(next.receipts[0]?.reason).toBe("reserved");
+    expect(next.next_cursor).toBeNull();
+    expect(
+      (await request("operation?account_id=other&order_id=history")).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await request(
+          `operation?account_id=other&order_id=history&view=receipts&cursor=${receipts.next_cursor}`,
+        )
+      ).statusCode,
+    ).toBe(400);
+    const events = (
+      await request("operation?account_id=manual&order_id=history")
+    ).json<DeskOperation>();
+    expect(
+      events.events
+        .flatMap((e) => e.ledger)
+        .filter((e) => e.payload.event_type === "fill"),
+    ).toHaveLength(result.fills.length);
+    expect(
+      (await request("account?account_id=manual")).json().funding,
+    ).toMatchObject({ status: "settled" });
+    expect(
+      (await request("account?account_id=other")).json().funding,
+    ).toBeNull();
+    expect(await snapshot()).toEqual(before);
+  });
+  it("reads passive receipts and rejects malformed sequence cursors without repairing history", async () => {
+    await createLedgerAccount(fixture.poolAdapter, identity());
+    const metadataId = await seedMarginMetadata(fixture.poolAdapter);
+    await fixture.capture();
+    await seedRiskFunding(fixture.poolAdapter);
+    const at = Number(
+        (
+          await fixture.pool.query(
+            "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::text AS at",
+          )
+        ).rows[0].at,
+      ),
+      m = market(at),
+      h = health(at);
+    Object.assign(h.channels, m.capture!.health.channels);
+    h.channels.trades = { ...h.channels.book };
+    const capture = {
+      ...m.capture!,
+      health: h,
+      id: "fixture:passive-capture",
+      session: "fixture",
+      from: at - 1000,
+      history_truncated: false,
+      restarted: false,
+    };
+    await withBtcRetentionTransaction(fixture.poolAdapter, async (tx) => {
+      await storeRetentionObjectTx(tx, {
+        id: capture.id,
+        class: "raw",
+        identity: scope,
+        recordedAt: new Date(at),
+        payload: capture,
+        dependencies: [],
+      });
+      await tx.query(
+        "INSERT INTO btc_market_records(object_id,kind,source_at,received_at) VALUES($1,'capture',$2,$2)",
+        [capture.id, iso(at)],
+      );
+    });
+    await applyPassive(fixture.poolAdapter, scope, {
+      action: "submit",
+      operation_id: "passive:submit",
+      order: riskOrder("passive"),
+      intent: {
+        schema_version: "btc.passive.v1",
+        limit_price_usd_raw: "64900000000",
+        fee_metadata_id: metadataId,
+      },
+    });
+    await applyPassive(fixture.poolAdapter, scope, {
+      action: "cancel",
+      operation_id: "passive:cancel",
+      order_id: "passive",
+    });
+    const before = await snapshot();
+    const page = (
+      await request(
+        "operation?account_id=manual&order_id=passive&view=receipts&limit=1",
+      )
+    ).json<DeskOperation>();
+    expect(page.broker).toBe("passive");
+    expect(page.receipts[0]?.operation_id).toBe("passive:submit");
+    const next = (
+      await request(
+        `operation?account_id=manual&order_id=passive&view=receipts&cursor=${page.next_cursor}`,
+      )
+    ).json<DeskOperation>();
+    expect(next.receipts[0]?.operation_id).toBe("passive:cancel");
+    const invalid = Buffer.from(
+      JSON.stringify([
+        "desk.v1",
+        "operation:passive:receipts",
+        "manual",
+        "not-a-sequence",
+      ]),
+    ).toString("base64url");
+    expect(
+      (
+        await request(
+          `operation?account_id=manual&order_id=passive&view=receipts&cursor=${invalid}`,
+        )
+      ).statusCode,
+    ).toBe(400);
+    expect(await snapshot()).toEqual(before);
+  });
+  it("shows a pending funding receipt without substituting zero or settling it on read", async () => {
+    await createLedgerAccount(fixture.poolAdapter, identity());
+    await seedMarginMetadata(fixture.poolAdapter);
+    await fixture.capture();
+    const period = iso(Math.floor(Date.now() / 3_600_000) * 3_600_000);
+    const result = await reconcileFunding(fixture.poolAdapter, scope, {
+      operation_id: "pending:history",
+      period_hour: period,
+      observation: null,
+      oracle_object_id: null,
+    });
+    expect(result.status).toBe("pending");
+    now = Date.now() + 1;
+    const before = await snapshot();
+    expect((await request("account?account_id=manual")).json().funding).toEqual(
+      { status: "pending", reason: result.reason, period_hour: period },
+    );
     expect(await snapshot()).toEqual(before);
   });
 });

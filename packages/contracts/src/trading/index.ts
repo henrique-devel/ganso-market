@@ -38,3 +38,4 @@ export type {
   DeskCommandPreview,
   DeskCommandReceipt,
 } from "./commands.js";
+export type { DeskOperation } from "./history.js";

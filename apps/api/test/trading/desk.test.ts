@@ -12,7 +12,13 @@ describe("desk HTTP boundary", () => {
       clock: () => new Date(),
     });
     try {
-      for (const route of ["accounts", "account", "positions", "orders"]) {
+      for (const route of [
+        "accounts",
+        "account",
+        "positions",
+        "orders",
+        "operation",
+      ]) {
         for (const headers of [{}, { authorization: "Bearer expired" }]) {
           const r = await app.inject({ url: `/trading/${route}`, headers });
           expect(r.statusCode).toBe(401);
@@ -40,6 +46,11 @@ describe("desk HTTP boundary", () => {
     try {
       for (const url of [
         "/trading/orders",
+        "/trading/operation?account_id=manual",
+        "/trading/operation?account_id=manual&order_id=a&order_id=b",
+        "/trading/operation?account_id=manual&order_id=a&view=all",
+        "/trading/orders?account_id=manual&position_id=",
+        "/trading/operation?account_id=manual&order_id=a&limit=101",
         "/trading/account?account_id=",
         "/trading/account?account_id=a&account_id=b",
         "/trading/accounts?limit=0",

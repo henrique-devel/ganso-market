@@ -86,6 +86,7 @@
 }
 .btc-table table {
   width: 100%;
+  min-width: 640px;
   border-collapse: collapse;
 }
 .btc-table th,
@@ -107,5 +108,35 @@
   }
   .btc-preview dd {
     text-align: left;
+  }
+}
+.btc-operation {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #617487;
+  border-radius: 8px;
+}
+.btc-facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr);
+  gap: 0.7rem;
+}
+.btc-facts dd {
+  margin: 0;
+}
+.btc-events {
+  padding-left: 1.4rem;
+}
+.btc-events li {
+  margin: 1rem 0;
+  padding: 0.6rem;
+  border-bottom: 1px solid #44515e;
+}
+.btc-condition {
+  font-size: 0.9rem;
+}
+@media (max-width: 700px) {
+  .btc-facts {
+    grid-template-columns: 1fr;
   }
 }

@@ -11,7 +11,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "deploy"))
 import server_update as update  # noqa: E402
-from deploy_paths import CODE_SERVICES, affected_services, changed_tree_files  # noqa: E402
+from deploy_paths import (  # noqa: E402
+    CODE_SERVICES,
+    affected_services,
+    changed_runtime_services,
+    changed_tree_files,
+)
 
 
 class ServerUpdateTests(unittest.TestCase):
@@ -177,6 +182,59 @@ class ServerUpdateTests(unittest.TestCase):
             (newer / "deploy/release-sha").write_text("b" * 40)
             with self.assertRaises(ValueError):
                 update.previous_release(root)
+
+    def test_operation_reads_preserve_running_collector(self) -> None:
+        self.assertEqual(
+            affected_services(
+                [
+                    "apps/api/src/storage/desk-history.ts",
+                    "apps/api/test/trading/desk.test.ts",
+                    "apps/api/test/route-budgets.runtime.test.ts",
+                    "apps/api/test/trading/desk.pg.test.ts",
+                    "packages/contracts/src/trading/history.ts",
+                    "migrations/0042_btc_operation_reads.sql",
+                    "infra/nginx/nginx.conf",
+                ]
+            ),
+            {"api", "web", "migrate", "nginx"},
+        )
+
+    def test_runtime_route_budgets_only_target_api_and_unknown_changes_remain_conservative(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            before, after = Path(directory) / "before", Path(directory) / "after"
+            config = {
+                "services": {"api": {"statement_timeout_ms": {"routes": {"/a": 500}}}},
+                "logging": {"level": "info"},
+            }
+            for root in (before, after):
+                (root / "config").mkdir(parents=True)
+                (root / "config/runtime.json").write_text(json.dumps(config))
+            config["services"]["api"]["statement_timeout_ms"]["routes"]["/b"] = 1500
+            (after / "config/runtime.json").write_text(json.dumps(config))
+            self.assertEqual(changed_runtime_services(before, after), {"api"})
+            config["logging"]["level"] = "debug"
+            (after / "config/runtime.json").write_text(json.dumps(config))
+            self.assertIn("btc-worker", changed_runtime_services(before, after))
+            (after / "config/runtime.json").write_text("invalid")
+            self.assertIn("btc-worker", changed_runtime_services(before, after))
+
+    def test_type_barrel_change_preserves_runtime_but_runtime_export_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            before, after = Path(directory) / "before", Path(directory) / "after"
+            path = "packages/contracts/src/trading/index.ts"
+            runtime = 'export { parseTradingAmount } from "./amount.js";\n'
+            for root in (before, after):
+                (root / path).parent.mkdir(parents=True)
+                (root / path).write_text(runtime)
+            (after / path).write_text(
+                runtime + 'export type { DeskOperation } from "./history.js";\n'
+            )
+            self.assertEqual(changed_tree_files(before, after), [])
+            (after / path).write_text(runtime + 'export { danger } from "./history.js";\n')
+            self.assertEqual(changed_tree_files(before, after), [path])
+            self.assertIn("btc-worker", affected_services(changed_tree_files(before, after)))
 
     def test_tree_comparison_includes_deleted_files_and_ignores_local_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

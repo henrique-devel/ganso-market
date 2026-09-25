@@ -1134,10 +1134,6 @@ export function AgoraBloco({
           tela — o servidor tem um motivo, e ele fica registrado.
         </p>
       )}
-      <p className="pnl-nota">
-        Posição resolvida na venue e não liquidada no paper entra aqui no PR 2
-        desta RFC, com <code>/paper/positions</code> publicado.
-      </p>
     </section>
   );
 }
@@ -1492,8 +1488,10 @@ export function Mesa({
   accessToken,
   onUnauthorized,
   overview,
+  archive = false,
 }: Readonly<{
   accessToken: string;
+  archive?: boolean;
   onUnauthorized: () => void;
   overview: Overview | null;
 }>) {
@@ -1765,7 +1763,7 @@ export function Mesa({
       overview={overview}
       falhou={falhou}
       atualizadoEm={atualizadoEm}
-      onRearmar={rearmar}
+      onRearmar={archive ? null : rearmar}
       rearmando={rearmando}
       erroRearme={erroRearme}
       series={series}
