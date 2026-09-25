@@ -3,7 +3,7 @@
   "policy_version": "btc.baseline.trend.v1",
   "contract": {
     "path": "docs/contracts/btc-baseline-manifest-v1.md",
-    "sha256": "898fd980bc6c2bf37cb3b9c0a068610fa666058a9cef33e95698fb7685d4cba1"
+    "sha256": "73ff89d018a86c41eaa72eef337afaa449d3a6d9a4dad19ded54e9a93d7feab6"
   },
   "activation": {
     "baseline_enabled": false,

@@ -28,6 +28,8 @@ describe("G2-07.1 frozen experiment (no strategy runtime)", () => {
   it("pins the normative text and semantic config with compatible runtime contracts", () => {
     const receipt = validateBaselineManifest(source, contract);
     expect(receipt.fingerprint).toBe(BASELINE_FINGERPRINT);
+    expect(receipt.manifest_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(`sha256:${receipt.manifest_hash}`).toBe(receipt.fingerprint);
     expect(Object.isFrozen(receipt)).toBe(true);
     expect(JSON.parse(receipt.canonical_json).activation).toEqual({
       baseline_enabled: false,

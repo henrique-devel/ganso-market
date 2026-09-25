@@ -16,7 +16,7 @@ import { HYPERLIQUID_REFERENCE } from "../venues/hyperliquid/reference.js";
 // This allowlist freezes one reviewed experiment, not a parameter optimizer.
 // New semantics require a new policy/manifest version and prospective registration.
 export const BASELINE_FINGERPRINT =
-  "sha256:c6a88d9d267f626b8ad233db1ab557de87130fbf6b21d5e08e7be662cec8ceda";
+  "sha256:1d9ebd2cd94246077f3a0f5eca826f028adc08896668ea364812aaeecb0b1b81";
 
 function requireManifest(ok: boolean, code: string): asserts ok {
   if (!ok) throw new TypeError(`BTC_BASELINE_${code}`);
@@ -110,5 +110,9 @@ export function validateBaselineManifest(source: string, contract: string) {
   same(m.accounting!.valuation, VALUATION_VERSION);
   same(m.data!.metadata_reference, HYPERLIQUID_REFERENCE.version);
   same(HYPERLIQUID_REFERENCE.taker_rate, "0.00045");
-  return Object.freeze({ fingerprint, canonical_json });
+  return Object.freeze({
+    fingerprint,
+    manifest_hash: fingerprint.slice(7),
+    canonical_json,
+  });
 }

@@ -23,6 +23,12 @@ conta recebe somente sua gênese fictícia idempotente USD6 `1000000000`; não s
 cenários nem reaproveitar/resetar contas ou âncoras. IDs operacionais privados
 pertencem aos registros internos, não ao manifesto público.
 
+Mapeamento para `trading.v1`: account.purpose=`baseline` (variante=`challenger`),
+experiment.strategy_version=policy_version, experiment.started_at=start_at e
+experiment.manifest_hash=os 64 dígitos hex do fingerprint, sem o prefixo `sha256:`.
+O vínculo de execução com SHA/metadata/conta é um registro separado pinado junto
+do manifesto, não uma mutação da configuração congelada.
+
 Canonicalização `sorted-json-safe-integers.v1`: objetos JSON simples com chaves
 ordenadas lexicograficamente por UTF-16, arrays na ordem original, strings via
 JSON.stringify, somente inteiros seguros (sem -0), booleanos/null; sem whitespace.
