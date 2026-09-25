@@ -1,3 +1,4 @@
+import { createCollectorRuntimeDiagnostics } from "./btc/runtime-diagnostics.js";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, statfs, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -50,7 +51,7 @@ async function publish(value: unknown) {
   await writeFile(`${BTC_HEALTH_PATH}.tmp`, text, { mode: 0o600 });
   await rename(`${BTC_HEALTH_PATH}.tmp`, BTC_HEALTH_PATH);
 }
-async function run() {
+export async function runBtcWorker() {
   if (process.argv.includes("--health")) {
     const state = JSON.parse(await readFile(BTC_HEALTH_PATH, "utf8"));
     if (
@@ -90,6 +91,12 @@ async function run() {
     queryTimeoutMs: 6000,
     applicationName: "ganso-btc-collector",
   });
+  const diagnostics = createCollectorRuntimeDiagnostics();
+  const observe = diagnostics.run;
+  const publishStatus = (state: unknown) =>
+    observe("publish", () =>
+      publish({ ...(state as object), failure: diagnostics.failure() }),
+    );
   let collector: ReturnType<typeof createCollector> | undefined;
   let stopRequested = false;
   let feed: ReturnType<typeof startHyperliquidBtcFeed> | undefined;
@@ -126,9 +133,15 @@ async function run() {
         hold: retention.hold,
       };
     }
-    assertCollectorCapacity(await capacity());
+    const checkedCapacity = () =>
+      observe("capacity", async () => {
+        const sample = await capacity();
+        assertCollectorCapacity(sample);
+        return sample;
+      });
+    await checkedCapacity();
     const adapter = createHyperliquidPublicAdapter();
-    let metadata = await adapter.getBtcMetadata();
+    let metadata = await observe("metadata", () => adapter.getBtcMetadata());
     if (stopRequested) return;
     feed = startHyperliquidBtcFeed(metadata, "http_snapshot");
     collector = createCollector({
@@ -136,9 +149,11 @@ async function run() {
       sessionId: randomUUID(),
       metadata: () => metadata,
       now: () => new Date().toISOString(),
-      capacity,
-      capture: (batch) => captureBtcMarketBatch(pool, batch, true),
-      closeBars: (at) => closeBtcMarketBars(pool, at, true),
+      capacity: checkedCapacity,
+      capture: (batch) =>
+        observe("capture", () => captureBtcMarketBatch(pool, batch, true)),
+      closeBars: (at) =>
+        observe("close_bars", () => closeBtcMarketBars(pool, at, true)),
     });
     let refreshed = Date.now(),
       logged = 0,
@@ -148,9 +163,11 @@ async function run() {
       if (feed.status().socket.connected) {
         const contextDue = Date.now() - contextRefreshed >= 2000;
         const [book, context] = await Promise.all([
-          fetchBtcBookSnapshot(metadata),
+          observe("book_snapshot", () => fetchBtcBookSnapshot(metadata)),
           contextDue
-            ? fetchBtcContextSnapshot(metadata)
+            ? observe("context_snapshot", () =>
+                fetchBtcContextSnapshot(metadata),
+              )
             : Promise.resolve(null),
         ]);
         feed.observeSnapshot(book);
@@ -160,18 +177,21 @@ async function run() {
         }
       }
       if (Date.now() - refreshed >= 60_000) {
-        const current = await adapter.getBtcMetadata();
-        if (
-          current.instrument.instrument_version !==
-          metadata.instrument.instrument_version
-        )
-          throw new Error("BTC_COLLECTOR_METADATA_CHANGED");
+        const current = await observe("metadata", async () => {
+          const next = await adapter.getBtcMetadata();
+          if (
+            next.instrument.instrument_version !==
+            metadata.instrument.instrument_version
+          )
+            throw new Error("BTC_COLLECTOR_METADATA_CHANGED");
+          return next;
+        });
         metadata = current;
         refreshed = Date.now();
       }
       if (stopRequested) break;
       await collector.tick();
-      await publish(collector.status());
+      await publishStatus(collector.status());
       if (Date.now() - logged >= 30_000) {
         console.info(JSON.stringify(collector.status()));
         logged = Date.now();
@@ -189,24 +209,30 @@ async function run() {
         ? error.message
         : "BTC_COLLECTOR_RUNTIME_FAILED";
     if (!collector?.status().gap_open) collector?.stop(reason);
-    await publish(
+    process.exitCode = 1;
+    console.error(
+      JSON.stringify({
+        ...(collector?.status() ?? { status: "stopped", reason }),
+        failure: diagnostics.failure(),
+      }),
+    );
+    await publishStatus(
       collector?.status() ?? { status: "stopped", gap_open: true, reason },
     );
-    console.error(
-      JSON.stringify(collector?.status() ?? { status: "stopped", reason }),
-    );
-    process.exitCode = 1;
   } finally {
     feed?.stop();
-    if (collector) await publish(collector.status());
-    await pool.end();
-    process.off("SIGTERM", shutdown);
-    process.off("SIGINT", shutdown);
-    process.off("SIGUSR1", reconnect);
+    try {
+      if (collector) await publishStatus(collector.status());
+    } finally {
+      await pool.end();
+      process.off("SIGTERM", shutdown);
+      process.off("SIGINT", shutdown);
+      process.off("SIGUSR1", reconnect);
+    }
   }
 }
 if (process.argv[1]?.endsWith("/btc-worker.js")) {
-  await run().catch(() => {
+  await runBtcWorker().catch(() => {
     console.error("BTC_WORKER_STARTUP_FAILED");
     process.exitCode = 1;
   });

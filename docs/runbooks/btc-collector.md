@@ -155,6 +155,14 @@ coleta para não misturar regras antigas e novas.
 
 Falha/quota/espaço/buffer excedido encerra admissão, fecha socket e publica razão,
 `gap_open=true`, último capture confirmado e quantidade do lote sem confirmação.
+O campo `failure` preserva a primeira etapa que falhou (`capacity`, `metadata`,
+`book_snapshot`, `context_snapshot`, `capture`, `close_bars` ou `publish`),
+o tipo de erro e um código técnico permitido quando disponível. Não inclui
+mensagem, stack, URL ou payload. `TimeoutError` em um snapshot distingue seu
+deadline de erro SQL em captura/capacidade; ausência desse campo em um log
+antigo não permite reconstruir a causa. Esse diagnóstico não adiciona retries
+nem amplia os timeouts.
+
 Não reenviar lote rejeitado como completo; restart usa sessão nova e o cursor
 persistido registra descontinuidade. O status terminal fica no filesystem do
 container parado e nos logs; nenhum log de payload/segredo é necessário.
