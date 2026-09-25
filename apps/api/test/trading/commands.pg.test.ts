@@ -280,7 +280,10 @@ describe.skipIf(!url)(
       async (broker) => {
         await f.pool.query("UPDATE btc_desk_controls SET broker=$1", [broker]);
         if (broker === "passive") {
-          const at = Date.now(),
+          const at = new Date(
+              (await f.pool.query("SELECT clock_timestamp() AS now")).rows[0]
+                .now,
+            ).getTime(),
             m = market(at),
             h = health(at);
           Object.assign(h.channels, m.capture!.health.channels);

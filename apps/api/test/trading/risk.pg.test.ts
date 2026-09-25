@@ -64,6 +64,35 @@ describe.skipIf(!url)(
       vi.useRealTimers();
       await f?.dispose();
     });
+    it("admits a proven current-state HTTP mark, journals full evidence, and still expires it after 5 s", async () => {
+      const at = Date.now();
+      await f.capture({ at, httpSnapshot: true });
+      await reserve("http-mark");
+      const row = (
+        await f.pool.query(
+          "SELECT object_id,payload FROM btc_retention_objects WHERE payload->>'source_id'='hyperliquid:mainnet:info'",
+        )
+      ).rows[0];
+      expect(row.payload.source_timestamp).toBeNull();
+      expect(row.payload.quality).toBe("unknown");
+      expect(row.payload.payload.snapshot.basis).toBe("http_response_date");
+      const journal = (
+        await f.pool.query(
+          "SELECT evidence FROM btc_risk_events WHERE evidence->'market'->'context'->>'object_id'=$1 ORDER BY sequence DESC LIMIT 1",
+          [row.object_id],
+        )
+      ).rows[0];
+      expect(journal.evidence.market.context.payload).toEqual(row.payload);
+      expect(journal.evidence.finance.maintenance).toMatchObject({
+        usable_for_risk: true,
+        source_timestamp: null,
+        timestamp_basis: "http_response_date",
+      });
+      f.setClock(new Date(at + 5100).toISOString());
+      const expired = await risk();
+      expect(expired.state).toBe("REDUCE_ONLY");
+      expect(expired.reasons).toContain("data_unavailable");
+    });
     it.each(["manual", "strategy"] as const)(
       "enforces identical caps for %s and refuses caller policy override",
       async (source) => {

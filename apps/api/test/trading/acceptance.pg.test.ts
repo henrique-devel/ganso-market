@@ -453,14 +453,18 @@ describe.skipIf(!url)(
         await capture();
         tick(5101);
         await expect(submit(mode, owners[1]!, "stale")).rejects.toThrow(
-          "BTC_RISK_REDUCE_ONLY",
+          mode === "passive" ? "book_stale" : "BTC_RISK_REDUCE_ONLY",
         );
         for (const owner of owners) {
           expect(await orders(owner)).toEqual([]);
           expect((await readLedgerAccount(w.pool, owner)).events).toHaveLength(
             1,
           );
-          expect((await risk(owner))!.state).toBe("REDUCE_ONLY");
+          // The 2 s book guard rejects passive admission before a new risk
+          // checkpoint can be committed. Neither path creates an order/fill.
+          if (mode === "passive" && owner === owners[1])
+            expect(await risk(owner)).toBeNull();
+          else expect((await risk(owner))!.state).toBe("REDUCE_ONLY");
         }
       },
     );

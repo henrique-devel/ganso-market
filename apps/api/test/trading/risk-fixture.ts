@@ -1,3 +1,5 @@
+import { normalizeBtcContextSnapshot } from "../../src/venues/hyperliquid/context-snapshot.js";
+import { metadata } from "./bars-fixture.js";
 import type { SqlExecutor } from "../../src/database.js";
 import { createPgFixture } from "../pg-fixture.js";
 import { ledgerScope } from "../../src/trading/ledger.js";
@@ -68,6 +70,7 @@ export async function riskFixture(url: string | undefined) {
       unknown?: boolean;
       bookStale?: boolean;
       markStale?: boolean;
+      httpSnapshot?: boolean;
     } = {},
   ) {
     const at = options.at ?? Date.now(),
@@ -77,6 +80,37 @@ export async function riskFixture(url: string | undefined) {
     Object.assign(m.context!.payload.payload.mark_price, {
       raw: options.mark ?? "65000000000",
     });
+    if (options.httpSnapshot)
+      m.context!.payload = {
+        ...m.context!.payload,
+        ...normalizeBtcContextSnapshot(
+          [
+            {
+              universe: [
+                {
+                  name: "BTC",
+                  szDecimals: 5,
+                  maxLeverage: 40,
+                  marginTableId: 40,
+                },
+              ],
+              marginTables: [],
+              collateralToken: 0,
+            },
+            [{ markPx: "65000", oraclePx: "64990", funding: "0.0001" }],
+          ],
+          {
+            requestedAt: iso(at - 200),
+            receivedAt: iso(at),
+            serverDate: new Date(at).toUTCString(),
+            cacheStatus: "Miss from cloudfront",
+            age: null,
+          },
+          metadata,
+          `risk-http:${at}`,
+        ),
+        quality: "unknown",
+      };
     if (options.unknown)
       Object.assign(m.context!.payload, { source_timestamp: null });
     if (options.markStale)

@@ -48,6 +48,8 @@ export interface DeskMarket {
   readonly received_at: string | null;
 }
 export interface DeskMark extends DeskMarket {
+  readonly freshness_timestamp?: string | null;
+  readonly timestamp_basis?: string;
   readonly mark_price_usd_raw: string | null;
   readonly oracle_price_usd_raw: string | null;
 }

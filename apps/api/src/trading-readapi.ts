@@ -268,6 +268,8 @@ async function financialTx(
       quality: mark.quality,
       evidence: mark.evidence,
       source_timestamp: mark.source_timestamp,
+      freshness_timestamp: mark.freshness_timestamp,
+      timestamp_basis: mark.timestamp_basis,
       received_at: mark.received_at,
       mark_price_usd_raw: mark.mark_price?.raw ?? null,
       oracle_price_usd_raw: mark.oracle_price?.raw ?? null,

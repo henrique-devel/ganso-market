@@ -14,6 +14,7 @@ import {
 } from "../../src/storage/btc-retention.js";
 import { BTC_RETENTION_POLICY } from "../../src/trading/retention.js";
 import { iso, health, metadata, start, trade } from "./bars-fixture.js";
+import { normalizeBtcContextSnapshot } from "../../src/venues/hyperliquid/context-snapshot.js";
 import { normalizeHyperliquidFeed } from "../../src/venues/hyperliquid/feed-normalizer.js";
 
 const url = process.env.GANSO_TEST_DATABASE_URL;
@@ -114,6 +115,77 @@ describe.skipIf(!url)("BTC market persistence on disposable PostgreSQL", () => {
   });
   afterEach(async () => {
     await fixture?.dispose();
+  });
+  it("preserves HTTP response provenance, duplicate identity and restart gaps without rewriting history", async () => {
+    await capture(batch());
+    const before = await counts();
+    const ctx = normalizeBtcContextSnapshot(
+      [
+        {
+          universe: [
+            { name: "BTC", szDecimals: 5, maxLeverage: 40, marginTableId: 40 },
+          ],
+          marginTables: [],
+          collateralToken: 0,
+        },
+        [{ markPx: "64000", oraclePx: "64001", funding: "0.0000125" }],
+      ],
+      {
+        requestedAt: iso(start + 2000),
+        receivedAt: iso(start + 2200),
+        serverDate: new Date(start + 2000).toUTCString(),
+        cacheStatus: "Miss from cloudfront",
+        age: null,
+      },
+      metadata,
+      "rest-context",
+    );
+    const b = batch(
+      start + 3000,
+      [
+        {
+          ...ctx,
+          quality: "unknown",
+          gap_epoch: 0,
+          revalidation: "current_state_only",
+          continuity: "unproven",
+        },
+      ],
+      "new-session",
+    );
+    expect(await capture(b)).toMatchObject({ stored: 1 });
+    const charged = await counts();
+    expect(await capture(b)).toMatchObject({ status: "duplicate" });
+    expect(await counts()).toEqual(charged);
+    expect(Number(charged.raw)).toBeGreaterThan(Number(before.raw));
+    const row = (
+      await fixture.pool.query(
+        "SELECT o.payload,r.source_at FROM btc_market_records r JOIN btc_retention_objects o USING(object_id) WHERE r.kind='context'",
+      )
+    ).rows[0];
+    expect(row.source_at).toBeNull();
+    expect(row.payload.source_timestamp).toBeNull();
+    expect(row.payload.payload.snapshot.server_date).toBe(
+      new Date(start + 2000).toUTCString(),
+    );
+    const gap = (
+      await fixture.pool.query(
+        "SELECT payload FROM btc_retention_objects WHERE payload->>'session'='new-session'",
+      )
+    ).rows[0].payload;
+    expect(gap).toMatchObject({
+      restarted: true,
+      from: start + 1000,
+      at: start + 3000,
+    });
+    expect(
+      (
+        await fixture.pool.query(
+          "SELECT count(*)::int n FROM btc_market_records WHERE kind='trades'",
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect((await retentionCapacity(pool)).hold).toBe(true);
   });
   it("persists metadata/raw once, and replays a committed batch idempotently", async () => {
     expect(await capture(batch())).toMatchObject({ stored: 1, duplicates: 0 });

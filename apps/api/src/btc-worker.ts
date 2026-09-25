@@ -6,6 +6,10 @@ import { createDatabasePool } from "./database.js";
 import { createHyperliquidPublicAdapter } from "./venues/hyperliquid/public.js";
 import { startHyperliquidBtcFeed } from "./venues/hyperliquid/feed.js";
 import {
+  fetchBtcContextSnapshot,
+  fetchBtcBookSnapshot,
+} from "./venues/hyperliquid/context-snapshot.js";
+import {
   captureBtcMarketBatch,
   closeBtcMarketBars,
 } from "./storage/btc-marketstore.js";
@@ -53,7 +57,8 @@ async function run() {
       state.status !== "collecting" ||
       !state.last_capture_at ||
       !state.feed?.socket?.alive ||
-      state.feed.subscriptions_confirmed !== 3 ||
+      state.feed.subscriptions_confirmed !==
+        state.feed.subscriptions_expected ||
       state.feed.channels.book.status !== "healthy" ||
       state.feed.channels.context.status !== "healthy" ||
       Date.now() - Date.parse(state.timestamp) > 15_000 ||
@@ -125,7 +130,7 @@ async function run() {
     const adapter = createHyperliquidPublicAdapter();
     let metadata = await adapter.getBtcMetadata();
     if (stopRequested) return;
-    feed = startHyperliquidBtcFeed(metadata);
+    feed = startHyperliquidBtcFeed(metadata, "http_snapshot");
     collector = createCollector({
       feed,
       sessionId: randomUUID(),
@@ -136,8 +141,23 @@ async function run() {
       closeBars: (at) => closeBtcMarketBars(pool, at, true),
     });
     let refreshed = Date.now(),
-      logged = 0;
+      logged = 0,
+      contextRefreshed = 0;
     while (!stopRequested) {
+      if (feed.status().socket.connected) {
+        const contextDue = Date.now() - contextRefreshed >= 2000;
+        const [book, context] = await Promise.all([
+          fetchBtcBookSnapshot(metadata),
+          contextDue
+            ? fetchBtcContextSnapshot(metadata)
+            : Promise.resolve(null),
+        ]);
+        feed.observeSnapshot(book);
+        if (context) {
+          feed.observeSnapshot(context);
+          contextRefreshed = Date.now();
+        }
+      }
       if (Date.now() - refreshed >= 60_000) {
         const current = await adapter.getBtcMetadata();
         if (
