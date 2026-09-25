@@ -16,6 +16,7 @@ import {
 export async function acceptanceFixture(
   url: string | undefined,
   now: () => number,
+  statementClock = false,
 ) {
   const f = await createPgFixture(url);
   const clients = new Set<pg.Pool>();
@@ -32,6 +33,13 @@ export async function acceptanceFixture(
           await c.query("BEGIN");
           const result = await run({
             async query(sql, params) {
+              // Opt-in for consumers with clocks embedded in hour/lease queries.
+              // The timestamp is generated here, never supplied as SQL by callers.
+              if (statementClock)
+                sql = sql.replaceAll(
+                  "clock_timestamp()",
+                  `TIMESTAMPTZ '${iso(now())}'`,
+                );
               const r =
                 sql === "SELECT clock_timestamp() AS now"
                   ? await c.query("SELECT $1::timestamptz AS now", [iso(now())])
