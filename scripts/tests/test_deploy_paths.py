@@ -86,6 +86,13 @@ class LedgerDeploymentTests(unittest.TestCase):
         paths = [
             "config/trading/baseline.json",
             "apps/api/src/storage/baseline-manifest.ts",
+            "apps/api/src/trading/strategies/baseline.ts",
+            "apps/api/src/storage/baseline-inputs.ts",
+            "apps/api/src/storage/baseline-policy.ts",
+            "apps/api/src/storage/baseline-exits.ts",
+            "apps/api/test/trading/baseline-fixture.ts",
+            "apps/api/test/trading/baseline-policy.test.ts",
+            "apps/api/test/trading/baseline-exits.test.ts",
             "apps/api/test/trading/baseline-manifest.test.ts",
             "docs/contracts/btc-baseline-manifest-v1.md",
             "deploy/deploy_paths.py",
