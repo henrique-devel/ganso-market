@@ -7,8 +7,11 @@ export interface TradingMarketObservation {
   readonly schema_version: "trading.market-data.v1";
   readonly instrument_id: string;
   readonly instrument_version: string;
-  readonly source_id: "hyperliquid:mainnet:ws";
-  readonly parser_version: "hyperliquid.feed.v1";
+  readonly source_id: "hyperliquid:mainnet:ws" | "hyperliquid:mainnet:info";
+  readonly parser_version:
+    | "hyperliquid.feed.v1"
+    | "hyperliquid.context-snapshot.v1"
+    | "hyperliquid.book-snapshot.v1";
   readonly channel: "book" | "trades" | "context";
   readonly key: string;
   readonly source_timestamp: string | null;
@@ -41,6 +44,16 @@ export interface TradingMarketObservation {
         readonly funding_semantics: "current_context_not_settled_payment";
         readonly funding_interval_seconds: 3600;
         readonly settlement_timestamp: null;
+        /** Current-state HTTP response time; never a price-update timestamp. */
+        readonly snapshot?: {
+          readonly basis: "http_response_date";
+          readonly requested_at: string;
+          readonly received_at: string;
+          readonly server_date: string;
+          readonly cache_status: "Miss from cloudfront";
+          readonly age: string | null;
+          readonly raw_context: unknown;
+        };
       };
 }
 export interface TradingBookLevel {

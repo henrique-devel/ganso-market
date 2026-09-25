@@ -137,7 +137,7 @@ export async function observeRiskTx(tx: SqlExecutor, scope: TradingScope) {
     finance.maintenance.usable_for_risk &&
     fresh(
       now,
-      finance.maintenance.source_timestamp,
+      finance.maintenance.freshness_timestamp,
       finance.maintenance.received_at,
       RISK_POLICY.mark_age_ms,
     );
@@ -179,7 +179,7 @@ export async function observeRiskTx(tx: SqlExecutor, scope: TradingScope) {
         (value.maintenance.usable_for_risk &&
           fresh(
             boundary,
-            value.maintenance.source_timestamp,
+            value.maintenance.freshness_timestamp,
             value.maintenance.received_at,
             RISK_POLICY.mark_age_ms,
           ))

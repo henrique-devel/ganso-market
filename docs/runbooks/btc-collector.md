@@ -22,14 +22,34 @@ PostgreSQL em `docker inspect`. Ambos precisam estar no mesmo filesystem.
 Montar somente esse diretório vazio, read-only, em `/capacity`; nunca usar
 filesystem da imagem/overlay como evidência de espaço do banco.
 
-Os tetos iniciais do coletor são menores que os da política SQL: 512 MiB raw,
-768 MiB lógicos totais e 1 GiB físico (tabelas, TOAST, projeções e índices). São
-limites de corpus, mantidos também após restart, não uma previsão de duração.
-O envelope conservador cabe na margem observada antes da ativação; ajustar só
-após medir crescimento real em outra entrega. WAL/duplicação não são bytes lógicos:
-a reserva de disco usa alocação real do filesystem e continua independente do teto
-de tabelas. Uma transação limitada pode ultrapassar ligeiramente o teto físico;
-a reserva adicional evita depender desse teto como proteção exata de disco.
+Os tetos internos desta correção são **4 GiB raw, 6 GiB lógicos totais e
+4 GiB físicos**, incluindo o corpus anterior; as quotas SQL continuam 10/12 GiB.
+O piso de 25% mais 1 GiB, o limite de conexões e a parada terminal continuam
+independentes. Não há configuração para ampliar esses tetos pelo operador.
+
+Justificativa de admissão (25/09/2026 00:20 UTC): filesystem 322.302.373.888 B,
+94.190.473.216 B disponíveis; corpus 536.909.884 B raw, 798.752.769 B lógicos,
+473.636.864 B físicos. A margem acima do piso + reserva era 12,54 GB; crescer
+até o teto físico permite no máximo outros 3,82 GB em tabelas/índices, deixando
+aproximadamente 8,72 GB além do piso/reserva para WAL e demais alocações. Essa
+conta não reserva disco: o guard mede o filesystem antes de cada transação.
+Uma transação limitada pode ultrapassar ligeiramente o teto físico, mas não há
+loop de reinício nem expansão de volume. Crescimento externo pode parar antes.
+
+A captura anterior de 08:14 a 14:01 de 23/09 acumulou cerca de 92,7 MB raw/h e
+138 MB lógicos/h (média de calendário, incluindo interrupções). Repetir aquela
+média daria aproximadamente 40 h adicionais antes dos novos tetos raw/lógico.
+Ela **não** prevê a cadência atual: snapshots de livro são mais frequentes e há
+mais captures. Planejar apenas uma janela operacional de até 24 h, reavaliando
+os deltas reais e recusando novos experimentos se a janela necessária não couber.
+Não existe promessa de 7 dias: com HOLD, crescimento monotônico sempre esgota
+a capacidade. Não esperar nem declarar maturidade de 7/30 dias nesta entrega.
+
+`growth` expõe raw/lógico/físico/disco, duração e, depois de 60 s, taxa/hora e
+horizonte linear separado por teto. Usar o menor horizonte positivo, com margem
+para picos; queda/ausência de crescimento não significa duração infinita.
+O estimador é diagnóstico, jamais autoriza ignorar o guard. Medir por amostras
+separadas e confrontar especialmente WAL/alocação do host com as tabelas BTC.
 
 Manter `btc-paper-v1` em HOLD e suas quotas SQL de 10/12 GiB; TTL raw 7 dias,
 barras 12 meses, logs 14 dias, pins permanentes e dependências prevalecem.
@@ -68,10 +88,55 @@ ativos e permite este coletor; não ativa coletor parado nem qualquer legado.
 ## Checagem breve e parada
 
 `docker compose ... exec -T btc-worker cat /tmp/ganso-btc-health.json` informa
-progresso, último commit de captura, health individual dos três canais, gaps,
-subscriptions, retries, counters e limites. Docker health verifica progresso,
-socket e livro/contexto; silêncio de trades permanece explícito no canal e não
-prova socket morto. Contexto sem timestamp da fonte conserva qualidade unknown.
+progresso, último commit, canais, gaps, retries, contadores, limites e
+`consumer_freshness` dos últimos dados **confirmados no banco**. Docker health
+mede processo/socket/entrega por canal; admissão financeira depende separadamente
+de livro até 2 s e mark até 5 s. Um processo saudável não garante dado admissível.
+A API reavalia idade e gap em cada consulta/transação, sem cache de frescor.
+
+## Captura e procedência temporal
+
+Política `btc-current-state.v1`: trades observados integralmente por WebSocket;
+livro REST `l2Book` completo top-20 a cada ciclo (intervalo mínimo 1 s); contexto
+REST `metaAndAssetCtxs` no máximo a cada 2 s. Os snapshots intermediários ainda
+não expostos a consumidores podem ser agrupados, com contagem persistida em cada
+capture. Não são descartados trades nem objetos já persistidos/referenciados.
+O livro continua finito, sem garantia de fila contínua; replay de snapshots não
+prova cada mudança intrassegundo. Barras continuam derivadas de trades completos
+observados, com gaps/warmup explícitos. Isso reduz escopo de captura futura sem
+poda, remoção de arestas ou reclassificação de evidência financeira.
+
+`l2Book.time` é preservado como timestamp da fonte. O WebSocket observado tinha
+intervalos maiores que 2 s; consultar L2 permite obter o snapshot atual sem
+renomear um timestamp antigo. Se a fonte devolver tempo antigo, o livro continua
+stale e novos fills/intents executáveis são recusados.
+
+`activeAssetCtx` e o corpo de `metaAndAssetCtxs` não têm horário de atualização
+do mark. Para o novo snapshot, **`source_timestamp` permanece null e a qualidade
+de tempo do evento permanece unknown**. Preservam-se contexto BTC original,
+hash, parser, horário de início/fim da consulta, `Date`, `Age` e `X-Cache`.
+O contrato financeiro distingue `freshness_timestamp` e
+`timestamp_basis=http_response_date`: é frescor da resposta de estado atual,
+**não** prova do instante em que o preço mudou na cadeia. Não há fallback de
+mark para mid/oracle ou cópia do timestamp do livro.
+
+Aceitar essa observação requer HTTPS oficial sem redirect, `Miss from cloudfront`,
+Age ausente/zero, Date válido, resposta de até 256 KiB e 1,5 s, coerência de
+relógios (resolução HTTP de 1 s), BTC e versão de metadados compatíveis. O relógio
+HTTP envelhece até 5 s; contexto legado WS sem tempo continua degradado.
+Resposta ausente, cache, timeout, incompatibilidade ou tempo inválido encerra a
+coleta; nenhum retry irrestrito ou timestamp sintético. Limites de idade de risco
+permanecem 2/5 s, incluindo recepção, capture e revalidação de gap.
+
+O worker usa uma subscription pública (trades) e no máximo 60 consultas L2/min
+(peso 2), 30 contexto/min (peso 20), mais metadata/min (peso 20): teto de 740 do
+limite público de 1200/min/IP, sem cliente privado, credencial ou API paga.
+Fontes oficiais revalidadas nesta correção:
+[WebSocket](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions),
+[Info](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals),
+[limites](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits),
+[Date HTTP](https://www.rfc-editor.org/rfc/rfc9110.html#name-date).
+
 Barras/warmup são consultadas por `readBtcMarketView`; início parcial, restart,
 silêncio e gap continuam incompletos. Warmup pendente não é falha do coletor.
 

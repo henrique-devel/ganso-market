@@ -10,6 +10,7 @@ import {
   type StorageIdentity,
 } from "../trading/retention.js";
 import { FEED_LIMITS } from "../trading/feed.js";
+import { contextSnapshotTime } from "../trading/valuation.js";
 import {
   BAR_BUILD_VERSION,
   BAR_LIMITS,
@@ -119,8 +120,19 @@ function validateEvent(
     event.schema_version !== "trading.market-data.v1" ||
     event.instrument_id !== instrument ||
     event.instrument_version !== version ||
-    event.source_id !== source ||
-    event.parser_version !== "hyperliquid.feed.v1" ||
+    !(
+      (event.source_id === source &&
+        event.parser_version === "hyperliquid.feed.v1") ||
+      (event.source_id === "hyperliquid:mainnet:info" &&
+        event.parser_version === "hyperliquid.book-snapshot.v1" &&
+        event.channel === "book" &&
+        event.payload.kind === "book") ||
+      (event.source_id === "hyperliquid:mainnet:info" &&
+        event.parser_version === "hyperliquid.context-snapshot.v1" &&
+        event.channel === "context" &&
+        event.payload.kind === "mark_funding" &&
+        contextSnapshotTime(event.payload.snapshot, event.received_at))
+    ) ||
     !event.key ||
     event.key.length > 256 ||
     digest(event.payload) !== event.payload_hash ||
@@ -159,6 +171,12 @@ export interface BtcMarketBatch {
   events: readonly TradingMarketData[];
   /** Capture after drain, including when the drain is empty. Never omit gaps. */
   health: MarketHealth;
+  capturePolicy?: {
+    version: "btc-current-state.v1";
+    snapshotsCoalesced: number;
+    trades: "all_observed";
+    book: "latest_full_top_20_per_capture";
+  };
 }
 /** Inert by default, and not wired into a worker in G2-04.3. The G2-04.4 caller
  * must stop admission/mark a gap on ANY rejection; never drain-and-drop on quota.
@@ -185,6 +203,17 @@ export async function captureBtcMarketBatch(
   )
     throw new Error("BTC_MARKET_INVALID_BATCH");
   for (const event of batch.events) validateEvent(event, version, at);
+  if (
+    batch.capturePolicy &&
+    (batch.capturePolicy.version !== "btc-current-state.v1" ||
+      batch.capturePolicy.book !== "latest_full_top_20_per_capture" ||
+      batch.capturePolicy.trades !== "all_observed" ||
+      !Number.isSafeInteger(batch.capturePolicy.snapshotsCoalesced) ||
+      batch.capturePolicy.snapshotsCoalesced < 0 ||
+      batch.capturePolicy.snapshotsCoalesced + batch.events.length >
+        FEED_LIMITS.queue)
+  )
+    throw new Error("BTC_MARKET_INVALID_BATCH");
   for (const gap of batch.health.gaps) {
     if (
       !Number.isSafeInteger(gap.detected_at) ||
@@ -256,6 +285,7 @@ export async function captureBtcMarketBatch(
       input_hash: inputHash,
       restarted: !head || head.session_id !== batch.sessionId,
       history_truncated: batch.health.counters.gaps - previousGaps > unseenGaps,
+      ...(batch.capturePolicy ? { capture_policy: batch.capturePolicy } : {}),
     };
     await storeRetentionObjectTx(tx, {
       id: captureId,
@@ -519,7 +549,7 @@ export async function readBtcMarketView(
               row.payload.source_timestamp === null
                 ? ("unknown" as const)
                 : at - Date.parse(row.payload.source_timestamp) >
-                    FEED_LIMITS.sourceAgeMs
+                    (channel === "book" ? 2000 : FEED_LIMITS.sourceAgeMs)
                   ? ("stale" as const)
                   : row.payload.quality,
           },

@@ -5,10 +5,12 @@ import {
   COLLECTOR_LIMITS,
   createCollector,
   walBytesBetween,
+  collectorHorizon,
   type CapacitySample,
 } from "../src/btc/collector.js";
 import { health, metadata, start, iso, trade } from "./trading/bars-fixture.js";
 import { HYPERLIQUID_FEED_LIMITS } from "../src/venues/hyperliquid/feed-normalizer.js";
+import { normalizeHyperliquidFeed } from "../src/venues/hyperliquid/feed-normalizer.js";
 
 const sample: CapacitySample = {
   diskTotalBytes: String(300 * 1024 ** 3),
@@ -30,6 +32,8 @@ function fixture() {
     stopped: false,
     terminal_reason: null,
     subscriptions_confirmed: 3,
+    subscriptions_expected: 3,
+    context_mode: "ws" as const,
     transport_limits: HYPERLIQUID_FEED_LIMITS,
   };
   const feed = {
@@ -51,6 +55,81 @@ function fixture() {
   return { state, deps, collector: createCollector(deps) };
 }
 describe("BTC collector admission and terminal refusal", () => {
+  it("resumes above the old ceiling, with the measured corpus still charged", () => {
+    expect(() =>
+      assertCollectorCapacity({
+        ...sample,
+        rawBytes: "536909884",
+        totalBytes: "798752769",
+        physicalBytes: "473636864",
+      }),
+    ).not.toThrow();
+    expect(COLLECTOR_LIMITS.rawBytes).toBeLessThan(10 * 1024 ** 3);
+    expect(COLLECTOR_LIMITS.totalBytes).toBeLessThan(12 * 1024 ** 3);
+  });
+  it("estimates each ceiling independently and refuses a premature sustainability claim", () => {
+    expect(collectorHorizon(sample, sample, 59999)).toBeNull();
+    const after = {
+      ...sample,
+      totalBytes: "3600000",
+      rawBytes: "1800000",
+      physicalBytes: "1865536",
+      diskAvailableBytes: String(90 * 1024 ** 3 - 7200000),
+    };
+    expect(collectorHorizon(sample, after, 3600000)).toMatchObject({
+      logical: {
+        bytes_per_hour: 3600000,
+        remaining_seconds: Math.floor(
+          (COLLECTOR_LIMITS.totalBytes - 3600000) / 1000,
+        ),
+      },
+      raw: { bytes_per_hour: 1800000 },
+      filesystem: { bytes_per_hour: 7200000 },
+    });
+  });
+  it("coalesces only unexposed snapshots, persists the policy, and preserves every trade", async () => {
+    const { deps, collector } = fixture();
+    const book = (at: number) => ({
+      ...normalizeHyperliquidFeed(
+        "book",
+        {
+          coin: "BTC",
+          time: at,
+          levels: [
+            [{ px: "64000", sz: "1", n: 1 }],
+            [{ px: "64001", sz: "1", n: 1 }],
+          ],
+        },
+        iso(at),
+        metadata.instrument.instrument_version,
+        "fixture",
+      )[0]!,
+      quality: "fresh" as const,
+      gap_epoch: 0,
+      revalidation: "none" as const,
+      continuity: "unproven" as const,
+    });
+    const events = [
+      book(start),
+      trade(),
+      book(start + 1000),
+      trade(start + 1500, 2),
+    ];
+    deps.feed.drain.mockReturnValue(events);
+    await collector.tick();
+    expect(deps.capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        events: events.slice(1),
+        capturePolicy: {
+          version: "btc-current-state.v1",
+          snapshotsCoalesced: 1,
+          trades: "all_observed",
+          book: "latest_full_top_20_per_capture",
+        },
+      }),
+    );
+    expect(collector.status().counters.snapshots_coalesced).toBe(1);
+  });
   it.each([false, true])("accepts explicit paper enabled=%s", (enabled) => {
     expect(
       inspectBtcWorkerConfig({

@@ -1,5 +1,48 @@
 /** Structural inputs keep this pure core independent of adapter/runtime packages.
  * The storage adapter validates identity, event units and replay before projection. */
+/** Public current-state response evidence, NOT a venue price-update timestamp.
+ * Kept structural/pure so adapters, storage and financial readers apply one rule.
+ */
+export interface ContextSnapshot {
+  basis: "http_response_date";
+  requested_at: string;
+  received_at: string;
+  server_date: string;
+  cache_status: "Miss from cloudfront";
+  age: string | null;
+  raw_context: unknown;
+}
+export function contextSnapshotTime(
+  value: unknown,
+  receivedAt: string,
+): string | null {
+  if (!value || typeof value !== "object") return null;
+  const s = value as ContextSnapshot;
+  const requested = Date.parse(s.requested_at),
+    received = Date.parse(receivedAt),
+    date = Date.parse(s.server_date);
+  if (
+    s.basis !== "http_response_date" ||
+    s.received_at !== receivedAt ||
+    s.cache_status !== "Miss from cloudfront" ||
+    (s.age !== null && s.age !== "0") ||
+    !Number.isSafeInteger(requested) ||
+    !Number.isSafeInteger(received) ||
+    !Number.isSafeInteger(date) ||
+    new Date(requested).toISOString() !== s.requested_at ||
+    new Date(received).toISOString() !== receivedAt ||
+    new Date(date).toUTCString() !== s.server_date ||
+    received < requested ||
+    received - requested > 1500 ||
+    date > received ||
+    date < requested - 1000 ||
+    received - date > 2500 ||
+    !s.raw_context
+  )
+    return null;
+  return new Date(date).toISOString();
+}
+
 export interface Amount {
   raw: string;
   unit: string;
@@ -27,7 +70,12 @@ interface TradingMarketData {
         bids: readonly TradingBookLevel[];
         asks: readonly TradingBookLevel[];
       }
-    | { kind: "mark_funding"; mark_price: Amount; oracle_price: Amount }
+    | {
+        kind: "mark_funding";
+        mark_price: Amount;
+        oracle_price: Amount;
+        snapshot?: unknown;
+      }
     | { kind: "trade" };
 }
 export interface LedgerProjection {
@@ -59,6 +107,8 @@ interface FinancialEvent {
 /** Valuation contract v1 policy; neither a provider freshness claim nor a clock. */
 export const VALUATION_LIMITS = Object.freeze({
   sourceAgeMs: 10_000,
+  bookAgeMs: 2000,
+  markAgeMs: 5000,
   futureToleranceMs: 1000,
 });
 export const VALUATION_VERSION = "btc.valuation.v1" as const;
@@ -203,18 +253,37 @@ function quality(
     event = row?.payload;
   if (!event) return "missing";
   const scope = projection.ledger.scope;
+  const snapshotTime =
+    event.payload.kind === "mark_funding" &&
+    event.source_id === "hyperliquid:mainnet:info" &&
+    event.parser_version === "hyperliquid.context-snapshot.v1" &&
+    event.source_timestamp === null
+      ? contextSnapshotTime(event.payload.snapshot, event.received_at)
+      : null;
   if (
     event.instrument_id !== scope.instrument_id ||
     event.instrument_version !== scope.instrument_version ||
     event.channel !== kind ||
-    event.source_id !== "hyperliquid:mainnet:ws" ||
-    event.parser_version !== "hyperliquid.feed.v1" ||
+    !(
+      (event.source_id === "hyperliquid:mainnet:ws" &&
+        event.parser_version === "hyperliquid.feed.v1") ||
+      (kind === "book" &&
+        event.source_id === "hyperliquid:mainnet:info" &&
+        event.parser_version === "hyperliquid.book-snapshot.v1") ||
+      (kind === "context" && snapshotTime !== null)
+    ) ||
     event.schema_version !== "trading.market-data.v1"
   )
     return "incompatible";
   const received = time(event.received_at),
     source =
-      event.source_timestamp === null ? null : time(event.source_timestamp);
+      snapshotTime !== null
+        ? time(snapshotTime)
+        : event.source_timestamp === null
+          ? null
+          : time(event.source_timestamp);
+  const maxAge =
+    kind === "book" ? VALUATION_LIMITS.bookAgeMs : VALUATION_LIMITS.markAgeMs;
   if (
     received > now ||
     (source !== null &&
@@ -222,8 +291,8 @@ function quality(
   )
     return "future";
   if (
-    now - received > VALUATION_LIMITS.sourceAgeMs ||
-    (source !== null && now - source > VALUATION_LIMITS.sourceAgeMs) ||
+    now - received > maxAge ||
+    (source !== null && now - source > maxAge) ||
     event.quality === "stale"
   )
     return "stale";
@@ -233,7 +302,7 @@ function quality(
     !capture ||
     capture.at > now ||
     capture.at < received ||
-    now - capture.at > VALUATION_LIMITS.sourceAgeMs ||
+    now - capture.at > maxAge ||
     !capture.health.socket.connected ||
     !capture.health.socket.alive ||
     !channel ||
@@ -242,7 +311,7 @@ function quality(
     channel.gap_epoch !== event.gap_epoch
   )
     return "feed_unavailable";
-  if (source === null || event.quality !== "fresh")
+  if (source === null || (!snapshotTime && event.quality !== "fresh"))
     return "source_time_unproven";
   return "fresh";
 }
@@ -281,6 +350,11 @@ export function valueFinancials(
   )
     markQuality = "invalid";
   const canMark = markQuality === "fresh";
+  const snapshotTime =
+    context?.source_id === "hyperliquid:mainnet:info" &&
+    context.payload.kind === "mark_funding"
+      ? contextSnapshotTime(context.payload.snapshot, context.received_at)
+      : null;
   const unrealized =
     open.length === 0
       ? "0"
@@ -376,6 +450,12 @@ export function valueFinancials(
       oracle_price: prices?.oracle_price ?? null,
       evidence: market.context?.object_id ?? null,
       source_timestamp: context?.source_timestamp ?? null,
+      freshness_timestamp: snapshotTime ?? context?.source_timestamp ?? null,
+      timestamp_basis: snapshotTime
+        ? "http_response_date"
+        : context?.source_timestamp
+          ? "venue_event"
+          : "unknown",
       received_at: context?.received_at ?? null,
       unrealized_pnl_usd_raw: unrealized,
       equity_usd_raw:

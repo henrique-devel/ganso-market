@@ -165,10 +165,11 @@ export async function liquidateIsolatedPosition(
         result.reason = "book_unavailable";
         const book = market.book;
         const mark = market.context!.payload;
+        const triggerTime = snapshot.finance.maintenance.freshness_timestamp;
         const afterTrigger =
           !!book?.payload.source_timestamp &&
-          !!mark.source_timestamp &&
-          book.payload.source_timestamp >= mark.source_timestamp &&
+          !!triggerTime &&
+          book.payload.source_timestamp >= triggerTime &&
           book.payload.received_at >= mark.received_at;
         if (snapshot.finance.closing.quality === "fresh" && !afterTrigger)
           result.reason = "book_before_trigger";

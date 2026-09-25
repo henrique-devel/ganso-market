@@ -30,13 +30,19 @@ const subscriptions = [
  * https://github.com/nktkas/hyperliquid/blob/v0.33.3/src/transport/websocket/mod.ts
  * https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/timeouts-and-heartbeats
  */
-export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
+export function startHyperliquidBtcFeed(
+  metadata: TradingInstrumentMetadata,
+  contextMode: "ws" | "http_snapshot" = "ws",
+) {
   if (
     metadata.instrument.instrument_id !== "hyperliquid:mainnet:BTC" ||
     metadata.instrument.venue_symbol !== "BTC"
   )
     throw new TypeError("Expected standard BTC metadata");
   const machine = new FeedQualityMachine<TradingMarketObservation>();
+  const selectedSubscriptions = subscriptions.filter(
+    (s) => contextMode === "ws" || s.type === "trades",
+  );
   const session = randomUUID();
   let observation = 0;
   let socket: WebSocket | null = null;
@@ -81,7 +87,7 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
       openedAt = Date.now();
       lastPing = openedAt;
       machine.open(openedAt);
-      for (const subscription of subscriptions)
+      for (const subscription of selectedSubscriptions)
         send({ method: "subscribe", subscription });
     });
     current.on("message", (raw, binary) => {
@@ -112,7 +118,7 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
           if (
             frame.data?.method !== "subscribe" ||
             sub?.coin !== "BTC" ||
-            !subscriptions.some((item) => item.type === sub.type)
+            !selectedSubscriptions.some((item) => item.type === sub.type)
           )
             throw new TypeError("Invalid subscription ack");
           acked.add(sub.type);
@@ -121,6 +127,8 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
         if (!Object.hasOwn(WIRE_CHANNELS, frame.channel))
           throw new TypeError("Unexpected public channel");
         channel = WIRE_CHANNELS[frame.channel as keyof typeof WIRE_CHANNELS];
+        if (channel !== "trades" && contextMode !== "ws")
+          throw new TypeError("Unexpected context source");
         const events = normalizeHyperliquidFeed(
           channel,
           frame.data,
@@ -156,7 +164,7 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
     const now = Date.now(),
       state = machine.status(now);
     if (
-      (acked.size !== subscriptions.length &&
+      (acked.size !== selectedSubscriptions.length &&
         now - openedAt >= limits.handshakeMs) ||
       (waitingPongAt !== null && now - waitingPongAt >= limits.pongTimeoutMs) ||
       state.channels.book.status === "stale" ||
@@ -174,6 +182,15 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
   }, 1000);
   connect();
   return {
+    observeSnapshot: (event: TradingMarketObservation) => {
+      if (
+        contextMode !== "http_snapshot" ||
+        !["book", "context"].includes(event.channel) ||
+        event.source_id !== "hyperliquid:mainnet:info"
+      )
+        throw new Error("BTC_CONTEXT_RESPONSE_REFUSED");
+      machine.accept(event);
+    },
     stop: () => stop(),
     // Operator transport probe uses the same bounded retry/gap path as a failure.
     reconnect: () => {
@@ -186,6 +203,8 @@ export function startHyperliquidBtcFeed(metadata: TradingInstrumentMetadata) {
       stopped,
       terminal_reason: terminalReason,
       subscriptions_confirmed: acked.size,
+      subscriptions_expected: selectedSubscriptions.length,
+      context_mode: contextMode,
       transport_limits: limits,
     }),
   };
