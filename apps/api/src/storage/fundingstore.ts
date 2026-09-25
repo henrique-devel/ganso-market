@@ -12,11 +12,15 @@ import {
   FUNDING_HOUR_MS,
   FUNDING_VERSION,
   FUNDING_POLICY,
+  PAPER_FUNDING_MODEL,
+  PAPER_FUNDING_POLICY,
+  PAPER_FUNDING_MAX_RECEIPT_AGE_MS,
   fundingDelta,
   fundingPositions,
   fundingCoverage,
   type FundingReceipt,
 } from "../trading/funding.js";
+import { contextSnapshotTime } from "../trading/valuation.js";
 import type { LedgerReplayEvent } from "../trading/ledger.js";
 import { canonicalFingerprint } from "../trading/replay.js";
 import { assertEvidenceJson } from "../trading/retention.js";
@@ -41,6 +45,7 @@ import {
 } from "./btc-retention.js";
 
 export interface FundingCommand {
+  model_version?: typeof PAPER_FUNDING_MODEL;
   operation_id: string;
   period_hour: string;
   observation: {
@@ -78,7 +83,53 @@ export async function readFundingCoverageTx(
     asOf,
   );
 }
-/** S6 paper library only, no caller/route/worker until the integrated gate.
+/** Indexed, bounded selection. Receipt age is NOT price age. A later response
+ * can never backfill a historical cutoff. Same receipt time uses object ID. */
+export async function paperFundingOracleTx(
+  tx: SqlExecutor,
+  scope: TradingScope,
+  cutoff: string,
+) {
+  const rows = (
+    await tx.query<{ object_id: string; payload: TradingMarketData }>(
+      `SELECT r.object_id,o.payload FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
+     WHERE r.kind='context' AND r.received_at <= $1 AND r.received_at >= $2
+     ORDER BY r.received_at DESC,r.object_id LIMIT 16`,
+      [
+        cutoff,
+        new Date(
+          Date.parse(cutoff) - PAPER_FUNDING_MAX_RECEIPT_AGE_MS,
+        ).toISOString(),
+      ],
+    )
+  ).rows;
+  return (
+    rows.find(({ payload: o }) => validPaperOracle(o, scope, cutoff)) ?? null
+  );
+}
+function validPaperOracle(
+  o: TradingMarketData,
+  scope: TradingScope,
+  cutoff: string,
+) {
+  const p = o.payload;
+  return (
+    o.schema_version === "trading.market-data.v1" &&
+    o.instrument_id === scope.instrument_id &&
+    o.instrument_version === scope.instrument_version &&
+    o.source_id === "hyperliquid:mainnet:info" &&
+    o.parser_version === "hyperliquid.context-snapshot.v1" &&
+    o.channel === "context" &&
+    o.source_timestamp === null &&
+    o.quality === "unknown" &&
+    o.received_at <= cutoff &&
+    Date.parse(cutoff) - Date.parse(o.received_at) <=
+      PAPER_FUNDING_MAX_RECEIPT_AGE_MS &&
+    p.kind === "mark_funding" &&
+    !!contextSnapshotTime(p.snapshot, o.received_at)
+  );
+}
+/** Paper reconciliation used by the manual desk consumer.
  * Lock order retention -> account matches broker. Everything, including pending
  * evidence/pins, commits atomically. Retry identity is operation_id; settlement
  * identity is owner/hour, with deterministic per-position ledger keys. */
@@ -90,7 +141,11 @@ export async function reconcileFunding(
   assertEvidenceJson(input);
   requireFunding(
     Object.keys(input).sort().join() ===
-      "observation,operation_id,oracle_object_id,period_hour" &&
+      (input.model_version === undefined
+        ? "observation,operation_id,oracle_object_id,period_hour"
+        : "model_version,observation,operation_id,oracle_object_id,period_hour") &&
+      (input.model_version === undefined ||
+        input.model_version === PAPER_FUNDING_MODEL) &&
       /^[a-zA-Z0-9:._-]{1,160}$/.test(input.operation_id) &&
       (input.oracle_object_id === null ||
         (typeof input.oracle_object_id === "string" &&
@@ -99,6 +154,8 @@ export async function reconcileFunding(
     "COMMAND",
   );
   const hour = fundingHour(input.period_hour);
+  const paper = input.model_version === PAPER_FUNDING_MODEL;
+  const rateDecimals = paper ? 18 : 9;
   if (input.observation) {
     requireFunding(
       Object.keys(input.observation).sort().join() ===
@@ -109,6 +166,7 @@ export async function reconcileFunding(
       input.observation.row,
       input.period_hour,
       input.observation.received_at,
+      rateDecimals,
     );
   }
   const request: FundingCommand = JSON.parse(JSON.stringify(input)),
@@ -149,14 +207,40 @@ export async function reconcileFunding(
           request.observation.row,
           request.period_hour,
           request.observation.received_at,
+          rateDecimals,
         )
       : null;
-    const basis = final
-      ? hash([final.cutoff, final.rate_raw ?? request.observation!.row])
+    // Preserve legacy observation identity across an explicit model upgrade.
+    const legacyFinal = request.observation
+      ? parseFinalFunding(
+          request.observation.row,
+          request.period_hour,
+          request.observation.received_at,
+        )
+      : null;
+    const basis = legacyFinal
+      ? hash([
+          legacyFinal.cutoff,
+          legacyFinal.rate_raw ?? request.observation!.row,
+        ])
       : null;
     const evidenceId = `btc-funding:${hash([scope, request.operation_id])}`;
     const result: FundingReceipt = {
       schema_version: FUNDING_VERSION,
+      ...(paper
+        ? {
+            model_version: PAPER_FUNDING_MODEL,
+            rate:
+              final?.rate_raw === null || !final
+                ? null
+                : {
+                    unit: "RATE" as const,
+                    decimals: 18 as const,
+                    raw: final.rate_raw,
+                  },
+            price_evidence: null,
+          }
+        : {}),
       period_hour: request.period_hour,
       cutoff: final?.cutoff ?? null,
       status: "pending",
@@ -190,12 +274,12 @@ export async function reconcileFunding(
     } else if (final) {
       const eligible = fundingPositions(ledger.events, final.cutoff);
       if (eligible.ambiguous.length) result.reason = "ambiguous_cutoff_order";
-      else if (final.rate_raw === null) result.reason = "inexact_RATE9";
+      else if (final.rate_raw === null) result.reason = final.precision;
       else {
         const p = oracle?.payload;
         // Source time must be the actual settlement cut, not receipt time, a
         // nearby current context, candle, mark, premium or inferred oracle.
-        const validOracle =
+        const exactOracle =
           oracle?.schema_version === "trading.market-data.v1" &&
           oracle.instrument_id === scope.instrument_id &&
           oracle.instrument_version === scope.instrument_version &&
@@ -207,8 +291,13 @@ export async function reconcileFunding(
           oracle.received_at >= final.cutoff &&
           oracle.received_at <= now &&
           p?.kind === "mark_funding";
+        const validOracle = paper
+          ? !!oracle && validPaperOracle(oracle, scope, final.cutoff)
+          : exactOracle;
         if (eligible.positions.length && !validOracle)
-          result.reason = "missing_settlement_oracle";
+          result.reason = paper
+            ? "missing_pre_cut_snapshot"
+            : "missing_settlement_oracle";
         else {
           const price =
             validOracle && p?.kind === "mark_funding"
@@ -218,6 +307,27 @@ export async function reconcileFunding(
             !eligible.positions.length || BigInt(price) > 0n,
             "ORACLE_PRICE",
           );
+          if (paper && eligible.positions.length && oracle) {
+            // The consumer cannot choose a convenient older or future price.
+            const selected = await paperFundingOracleTx(
+              tx,
+              scope,
+              final.cutoff,
+            );
+            requireFunding(
+              selected?.object_id === request.oracle_object_id,
+              "PAPER_SELECTION_CHANGED",
+            );
+            result.price_evidence = {
+              object_id: request.oracle_object_id!,
+              received_at: oracle.received_at,
+              receipt_age_ms:
+                Date.parse(final.cutoff) - Date.parse(oracle.received_at),
+              source_timestamp: null,
+              quality: "unknown",
+              fidelity: "paper_approximation_not_venue_settlement",
+            };
+          }
           result.oracle_usd_raw = eligible.positions.length ? price : null;
           result.positions = eligible.positions.map((position) => ({
             ...position,
@@ -225,10 +335,15 @@ export async function reconcileFunding(
               position.quantity_btc_raw,
               price,
               final.rate_raw!,
+              rateDecimals,
             ),
           }));
           if (settled) {
             if (
+              (eligible.positions.length > 0 &&
+                (settled.model_version !== result.model_version ||
+                  canonicalFingerprint(settled.price_evidence ?? null) !==
+                    canonicalFingerprint(result.price_evidence ?? null))) ||
               settled.oracle_usd_raw !== result.oracle_usd_raw ||
               canonicalFingerprint(settled.positions) !==
                 canonicalFingerprint(result.positions)
@@ -242,7 +357,9 @@ export async function reconcileFunding(
           } else {
             result.status = "settled";
             result.reason = eligible.positions.length
-              ? "observed"
+              ? paper
+                ? "paper_pre_cut_snapshot"
+                : "observed"
               : "no_eligible_position";
             const commands: LedgerCommand[] = result.positions.map(
               (position) => {
@@ -266,7 +383,11 @@ export async function reconcileFunding(
                       hour - FUNDING_HOUR_MS,
                     ).toISOString(),
                     period_end: final.cutoff,
-                    rate: { unit: "RATE", decimals: 9, raw: final.rate_raw! },
+                    rate: {
+                      unit: "RATE",
+                      decimals: rateDecimals,
+                      raw: final.rate_raw!,
+                    },
                     delta: {
                       unit: "USD",
                       decimals: 6,
@@ -281,7 +402,9 @@ export async function reconcileFunding(
                       kind: "funding",
                       source_timestamp: final.cutoff,
                       received_at: request.observation!.received_at,
-                      parser_version: FUNDING_VERSION,
+                      parser_version: paper
+                        ? PAPER_FUNDING_MODEL
+                        : FUNDING_VERSION,
                       payload_hash: hash(request.observation!.row),
                       quality: "fresh",
                     },
@@ -308,6 +431,9 @@ export async function reconcileFunding(
     }
     // An incomplete retry cannot erase an earlier settlement or conflict.
     if (settled && result.status === "pending") {
+      delete result.model_version;
+      delete result.rate;
+      delete result.price_evidence;
       Object.assign(result, settled, {
         status: "duplicate",
         reason: "already_settled",
@@ -322,7 +448,7 @@ export async function reconcileFunding(
       payload: {
         request,
         result,
-        policy: FUNDING_POLICY,
+        policy: paper ? PAPER_FUNDING_POLICY : FUNDING_POLICY,
         ledger_sequence: ledger.projection.last_sequence,
       },
       dependencies: deps,

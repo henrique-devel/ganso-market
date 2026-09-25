@@ -11,6 +11,20 @@ interface FundingEvent {
 }
 
 export const FUNDING_VERSION = "btc.funding.v1" as const;
+export const PAPER_FUNDING_MODEL = "btc.funding.paper-precut.v2" as const;
+export const PAPER_FUNDING_MAX_RECEIPT_AGE_MS = 5000;
+export const PAPER_FUNDING_POLICY = Object.freeze({
+  model_version: PAPER_FUNDING_MODEL,
+  fidelity: "paper_approximation_not_venue_settlement",
+  price:
+    "last validated HTTP context received at/before cutoff, maximum receipt age 5000ms; source price time remains unknown",
+  units:
+    "quantity BTC8 * observed oracle USD_PER_BTC6 * exact final RATE18 -> USD6",
+  rounding: "floor signed cash delta once per account/hour/position",
+  cutoff: "fundingHistory.time verbatim; equal-time fills stay pending",
+  correction:
+    "append conflict; preserve settled cash; manual reconciliation required",
+});
 export const FUNDING_HOUR_MS = 3_600_000;
 export const FUNDING_POLICY = Object.freeze({
   units: "quantity BTC8 * oracle USD_PER_BTC6 * signed hourly RATE9 -> USD6",
@@ -23,9 +37,14 @@ export const FUNDING_POLICY = Object.freeze({
 /** No interpolation, mark substitution, daily-rate division or pro-rating. The
  * history endpoint already returns the hourly rate. Floor is a conservative
  * paper policy, not a claim about venue rounding. */
-export function fundingDelta(quantity: string, oracle: string, rate: string) {
+export function fundingDelta(
+  quantity: string,
+  oracle: string,
+  rate: string,
+  decimals: 9 | 18 = 9,
+) {
   const numerator = -BigInt(quantity) * BigInt(oracle) * BigInt(rate);
-  const denominator = 100_000_000n * 1_000_000_000n;
+  const denominator = 100_000_000n * 10n ** BigInt(decimals);
   return (
     numerator / denominator -
     (numerator < 0n && numerator % denominator !== 0n ? 1n : 0n)
@@ -63,6 +82,17 @@ export function fundingPositions(
 }
 export interface FundingReceipt {
   schema_version: typeof FUNDING_VERSION;
+  /** Absent on immutable legacy receipts: btc.funding.v1 exact-oracle policy. */
+  model_version?: typeof PAPER_FUNDING_MODEL;
+  rate?: { unit: "RATE"; decimals: 18; raw: string } | null;
+  price_evidence?: {
+    object_id: string;
+    received_at: string;
+    receipt_age_ms: number;
+    source_timestamp: null;
+    quality: "unknown";
+    fidelity: "paper_approximation_not_venue_settlement";
+  } | null;
   period_hour: string;
   cutoff: string | null;
   status: "pending" | "settled" | "conflict" | "duplicate";

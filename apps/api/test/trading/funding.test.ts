@@ -60,6 +60,22 @@ describe("economic funding arithmetic and public semantics", () => {
       ).rate_raw,
     ).toBeNull();
   });
+  it("preserves ten and eighteen decimal final rates and rejects precision overflow/range", () => {
+    for (const [rate, raw] of [
+      ["-0.0000072281", "-7228100000000"],
+      ["0.000000000000000001", "1"],
+    ]) {
+      const o = observation(rate);
+      expect(
+        parseFinalFunding(o.row, iso(hour), o.received_at, 18).rate_raw,
+      ).toBe(raw);
+    }
+    const o = observation("0.0400000000000000001");
+    expect(() =>
+      parseFinalFunding(o.row, iso(hour), o.received_at, 18),
+    ).toThrow("RATE_RANGE");
+    expect(fundingDelta("1", "1", "1", 18)).toBe("-1");
+  });
   it.each([
     { funding: "0.0001", oraclePx: "64000" },
     { coin: "BTC", time: cut, fundingRate: 0.0001, premium: "0" },

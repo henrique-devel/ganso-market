@@ -178,7 +178,14 @@ export type PerpetualLedgerPayload =
       readonly position_id: string;
       readonly period_start: UtcRfc3339Timestamp;
       readonly period_end: UtcRfc3339Timestamp;
-      readonly rate: TradingRate;
+      /** Legacy RATE9 or exact final funding RATE18; other rates stay RATE9. */
+      readonly rate:
+        | TradingRate
+        | {
+            readonly unit: "RATE";
+            readonly decimals: 18;
+            readonly raw: CanonicalIntegerString;
+          };
       readonly delta: UsdAmount;
       readonly origin: TradingDataIdentity;
     }

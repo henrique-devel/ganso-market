@@ -121,14 +121,22 @@ export function AccountCondition({
             {" "}
             · {account.funding.period_hour} ·{" "}
             <code>{account.funding.reason}</code>
+            {account.funding.model_version && (
+              <>
+                {" "}
+                · modelo <code>{account.funding.model_version}</code>
+              </>
+            )}
           </>
         )}
         .
       </p>
       <p>
-        Funding com posição elegível depende de oracle exato de settlement. Sua
-        ausência mantém a pendência e pode bloquear novas entradas; saídas e
-        gestão de risco continuam disponíveis conforme seus limites.
+        Funding paper usa taxa final e oracle observado antes do corte (resposta
+        recebida até 5 segundos antes). É aproximação de preço, não settlement
+        exato da venue: o horário de atualização do oracle é desconhecido. Sem
+        taxa ou evidência válida, fica pendente e pode bloquear novas entradas;
+        saídas e gestão de risco continuam conforme seus limites.
       </p>
       <p>
         Sinais e warmup de estratégia: sem diagnóstico disponível nesta leitura.

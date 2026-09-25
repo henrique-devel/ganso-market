@@ -9,11 +9,13 @@ import { applyIocTx } from "./brokerstore.js";
 import { applyPassiveTx } from "./passivestore.js";
 import { liquidateIsolatedPosition } from "./marginstore.js";
 import { readIsolatedMarginTx } from "./valuationstore.js";
-import { reconcileFunding } from "./fundingstore.js";
+import { reconcileFunding, paperFundingOracleTx } from "./fundingstore.js";
 import {
   fetchFinalBtcFunding,
   FUNDING_SOURCE,
 } from "../venues/hyperliquid/funding.js";
+
+import { PAPER_FUNDING_MODEL } from "../trading/funding.js";
 
 const hash = (v: unknown) =>
   createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -240,8 +242,8 @@ export async function consumeDeskAccount(pool: Pool, account: string) {
   });
 }
 
-/** One free public history request per cycle (>=30s). A missing settlement oracle
- * stays pending. No interpolation, synthetic settlement price or timestamp. */
+/** One free public history request per cycle (>=30s). Explicit paper model;
+ * no future context, inferred price timestamp or silent exact-oracle fallback. */
 export async function fundDeskAccount(
   pool: Pool,
   account: string,
@@ -263,21 +265,23 @@ export async function fundDeskAccount(
   });
   if (!hour) return;
   const response = await fetchFunding(hour);
-  if (!response.rows.length) return;
-  if (response.rows.length !== 1) throw new Error("BTC_DESK_FUNDING_AMBIGUOUS");
-  const row = response.rows[0]!;
-  const oracle = await pool.readOnly(
-    1500,
-    async (tx) =>
-      (
-        await tx.query<{ object_id: string }>(
-          "SELECT object_id FROM btc_market_records WHERE kind='context' AND source_at=$1 ORDER BY received_at,object_id LIMIT 1",
-          [new Date(row.time).toISOString()],
-        )
-      ).rows[0]?.object_id ?? null,
-  );
+  if (response.rows.length > 1) throw new Error("BTC_DESK_FUNDING_AMBIGUOUS");
+  const row = response.rows[0] ?? null;
+  const oracle = row
+    ? await pool.readOnly(
+        1500,
+        async (tx) =>
+          (
+            await paperFundingOracleTx(
+              tx,
+              ledgerScope(c.identity),
+              new Date(row.time).toISOString(),
+            )
+          )?.object_id ?? null,
+      )
+    : null;
   // Stable content identity avoids unbounded pending receipts when evidence is unchanged.
-  const operation_id = `funding:${hash([hour, row, oracle])}`;
+  const operation_id = `funding:${hash([PAPER_FUNDING_MODEL, hour, row, oracle])}`;
   const prior = await pool.readOnly(1500, (tx) =>
     tx.query(
       "SELECT 1 FROM btc_funding_results WHERE account_id=$1 AND operation_id=$2",
@@ -288,13 +292,16 @@ export async function fundDeskAccount(
   await withDeskWorker(pool, account, (worker) =>
     reconcileFunding(worker, ledgerScope(c.identity), {
       operation_id,
+      model_version: PAPER_FUNDING_MODEL,
       period_hour: hour,
       oracle_object_id: oracle,
-      observation: {
-        source: FUNDING_SOURCE,
-        received_at: response.received_at,
-        row,
-      },
+      observation: row
+        ? {
+            source: FUNDING_SOURCE,
+            received_at: response.received_at,
+            row,
+          }
+        : null,
     }),
   );
 }

@@ -449,8 +449,9 @@ export function registerTradingReadRoutes(
             status: "pending" | "settled" | "conflict";
             reason: string;
             period_hour: string;
+            model_version: string | null;
           }>(
-            `SELECT status,result->>'reason' AS reason,result->>'period_hour' AS period_hour
+            `SELECT status,result->>'reason' AS reason,result->>'period_hour' AS period_hour,result->>'model_version' AS model_version
         FROM btc_funding_results WHERE account_id=$1 AND period_hour=date_trunc('hour',$2::timestamptz)
         AND status <> 'duplicate' ORDER BY sequence DESC LIMIT 1`,
             [p.account, env.as_of],

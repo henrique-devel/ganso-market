@@ -82,6 +82,8 @@ A [autorização de entrega](../ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-ganso-20-
 
 **Implantação:** PR/merge/deploy de componente ainda subordinado ao gate S10; sem consultas pagas.
 
+**Emenda técnica de funding paper (25/09/2026):** o consumidor manual adota explicitamente `btc.funding.paper-precut.v2`: taxa final exata RATE18 e oracle de contexto HTTP recebido até 5000ms antes do corte, mantendo timestamp do preço desconhecido. É aproximação paper, não settlement exato da venue. O [contrato detalhado e limites](../runbooks/btc-manual-ticket.md#contrato-de-funding-para-posições-elegíveis) define seleção, evidência pinada, replay, empate no corte, pendências e campos que o manifesto deverá congelar. Envelope de recibo v1 e schema SQL42 preservados; recibos anteriores não são reescritos.
+
 ## S7
 
 **G2-05.7 — Simular margem isolada e liquidação.** [Prompt da sessão](../../prompts/ganso-2/g2-05-7-margem-liquidacao.md). Dependências: G2-05.3, G2-05.6, G2-05.4.
