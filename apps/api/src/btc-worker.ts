@@ -144,6 +144,7 @@ async function run() {
       logged = 0,
       contextRefreshed = 0;
     while (!stopRequested) {
+      const cycleStarted = Date.now();
       if (feed.status().socket.connected) {
         const contextDue = Date.now() - contextRefreshed >= 2000;
         const [book, context] = await Promise.all([
@@ -175,7 +176,11 @@ async function run() {
         console.info(JSON.stringify(collector.status()));
         logged = Date.now();
       }
-      await delay(COLLECTOR_LIMITS.intervalMs);
+      // Start-to-start cadence: IO time must not add another full interval
+      // to the age of a persisted book. Never catch up with a burst.
+      await delay(
+        Math.max(0, COLLECTOR_LIMITS.intervalMs - (Date.now() - cycleStarted)),
+      );
     }
     collector.stop("BTC_COLLECTOR_OPERATOR_STOP");
   } catch (error) {

@@ -97,7 +97,8 @@ A API reavalia idade e gap em cada consulta/transação, sem cache de frescor.
 ## Captura e procedência temporal
 
 Política `btc-current-state.v1`: trades observados integralmente por WebSocket;
-livro REST `l2Book` completo top-20 a cada ciclo (intervalo mínimo 1 s); contexto
+livro REST `l2Book` completo top-20 a cada ciclo (mínimo 1 s entre inícios,
+descontando o tempo de consulta/gravação da espera, sem rajada de compensação); contexto
 REST `metaAndAssetCtxs` no máximo a cada 2 s. Os snapshots intermediários ainda
 não expostos a consumidores podem ser agrupados, com contagem persistida em cada
 capture. Não são descartados trades nem objetos já persistidos/referenciados.
