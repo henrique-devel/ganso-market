@@ -91,7 +91,7 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
   it("retains complete transitive evidence including old raw and gaps", async () => {
     const scope = ledgerScope(identity());
     for (const [id, deps, payload] of [
-      ["raw", [], { gap_epoch: 3, quality: "gap" }],
+      ["raw", [], { gap_epoch: 3, quality: "gap", captured_probability: 0.7 }],
       ["intent", ["raw"], { schema_version: "btc.ioc.v1" }],
     ] as const)
       await storeRetentionObject(pool, {
@@ -115,7 +115,7 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
     ]);
     expect(
       a.dataset.evidence.find((x) => x.object_id === "raw")!.payload,
-    ).toEqual({ gap_epoch: 3, quality: "gap" });
+    ).toEqual({ gap_epoch: 3, quality: "gap", captured_probability: 0.7 });
     expect(
       (
         await f.pool.query(

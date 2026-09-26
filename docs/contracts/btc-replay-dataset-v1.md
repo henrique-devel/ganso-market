@@ -16,6 +16,10 @@ SHA, reducer versions, all captured outputs and the complete retained evidence
 closure. Registration evidence includes original policy/code/manifest/contract;
 market evidence includes original source/parser/build versions and timestamps.
 Financial values retain USD6, BTC8, USD_PER_BTC6 and USD14 cost basis.
+Canonical JSON sorts object keys, preserves array order and accepts finite
+nonfinancial JSON numbers (including captured Jev probabilities). Monetary
+amounts still pass the existing decimal-string/unit validators; raw model
+response bytes remain captured verbatim in their original response fields.
 
 Capture uses repeatable read and the existing retention → account lock order.
 Only the current snapshot can be captured; export reopens that immutable cut.

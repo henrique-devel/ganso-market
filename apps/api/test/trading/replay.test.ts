@@ -22,6 +22,7 @@ import {
   REPLAY_CONTRACTS,
   REPLAY_VERSION,
   replayDataset,
+  replayHash,
   sealReplayDataset,
   requireSameReplayDataset,
   type ReplayDataset,
@@ -97,6 +98,36 @@ export function dataset(): ReplayDataset {
   };
 }
 describe("bounded captured BTC dataset replay", () => {
+  it("hashes finite fractional captured metadata without allowing float money", () => {
+    const d = dataset();
+    const payload = {
+      confidence: 0.7,
+      probabilities: { approve: 0.7, veto: 0.3 },
+    };
+    d.roots = ["jev-captured"];
+    d.evidence = [
+      {
+        object_id: "jev-captured",
+        class: "decision",
+        identity: d.ledger[0]!,
+        recorded_at: iso(start),
+        payload,
+        payload_hash: replayHash(payload),
+        dependencies: [],
+      },
+    ];
+    const a = sealReplayDataset(d);
+    expect(
+      replayDataset(JSON.parse(JSON.stringify(a))).financials.balance_usd_raw,
+    ).toBe("1009650000");
+    expect(a.dataset.evidence[0]!.payload).toEqual(payload);
+    expect(() => replayHash({ confidence: NaN })).toThrow("INVALID_JSON");
+    const p = d.ledger[0]!.payload;
+    if (p.event_type !== "cash") throw new Error("fixture");
+    Object.assign(p.delta, { raw: 1000.1 });
+    expect(() => replayDataset(sealReplayDataset(d))).toThrow();
+  });
+
   it("replays finite capital, fees and late funding exactly without economic reordering", () => {
     const d = dataset(),
       a = sealReplayDataset(d),
@@ -225,9 +256,13 @@ describe("bounded captured BTC dataset replay", () => {
       "response_missing",
     );
     d.jev[0]!.state = "final";
-    d.jev[0]!.outcome = { status: "unavailable" };
+    d.jev[0]!.outcome = {
+      confidence: 0.75,
+      probabilities: { approve: 0.75, veto: 0.25 },
+    };
     expect(replayDataset(sealReplayDataset(d)).jev[0]!.outcome).toEqual({
-      status: "unavailable",
+      confidence: 0.75,
+      probabilities: { approve: 0.75, veto: 0.25 },
     });
     const ref = decision.input_refs[0]!;
     d.roots.push(ref.object_id);

@@ -1,5 +1,4 @@
 import type { DatabasePool, SqlExecutor } from "../database.js";
-import { baselineHash } from "./baseline-inputs.js";
 import { ledgerScope } from "../trading/ledger.js";
 import {
   pinRetentionObjectTx,
@@ -10,6 +9,7 @@ import {
   REPLAY_LIMITS,
   REPLAY_VERSION,
   replayDataset,
+  replayHash,
   requireReplay,
   sealReplayDataset,
   type ReplayArtifact,
@@ -180,7 +180,7 @@ export async function captureReplayDataset(
           );
           evidence.set(r.object_id, {
             ...r.value,
-            payload_hash: baselineHash(r.value.payload),
+            payload_hash: replayHash(r.value.payload),
           });
           for (const id of r.value.dependencies)
             if (!evidence.has(id)) next.add(id);

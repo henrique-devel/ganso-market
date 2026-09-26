@@ -1,5 +1,7 @@
-import { baselineHash, baselineTime } from "./baseline-inputs.js";
-import { canonicalBaselineJson } from "./baseline-manifest.js";
+import { createHash } from "node:crypto";
+import { baselineTime } from "./baseline-inputs.js";
+import { canonicalFingerprint } from "../trading/replay.js";
+import { assertEvidenceJson } from "../trading/retention.js";
 import { type BaselineDecision } from "./baseline-policy.js";
 import {
   parseLedgerEvent,
@@ -90,14 +92,23 @@ export interface ReplayArtifact {
 export function requireReplay(ok: unknown, code: string): asserts ok {
   if (!ok) throw new Error(`BTC_REPLAY_${code}`);
 }
+/** Captured JSON may contain fractional nonfinancial model probabilities.
+ * Amounts remain validated decimal strings by the existing ledger contracts. */
+export function replayHash(value: unknown): string {
+  assertEvidenceJson(value);
+  return createHash("sha256")
+    .update(canonicalFingerprint(value), "utf8")
+    .digest("hex");
+}
 export function sealReplayDataset(dataset: ReplayDataset): ReplayArtifact {
+  assertEvidenceJson(dataset);
   requireReplay(
-    Buffer.byteLength(canonicalBaselineJson(dataset)) <= REPLAY_LIMITS.bytes,
+    Buffer.byteLength(canonicalFingerprint(dataset)) <= REPLAY_LIMITS.bytes,
     "BYTE_LIMIT",
   );
-  return { dataset_id: `btc-replay:${baselineHash(dataset)}`, dataset };
+  return { dataset_id: `btc-replay:${replayHash(dataset)}`, dataset };
 }
-const same = (a: unknown, b: unknown) => baselineHash(a) === baselineHash(b);
+const same = (a: unknown, b: unknown) => replayHash(a) === replayHash(b);
 /** Captured-event replay, not a counterfactual strategy/backtest. No I/O, clock,
  * model call, admission or broker. Reservations never become cash expenses. */
 export function replayDataset(artifact: ReplayArtifact) {
@@ -133,7 +144,7 @@ export function replayDataset(artifact: ReplayArtifact) {
   );
   for (const o of d.evidence) {
     requireReplay(
-      o.payload_hash === baselineHash(o.payload) &&
+      o.payload_hash === replayHash(o.payload) &&
         baselineTime(o.recorded_at) <= cut,
       "EVIDENCE_HASH_OR_TIME",
     );
