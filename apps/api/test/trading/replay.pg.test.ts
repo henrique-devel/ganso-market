@@ -6,6 +6,8 @@ import {
   createLedgerAccount,
   appendLedgerBatchTx,
 } from "../../src/storage/ledgerstore.js";
+import { decideBaseline } from "../../src/storage/baseline-policy.js";
+import { fixture as baselineFixture, AT, T } from "./baseline-fixture.js";
 import { ledgerScope } from "../../src/trading/ledger.js";
 import {
   captureReplayDataset,
@@ -50,6 +52,78 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
   afterEach(async () => {
     await f.dispose();
   });
+  it("records exact selected decision IDs without truncating financial history", async () => {
+    await createLedgerAccount(pool, identity("baseline"));
+    await f.pool.query(
+      "INSERT INTO auth_accounts(username,password_hash) VALUES('owner','fixture-only')",
+    );
+    await f.pool.query(
+      "INSERT INTO btc_desk_controls(account_id,owner_account_id,broker,signing_key) SELECT 'baseline',account_id,'ioc',repeat('a',64) FROM auth_accounts",
+    );
+    const input = baselineFixture();
+    const decisions = [
+      decideBaseline(input),
+      decideBaseline({
+        ...input,
+        bar_end_at: iso(T + 900000),
+        decision_at: iso(AT + 900000),
+      }),
+    ];
+    await storeRetentionObject(pool, {
+      id: "registration",
+      class: "experiment",
+      identity: decisions[0]!.registration.scope,
+      recordedAt: new Date(iso(start)),
+      payload: decisions[0]!.registration,
+      dependencies: [],
+    });
+    await f.pool.query(
+      "INSERT INTO btc_baseline_registrations(account_id,registration,evidence_id) VALUES('baseline',$1,'registration')",
+      [JSON.stringify(decisions[0]!.registration)],
+    );
+    for (const d of decisions) {
+      const id = `decision:${d.decision_id}`;
+      await storeRetentionObject(pool, {
+        id,
+        class: "decision",
+        identity: d.registration.scope,
+        recordedAt: new Date(d.decision_at),
+        payload: d,
+        dependencies: [],
+      });
+      await f.pool.query(
+        "INSERT INTO btc_baseline_decisions(account_id,bar_end_at,decision_id,decision,evidence_id) VALUES('baseline',$1,$2,$3,$4)",
+        [d.bar_end_at, d.decision_id, JSON.stringify(d), id],
+      );
+    }
+    const selected = [decisions[0]!.decision_id];
+    const a = await captureReplayDataset(
+      pool,
+      "baseline",
+      "a".repeat(40),
+      selected,
+    );
+    expect(a.dataset.decisions.map((x) => x.decision.decision_id)).toEqual(
+      selected,
+    );
+    expect(replayDataset(a)).toMatchObject({
+      decision_selection: { mode: "ids", ids: selected },
+      financials: {
+        ledger: { last_sequence: "1" },
+        balance_usd_raw: "1000000000",
+      },
+    });
+    expect(await loadReplayDataset(pool, a.dataset_id)).toEqual(a);
+    await expect(
+      captureReplayDataset(pool, "baseline", "a".repeat(40), ["f".repeat(64)]),
+    ).rejects.toThrow("DECISION_SELECTION_MISSING");
+    await expect(
+      captureReplayDataset(pool, "baseline", "a".repeat(40), [
+        ...selected,
+        ...selected,
+      ]),
+    ).rejects.toThrow("DECISION_SELECTION");
+  });
   it("captures, pins, exports and replays a snapshot without rewriting account or activating anything", async () => {
     const a = await captureReplayDataset(pool, "manual", "a".repeat(40));
     expect(replayDataset(a).financials.balance_usd_raw).toBe("1000000000");
@@ -91,7 +165,7 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
   it("retains complete transitive evidence including old raw and gaps", async () => {
     const scope = ledgerScope(identity());
     for (const [id, deps, payload] of [
-      ["raw", [], { gap_epoch: 3, quality: "gap" }],
+      ["raw", [], { gap_epoch: 3, quality: "gap", captured_probability: 0.7 }],
       ["intent", ["raw"], { schema_version: "btc.ioc.v1" }],
     ] as const)
       await storeRetentionObject(pool, {
@@ -115,7 +189,7 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
     ]);
     expect(
       a.dataset.evidence.find((x) => x.object_id === "raw")!.payload,
-    ).toEqual({ gap_epoch: 3, quality: "gap" });
+    ).toEqual({ gap_epoch: 3, quality: "gap", captured_probability: 0.7 });
     expect(
       (
         await f.pool.query(

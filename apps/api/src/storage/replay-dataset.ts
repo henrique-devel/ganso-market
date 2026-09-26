@@ -1,5 +1,7 @@
-import { baselineHash, baselineTime } from "./baseline-inputs.js";
-import { canonicalBaselineJson } from "./baseline-manifest.js";
+import { createHash } from "node:crypto";
+import { baselineTime } from "./baseline-inputs.js";
+import { canonicalFingerprint } from "../trading/replay.js";
+import { assertEvidenceJson } from "../trading/retention.js";
 import { type BaselineDecision } from "./baseline-policy.js";
 import {
   parseLedgerEvent,
@@ -66,6 +68,8 @@ export interface ReplayDataset {
     reservation_sequence: string;
     semantics: "locked_account_snapshot";
   };
+  /** Omitted only in original v1 exports, where every decision was captured. */
+  decision_selection?: { mode: "all" } | { mode: "ids"; ids: string[] };
   identity: LedgerIdentity;
   ledger: LedgerEvent[];
   reservations: ReplayReservation[];
@@ -90,14 +94,23 @@ export interface ReplayArtifact {
 export function requireReplay(ok: unknown, code: string): asserts ok {
   if (!ok) throw new Error(`BTC_REPLAY_${code}`);
 }
+/** Captured JSON may contain fractional nonfinancial model probabilities.
+ * Amounts remain validated decimal strings by the existing ledger contracts. */
+export function replayHash(value: unknown): string {
+  assertEvidenceJson(value);
+  return createHash("sha256")
+    .update(canonicalFingerprint(value), "utf8")
+    .digest("hex");
+}
 export function sealReplayDataset(dataset: ReplayDataset): ReplayArtifact {
+  assertEvidenceJson(dataset);
   requireReplay(
-    Buffer.byteLength(canonicalBaselineJson(dataset)) <= REPLAY_LIMITS.bytes,
+    Buffer.byteLength(canonicalFingerprint(dataset)) <= REPLAY_LIMITS.bytes,
     "BYTE_LIMIT",
   );
-  return { dataset_id: `btc-replay:${baselineHash(dataset)}`, dataset };
+  return { dataset_id: `btc-replay:${replayHash(dataset)}`, dataset };
 }
-const same = (a: unknown, b: unknown) => baselineHash(a) === baselineHash(b);
+const same = (a: unknown, b: unknown) => replayHash(a) === replayHash(b);
 /** Captured-event replay, not a counterfactual strategy/backtest. No I/O, clock,
  * model call, admission or broker. Reservations never become cash expenses. */
 export function replayDataset(artifact: ReplayArtifact) {
@@ -114,6 +127,19 @@ export function replayDataset(artifact: ReplayArtifact) {
     /^[a-f0-9]{40}$/.test(d.code_sha) &&
       d.cut.semantics === "locked_account_snapshot",
     "MANIFEST",
+  );
+  const selection = d.decision_selection ?? { mode: "all" };
+  requireReplay(
+    selection.mode === "all" ||
+      (selection.mode === "ids" &&
+        selection.ids.length > 0 &&
+        selection.ids.length <= REPLAY_LIMITS.decisions &&
+        new Set(selection.ids).size === selection.ids.length &&
+        same(
+          [...selection.ids].sort(),
+          d.decisions.map((x) => x.decision.decision_id).sort(),
+        )),
+    "DECISION_SELECTION",
   );
   const cut = baselineTime(d.cut.captured_at);
   validateLedgerIdentity(d.identity);
@@ -133,7 +159,7 @@ export function replayDataset(artifact: ReplayArtifact) {
   );
   for (const o of d.evidence) {
     requireReplay(
-      o.payload_hash === baselineHash(o.payload) &&
+      o.payload_hash === replayHash(o.payload) &&
         baselineTime(o.recorded_at) <= cut,
       "EVIDENCE_HASH_OR_TIME",
     );
@@ -333,6 +359,7 @@ export function replayDataset(artifact: ReplayArtifact) {
     dataset_id: artifact.dataset_id,
     schema_version: REPLAY_VERSION,
     cut: d.cut,
+    decision_selection: selection,
     financials,
     reservations,
     decisions: decisions.map((x) => x.decision),

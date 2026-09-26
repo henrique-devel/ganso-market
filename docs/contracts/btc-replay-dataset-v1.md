@@ -16,6 +16,10 @@ SHA, reducer versions, all captured outputs and the complete retained evidence
 closure. Registration evidence includes original policy/code/manifest/contract;
 market evidence includes original source/parser/build versions and timestamps.
 Financial values retain USD6, BTC8, USD_PER_BTC6 and USD14 cost basis.
+Canonical JSON sorts object keys, preserves array order and accepts finite
+nonfinancial JSON numbers (including captured Jev probabilities). Monetary
+amounts still pass the existing decimal-string/unit validators; raw model
+response bytes remain captured verbatim in their original response fields.
 
 Capture uses repeatable read and the existing retention → account lock order.
 Only the current snapshot can be captured; export reopens that immutable cut.
@@ -47,11 +51,22 @@ truncation. The runner conservatively reserves 32 MiB below existing 6 GiB logic
 and 4 GiB physical worker ceilings; it never increases a quota or disables HOLD.
 The infrastructure's existing disk floor and resource budgets still apply.
 
-## On-demand CLI (inside the deployed API)
+A bounded explicit decision selection is also supported. `decision_selection`
+records either `all` or the exact requested IDs; unknown/duplicate IDs fail.
+Financial streams still cover the whole account from genesis to snapshot. Their
+PnL must not be attributed to only the selected decisions. Execution/financial
+dependencies remain complete even if they reference unselected decisions. This
+mode avoids silently truncating a large history; any selected closure that still
+exceeds a bound is refused without increasing limits. Original v1 exports without
+the selection field mean `all`.
+
+## On-demand CLI (workdir `/workspace/apps/api` inside the deployed API)
 
 - `node dist/btc-replay-cli.js version`: inspect runner/contracts/limits, no DB.
 - `node dist/btc-replay-cli.js capture baseline`: capture and pin one dataset;
   stdout is the product JSON export, not an administrative evidence report.
+- `node dist/btc-replay-cli.js capture baseline <decision-id> [<decision-id> ...]`:
+  explicitly capture only those decision outputs, keeping the full account ledger.
 - `node dist/btc-replay-cli.js export btc-replay:<sha256>`: load the pinned export.
 - `node dist/btc-replay-cli.js replay < dataset.json`: offline replay, no DB/config.
 - `node dist/btc-replay-cli.js compare < pair.json`: requires exactly two artifacts
