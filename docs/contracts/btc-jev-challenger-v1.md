@@ -1,8 +1,10 @@
 # btc.jev-challenger.v1 — G2-08.2
 
-Backend composition, **disabled by default**. This slice installs no scheduler,
+Backend composition, **disabled by default**. G2-08.2 installed no scheduler,
 registration, account/genesis, activation switch, credential or funded budget.
-G2-08.3 owns prospective registration and operational composition. Each paper
+G2-08.3 adds prospective registration, the existing API scheduler and authenticated
+observability; see [operational activation](../runbooks/btc-jev-activation.md).
+No account, credential or funded budget is created at startup. Each paper
 account starts independently with USD6 1000000000; scenarios must never be summed.
 The optional consumer cannot enable itself from a key or from an existing budget.
 The proposed US$5/month is not available credit or spending authorization.
@@ -73,8 +75,9 @@ deleted or truncated, and retention pins protect their input graph.
 model attempt without awaiting HTTP. Later ticks continue exit/risk management.
 `drain()`/`stop()` are shutdown/testing operations, not heartbeat operations.
 Funding accepts the registered challenger purpose through the same existing
-reconciliation function. Wiring that consumer and funding into an activated
-account belongs to G2-08.3; the production desk scheduler is unchanged here.
+reconciliation function. G2-08.3 wires that consumer and funding into an explicitly registered account.
+The frozen binding and real coverage are checked again at final admission;
+revocation blocks entry without refunding an already incurred or uncertain cost.
 
 Deployment classification is **API + additive migration only**, preserving the
 collector and other running services. No test writes production trading records.

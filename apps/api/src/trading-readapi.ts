@@ -1,3 +1,5 @@
+import type { ChallengerConfig } from "./models/jev-config.js";
+import { readChallengerStatusTx } from "./storage/challenger-operations.js";
 import { readOperationTx, HistoryCursorError } from "./storage/desk-history.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
@@ -345,6 +347,7 @@ export function registerTradingReadRoutes(
     pool: Pick<DatabasePool, "readOnly">;
     authService: { session(token: string): Promise<{ status: string }> };
     clock: () => Date;
+    challengerConfig?: ChallengerConfig;
   },
 ) {
   const error = (reply: FastifyReply, status: number, code: string) =>
@@ -397,6 +400,13 @@ export function registerTradingReadRoutes(
       }
     };
   }
+  app.get(
+    "/trading/jev",
+    { preHandler: guard },
+    handler("accounts", false, (tx) =>
+      readChallengerStatusTx(tx, deps.challengerConfig),
+    ),
+  );
   app.get(
     "/trading/accounts",
     { preHandler: guard },
@@ -458,7 +468,7 @@ export function registerTradingReadRoutes(
           )
         ).rows[0] ?? null;
       let baseline: DeskAccountView["baseline"] = null;
-      if (view.account.account.purpose === "baseline") {
+      if (["baseline", "challenger"].includes(view.account.account.purpose)) {
         const registration = (
           await tx.query<{
             registration: NonNullable<DeskAccountView["baseline"]>;

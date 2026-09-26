@@ -2,10 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
   DeskAccountView,
+  DeskJevView,
   DeskOperation,
 } from "@ganso-market/contracts/trading";
 import {
   AccountCondition,
+  JevStatus,
   OperationDetail,
   reasonLabel,
 } from "../src/BtcOperations.tsx";
@@ -113,5 +115,102 @@ describe("BTC history uses recorded facts from an explicit disposable fixture", 
       "resolucao",
       "sistema",
     ]);
+  });
+});
+
+describe("Jev status labels from MOCK UI fixtures", () => {
+  const empty: DeskJevView = {
+    as_of: "2026-09-26T12:00:00.000Z",
+    enabled: false,
+    reasons: ["credential_unavailable", "coverage_unavailable"],
+    credential_present: false,
+    configured_origin: "real",
+    registration: null,
+    recent: [],
+    real_api_cost: {
+      month: "2026-09",
+      measured_usd6: "0",
+      uncertain_reserved_usd6: "0",
+      calls: "0",
+      limit_usd6: null,
+      committed_usd6: "0",
+      circuit_open: false,
+    },
+  };
+  it("distinguishes no consultation and unavailable coverage from mock/real answers and paper cash", () => {
+    const html = renderToStaticMarkup(<JevStatus view={empty} />);
+    for (const text of [
+      "DESATIVADA",
+      "Credencial indisponível",
+      "Cobertura de consumo não disponível",
+      "Sem consulta Jev observada",
+      "Gasto real de API",
+      "não paga a API",
+      "não é crédito disponível",
+    ])
+      expect(html).toContain(text);
+    expect(html).not.toContain("API REAL · tentativa");
+    expect(html).not.toContain("MOCK · teste sintético");
+  });
+  it("keeps mock veto, real timeout and unrequested eligibility distinct without calling uncertain costs free", () => {
+    const row: DeskJevView["recent"][number] = {
+      decision_id: "mock:1",
+      source_decision_id: "mock:base",
+      bar_end_at: empty.as_of,
+      eligibility: "candidate",
+      eligibility_reasons: [],
+      request_state: "final",
+      deadline_at: empty.as_of,
+      origin: "mock",
+      attempted: true,
+      decision: "veto",
+      reason: "ok",
+      cost_usd6: "42",
+      reserved_usd6: "2753",
+      duration_ms: 35,
+      response_received_at: empty.as_of,
+      admission_reasons: ["jev_veto"],
+      admission_status: null,
+    };
+    const html = renderToStaticMarkup(
+      <JevStatus
+        view={{
+          ...empty,
+          recent: [
+            row,
+            {
+              ...row,
+              decision_id: "mock:2",
+              origin: "real",
+              decision: "abstain",
+              reason: "timeout",
+              cost_usd6: null,
+              response_received_at: null,
+            },
+            {
+              ...row,
+              decision_id: "mock:3",
+              origin: null,
+              attempted: false,
+              decision: null,
+              reason: null,
+              request_state: null,
+            },
+          ],
+        }}
+      />,
+    );
+    for (const text of [
+      "MOCK · teste sintético",
+      "VETO",
+      "API REAL · tentativa",
+      "ABSTENÇÃO",
+      "SEM CONSULTA",
+      "timeout",
+      "incerto",
+      "35.0 ms",
+      "sem ordem aceita",
+    ])
+      expect(html).toContain(text);
   });
 });

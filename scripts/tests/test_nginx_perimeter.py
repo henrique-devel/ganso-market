@@ -70,7 +70,7 @@ class NginxPerimeterTests(unittest.TestCase):
     def test_desk_reads_are_exact_and_get_only(self) -> None:
         expected = {
             f"/api/trading/{name}"
-            for name in ("accounts", "account", "positions", "orders", "operation")
+            for name in ("accounts", "account", "positions", "orders", "operation", "jev")
         }
         commands = {
             f"/api/trading/{name}" for name in ("preview", "submit", "cancel", "close", "pause")

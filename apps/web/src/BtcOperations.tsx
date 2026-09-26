@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type {
   DeskAccount,
   DeskAccountView,
+  DeskJevView,
   DeskOperation,
   DeskOrder,
   DeskPage,
@@ -222,6 +223,172 @@ export function AccountCondition({
     </div>
   );
 }
+const jevReasons: Record<string, string> = {
+  configuration_missing: "Configuração Jev ausente",
+  configuration_invalid: "Configuração Jev inválida",
+  switch_disabled: "Ativação desligada",
+  credential_unavailable: "Credencial indisponível",
+  billing_bound_unavailable: "Teto faturável total não atestado",
+  coverage_unavailable: "Cobertura de consumo não disponível",
+  coverage_month_expired: "Cobertura fora do mês vigente",
+  tariff_mismatch: "Tarifa divergente da cobertura",
+  tariff_or_coverage_attestation_invalid:
+    "Tarifa ou atestado de cobertura inválido",
+  budget_exhausted: "Limite real sem reserva disponível",
+  circuit_open: "Circuit breaker aberto",
+  registration_required: "Comparação ainda não registrada",
+  prospective_start_pending: "Aguardando início prospectivo",
+  entries_paused: "Entradas pausadas",
+  registration_identity_mismatch: "Configuração diverge do registro congelado",
+  source_registration_mismatch: "Vínculo com baseline divergente",
+};
+export function JevStatus({ view }: { view: DeskJevView }) {
+  const cost = view.real_api_cost;
+  return (
+    <section className="btc-desk" aria-label="Comparação Jev">
+      <h2>Comparação Jev · paper</h2>
+      <p>
+        <strong>
+          {view.enabled
+            ? "HABILITADA para novas consultas elegíveis"
+            : "DESATIVADA para novas consultas"}
+        </strong>
+        . Leitura em {view.as_of}.
+      </p>
+      {view.reasons.map((reason) => (
+        <p key={reason}>{jevReasons[reason] ?? reason}.</p>
+      ))}
+      <p>
+        Gasto real de API · {cost.month}: US$ {displayRaw(cost.measured_usd6)}{" "}
+        medidos; US$ {displayRaw(cost.uncertain_reserved_usd6)} reservados com
+        custo pendente ou incerto. Comprometido: US${" "}
+        {displayRaw(cost.committed_usd6)}. Limite provisionado:{" "}
+        {cost.limit_usd6 === null
+          ? "não disponível"
+          : `US$ ${displayRaw(cost.limit_usd6)}`}
+        . Tentativas registradas: {cost.calls}.
+      </p>
+      <p>
+        O saldo fictício de US$ 1.000 de cada conta é independente e não paga a
+        API. A proposta de US$ 5/mês não é crédito disponível.
+      </p>
+      {view.registration ? (
+        <>
+          <p>
+            Conta {view.registration.account_id}; fonte{" "}
+            {view.registration.source_account}. Comparação prospectiva desde{" "}
+            {view.registration.comparison_start_at}; baseline desde{" "}
+            {view.registration.source_start_at}. Sem respostas retroativas ou
+            histórico anterior pareado.
+          </p>
+          <p>
+            Mesmo candidato exógeno; caixa, posições, elegibilidade e risco
+            próprios. Jev somente permite, veta ou abstém a entrada; saídas
+            seguem a política congelada.
+          </p>
+          <details>
+            <summary>Identidade congelada</summary>
+            <p>
+              Origem configurada: {view.registration.origin}. Modelo{" "}
+              {view.registration.model}; adaptador{" "}
+              {view.registration.adapter_version}; prompt{" "}
+              {view.registration.prompt_version} (
+              {view.registration.prompt_hash}). Manifesto{" "}
+              {view.registration.manifest_fingerprint}; código{" "}
+              {view.registration.code_sha}; vínculo baseline{" "}
+              {view.registration.source_registration_hash}.
+            </p>
+          </details>
+        </>
+      ) : (
+        <p>
+          Sem registro challenger ou data de início. Nenhuma ativação real é
+          presumida.
+        </p>
+      )}
+      {view.recent.length === 0 && (
+        <p>
+          Sem consulta Jev observada. Isso não é uma resposta mock nem uma
+          resposta real.
+        </p>
+      )}
+      {view.recent.map((row) => (
+        <details key={row.decision_id}>
+          <summary>
+            {row.bar_end_at} ·{" "}
+            {row.attempted
+              ? row.origin === "mock"
+                ? "MOCK · teste sintético"
+                : "API REAL · tentativa"
+              : "SEM CONSULTA OBSERVADA"}{" "}
+            ·{" "}
+            {row.decision === "veto"
+              ? "VETO"
+              : row.decision === "abstain"
+                ? "ABSTENÇÃO"
+                : row.decision === "allow"
+                  ? "ALLOW"
+                  : "SEM RESPOSTA"}
+          </summary>
+          <p>
+            Elegibilidade própria: {row.eligibility};{" "}
+            {row.eligibility_reasons.join(", ") || "sem motivo adicional"}.
+            Consulta: {row.request_state ?? "não solicitada"}; motivo{" "}
+            {row.reason ?? "não observado"}.
+          </p>
+          <p>
+            Resposta recebida: {row.response_received_at ?? "não observada"}.
+            Latência medida pelo adaptador:{" "}
+            {row.duration_ms === null
+              ? "não observada"
+              : `${row.duration_ms.toFixed(1)} ms`}
+            . Deadline original: {row.deadline_at ?? "sem consulta"}.
+          </p>
+          <p>
+            Custo {row.origin === "mock" ? "sintético" : "de API"}:{" "}
+            {row.cost_usd6 === null
+              ? row.attempted
+                ? "incerto"
+                : "sem medição"
+              : `US$ ${displayRaw(row.cost_usd6)}`}
+            ; reserva{" "}
+            {row.reserved_usd6 === null
+              ? "não observada"
+              : `US$ ${displayRaw(row.reserved_usd6)}`}
+            . Admissão: {row.admission_status ?? "sem ordem aceita"};{" "}
+            {row.admission_reasons.join(", ") || "sem motivo adicional"}.
+          </p>
+          <p>
+            Decisão fonte:{" "}
+            <code>{row.source_decision_id ?? "não disponível"}</code>. Decisão
+            challenger: <code>{row.decision_id}</code>.
+          </p>
+        </details>
+      ))}
+      <p>
+        Saídas, stop, funding e risco continuam mesmo sem novas consultas.
+        Disponibilidade e decisões não demonstram desempenho econômico.
+      </p>
+    </section>
+  );
+}
+function JevPanel(props: Access) {
+  const [revision, setRevision] = useState(0);
+  return (
+    <div className="btc-desk">
+      <button onClick={() => setRevision((v) => v + 1)}>Atualizar Jev</button>
+      <JevRead key={revision} {...props} />
+    </div>
+  );
+}
+function JevRead(props: Access) {
+  const data = useRead<DeskJevView>("jev", props);
+  return data?.value ? (
+    <JevStatus view={data.value} />
+  ) : (
+    <p role="status">{data?.error ?? "Carregando estado Jev…"}</p>
+  );
+}
 export function BtcWorkspace(props: Access & { tab: string }) {
   const [selected, setSelected] = useState("manual");
   const [cursor, setCursor] = useState<string | null>(null);
@@ -281,6 +448,7 @@ export function BtcWorkspace(props: Access & { tab: string }) {
           </button>
         )}
       </section>
+      {["Mesa", "Experimentos"].includes(props.tab) && <JevPanel {...props} />}
       {props.tab === "Mesa" ? (
         <BtcDesk key={selected} {...props} accountId={selected} />
       ) : props.tab === "Operações" ? (
@@ -290,9 +458,10 @@ export function BtcWorkspace(props: Access & { tab: string }) {
           <h2>Experimentos BTC</h2>
           <p>Conta selecionada: {selected}.</p>
           <p>
-            Avaliação de experimentos ainda indisponível. Não há comparação de
+            Avaliação econômica ainda indisponível. Não há comparação de
             desempenho ou promoção de modelo disponível nesta tela. As decisões
-            da conta-base estão na Mesa e seus fills/custos em Operações.
+            das contas de estratégia estão na Mesa e seus fills/custos em
+            Operações.
           </p>
           <p>
             Versão cadastrada:{" "}

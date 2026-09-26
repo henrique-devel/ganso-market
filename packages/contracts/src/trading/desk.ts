@@ -178,3 +178,56 @@ export interface DeskPositionPage extends DeskPage<DeskPosition> {
   readonly mark: DeskMark | null;
   readonly book: DeskMarket | null;
 }
+
+/** Real provider spend is never a paper balance. Null origin means no attempt,
+ * even when a configured adapter would have used the real provider. */
+export interface DeskJevView {
+  as_of: string;
+  enabled: boolean;
+  reasons: string[];
+  credential_present: boolean;
+  configured_origin: "real";
+  registration: {
+    account_id: string;
+    source_account: string;
+    source_registration_hash: string;
+    source_start_at: string;
+    comparison_start_at: string;
+    registered_at: string;
+    manifest_fingerprint: string;
+    code_sha: string;
+    origin: "real" | "mock";
+    model: string;
+    adapter_version: string;
+    prompt_version: string;
+    prompt_hash: string;
+  } | null;
+  real_api_cost: {
+    month: string;
+    measured_usd6: string;
+    uncertain_reserved_usd6: string;
+    calls: string;
+    limit_usd6: string | null;
+    committed_usd6: string;
+    circuit_open: boolean;
+  };
+  recent: {
+    decision_id: string;
+    source_decision_id: string | null;
+    bar_end_at: string;
+    eligibility: string;
+    eligibility_reasons: string[];
+    request_state: "prepared" | "dispatching" | "final" | null;
+    deadline_at: string | null;
+    origin: "real" | "mock" | null;
+    attempted: boolean;
+    decision: "allow" | "veto" | "abstain" | null;
+    reason: string | null;
+    cost_usd6: string | null;
+    reserved_usd6: string | null;
+    duration_ms: number | null;
+    response_received_at: string | null;
+    admission_reasons: string[];
+    admission_status: string | null;
+  }[];
+}

@@ -82,6 +82,20 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_operational_challenger_selects_api_web_and_exact_read_gateway(self) -> None:
+        paths = [
+            "apps/api/src/challenger-activate-cli.ts",
+            "apps/api/src/models/jev-config.ts",
+            "apps/api/src/storage/challenger-operations.ts",
+            "apps/api/src/server.ts",
+            "apps/api/test/trading/challenger-operations.pg.test.ts",
+            "apps/api/test/trading/jev-config.test.ts",
+            "packages/contracts/src/trading/desk.ts",
+            "apps/web/src/BtcOperations.tsx",
+            "infra/nginx/nginx.conf",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "web", "nginx"})
+
     def test_disabled_challenger_preserves_the_running_collector(self) -> None:
         paths = [
             "apps/api/src/storage/challenger-runtime.ts",
