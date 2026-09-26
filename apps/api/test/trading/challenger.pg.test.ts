@@ -1,3 +1,10 @@
+import { activateChallenger } from "../../src/challenger-activate-cli.js";
+import { SecretValue } from "../../src/config.js";
+import type { ChallengerConfig } from "../../src/models/jev-config.js";
+import {
+  createOperationalChallenger,
+  readChallengerStatusTx,
+} from "../../src/storage/challenger-operations.js";
 import { readFileSync } from "node:fs";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import type { DatabasePool, SqlExecutor } from "../../src/database.js";
@@ -15,7 +22,6 @@ import {
   storeRetentionObjectTx,
   withBtcRetentionTransaction,
 } from "../../src/storage/btc-retention.js";
-import { baselineEvidenceTx } from "../../src/storage/baseline-store.js";
 import {
   readLedgerAccount,
   createLedgerAccount,
@@ -23,7 +29,6 @@ import {
 } from "../../src/storage/ledgerstore.js";
 import type { LedgerIdentity } from "../../src/storage/ledger-contract.js";
 import { command, usd } from "./ledger-fixture.js";
-import { ledgerScope } from "../../src/trading/ledger.js";
 import { applyRisk } from "../../src/storage/riskstore.js";
 import { withDeskWorker } from "../../src/storage/desk-worker.js";
 import {
@@ -52,6 +57,7 @@ let pool: Pick<DatabasePool, "transaction" | "readOnly">,
   r: BaselineRegistration,
   cr: BaselineRegistration;
 let input: ReturnType<typeof fixture>, tariff: ReturnType<typeof mockTariff>;
+let config: ChallengerConfig;
 let consumers: ReturnType<typeof createChallengerConsumer>[];
 const makeWorker = () => {
   const p = f.worker().pool;
@@ -242,49 +248,39 @@ describe.skipIf(!url)(
           contract,
         )
       ).registration;
-      // Explicitly synthetic prospective challenger registration in disposable PG.
-      // There is no activation CLI or production seed in this slice.
-      const id: LedgerIdentity = structuredClone(
-        (
-          await f.pool.query(
-            "SELECT identity FROM btc_ledger_accounts WHERE account_id='baseline'",
-          )
-        ).rows[0].identity,
+      // Operational registration with explicitly MOCK coverage/transport, never production credit.
+      tariff = mockTariff();
+      config = {
+        enabled: true,
+        credentialPresent: true,
+        key: new SecretValue("MOCK-test-only"),
+        tariff,
+        provisionReference: "MOCK-disposable-coverage",
+        billingBoundReference: "MOCK-test-bound",
+        reasons: [],
+      };
+      await pool.transaction((tx) =>
+        tx.query(
+          "INSERT INTO btc_jev_budgets(origin,month,enabled,provision_reference,tariff_hash,limit_usd6) VALUES('mock',$1,true,$2,$3,5000000)",
+          [iso(now).slice(0, 7), config.provisionReference, jevHash(tariff)],
+        ),
       );
-      Object.assign(id.account, {
-        account_id: "challenger",
-        purpose: "challenger",
-        experiment_id: "mock:challenger",
-      });
-      Object.assign(id.experiment, { experiment_id: "mock:challenger" });
-      cr = { ...r, scope: ledgerScope(id) };
-      await withBtcRetentionTransaction(pool, async (tx) => {
-        await tx.query(
-          "INSERT INTO btc_ledger_accounts(account_id,experiment_id,instrument_id,instrument_version,identity) VALUES('challenger',$1,$2,$3,$4::jsonb)",
-          [
-            cr.scope.experiment_id,
-            cr.scope.instrument_id,
-            cr.scope.instrument_version,
-            JSON.stringify(id),
-          ],
-        );
-        await tx.query(
-          "INSERT INTO btc_desk_controls(account_id,owner_account_id,enabled,broker,latency_ms,signing_key) SELECT 'challenger',owner_account_id,true,'ioc',1000,signing_key FROM btc_desk_controls WHERE account_id='baseline'",
-        );
-        const evidence_id = "mock:challenger-registration";
-        await baselineEvidenceTx(
-          tx,
-          { registration: cr, evidence_id, enabled: true },
-          evidence_id,
-          { registration: cr, metadata_id: input.metadata!.object_id },
-          iso(now),
-          [input.metadata!.object_id],
-        );
-        await tx.query(
-          "INSERT INTO btc_baseline_registrations(account_id,registration,evidence_id) VALUES('challenger',$1::jsonb,$2)",
-          [JSON.stringify(cr), evidence_id],
-        );
-      });
+      const registered = await activateChallenger(
+        pool,
+        "baseline-owner",
+        "c".repeat(40),
+        manifest,
+        contract,
+        config,
+        "mock",
+      );
+      if (!registered.registration) throw new Error("mock registration failed");
+      cr = registered.registration;
+      const id: LedgerIdentity = (
+        await f.pool.query(
+          "SELECT identity FROM btc_ledger_accounts WHERE account_id='challenger'",
+        )
+      ).rows[0].identity;
       now = T;
       vi.setSystemTime(now);
       await createLedgerAccount(pool, id);
@@ -295,19 +291,147 @@ describe.skipIf(!url)(
       await fund("baseline");
       await fund("challenger");
       await seedBars();
-      tariff = mockTariff();
-      await pool.transaction((tx) =>
-        tx.query(
-          "INSERT INTO btc_jev_budgets(origin,month,enabled,provision_reference,tariff_hash,limit_usd6) VALUES('mock',$1,true,'explicit MOCK test only',$2,5000000)",
-          [iso(now).slice(0, 7), jevHash(tariff)],
-        ),
-      );
       await consumeBaselineAccount(pool, "baseline");
     });
     afterEach(async () => {
       for (const c of consumers) await c.stop();
       vi.useRealTimers();
       await f?.dispose();
+    });
+    it("operational composition consumes the registered candidate with MOCK billing and observes no real expense", async () => {
+      const network = vi.fn().mockResolvedValue(mockResponse("veto"));
+      const runtime = createOperationalChallenger(pool, config, () => {}, {
+        origin: "mock",
+        model: tariff.model,
+        evaluate: network,
+      });
+      try {
+        await runtime.tick("challenger");
+        await runtime.drain();
+        expect(network).toHaveBeenCalledTimes(1);
+        const status = await pool.readOnly(1500, (tx) =>
+          readChallengerStatusTx(tx, config),
+        );
+        expect(status.registration).toMatchObject({
+          origin: "mock",
+          comparison_start_at: cr.start_at,
+          source_start_at: r.start_at,
+        });
+        expect(status.real_api_cost).toMatchObject({
+          calls: "0",
+          measured_usd6: "0",
+          limit_usd6: null,
+        });
+        expect(status.recent[0]).toMatchObject({
+          origin: "mock",
+          attempted: true,
+          decision: "veto",
+          cost_usd6: "42",
+          admission_status: null,
+        });
+        await runtime.tick("challenger");
+        await runtime.drain();
+        expect(network).toHaveBeenCalledTimes(1);
+      } finally {
+        await runtime.stop();
+      }
+    });
+    it("revoking provisioned coverage prevents a new operational request without touching baseline", async () => {
+      await f.pool.query(
+        "UPDATE btc_jev_budgets SET enabled=false WHERE origin='mock'",
+      );
+      const network = vi.fn();
+      const runtime = createOperationalChallenger(pool, config, () => {}, {
+        origin: "mock",
+        model: tariff.model,
+        evaluate: network,
+      });
+      try {
+        await runtime.tick("challenger");
+        await runtime.drain();
+        expect(network).not.toHaveBeenCalled();
+        expect(await jobs()).toHaveLength(0);
+        expect(await orders("baseline")).toHaveLength(1);
+        const status = await pool.readOnly(1500, (tx) =>
+          readChallengerStatusTx(tx, config),
+        );
+        expect(status.recent[0]).toMatchObject({
+          origin: null,
+          attempted: false,
+          request_state: null,
+          cost_usd6: null,
+        });
+      } finally {
+        await runtime.stop();
+      }
+    });
+    it("revocation during HTTP is revalidated at admission without a second heartbeat", async () => {
+      let resolve!: (x: unknown) => void;
+      let dispatched!: () => void;
+      const sent = new Promise<void>((r) => {
+        dispatched = r;
+      });
+      const network = vi.fn(() => {
+        dispatched();
+        return new Promise((resolveResponse) => {
+          resolve = resolveResponse;
+        });
+      });
+      const runtime = createOperationalChallenger(pool, config, () => {}, {
+        origin: "mock",
+        model: tariff.model,
+        evaluate: network,
+      });
+      try {
+        await runtime.tick("challenger");
+        await sent;
+        await f.pool.query(
+          "UPDATE btc_jev_budgets SET enabled=false WHERE origin='mock'",
+        );
+        resolve(mockResponse());
+        await runtime.drain();
+        expect(await orders()).toHaveLength(0);
+        expect((await jobs())[0].outcome.reasons).toContain(
+          "activation_revoked",
+        );
+        expect((await budget()).committed_usd6).toBe("42");
+        expect(await orders("baseline")).toHaveLength(1);
+      } finally {
+        await runtime.stop();
+      }
+    });
+    it("the final admission consumes its already settled reservation, not a second hypothetical charge", async () => {
+      await f.pool.query(
+        "UPDATE btc_jev_budgets SET limit_usd6=2753 WHERE origin='mock'",
+      );
+      let resolve!: (x: unknown) => void;
+      let dispatched!: () => void;
+      const sent = new Promise<void>((r) => {
+        dispatched = r;
+      });
+      const network = vi.fn(() => {
+        dispatched();
+        return new Promise((r) => {
+          resolve = r;
+        });
+      });
+      const runtime = createOperationalChallenger(pool, config, () => {}, {
+        origin: "mock",
+        model: tariff.model,
+        evaluate: network,
+      });
+      try {
+        await runtime.tick("challenger");
+        await sent;
+        await runtime.tick("challenger"); // full hold disables another new query, not the paid receipt
+        resolve(mockResponse());
+        await runtime.drain();
+        expect(await orders()).toHaveLength(1);
+        expect(network).toHaveBeenCalledTimes(1);
+        expect((await budget()).committed_usd6).toBe("42");
+      } finally {
+        await runtime.stop();
+      }
     });
     it.each(["allow", "veto", "abstain"] as const)(
       "%s shares the exact exogenous candidate, fixes proposal before Jev and replays original without another call",

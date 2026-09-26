@@ -1,3 +1,4 @@
+import type { ChallengerConfig } from "./models/jev-config.js";
 import { registerTradingCommandRoutes } from "./trading-commandapi.js";
 import { registerTradingReadRoutes } from "./trading-readapi.js";
 import { randomUUID } from "node:crypto";
@@ -42,6 +43,7 @@ export interface RouteBudgetConfig {
 }
 
 export interface BuildApiOptions {
+  readonly challengerConfig?: ChallengerConfig;
   readonly config: ApiConfig;
   /**
    * RFC-023 D1. Defaults to `requireStatementBudgets(config)`, which throws
@@ -252,6 +254,9 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
     });
     const readPool = budgetedPool(options.pool);
     registerTradingReadRoutes(app, {
+      ...(options.challengerConfig
+        ? { challengerConfig: options.challengerConfig }
+        : {}),
       pool: readPool,
       authService: options.authService,
       clock,

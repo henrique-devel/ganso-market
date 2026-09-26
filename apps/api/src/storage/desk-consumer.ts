@@ -1,3 +1,5 @@
+import { createOperationalChallenger } from "./challenger-operations.js";
+import type { ChallengerConfig } from "../models/jev-config.js";
 import { consumeBaselineAccount } from "./baseline-runtime.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabasePool, SqlExecutor } from "../database.js";
@@ -317,7 +319,12 @@ export async function fundDeskAccount(
 }
 
 /** Bounded sequential loops, existing API pool only; no live adapter; baseline requires its separate explicit registration. */
-export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
+export function startDeskConsumer(
+  pool: Pool,
+  log: (reason: string) => void,
+  config?: ChallengerConfig,
+) {
+  const challenger = createOperationalChallenger(pool, config, log);
   let stopped = false,
     timer: ReturnType<typeof setTimeout> | undefined;
   let funding: Promise<void> | null = null;
@@ -330,12 +337,12 @@ export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
         async (tx) =>
           (
             await tx.query<{ account_id: string; purpose: string }>(
-              "SELECT c.account_id,a.identity->'account'->>'purpose' AS purpose FROM btc_desk_controls c JOIN btc_ledger_accounts a USING(account_id) WHERE a.identity->'account'->>'purpose' IN ('manual','baseline') AND (a.identity->'experiment'->>'started_at')::timestamptz <= clock_timestamp() ORDER BY c.account_id LIMIT 3",
+              "SELECT c.account_id,a.identity->'account'->>'purpose' AS purpose FROM btc_desk_controls c JOIN btc_ledger_accounts a USING(account_id) WHERE a.identity->'account'->>'purpose' IN ('manual','baseline','challenger') AND (a.identity->'experiment'->>'started_at')::timestamptz <= clock_timestamp() ORDER BY CASE a.identity->'account'->>'purpose' WHEN 'baseline' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END,c.account_id LIMIT 4",
             )
           ).rows,
       );
       if (
-        accounts.length > 2 ||
+        accounts.length > 3 ||
         new Set(accounts.map((a) => a.purpose)).size !== accounts.length
       )
         throw new Error("BTC_DESK_ACCOUNT_LIMIT");
@@ -343,6 +350,7 @@ export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
         try {
           if (purpose === "baseline")
             await consumeBaselineAccount(pool, account_id);
+          else if (purpose === "challenger") await challenger.tick(account_id);
           else await consumeDeskAccount(pool, account_id);
         } catch (e) {
           const reason =
@@ -384,5 +392,6 @@ export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
     clearTimeout(timer);
     await running;
     await funding;
+    await challenger.stop();
   };
 }

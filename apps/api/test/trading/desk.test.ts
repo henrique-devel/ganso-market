@@ -13,6 +13,7 @@ describe("desk HTTP boundary", () => {
     });
     try {
       for (const route of [
+        "jev",
         "accounts",
         "account",
         "positions",

@@ -28,6 +28,7 @@ export type {
   DeskMargin,
   DeskBalances,
   DeskAccountView,
+  DeskJevView,
   DeskPosition,
   DeskPositionPage,
   DeskOrder,

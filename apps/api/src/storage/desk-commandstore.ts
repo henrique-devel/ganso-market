@@ -138,7 +138,8 @@ async function accessTx(
     row.identity.account.mode !== "paper" ||
     !(
       row.identity.account.purpose === "manual" ||
-      (row.identity.account.purpose === "baseline" && action === "pause")
+      (["baseline", "challenger"].includes(row.identity.account.purpose) &&
+        action === "pause")
     )
   )
     fail(403, "TRADING_PAPER_MANUAL_REQUIRED");

@@ -1,3 +1,4 @@
+import { loadChallengerConfig } from "./models/jev-config.js";
 import { startDeskConsumer } from "./storage/desk-consumer.js";
 import { createAuthService } from "./auth/service.js";
 import { createPostgresAuthStore } from "./auth/store.js";
@@ -23,15 +24,19 @@ async function run(): Promise<void> {
   const authService = createAuthService({
     store: createPostgresAuthStore(pool),
   });
+  const challengerConfig = await loadChallengerConfig();
   const app = buildApi({
+    challengerConfig,
     config,
     statementBudgets,
     readinessProbe: createPostgresReadinessProbe(pool),
     authService,
     pool,
   });
-  const stopDesk = startDeskConsumer(pool, (reason_code) =>
-    app.log.warn({ reason_code }, "paper_desk_consumer"),
+  const stopDesk = startDeskConsumer(
+    pool,
+    (reason_code) => app.log.warn({ reason_code }, "paper_desk_consumer"),
+    challengerConfig,
   );
   app.addHook("onClose", stopDesk);
   const gracefulShutdown = createGracefulShutdown(app, pool);

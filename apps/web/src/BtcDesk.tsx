@@ -567,33 +567,36 @@ export function BtcDesk({
           </aside>
         </div>
       )}
-      {account?.account.account.purpose === "baseline" && (
-        <section aria-label="Pausa da conta-base">
-          <p>
-            A pausa persiste após reinício. Saídas continuam geridas; rearme
-            exige ação explícita do operador.
-          </p>
-          <button
-            disabled={busy || !!pending}
-            onClick={() =>
-              void transact({ account_id: accountId, action: "pause" })
-            }
-          >
-            Pausar novas exposições da conta-base
-          </button>
-          {preview && (
-            <button disabled={busy} onClick={() => void confirm()}>
-              Confirmar pausa paper
+      {account &&
+        ["baseline", "challenger"].includes(
+          account.account.account.purpose,
+        ) && (
+          <section aria-label="Pausa da conta de estratégia">
+            <p>
+              A pausa persiste após reinício. Saídas continuam geridas; rearme
+              exige ação explícita do operador.
+            </p>
+            <button
+              disabled={busy || !!pending}
+              onClick={() =>
+                void transact({ account_id: accountId, action: "pause" })
+              }
+            >
+              Pausar novas exposições da conta {accountId}
             </button>
-          )}
-          {pending && (
-            <button disabled={busy} onClick={() => void transact()}>
-              Verificar / repetir a mesma intenção
-            </button>
-          )}
-          <p role="status">{message}</p>
-        </section>
-      )}
+            {preview && (
+              <button disabled={busy} onClick={() => void confirm()}>
+                Confirmar pausa paper
+              </button>
+            )}
+            {pending && (
+              <button disabled={busy} onClick={() => void transact()}>
+                Verificar / repetir a mesma intenção
+              </button>
+            )}
+            <p role="status">{message}</p>
+          </section>
+        )}
       <h3>Posições e saída</h3>
       {accountId === "manual" && (
         <p>

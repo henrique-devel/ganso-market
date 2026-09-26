@@ -50,8 +50,8 @@ const fenceTx = async (tx: SqlExecutor, account: string) =>
     )
   ).rows[0]!;
 
-/** Library composition only. No registration/genesis, config switch or running
- * scheduler is installed in S2. Each tick manages exits first and launches at
+/** Entry permission may be supplied by the S3 operational composition.
+ * This consumer never registers/genesis-seeds or provisions credit. Each tick manages exits first and launches at
  * most one asynchronous model attempt; subsequent ticks never await that HTTP.
  * The adapter still owns the REAL durable mock/real cost pool and circuit. */
 export function createChallengerConsumer(
@@ -61,10 +61,13 @@ export function createChallengerConsumer(
     sourceAccount: string;
     adapter: Adapter;
     enabled?: boolean;
+    isEnabled?: () => boolean;
+    admissionAllowedTx?: (tx: SqlExecutor) => Promise<boolean>;
     onError?: (reason: string) => void;
   },
 ) {
   const { account, sourceAccount, adapter, enabled = false } = options;
+  const entriesEnabled = () => enabled && (options.isEnabled?.() ?? true);
   let running: Promise<void> | null = null;
   let stopped = false;
   const cancellation = new AbortController();
@@ -104,7 +107,12 @@ export function createChallengerConsumer(
             )
           ).rows[0]!.decision;
           const reasons: string[] = [];
-          if (!enabled || stopped) reasons.push("disabled");
+          if (
+            !enabled ||
+            stopped ||
+            (!options.admissionAllowedTx && !entriesEnabled())
+          )
+            reasons.push("disabled");
           if (
             baselineHash(await fenceTx(tx, account)) !== baselineHash(job.fence)
           )
@@ -144,6 +152,11 @@ export function createChallengerConsumer(
             )
               reasons.push("receipt_unusable");
           }
+          if (
+            options.admissionAllowedTx &&
+            !(await options.admissionAllowedTx(tx))
+          )
+            reasons.push("activation_revoked");
           const receipt = { object_id: `challenger-receipt:${job.request_id}` };
           await storeRetentionObjectTx(tx, {
             id: receipt.object_id,
@@ -220,7 +233,7 @@ export function createChallengerConsumer(
     if (!job) return;
     if (
       job.abandoned ||
-      !enabled ||
+      !entriesEnabled() ||
       stopped ||
       adapter.identity.origin !== job.job.origin ||
       adapter.identity.model !== job.job.model
@@ -237,12 +250,13 @@ export function createChallengerConsumer(
       if (stopped) return;
       await consumeBaselineAccount(pool, account, {
         source_account: sourceAccount,
-        enabled,
+        enabled: entriesEnabled(),
         async stage(tx, r, decision, evidenceId, sourceEvidenceId) {
           // Independent account eligibility is already durably recorded even if
           // baseline is positioned, paused or has different cash. Freeze size
           // and exits BEFORE Jev; never resize from its answer or confidence.
-          if (!enabled || !decision.command || !decision.signal) return;
+          if (!entriesEnabled() || !decision.command || !decision.signal)
+            return;
           const s = decision.signal;
           const input = {
             candidate_hash: s.hash,
