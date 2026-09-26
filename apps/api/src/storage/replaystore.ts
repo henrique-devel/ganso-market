@@ -121,7 +121,7 @@ export async function captureReplayDataset(
     ]) {
       const records = await boundedRows<{ evidence_id: string }>(
         tx,
-        `SELECT evidence_id FROM ${table} WHERE account_id=$1 ORDER BY evidence_id`,
+        `SELECT evidence_id FROM ${table} WHERE account_id=$1`,
         account,
         REPLAY_LIMITS.rows,
         budget,
