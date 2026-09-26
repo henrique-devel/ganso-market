@@ -252,6 +252,23 @@ class LedgerDeploymentTests(unittest.TestCase):
         ]
         self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
 
+    def test_collector_diagnostics_only_select_worker(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/btc-worker.ts",
+                    "apps/api/src/btc/runtime-diagnostics.ts",
+                    "apps/api/test/btc-worker.test.ts",
+                    "apps/api/test/btc-worker-runtime.test.ts",
+                    "apps/api/test/btc-runtime-diagnostics.test.ts",
+                    "docs/runbooks/btc-collector.md",
+                    "deploy/deploy_paths.py",
+                    "scripts/tests/test_deploy_paths.py",
+                ]
+            ),
+            {"btc-worker"},
+        )
+
     def test_financial_reads_preserve_collector_and_database(self) -> None:
         self.assertEqual(
             deploy_paths.affected_services(
