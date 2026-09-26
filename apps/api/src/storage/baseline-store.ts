@@ -19,11 +19,13 @@ import {
 import {
   baselineHash,
   baselineIso,
+  knownRecord,
   type BaselineRecord,
   type BaselineRegistration,
   type BaselineEnvironment,
   type BaselineBars,
 } from "./baseline-inputs.js";
+import { canonicalBaselineJson } from "./baseline-manifest.js";
 
 export type RegistrationRow = {
   registration: BaselineRegistration;
@@ -99,6 +101,71 @@ async function retained<T>(
     ? baselineRecord(id, row.payload, row.recorded_at.toISOString())
     : null;
 }
+/** Compare the complete parsed metadata, allowing only its observation clocks
+ * and whole-response receipt hash to vary. The parser's version deliberately
+ * ignores those fields (including unrelated assets in the raw response).
+ * Neither retained payload nor its full hash is changed by this comparison.
+ * Equal version strings alone do not establish compatible fees/rules. */
+function sameMetadataRules(
+  frozen: TradingInstrumentMetadata,
+  current: TradingInstrumentMetadata,
+) {
+  const origin = current.instrument.origin;
+  const received = Date.parse(origin.received_at);
+  if (
+    origin.received_at !== origin.source_timestamp ||
+    !Number.isSafeInteger(received) ||
+    new Date(received).toISOString() !== origin.received_at ||
+    !/^[a-f0-9]{64}$/.test(current.provenance.response_hash)
+  )
+    return false;
+  return (
+    canonicalBaselineJson(frozen) ===
+    canonicalBaselineJson({
+      ...current,
+      instrument: {
+        ...current.instrument,
+        origin: {
+          ...origin,
+          received_at: frozen.instrument.origin.received_at,
+          source_timestamp: frozen.instrument.origin.source_timestamp,
+        },
+      },
+      provenance: {
+        ...current.provenance,
+        response_hash: frozen.provenance.response_hash,
+      },
+    })
+  );
+}
+/** Resolve the exact immutable snapshot registered before the experiment. A
+ * later equivalent observation witnesses continued compatibility; a true
+ * revision vetoes instead of falling back across instrument/fee changes. */
+async function registeredMetadataTx(
+  tx: SqlExecutor,
+  r: RegistrationRow,
+  currentId: string | null,
+  at: string,
+) {
+  const id = (
+    await tx.query<{ metadata_id: string }>(
+      "SELECT payload->>'metadata_id' AS metadata_id FROM btc_retention_objects WHERE object_id=$1",
+      [r.evidence_id],
+    )
+  ).rows[0]?.metadata_id;
+  const frozen = await retained<TradingInstrumentMetadata>(tx, id ?? null),
+    current = await retained<TradingInstrumentMetadata>(tx, currentId);
+  const time = Date.parse(at);
+  const compatible =
+    knownRecord(frozen, time) &&
+    knownRecord(current, time) &&
+    frozen.payload_hash === r.registration.metadata_hash &&
+    frozen.recorded_at <= r.registration.registered_at &&
+    current.recorded_at === current.payload.instrument.origin.received_at &&
+    current.payload.instrument.origin.received_at <= at &&
+    sameMetadataRules(frozen.payload, current.payload);
+  return { frozen, current, compatible };
+}
 /** Actual account state under the retention/recovery/owner fence. Persist only
  * when referenced by a decision/action, not on every idle heartbeat. */
 export async function baselineEnvironmentTx(
@@ -112,6 +179,12 @@ export async function baselineEnvironmentTx(
     tx,
     observed.ledger,
     observed.market,
+  );
+  const metadataValidation = await registeredMetadataTx(
+    tx,
+    r,
+    metadata?.object_id ?? null,
+    at,
   );
   const capture = (
     await tx.query<{ object_id: string }>(
@@ -185,14 +258,11 @@ export async function baselineEnvironmentTx(
       [scope.account_id],
     )
   ).rows[0];
-  account.object_id = `baseline-account:${baselineHash([scope.account_id, at, account.payload, recovery, Object.values(market).map((x) => x?.object_id ?? null), funding.map((x) => x.object_id)])}`;
+  account.object_id = `baseline-account:${baselineHash([scope.account_id, at, account.payload, recovery, Object.values(market).map((x) => x?.object_id ?? null), funding.map((x) => x.object_id), metadataValidation.frozen?.object_id ?? null, metadataValidation.current?.object_id ?? null, metadataValidation.compatible])}`;
   const env: BaselineEnvironment = {
     enabled: r.enabled,
     registration: r.registration,
-    metadata: await retained<TradingInstrumentMetadata>(
-      tx,
-      metadata?.object_id ?? null,
-    ),
+    metadata: metadataValidation.compatible ? metadataValidation.frozen : null,
     account,
     market,
     funding,
@@ -213,7 +283,9 @@ export async function baselineEnvironmentTx(
         r.evidence_id,
         ...Object.values(market).flatMap((x) => (x ? [x.object_id] : [])),
         ...funding.map((f) => f.object_id),
-        ...(env.metadata ? [env.metadata.object_id] : []),
+        ...[metadataValidation.frozen, metadataValidation.current].flatMap(
+          (m) => (m ? [m.object_id] : []),
+        ),
       ];
       const source = await baselineEvidenceTx(
         tx,
@@ -224,6 +296,11 @@ export async function baselineEnvironmentTx(
           funding: observed.funding,
           checkpoint: observed.checkpoint,
           recovery,
+          metadata_validation: {
+            registered_id: metadataValidation.frozen?.object_id ?? null,
+            observed_id: metadataValidation.current?.object_id ?? null,
+            compatible: metadataValidation.compatible,
+          },
         },
         at,
         deps,
@@ -248,13 +325,24 @@ export async function baselineBarsTx(
       object_id: string;
       payload: ClosedBar;
       recorded_at: Date;
+      dependencies: string[];
     }>(
-      `SELECT b.object_id,o.payload,o.recorded_at FROM btc_market_bars b
+      `SELECT b.object_id,o.payload,o.recorded_at,o.dependencies FROM btc_market_bars b
     JOIN btc_retention_objects o USING(object_id) WHERE interval_ms=$1 AND end_at <= $2 AND o.recorded_at <= $3
     ORDER BY end_at DESC LIMIT $4`,
       [interval, end, at, count],
     )
   ).rows;
+  // Pinning a bar must protect every input used by its deterministic replay.
+  // Refuse a malformed envelope instead of relying on undeclared edges.
+  if (
+    rows.some(
+      (x) =>
+        canonicalBaselineJson([...x.payload.input_ids].sort()) !==
+        canonicalBaselineJson([...x.dependencies].sort()),
+    )
+  )
+    throw new Error("BTC_BASELINE_BAR_EVIDENCE");
   const records = rows.map((x) =>
     baselineRecord(x.object_id, x.payload, x.recorded_at.toISOString()),
   );
@@ -282,3 +370,49 @@ export async function baselineBarsTx(
 }
 export const decisionBoundary = (at: string) =>
   baselineIso(Math.floor((Date.parse(at) - 10000) / 900000) * 900000);
+export const contextBoundary = (at: string) =>
+  baselineIso(Math.floor((Date.parse(at) - 10000) / 3600000) * 3600000);
+export async function nextBaselineBarTx(
+  tx: SqlExecutor,
+  r: RegistrationRow,
+  at: string,
+) {
+  return (
+    (
+      await tx.query<{ bar: Date }>(
+        `SELECT g AS bar FROM generate_series($2::timestamptz,
+    LEAST($3::timestamptz,$2::timestamptz+interval '30 days'-interval '15 minutes'),interval '15 minutes') g
+    WHERE NOT EXISTS(SELECT 1 FROM btc_baseline_decisions d WHERE d.account_id=$1 AND d.bar_end_at=g)
+    ORDER BY (g=$3::timestamptz) DESC,g LIMIT 1`,
+        [
+          r.registration.scope.account_id,
+          r.registration.start_at,
+          decisionBoundary(at),
+        ],
+      )
+    ).rows[0]?.bar.toISOString() ?? null
+  );
+}
+/** Immutable payloads may be decoded/hashed before the writer fence. Under the
+ * fence, reselect the exact as-of heads; any new bar or quality revision defers
+ * the decision. Existing bar FKs protect every declared dependency from pruning. */
+export async function baselineBarsUnchangedTx(
+  tx: SqlExecutor,
+  bars: BaselineBars,
+  interval: number,
+  count: number,
+  end: string,
+  at: string,
+) {
+  const ids = (
+    await tx.query<{ object_id: string }>(
+      `SELECT b.object_id FROM btc_market_bars b JOIN btc_retention_objects o USING(object_id)
+    WHERE interval_ms=$1 AND end_at <= $2 AND o.recorded_at <= $3 ORDER BY end_at DESC LIMIT $4`,
+      [interval, end, at, count],
+    )
+  ).rows.map((x) => x.object_id);
+  return (
+    canonicalBaselineJson(ids) ===
+    canonicalBaselineJson(bars.records.map((x) => x.object_id))
+  );
+}

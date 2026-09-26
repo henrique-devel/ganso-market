@@ -11,6 +11,7 @@ import {
   baselineHash,
   baselineIso,
   validateBaselineRegistration,
+  type BaselineBars,
 } from "./baseline-inputs.js";
 import {
   decideBaseline,
@@ -30,6 +31,9 @@ import {
   baselineBarsTx,
   baselineEvidenceTx,
   decisionBoundary,
+  contextBoundary,
+  nextBaselineBarTx,
+  baselineBarsUnchangedTx,
   type RegistrationRow,
 } from "./baseline-store.js";
 import {
@@ -175,7 +179,7 @@ async function executeActive(tx: SqlExecutor, r: RegistrationRow) {
 async function managePositions(
   tx: SqlExecutor,
   r: RegistrationRow,
-  context: boolean,
+  context: { bar_end_at: string; hours: BaselineBars } | null,
 ) {
   const account = r.registration.scope.account_id,
     s = await baselineEnvironmentTx(tx, r);
@@ -223,20 +227,9 @@ async function managePositions(
       liquidatable: s.isolation.positions.some(
         (p) => p.position_id === positionId && p.liquidatable,
       ),
-      ...(context
+      ...(context && context.bar_end_at === t
         ? {
-            decision_context: {
-              bar_end_at: t,
-              hours: await baselineBarsTx(
-                tx,
-                3600000,
-                12,
-                baselineIso(
-                  Math.floor((Date.parse(s.at) - 10000) / 3600000) * 3600000,
-                ),
-                s.at,
-              ),
-            },
+            decision_context: context,
           }
         : {}),
       attempts: attempts.map((x) => ({
@@ -345,6 +338,20 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
       ).rows[0],
   );
   if (pending) await createLedgerAccount(pool, pending.identity);
+  // Decode/hash bulky immutable market history without excluding the collector.
+  // Account/risk/admission remain inside the fence after exact head revalidation.
+  const prepared = await pool.readOnly(1500, async (tx) => {
+    await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+    const at = await baselineClock(tx),
+      bar = await nextBaselineBarTx(tx, r, at);
+    if (!bar) return null;
+    return {
+      bar,
+      latest: decisionBoundary(at),
+      hours: await baselineBarsTx(tx, 3600000, 12, contextBoundary(at), at),
+      quarters: await baselineBarsTx(tx, 900000, 15, bar, at),
+    };
+  });
   return withDeskWorker(pool, account, async (worker) => {
     const liquidate = await riskTransaction(
       worker,
@@ -353,15 +360,27 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
         const current = await baselineRegistrationTx(tx, account),
           at = await baselineClock(tx),
           latest = decisionBoundary(at);
-        const next = (
-          await tx.query<{ bar: Date }>(
-            `SELECT g AS bar FROM generate_series($2::timestamptz,
-        LEAST($3::timestamptz,$2::timestamptz+interval '30 days'-interval '15 minutes'),interval '15 minutes') g
-        WHERE NOT EXISTS(SELECT 1 FROM btc_baseline_decisions d WHERE d.account_id=$1 AND d.bar_end_at=g)
-        ORDER BY (g=$3::timestamptz) DESC,g LIMIT 1`,
-            [account, current.registration.start_at, latest],
-          )
-        ).rows[0];
+        const next = await nextBaselineBarTx(tx, current, at);
+        const usable =
+          prepared &&
+          next === prepared.bar &&
+          latest === prepared.latest &&
+          (await baselineBarsUnchangedTx(
+            tx,
+            prepared.hours,
+            3600000,
+            12,
+            contextBoundary(at),
+            at,
+          )) &&
+          (await baselineBarsUnchangedTx(
+            tx,
+            prepared.quarters,
+            900000,
+            15,
+            next,
+            at,
+          ));
         await executeActive(tx, current);
         const hasPosition =
           (
@@ -376,26 +395,21 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
           ? await managePositions(
               tx,
               current,
-              !!next && Date.parse(at) < Date.parse(latest) + 60000,
+              usable && Date.parse(at) < Date.parse(latest) + 60000
+                ? { bar_end_at: latest, hours: prepared.hours }
+                : null,
             )
           : [];
-        if (next) {
+        if (usable) {
           const s = await baselineEnvironmentTx(tx, current),
-            bar = next.bar.toISOString();
+            bar = prepared.bar;
+          const { hours, quarters } = prepared;
           const decision = decideBaseline({
             ...s.env,
             decision_at: s.at,
             bar_end_at: bar,
-            hours: await baselineBarsTx(
-              tx,
-              3600000,
-              12,
-              baselineIso(
-                Math.floor((Date.parse(s.at) - 10000) / 3600000) * 3600000,
-              ),
-              s.at,
-            ),
-            quarters: await baselineBarsTx(tx, 900000, 15, bar, s.at),
+            hours,
+            quarters,
           });
           await s.persist();
           const evidence = await baselineEvidenceTx(
@@ -406,7 +420,12 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
             s.at,
             [
               current.evidence_id,
-              ...decision.input_refs.map((x) => x.object_id),
+              // Account and bars already retain their immutable evidence graph.
+              // Keep every hashed input in the decision, but do not duplicate
+              // thousands of transitive edges under the shared collector lock.
+              s.env.account.object_id,
+              ...hours.records.map((x) => x.object_id),
+              ...quarters.records.map((x) => x.object_id),
             ],
           );
           await tx.query(
