@@ -317,11 +317,61 @@ async function managePositions(
   }
   return liquidate;
 }
+/** Caller owns the account recovery fence and has persisted its immutable
+ * decision. The optional dependency binds a Jev receipt to broker admission. */
+export async function admitBaselineDecisionTx(
+  tx: SqlExecutor,
+  r: RegistrationRow,
+  decision: BaselineDecision,
+  evidenceId: string,
+  dependencies: string[] = [],
+) {
+  if (!decision.command) throw new Error("BTC_BASELINE_NOT_CANDIDATE");
+  const fresh = await baselineEnvironmentTx(tx, r),
+    validation = revalidateBaseline(decision, fresh.env, fresh.at, "admit");
+  await fresh.persist();
+  const result =
+    validation.state === "ready"
+      ? await attempt(tx, r, decision.command)
+      : { result: null, reasons: validation.reasons };
+  await event(
+    tx,
+    r,
+    "admission",
+    `admit:${decision.command.order.order_id}`,
+    decision.command.order.position_id,
+    { validation, ...result },
+    fresh.at,
+    [
+      evidenceId,
+      ...dependencies,
+      fresh.env.account.object_id,
+      ...validation.input_refs.map((x) => x.object_id),
+      ...(result.result?.evidence_id ? [result.result.evidence_id] : []),
+    ],
+  );
+  return { validation, ...result };
+}
 /** One closed-bar decision per durable versioned key. Current window first,
  * then one missed window per tick; never backfill orders or delay exits for gaps. */
-export async function consumeBaselineAccount(pool: Pool, account: string) {
+export interface ChallengerStage {
+  source_account: string;
+  enabled: boolean;
+  stage(
+    tx: SqlExecutor,
+    r: RegistrationRow,
+    decision: BaselineDecision,
+    evidenceId: string,
+    sourceEvidenceId: string,
+  ): Promise<void>;
+}
+export async function consumeBaselineAccount(
+  pool: Pool,
+  account: string,
+  challenger?: ChallengerStage,
+) {
   const r = await pool.readOnly(1500, (tx) =>
-    baselineRegistrationTx(tx, account),
+    baselineRegistrationTx(tx, account, challenger ? "challenger" : "baseline"),
   );
   validateBaselineRegistration(r.registration);
   const now = await pool.readOnly(1500, baselineClock);
@@ -342,14 +392,42 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
   // Account/risk/admission remain inside the fence after exact head revalidation.
   const prepared = await pool.readOnly(1500, async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-    const at = await baselineClock(tx),
-      bar = await nextBaselineBarTx(tx, r, at);
-    if (!bar) return null;
+    const at = await baselineClock(tx);
+    const source = challenger
+      ? ((
+          await tx.query<{ decision: BaselineDecision; evidence_id: string }>(
+            `SELECT d.decision,d.evidence_id FROM btc_baseline_decisions d
+       JOIN btc_ledger_accounts a ON a.account_id=d.account_id
+       WHERE d.account_id=$1 AND a.identity->'account'->>'purpose'='baseline'
+       AND d.bar_end_at >= $3 AND d.bar_end_at <= $4
+       AND NOT EXISTS(SELECT 1 FROM btc_baseline_decisions c WHERE c.account_id=$2 AND c.bar_end_at=d.bar_end_at)
+       ORDER BY d.bar_end_at DESC LIMIT 1`,
+            [
+              challenger.source_account,
+              account,
+              r.registration.start_at,
+              decisionBoundary(at),
+            ],
+          )
+        ).rows[0] ?? null)
+      : null;
+    const bar = challenger
+      ? source?.decision.bar_end_at
+      : await nextBaselineBarTx(tx, r, at);
+    // Exit context is prepared even if the source has not produced a new candidate.
+    const hours =
+      bar || challenger
+        ? await baselineBarsTx(tx, 3600000, 12, contextBoundary(at), at)
+        : { records: [], dependencies: [], first_complete_start_at: null };
     return {
-      bar,
+      bar: bar ?? null,
+      source,
       latest: decisionBoundary(at),
-      hours: await baselineBarsTx(tx, 3600000, 12, contextBoundary(at), at),
-      quarters: await baselineBarsTx(tx, 900000, 15, bar, at),
+      hours,
+      quarters:
+        !challenger && bar
+          ? await baselineBarsTx(tx, 900000, 15, bar, at)
+          : { records: [], dependencies: [], first_complete_start_at: null },
     };
   });
   return withDeskWorker(pool, account, async (worker) => {
@@ -357,13 +435,18 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
       worker,
       r.registration.scope,
       async (tx) => {
-        const current = await baselineRegistrationTx(tx, account),
+        const current = await baselineRegistrationTx(
+            tx,
+            account,
+            challenger ? "challenger" : "baseline",
+          ),
           at = await baselineClock(tx),
           latest = decisionBoundary(at);
-        const next = await nextBaselineBarTx(tx, current, at);
-        const usable =
-          prepared &&
-          next === prepared.bar &&
+        const next = challenger
+          ? prepared.bar
+          : await nextBaselineBarTx(tx, current, at);
+        const hoursUsable =
+          (!!prepared.bar || !!challenger) &&
           latest === prepared.latest &&
           (await baselineBarsUnchangedTx(
             tx,
@@ -372,15 +455,26 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
             12,
             contextBoundary(at),
             at,
-          )) &&
-          (await baselineBarsUnchangedTx(
-            tx,
-            prepared.quarters,
-            900000,
-            15,
-            next,
-            at,
           ));
+        const usable =
+          next &&
+          next === prepared.bar &&
+          hoursUsable &&
+          (challenger
+            ? !(
+                await tx.query(
+                  "SELECT 1 FROM btc_baseline_decisions WHERE account_id=$1 AND bar_end_at=$2",
+                  [account, next],
+                )
+              ).rowCount
+            : await baselineBarsUnchangedTx(
+                tx,
+                prepared.quarters,
+                900000,
+                15,
+                next,
+                at,
+              ));
         await executeActive(tx, current);
         const hasPosition =
           (
@@ -395,17 +489,19 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
           ? await managePositions(
               tx,
               current,
-              usable && Date.parse(at) < Date.parse(latest) + 60000
+              hoursUsable && Date.parse(at) < Date.parse(latest) + 60000
                 ? { bar_end_at: latest, hours: prepared.hours }
                 : null,
             )
           : [];
         if (usable) {
           const s = await baselineEnvironmentTx(tx, current),
-            bar = prepared.bar;
+            bar = prepared.bar!;
           const { hours, quarters } = prepared;
           const decision = decideBaseline({
             ...s.env,
+            enabled: s.env.enabled && (!challenger || challenger.enabled),
+            ...(prepared.source ? { source: prepared.source.decision } : {}),
             decision_at: s.at,
             bar_end_at: bar,
             hours,
@@ -426,6 +522,7 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
               s.env.account.object_id,
               ...hours.records.map((x) => x.object_id),
               ...quarters.records.map((x) => x.object_id),
+              ...(prepared.source ? [prepared.source.evidence_id] : []),
             ],
           );
           await tx.query(
@@ -438,35 +535,21 @@ export async function consumeBaselineAccount(pool: Pool, account: string) {
               evidence.object_id,
             ],
           );
-          if (decision.command) {
-            const fresh = await baselineEnvironmentTx(tx, current),
-              validation = revalidateBaseline(
+          if (challenger) {
+            if (prepared.source)
+              await challenger.stage(
+                tx,
+                current,
                 decision,
-                fresh.env,
-                fresh.at,
-                "admit",
+                evidence.object_id,
+                prepared.source.evidence_id,
               );
-            await fresh.persist();
-            const result =
-              validation.state === "ready"
-                ? await attempt(tx, current, decision.command)
-                : { result: null, reasons: validation.reasons };
-            await event(
+          } else if (decision.command) {
+            await admitBaselineDecisionTx(
               tx,
               current,
-              "admission",
-              `admit:${decision.command.order.order_id}`,
-              decision.command.order.position_id,
-              { validation, ...result },
-              fresh.at,
-              [
-                evidence.object_id,
-                fresh.env.account.object_id,
-                ...validation.input_refs.map((x) => x.object_id),
-                ...(result.result?.evidence_id
-                  ? [result.result.evidence_id]
-                  : []),
-              ],
+              decision,
+              evidence.object_id,
             );
           }
         }

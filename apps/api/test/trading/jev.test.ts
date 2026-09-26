@@ -292,7 +292,7 @@ describe("TypeSafe wire contract with mock HTTP", () => {
       mockRequest().input,
       new AbortController().signal,
     );
-    expect(result).toEqual(mockResponse());
+    expect(result).toEqual({ body: JSON.stringify(mockResponse()) });
     expect(transport.origin).toBe("mock");
     expect(send).toHaveBeenCalledOnce();
     expect(send.mock.calls[0]![0]).toBe("https://api.typesafe.ai/v1/systemone");

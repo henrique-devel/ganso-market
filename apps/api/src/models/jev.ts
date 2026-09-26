@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { JevStore, JevReservation } from "../storage/jevstore.js";
 import {
+  JevWireResponse,
   JEV_VERSION,
   JEV_PROMPT_HASH,
   JEV_PROMPT_VERSION,
@@ -37,12 +38,20 @@ export function createJevAdapter(options: {
     ? Object.freeze({ ...options.tariff })
     : undefined;
   return {
+    identity: Object.freeze({
+      origin: transport.origin,
+      model: transport.model,
+    }),
     async evaluate(
       request: JevRequest,
       cancellation?: AbortSignal,
     ): Promise<JevResult> {
       const started = performance.now();
       const base: JevResult = {
+        input: null,
+        original_response: null,
+        response_hash: null,
+        response_received_at: null,
         version: JEV_VERSION,
         prompt_version: JEV_PROMPT_VERSION,
         prompt_hash: JEV_PROMPT_HASH,
@@ -78,6 +87,7 @@ export function createJevAdapter(options: {
       // Snapshot before any await: caller mutation must never diverge from the hash.
       const input = Object.freeze({ ...request.input }),
         deadline = Date.parse(request.deadline_at);
+      base.input = input;
       base.input_hash = jevHash(input);
       if (cancellation?.aborted) return refuse("cancelled");
       const remaining = deadline - Date.now();
@@ -154,8 +164,26 @@ export function createJevAdapter(options: {
           )
             result.reason = "timeout";
           else {
-            const billed = usageCost(completed.raw, tariff);
-            const answer = validateAnswer(completed.raw, transport.model);
+            const original =
+              completed.raw instanceof JevWireResponse
+                ? completed.raw.body
+                : JSON.stringify(completed.raw);
+            if (
+              typeof original !== "string" ||
+              Buffer.byteLength(original) > 16_384
+            )
+              throw new Error("JEV_RESPONSE_REJECTED");
+            result.original_response = original;
+            result.response_hash = jevHash(original);
+            result.response_received_at = new Date().toISOString();
+            let raw: unknown = null;
+            try {
+              raw = JSON.parse(original) as unknown;
+            } catch {
+              /* Retain malformed original, fail closed. */
+            }
+            const billed = usageCost(raw, tariff);
+            const answer = validateAnswer(raw, transport.model);
             if (!billed) {
               result.reason = "cost_unknown";
               billingUnknown = true;

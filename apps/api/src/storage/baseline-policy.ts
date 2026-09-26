@@ -65,7 +65,20 @@ export interface BaselineCandidate {
   quantity_btc_raw: string;
   costs: ReturnType<typeof baselineCosts>;
 }
+/** Account-independent market candidate, retained even when a particular
+ * account is already positioned or paused. Hash excludes cash/account clocks. */
+export interface BaselineSignal {
+  hash: string;
+  direction: BaselineDirection;
+  close_usd6: string;
+  atr_usd6: string;
+  fast_mean_usd6: string;
+  slow_mean_usd6: string;
+  input_refs: BaselineRef[];
+}
 export interface BaselineDecision {
+  signal?: BaselineSignal | null;
+  source_decision_id?: string;
   schema_version: typeof BASELINE_RESULT;
   policy_version: typeof BASELINE_POLICY;
   decision_id: string;
@@ -91,6 +104,7 @@ export interface BaselineDecisionInput extends BaselineEnvironment {
   /** First persisted result wins, even after late correction or missed replay.
    * The store is responsible for the unique decision key and atomic pinning. */
   previous?: BaselineDecision;
+  source?: BaselineDecision;
 }
 const max = (a: bigint, b: bigint) => (a > b ? a : b);
 export function baselineCosts(
@@ -322,12 +336,15 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     reasons.push("disabled");
   if (at < t + 10000 || at >= t + 60000) reasons.push("missed_decision_window");
   const unavailable = [...env.causes];
-  if (hours.state === "data_unavailable")
+  if (!input.source && hours.state === "data_unavailable")
     unavailable.push("context_bars_unavailable");
-  if (quarters.state === "data_unavailable")
+  if (!input.source && quarters.state === "data_unavailable")
     unavailable.push("decision_bars_unavailable");
   if (unavailable.length) reasons.push("data_unavailable", ...unavailable);
-  if (hours.state === "warmup" || quarters.state === "warmup")
+  if (
+    !input.source &&
+    (hours.state === "warmup" || quarters.state === "warmup")
+  )
     reasons.push("warmup");
   const managed =
     env.finance.positions.some((p) => p.quantity_btc_raw !== "0") ||
@@ -336,7 +353,57 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     (env.account.last_closed_bar_end_at !== null &&
       input.bar_end_at <= env.account.last_closed_bar_end_at);
   if (managed) reasons.push("position_managed");
+  let signal: BaselineSignal | null = null;
+  if (input.source) {
+    const source = input.source;
+    if (
+      source.bar_end_at !== input.bar_end_at ||
+      source.registration.policy_version !== r.policy_version ||
+      source.registration.manifest_fingerprint !== r.manifest_fingerprint ||
+      source.registration.metadata_hash !== r.metadata_hash ||
+      source.registration.scope.instrument_version !==
+        r.scope.instrument_version ||
+      source.registration.scope.instrument_id !== r.scope.instrument_id ||
+      source.registration.scope.mode !== "paper" ||
+      source.registration.scope.account_id === r.scope.account_id
+    )
+      throw new Error("BTC_CHALLENGER_SOURCE_MISMATCH");
+    signal = structuredClone(source.signal ?? null);
+    if (
+      at < baselineTime(source.decision_at) ||
+      at >= baselineTime(source.decision_at) + 5000
+    )
+      reasons.push("missed_decision_window");
+    if (!signal && source.state !== "neutral")
+      reasons.push("data_unavailable", "source_signal_unavailable");
+  } else if (hours.state === "ready" && quarters.state === "ready") {
+    const candles = quarters.bars.map((b) => b.ohlc!);
+    const direction = baselineBreakout(
+      baselineTrend(hours.bars.map((b) => b.ohlc!.close)),
+      candles[0]!,
+      candles[1]!,
+    );
+    if (direction) {
+      const closes = hours.bars.map((b) => BigInt(b.ohlc!.close));
+      const observations = {
+        direction,
+        close_usd6: candles[0]!.close,
+        atr_usd6: baselineAtr(candles).toString(),
+        fast_mean_usd6: (
+          closes.slice(0, 4).reduce((a, b) => a + b, 0n) / 4n
+        ).toString(),
+        slow_mean_usd6: (closes.reduce((a, b) => a + b, 0n) / 12n).toString(),
+        input_refs: baselineRefs([...hours.refs, ...quarters.refs]),
+      };
+      signal = {
+        ...observations,
+        hash: `sha256:${baselineHash([r.policy_version, r.manifest_fingerprint, r.scope.instrument_version, input.bar_end_at, observations])}`,
+      };
+    }
+  }
   const result: BaselineDecision = {
+    signal,
+    ...(input.source ? { source_decision_id: input.source.decision_id } : {}),
     schema_version: BASELINE_RESULT,
     policy_version: BASELINE_POLICY,
     decision_id: key,
@@ -349,7 +416,12 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     candidate: null,
     intent: null,
     command: null,
-    input_refs: baselineRefs([...env.refs, ...hours.refs, ...quarters.refs]),
+    input_refs: baselineRefs([
+      ...env.refs,
+      ...(input.source
+        ? (signal?.input_refs ?? [])
+        : [...hours.refs, ...quarters.refs]),
+    ]),
   };
   const pauses = openingCauses(env);
   const finish = (state: BaselineState) => {
@@ -365,12 +437,7 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     "position_managed",
   ] as const)
     if (reasons.includes(state)) return finish(state);
-  const candles = quarters.bars.map((b) => b.ohlc!);
-  const direction = baselineBreakout(
-    baselineTrend(hours.bars.map((b) => b.ohlc!.close)),
-    candles[0]!,
-    candles[1]!,
-  );
+  const direction = signal?.direction ?? null;
   result.direction = direction;
   if (!direction) {
     reasons.push("neutral");
@@ -381,9 +448,9 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     reasons.push(cause);
     return finish("rejected");
   };
-  const atr = baselineAtr(candles),
+  const atr = BigInt(signal!.atr_usd6),
     distance = 2n * atr,
-    c = BigInt(candles[0]!.close),
+    c = BigInt(signal!.close_usd6),
     metadata = env.metadata!;
   if (atr === 0n) return reject("zero_volatility");
   const lower = baselinePrice(c * 9990n, 10000n, "up", metadata),
@@ -414,7 +481,9 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     price_cap_usd_raw: upper.toString(),
     fee_bps: 5,
     margin_policy: "full_notional_v1",
-    valid_until: baselineIso(at + 5000),
+    valid_until: baselineIso(
+      (input.source ? baselineTime(input.source.decision_at) : at) + 5000,
+    ),
     risk_plan: {
       stop_price_usd_raw: stop.toString(),
       entry_floor_usd_raw: lower.toString(),
