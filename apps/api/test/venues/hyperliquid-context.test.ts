@@ -42,6 +42,7 @@ function snapshot(at = start + 100_000) {
 }
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 describe("BTC current-state response provenance", () => {
@@ -201,6 +202,93 @@ describe("BTC current-state response provenance", () => {
       expect(mock).toHaveBeenCalledOnce();
     },
   );
+  it("rejects late headers before accepting or normalizing a response, even before the abort timer fires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        vi.setSystemTime(start + 1501);
+        return new Response(new ReadableStream({ cancel }), {
+          headers: {
+            Date: new Date(start).toUTCString(),
+            "X-Cache": "Miss from cloudfront",
+          },
+        });
+      }),
+    );
+    await expect(fetchBtcContextSnapshot(metadata)).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+  it("keeps the deadline reason if a stalled body and its cleanup report AbortError", async () => {
+    const controller = new AbortController();
+    const deadline = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(controller.signal);
+    const read = vi.fn(async () => {
+      controller.abort(new DOMException("deadline", "TimeoutError"));
+      throw new DOMException("body aborted", "AbortError");
+    });
+    const cancel = vi.fn(async () => {
+      throw new DOMException("cleanup", "AbortError");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        body: { getReader: () => ({ read, cancel }) },
+      })),
+    );
+    await expect(fetchBtcContextSnapshot(metadata)).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    expect(deadline).toHaveBeenCalledWith(1500);
+    expect(read).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+  it("rejects a late body and disposes it without manufacturing a received timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    const cancel = vi.fn(async () => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              vi.setSystemTime(start + 1501);
+              return {
+                done: false,
+                value: Buffer.from(JSON.stringify(snapshotBody)),
+              };
+            },
+            cancel,
+          }),
+        },
+      })),
+    );
+    await expect(fetchBtcContextSnapshot(metadata)).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+  it("forwards operator cancellation to the active request with the unchanged deadline", async () => {
+    const stop = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, options) => {
+        stop.abort();
+        options.signal.throwIfAborted();
+      }),
+    );
+    await expect(
+      fetchBtcContextSnapshot(metadata, stop.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
   it("public fetch has a deadline, no redirect/retry/credentials and keeps response evidence", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(start + 100_000);

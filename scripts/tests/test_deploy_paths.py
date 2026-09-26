@@ -82,6 +82,22 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_context_timeout_only_affects_collector_and_does_not_start_it(self) -> None:
+        paths = [
+            "apps/api/src/btc-worker.ts",
+            "apps/api/src/btc/context-poll.ts",
+            "apps/api/test/btc-context-poll.test.ts",
+            "apps/api/test/btc-worker-runtime.test.ts",
+            "apps/api/src/venues/hyperliquid/feed.ts",
+            "apps/api/src/venues/hyperliquid/context-snapshot.ts",
+            "apps/api/test/venues/hyperliquid-feed.test.ts",
+            "apps/api/test/venues/hyperliquid-context.test.ts",
+            "docs/runbooks/btc-collector.md",
+            "deploy/deploy_paths.py",
+            "scripts/tests/test_deploy_paths.py",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"btc-worker"})
+
     def test_inactive_baseline_contract_preserves_collector(self) -> None:
         paths = [
             "config/trading/baseline.json",

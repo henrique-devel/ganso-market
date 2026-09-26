@@ -16,17 +16,25 @@ import { parseHyperliquidBtcMetadata } from "./metadata.js";
  */
 export async function fetchBtcContextSnapshot(
   metadata: TradingInstrumentMetadata,
+  signal?: AbortSignal,
 ): Promise<TradingMarketObservation> {
-  const { body, timing } = await fetchSnapshot({
-    type: "metaAndAssetCtxs",
-    dex: "",
-  });
+  const { body, timing } = await fetchSnapshot(
+    {
+      type: "metaAndAssetCtxs",
+      dex: "",
+    },
+    signal,
+  );
   return normalizeBtcContextSnapshot(body, timing, metadata, randomUUID());
 }
 export async function fetchBtcBookSnapshot(
   metadata: TradingInstrumentMetadata,
+  signal?: AbortSignal,
 ): Promise<TradingMarketObservation> {
-  const { body, timing } = await fetchSnapshot({ type: "l2Book", coin: "BTC" });
+  const { body, timing } = await fetchSnapshot(
+    { type: "l2Book", coin: "BTC" },
+    signal,
+  );
   return {
     ...normalizeHyperliquidFeed(
       "book",
@@ -39,34 +47,59 @@ export async function fetchBtcBookSnapshot(
     parser_version: "hyperliquid.book-snapshot.v1",
   };
 }
-async function fetchSnapshot(request: object) {
+async function fetchSnapshot(request: object, stopSignal?: AbortSignal) {
   const requestedAt = new Date().toISOString();
+  const deadline = AbortSignal.timeout(1500);
+  const signal = stopSignal
+    ? AbortSignal.any([deadline, stopSignal])
+    : deadline;
+  const checkDeadline = () => {
+    signal.throwIfAborted();
+    // Also reject a late completion when event-loop delay postpones the timer.
+    if (Date.now() - Date.parse(requestedAt) > 1500)
+      throw new DOMException("Snapshot deadline exceeded", "TimeoutError");
+  };
   const response = await fetch("https://api.hyperliquid.xyz/info", {
     method: "POST",
     redirect: "error",
-    signal: AbortSignal.timeout(1500),
+    signal,
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache, no-store",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok || !response.body)
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => {});
     throw new Error("BTC_CONTEXT_RESPONSE_REFUSED");
+  }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     for (;;) {
+      checkDeadline();
       const { done, value } = await reader.read();
+      checkDeadline();
       if (done) break;
       size += value.byteLength;
       if (size > 262144) throw new Error("BTC_CONTEXT_RESPONSE_TOO_LARGE");
       chunks.push(value);
     }
+  } catch (error) {
+    if (
+      error instanceof DOMException &&
+      error.name === "AbortError" &&
+      signal.aborted
+    )
+      throw signal.reason;
+    throw error;
   } finally {
-    await reader.cancel();
+    // Cancelling an already-aborted body can reject with AbortError; that must
+    // not replace the original TimeoutError or payload refusal diagnostic.
+    await reader.cancel().catch(() => {});
   }
+  checkDeadline();
   return {
     body: JSON.parse(Buffer.concat(chunks).toString()),
     timing: {
