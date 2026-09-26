@@ -19,8 +19,11 @@ import {
 } from "./btc-ticket.js";
 import { AccountCondition, reasonLabel } from "./BtcOperations.tsx";
 import "./btc-desk.css";
-const storage = "ganso.manual.pending.v1";
-const saved = (): PendingTicket | null => {
+const storageKey = (account: string) =>
+  account === "manual"
+    ? "ganso.manual.pending.v1"
+    : `ganso.${account}.pending.v1`;
+const saved = (storage: string): PendingTicket | null => {
   try {
     return JSON.parse(
       sessionStorage.getItem(storage) ?? "null",
@@ -44,13 +47,16 @@ export function BtcDesk({
   accountId?: string;
   onUnauthorized: () => void;
 }) {
+  const storage = storageKey(accountId);
   const [account, setAccount] = useState<DeskAccountView | null>(null),
     [orders, setOrders] = useState<DeskOrder[]>([]),
     [positions, setPositions] = useState<DeskPosition[]>([]);
   const [readError, setReadError] = useState(""),
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
-    [pending, setPending] = useState<PendingTicket | null>(saved),
+    [pending, setPending] = useState<PendingTicket | null>(() =>
+      saved(storage),
+    ),
     [preview, setPreview] = useState<DeskCommandPreview | null>(null);
   const [side, setSide] = useState<"buy" | "sell">("buy"),
     [unit, setUnit] = useState("BTC"),
@@ -66,7 +72,7 @@ export function BtcDesk({
   useEffect(() => {
     if (pending) sessionStorage.setItem(storage, JSON.stringify(pending));
     else sessionStorage.removeItem(storage);
-  }, [pending]);
+  }, [pending, storage]);
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -149,7 +155,12 @@ export function BtcDesk({
   const operational =
     !!ticket?.enabled && !!ticket.consumer_ready && freshRead && !readError;
   const transact = async (command?: DeskCommand) => {
-    if (inFlight.current || accountId !== "manual") return;
+    if (
+      inFlight.current ||
+      (accountId !== "manual" &&
+        (command?.action ?? pending?.command.action) !== "pause")
+    )
+      return;
     inFlight.current = true;
     setBusy(true);
     setMessage("");
@@ -555,6 +566,33 @@ export function BtcDesk({
             </button>
           </aside>
         </div>
+      )}
+      {account?.account.account.purpose === "baseline" && (
+        <section aria-label="Pausa da conta-base">
+          <p>
+            A pausa persiste após reinício. Saídas continuam geridas; rearme
+            exige ação explícita do operador.
+          </p>
+          <button
+            disabled={busy || !!pending}
+            onClick={() =>
+              void transact({ account_id: accountId, action: "pause" })
+            }
+          >
+            Pausar novas exposições da conta-base
+          </button>
+          {preview && (
+            <button disabled={busy} onClick={() => void confirm()}>
+              Confirmar pausa paper
+            </button>
+          )}
+          {pending && (
+            <button disabled={busy} onClick={() => void transact()}>
+              Verificar / repetir a mesma intenção
+            </button>
+          )}
+          <p role="status">{message}</p>
+        </section>
       )}
       <h3>Posições e saída</h3>
       {accountId === "manual" && (

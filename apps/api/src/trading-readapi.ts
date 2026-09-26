@@ -457,9 +457,68 @@ export function registerTradingReadRoutes(
             [p.account, env.as_of],
           )
         ).rows[0] ?? null;
+      let baseline: DeskAccountView["baseline"] = null;
+      if (view.account.account.purpose === "baseline") {
+        const registration = (
+          await tx.query<{
+            registration: NonNullable<DeskAccountView["baseline"]>;
+          }>(
+            "SELECT registration FROM btc_baseline_registrations WHERE account_id=$1",
+            [p.account],
+          )
+        ).rows[0]?.registration;
+        if (registration) {
+          const decisions = (
+            await tx.query<
+              NonNullable<DeskAccountView["baseline"]>["decisions"][number]
+            >(
+              `SELECT
+            d.decision_id,d.decision->>'bar_end_at' AS bar_end_at,d.decision->>'decision_at' AS decision_at,
+            d.decision->>'state' AS state,d.decision->'reasons' AS reasons,d.decision->'candidate' AS candidate,
+            d.decision->'command'->'order'->>'order_id' AS order_id,d.evidence_id,
+            a.outcome AS admission,e.outcome AS execution
+            FROM (SELECT * FROM btc_baseline_decisions WHERE account_id=$1 ORDER BY bar_end_at DESC LIMIT 20) d
+            LEFT JOIN LATERAL(SELECT jsonb_build_object('reasons',payload->'reasons','status',payload->'result'->>'status','reason',payload->'result'->>'reason') AS outcome
+              FROM btc_baseline_events WHERE account_id=d.account_id AND event_key='admit:'||(d.decision->'command'->'order'->>'order_id')) a ON true
+            LEFT JOIN LATERAL(SELECT jsonb_build_object('reasons',COALESCE(payload->'validation'->'reasons','[]'::jsonb)||COALESCE(payload->'reasons','[]'::jsonb),'status',payload->'result'->>'status','reason',payload->'result'->>'reason') AS outcome
+              FROM btc_baseline_events WHERE account_id=d.account_id AND event_key='execute:'||(d.decision->'command'->'order'->>'order_id')) e ON true
+            ORDER BY d.bar_end_at DESC`,
+              [p.account],
+            )
+          ).rows;
+          const exits = (
+            await tx.query<
+              NonNullable<DeskAccountView["baseline"]>["exits"][number]
+            >(
+              `SELECT position_id,payload->>'state' AS state,
+            payload->'position'->>'deadline' AS deadline,payload->'position'->>'requested_at' AS requested_at,payload->'position'->'reasons' AS reasons
+            FROM (SELECT DISTINCT ON(position_id) position_id,payload,sequence FROM btc_baseline_events WHERE account_id=$1 AND kind='position' ORDER BY position_id,sequence DESC) e
+            ORDER BY (payload->>'state'='closed'),sequence DESC LIMIT 20`,
+              [p.account],
+            )
+          ).rows;
+          const {
+            start_at,
+            registered_at,
+            policy_version,
+            manifest_fingerprint,
+            code_sha,
+          } = registration;
+          baseline = {
+            start_at,
+            registered_at,
+            policy_version,
+            manifest_fingerprint,
+            code_sha,
+            decisions,
+            exits,
+          };
+        }
+      }
       return {
         ...view,
         funding,
+        baseline,
         ticket: {
           broker: c?.broker ?? null,
           enabled: c?.enabled ?? false,

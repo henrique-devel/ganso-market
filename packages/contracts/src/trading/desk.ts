@@ -76,6 +76,44 @@ export interface DeskBalances {
   readonly equity_usd_raw: string | null;
 }
 export interface DeskAccountView extends DeskEnvelope {
+  readonly baseline?: {
+    start_at: string;
+    registered_at: string;
+    policy_version: string;
+    manifest_fingerprint: string;
+    code_sha: string;
+    decisions: {
+      decision_id: string;
+      bar_end_at: string;
+      decision_at: string;
+      state: string;
+      reasons: string[];
+      order_id: string | null;
+      candidate: {
+        direction: string;
+        quantity_btc_raw: string;
+        stop_usd_raw: string;
+      } | null;
+      admission: {
+        reasons: string[];
+        status: string | null;
+        reason: string | null;
+      } | null;
+      execution: {
+        reasons: string[];
+        status: string | null;
+        reason: string | null;
+      } | null;
+      evidence_id: string;
+    }[];
+    exits: {
+      position_id: string;
+      state: string;
+      deadline: string;
+      requested_at: string | null;
+      reasons: string[];
+    }[];
+  } | null;
   /** Latest non-duplicate receipt for the current UTC hour; null means unobserved. */
   readonly funding?: {
     status: "pending" | "settled" | "conflict";

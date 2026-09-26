@@ -1,3 +1,4 @@
+import { consumeBaselineAccount } from "./baseline-runtime.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import type { LedgerIdentity } from "./ledger-contract.js";
@@ -25,7 +26,11 @@ type Control = {
   broker: "ioc" | "passive";
   latency_ms: number;
 };
-async function control(tx: SqlExecutor, account: string): Promise<Control> {
+async function control(
+  tx: SqlExecutor,
+  account: string,
+  funding = false,
+): Promise<Control> {
   const row = (
     await tx.query<Control>(
       `SELECT a.identity,c.broker,c.latency_ms
@@ -36,7 +41,10 @@ async function control(tx: SqlExecutor, account: string): Promise<Control> {
   if (
     !row ||
     row.identity.account.mode !== "paper" ||
-    row.identity.account.purpose !== "manual"
+    !(
+      row.identity.account.purpose === "manual" ||
+      (funding && row.identity.account.purpose === "baseline")
+    )
   )
     throw new Error("BTC_DESK_MANUAL_REQUIRED");
   return row;
@@ -249,7 +257,8 @@ export async function fundDeskAccount(
   account: string,
   fetchFunding = fetchFinalBtcFunding,
 ) {
-  const c = await pool.readOnly(1500, (tx) => control(tx, account));
+  const c = await pool.readOnly(1500, (tx) => control(tx, account, true));
+  if (c.identity.experiment.started_at > new Date().toISOString()) return;
   const hour = await pool.readOnly(1500, async (tx) => {
     const row = (
       await tx.query<{ hour: Date }>(
@@ -306,12 +315,12 @@ export async function fundDeskAccount(
   );
 }
 
-/** Bounded sequential loops, existing API pool only; no live adapter or strategy. */
+/** Bounded sequential loops, existing API pool only; no live adapter; baseline requires its separate explicit registration. */
 export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
   let stopped = false,
     timer: ReturnType<typeof setTimeout> | undefined;
-  let funding: Promise<void> | null = null,
-    lastFunding = 0;
+  let funding: Promise<void> | null = null;
+  const lastFunding = new Map<string, number>();
   let running: Promise<void> = Promise.resolve();
   const tick = async () => {
     try {
@@ -319,15 +328,21 @@ export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
         1500,
         async (tx) =>
           (
-            await tx.query<{ account_id: string }>(
-              "SELECT c.account_id FROM btc_desk_controls c JOIN btc_ledger_accounts a USING(account_id) WHERE a.identity->'account'->>'purpose'='manual' ORDER BY c.account_id LIMIT 2",
+            await tx.query<{ account_id: string; purpose: string }>(
+              "SELECT c.account_id,a.identity->'account'->>'purpose' AS purpose FROM btc_desk_controls c JOIN btc_ledger_accounts a USING(account_id) WHERE a.identity->'account'->>'purpose' IN ('manual','baseline') AND (a.identity->'experiment'->>'started_at')::timestamptz <= clock_timestamp() ORDER BY c.account_id LIMIT 3",
             )
           ).rows,
       );
-      if (accounts.length > 1) throw new Error("BTC_DESK_ACCOUNT_LIMIT");
-      for (const { account_id } of accounts) {
+      if (
+        accounts.length > 2 ||
+        new Set(accounts.map((a) => a.purpose)).size !== accounts.length
+      )
+        throw new Error("BTC_DESK_ACCOUNT_LIMIT");
+      for (const { account_id, purpose } of accounts) {
         try {
-          await consumeDeskAccount(pool, account_id);
+          if (purpose === "baseline")
+            await consumeBaselineAccount(pool, account_id);
+          else await consumeDeskAccount(pool, account_id);
         } catch (e) {
           const reason =
             e instanceof Error && /^BTC_[A-Z0-9_]+$/.test(e.message)
@@ -342,8 +357,11 @@ export function startDeskConsumer(pool: Pool, log: (reason: string) => void) {
           );
           log(reason);
         }
-        if (!funding && Date.now() - lastFunding >= 30000) {
-          lastFunding = Date.now();
+        if (
+          !funding &&
+          Date.now() - (lastFunding.get(account_id) ?? 0) >= 30000
+        ) {
+          lastFunding.set(account_id, Date.now());
           funding = fundDeskAccount(pool, account_id)
             .catch(() => log("BTC_DESK_FUNDING_UNAVAILABLE"))
             .finally(() => {

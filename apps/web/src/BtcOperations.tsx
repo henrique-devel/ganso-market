@@ -138,11 +138,87 @@ export function AccountCondition({
         taxa ou evidência válida, fica pendente e pode bloquear novas entradas;
         saídas e gestão de risco continuam conforme seus limites.
       </p>
-      <p>
-        Sinais e warmup de estratégia: sem diagnóstico disponível nesta leitura.
-        Uma lista vazia de ordens não prova falta de sinal, veto ou conclusão do
-        warmup.
-      </p>
+      {account.baseline ? (
+        <>
+          <p>
+            Estratégia paper: <code>{account.baseline.policy_version}</code>.
+            Início prospectivo: {account.baseline.start_at}.
+          </p>
+          <p>
+            Últimas {account.baseline.decisions.length} decisões persistidas
+            (até 20). Ausência de ordem não representa lucro nem sinal neutro.
+          </p>
+          {account.baseline.decisions.length === 0 && (
+            <p>Aguardando a primeira janela de decisão após o início.</p>
+          )}
+          {account.baseline.decisions.map((d) => (
+            <details key={d.decision_id}>
+              <summary>
+                {d.bar_end_at} · {d.state}
+              </summary>
+              <p>
+                Processada em {d.decision_at}. Motivos:{" "}
+                {d.reasons.join(", ") || "nenhum"}.
+              </p>
+              {d.candidate && (
+                <p>
+                  Candidato {d.candidate.direction}:{" "}
+                  {displayRaw(d.candidate.quantity_btc_raw, 8)} BTC; stop US${" "}
+                  {displayRaw(d.candidate.stop_usd_raw)}.
+                </p>
+              )}
+              <p>
+                Admissão:{" "}
+                {d.admission
+                  ? [
+                      d.admission.status,
+                      d.admission.reason,
+                      ...d.admission.reasons,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : "sem ordem proposta"}
+                .
+              </p>
+              <p>
+                Execução:{" "}
+                {d.execution
+                  ? [
+                      d.execution.status,
+                      d.execution.reason,
+                      ...d.execution.reasons,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : "sem resultado de execução registrado"}
+                .
+              </p>
+              {d.order_id && (
+                <p>
+                  Ordem: <code>{d.order_id}</code>. Fills e custos na aba
+                  Operações desta conta.
+                </p>
+              )}
+              <p>
+                Referência da decisão: <code>{d.decision_id}</code>.
+              </p>
+            </details>
+          ))}
+          {account.baseline.exits.map((x) => (
+            <p key={x.position_id}>
+              Saída {x.state} · prazo {x.deadline} · {x.reasons.join(", ")}.{" "}
+              {x.requested_at &&
+                `Solicitada em ${x.requested_at}; fechamento depende de livro observado.`}
+            </p>
+          ))}
+        </>
+      ) : (
+        <p>
+          Sinais e warmup de estratégia: sem diagnóstico disponível nesta
+          leitura. Uma lista vazia de ordens não prova falta de sinal, veto ou
+          conclusão do warmup.
+        </p>
+      )}
     </div>
   );
 }
@@ -215,8 +291,8 @@ export function BtcWorkspace(props: Access & { tab: string }) {
           <p>Conta selecionada: {selected}.</p>
           <p>
             Avaliação de experimentos ainda indisponível. Não há comparação de
-            desempenho, execução de estratégia ou promoção de modelo disponível
-            nesta tela.
+            desempenho ou promoção de modelo disponível nesta tela. As decisões
+            da conta-base estão na Mesa e seus fills/custos em Operações.
           </p>
           <p>
             Versão cadastrada:{" "}
