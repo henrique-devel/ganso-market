@@ -82,6 +82,19 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_disabled_jev_adapter_only_deploys_api_and_additive_schema(self) -> None:
+        paths = [
+            "apps/api/src/models/jev.ts",
+            "apps/api/src/models/jev-contract.ts",
+            "apps/api/src/models/jev-typesafe.ts",
+            "apps/api/src/storage/jevstore.ts",
+            "apps/api/test/trading/jev-fixture.ts",
+            "apps/api/test/trading/jev.test.ts",
+            "apps/api/test/trading/jev.pg.test.ts",
+            "migrations/0044_btc_jev_adapter.sql",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+
     def test_context_timeout_only_affects_collector_and_does_not_start_it(self) -> None:
         paths = [
             "apps/api/src/btc-worker.ts",
