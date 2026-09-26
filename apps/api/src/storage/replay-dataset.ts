@@ -57,7 +57,14 @@ export interface ReplayReservation {
   reservation: Reservation;
   ledger_transaction_id: string | null;
 }
+export interface RetainedReplayRef {
+  object_id: string;
+  recorded_at: string;
+  payload_hash: string | null;
+}
 export interface ReplayDataset {
+  evidence_mode?: "embedded" | "references";
+  retained_refs?: RetainedReplayRef[];
   schema_version: typeof REPLAY_VERSION;
   /** Export implementation; experiment code SHA remains in its captured registration. */
   code_sha: string;
@@ -141,7 +148,31 @@ export function replayDataset(artifact: ReplayArtifact) {
         )),
     "DECISION_SELECTION",
   );
+  const referenceMode = d.evidence_mode === "references";
+  requireReplay(
+    d.evidence_mode === undefined ||
+      d.evidence_mode === "embedded" ||
+      referenceMode,
+    "EVIDENCE_MODE",
+  );
+  const rootIds = new Set(d.roots);
+  const retained = new Map(
+    (d.retained_refs ?? []).map((r) => [r.object_id, r]),
+  );
+  requireReplay(
+    retained.size === (d.retained_refs?.length ?? 0) &&
+      retained.size <= REPLAY_LIMITS.objects &&
+      (referenceMode || retained.size === 0),
+    "REFERENCE_LIMIT",
+  );
   const cut = baselineTime(d.cut.captured_at);
+  for (const r of retained.values())
+    requireReplay(
+      rootIds.has(r.object_id) &&
+        baselineTime(r.recorded_at) <= cut &&
+        (r.payload_hash === null || /^[a-f0-9]{64}$/.test(r.payload_hash)),
+      "REFERENCE_MANIFEST",
+    );
   validateLedgerIdentity(d.identity);
   requireReplay(
     d.ledger.length <= REPLAY_LIMITS.rows &&
@@ -171,12 +202,12 @@ export function replayDataset(artifact: ReplayArtifact) {
       "EVIDENCE_INSTRUMENT",
     );
     requireReplay(
-      o.dependencies.every((id) => objects.has(id)),
+      referenceMode || o.dependencies.every((id) => objects.has(id)),
       "DEPENDENCY_MISSING",
     );
   }
   requireReplay(
-    d.roots.every((id) => objects.has(id)),
+    d.roots.every((id) => objects.has(id) || retained.has(id)),
     "ROOT_MISSING",
   );
   // Detect cycles, excessive depth and extraneous objects. Exact closure is part of identity.
@@ -187,6 +218,10 @@ export function replayDataset(artifact: ReplayArtifact) {
       "DEPENDENCY_CYCLE_OR_DEPTH",
     );
     if (reached.has(id)) return;
+    if (!objects.has(id)) {
+      requireReplay(referenceMode, "DEPENDENCY_MISSING");
+      return;
+    }
     const next = new Set(path).add(id);
     for (const dep of objects.get(id)!.dependencies) visit(dep, next);
     reached.add(id);
@@ -294,23 +329,35 @@ export function replayDataset(artifact: ReplayArtifact) {
     state: string;
     reasons: string[];
     missing_inputs: string[];
+    retained_inputs_not_embedded: number;
     jev: string;
   }[] = [];
   for (const { decision: decision, evidence_id } of decisions) {
     const o = objects.get(evidence_id);
     requireReplay(
       o &&
-        d.roots.includes(evidence_id) &&
+        rootIds.has(evidence_id) &&
         same(o.payload, decision) &&
         same(decision.registration.scope, ledgerScope(d.identity)) &&
         baselineTime(decision.decision_at) <= cut,
       "DECISION_EVIDENCE",
     );
     const missing: string[] = [];
+    let external = 0;
     for (const ref of decision.input_refs) {
       const input = objects.get(ref.object_id);
       if (!input) {
-        missing.push(ref.object_id);
+        const r = retained.get(ref.object_id);
+        if (!r) missing.push(ref.object_id);
+        else {
+          requireReplay(
+            r.payload_hash === ref.payload_hash &&
+              r.recorded_at === ref.recorded_at &&
+              r.recorded_at <= decision.decision_at,
+            "REFERENCE_AS_OF",
+          );
+          external++;
+        }
         continue;
       }
       requireReplay(
@@ -333,6 +380,7 @@ export function replayDataset(artifact: ReplayArtifact) {
       state: decision.state,
       reasons: decision.reasons,
       missing_inputs: missing,
+      retained_inputs_not_embedded: external,
       jev: !jev
         ? "not_captured"
         : jev.state !== "final"
@@ -345,7 +393,7 @@ export function replayDataset(artifact: ReplayArtifact) {
       d.jev.every(
         (j) =>
           decisions.some((x) => x.decision.decision_id === j.decision_id) &&
-          objects.has(j.evidence_id) &&
+          (objects.has(j.evidence_id) || retained.has(j.evidence_id)) &&
           ["real", "mock"].includes(j.origin) &&
           ["prepared", "dispatching", "final"].includes(j.state) &&
           (j.state === "final") === (j.outcome !== null),
@@ -360,6 +408,10 @@ export function replayDataset(artifact: ReplayArtifact) {
     schema_version: REPLAY_VERSION,
     cut: d.cut,
     decision_selection: selection,
+    evidence_mode: referenceMode ? "references" : "embedded",
+    input_audit: referenceMode
+      ? "resolve_retained_inputs_to_verify_payload_hash_and_source_time"
+      : "embedded_payloads_verified",
     financials,
     reservations,
     decisions: decisions.map((x) => x.decision),

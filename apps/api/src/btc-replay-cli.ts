@@ -5,6 +5,7 @@ import { createDatabasePool } from "./database.js";
 import {
   captureReplayDataset,
   loadReplayDataset,
+  loadReplayEvidence,
 } from "./storage/replaystore.js";
 import {
   REPLAY_CONTRACTS,
@@ -49,9 +50,14 @@ async function main() {
     console.log(JSON.stringify(replayDataset(artifacts[0]!)));
     return;
   }
-  if (!id || !["capture", "export"].includes(action ?? ""))
+  if (
+    !id ||
+    !["capture", "capture-references", "export", "evidence"].includes(
+      action ?? "",
+    )
+  )
     throw new Error(
-      "usage: btc-replay-cli version | capture ACCOUNT [DECISION_ID ...] | export DATASET_ID | replay < artifact.json | compare < [artifact,artifact]",
+      "usage: btc-replay-cli version | capture ACCOUNT [DECISION_ID ...] | capture-references ACCOUNT [DECISION_ID ...] | evidence DATASET_ID OBJECT_ID | export DATASET_ID | replay < artifact.json | compare < [artifact,artifact]",
     );
   const config = await loadConfig();
   const pool = createDatabasePool(config, {
@@ -60,7 +66,7 @@ async function main() {
     applicationName: "btc-replay-on-demand",
   });
   try {
-    if (action === "capture") {
+    if (action === "capture" || action === "capture-references") {
       const fs = await statfs("/", { bigint: true });
       if (
         fs.bavail * fs.bsize - 2n * BigInt(REPLAY_LIMITS.bytes) <
@@ -69,14 +75,17 @@ async function main() {
         throw new Error("BTC_REPLAY_DISK_FLOOR");
     }
     const artifact =
-      action === "capture"
+      action === "capture" || action === "capture-references"
         ? await captureReplayDataset(
             pool,
             id,
             (await readFile("/etc/ganso/release-sha", "utf8")).trim(),
             decisionIds.length ? decisionIds : undefined,
+            action === "capture-references" ? "references" : "embedded",
           )
-        : await loadReplayDataset(pool, id);
+        : action === "evidence"
+          ? await loadReplayEvidence(pool, id, decisionIds[0] ?? "")
+          : await loadReplayDataset(pool, id);
     console.log(JSON.stringify(artifact));
   } finally {
     await pool.end();

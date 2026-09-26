@@ -98,6 +98,52 @@ export function dataset(): ReplayDataset {
   };
 }
 describe("bounded captured BTC dataset replay", () => {
+  it("keeps external evidence explicit and refuses a tampered reference timestamp", () => {
+    const input = fixture(),
+      decision = decideBaseline(input),
+      d = dataset();
+    d.identity = identity("baseline");
+    d.ledger = materializeLedgerBatch(
+      genesisBatch(d.identity),
+      "0",
+      iso(start),
+    );
+    d.cut.ledger_sequence = "1";
+    d.cut.captured_at = iso(AT + 1000);
+    d.decisions = [{ decision, evidence_id: "decision" }];
+    d.evidence_mode = "references";
+    d.roots = ["decision", input.account.object_id];
+    d.retained_refs = [
+      {
+        object_id: "decision",
+        recorded_at: decision.decision_at,
+        payload_hash: null,
+      },
+      {
+        object_id: input.account.object_id,
+        recorded_at: input.account.recorded_at,
+        payload_hash: input.account.payload_hash,
+      },
+    ];
+    d.evidence = [
+      {
+        object_id: "decision",
+        class: "decision",
+        identity: decision.registration.scope,
+        recorded_at: decision.decision_at,
+        payload: decision,
+        payload_hash: replayHash(decision),
+        dependencies: [input.account.object_id],
+      },
+    ];
+    const output = replayDataset(sealReplayDataset(d));
+    expect(output.fidelity[0]!.retained_inputs_not_embedded).toBe(1);
+    expect(output.input_audit).toContain("resolve_retained_inputs");
+    d.retained_refs[1]!.recorded_at = iso(AT + 1);
+    expect(() => replayDataset(sealReplayDataset(d))).toThrow(
+      "REFERENCE_AS_OF",
+    );
+  });
   it("hashes finite fractional captured metadata without allowing float money", () => {
     const d = dataset();
     const payload = {
