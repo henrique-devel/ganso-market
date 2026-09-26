@@ -32,6 +32,16 @@ A identidade é registrada imediatamente. A gênese única de USD6 `1000000000`
 cedo um evento econômico futuro. Antes disso a projeção financeira pode aparecer
 indisponível. Cada cenário tem sua própria banca; nenhum saldo é somado à manual.
 
+A política recebe o ID/payload/hash completos da metadata pinada no registro.
+A observação mais recente, selecionada as-of, precisa concordar em todos os
+campos do instrumento, regras, taxas e proveniência do parser/referência. Só
+podem variar os relógios da observação local e o hash da resposta bruta da venue
+(que inclui outros ativos). Esses campos continuam nos payloads e hashes
+originais: a comparação não recalcula nem altera o hash congelado. Versão igual
+sozinha não comprova equivalência. O snapshot da conta retém ambas as evidências
+e o resultado da comparação; revisão econômica real ou evidência futura/ausente
+veta entradas. Registro, início e decisões antigas permanecem imutáveis.
+
 ## Decisão, execução e retomada
 
 Janela de entrada `[T+10s,T+60s)`, uma decisão por barra/conta/experimento/
@@ -42,6 +52,15 @@ saídas continuam depois dela. A seleção usa as barras retidas conhecidas no
 relógio real, nunca um candle da venue ou um preço posterior relabelado.
 Sem prova do início original da série, uma janela curta é `data_unavailable`,
 não um warmup presumidamente íntegro. Gaps e revisões inválidas vetoam entradas.
+
+A leitura e os hashes do histórico volumoso usam uma transação READ ONLY fora
+do lock de retenção. Sob o fence de execução, o consumidor confere as mesmas
+versões das barras; mudança concorrente adia a decisão. Conta, risco, reserva,
+ordem e pins permanecem atômicos. A decisão conserva todos os inputs de replay,
+mas protege dependências transitivas pelos roots das barras e da conta, evitando
+milhares de vínculos redundantes. Recovery consulta cada nó do grafo por índice.
+Essas medidas reduzem contenção; não alteram o timeout de 2s nem garantem ausência
+de contenção em toda carga futura. Uma parada do coletor exige diagnóstico.
 
 Candidato → revalidação → risco/reserva → IOC usam a mesma transação e locks
 de retenção/conta/recovery. A execução exige outro livro posterior à latência de

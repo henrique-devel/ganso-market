@@ -116,11 +116,15 @@ export async function recoverySnapshotTx(tx: SqlExecutor, id: string) {
       dependencies: string[];
       actual: string[];
     }>(
+      // Sparse account roots must not scan the whole retained market corpus
+      // while holding the retention fence. Correlated OFFSET 0 keeps indexed
+      // lookups per graph node even when recursive cardinality is overestimated.
       `WITH RECURSIVE graph(object_id) AS (
-       SELECT unnest($1::text[]) UNION SELECT d.dependency_id FROM btc_retention_dependencies d JOIN graph g USING(object_id)
+       SELECT unnest($1::text[]) UNION SELECT d.dependency_id FROM graph g
+       CROSS JOIN LATERAL (SELECT dependency_id FROM btc_retention_dependencies WHERE object_id=g.object_id OFFSET 0) d
      ) SELECT g.object_id,o.payload,o.identity,o.dependencies,
        ARRAY(SELECT dependency_id FROM btc_retention_dependencies d WHERE d.object_id=g.object_id ORDER BY dependency_id) AS actual
-       FROM graph g LEFT JOIN btc_retention_objects o USING(object_id) ORDER BY g.object_id`,
+       FROM graph g LEFT JOIN LATERAL (SELECT payload,identity,dependencies FROM btc_retention_objects WHERE object_id=g.object_id OFFSET 0) o ON true ORDER BY g.object_id`,
       [[...rootIds].sort()],
     )
   ).rows;
