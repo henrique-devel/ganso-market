@@ -501,3 +501,39 @@ describe("admission and execution never chase a changed market or resize", () =>
     expect(() => decideBaseline(input)).toThrow("ACCOUNT_EVIDENCE");
   });
 });
+
+describe("shared exogenous baseline signal", () => {
+  it("retains the same signal when the source account is paused or already managing a position", () => {
+    const input = fixture(),
+      original = decideBaseline(input);
+    input.account.payload.entries_paused = true;
+    input.account.payload.exit_pending = true;
+    rehash(input.account);
+    const source = decideBaseline(input);
+    expect(source.state).toBe("position_managed");
+    expect(source.command).toBeNull();
+    expect(source.signal).toEqual(original.signal);
+    const challenger = fixture();
+    Object.assign(challenger.registration.scope, {
+      account_id: "challenger",
+      experiment_id: "mock:challenger",
+    });
+    Object.assign(
+      challenger.account.payload.projection.ledger.scope,
+      challenger.registration.scope,
+    );
+    rehash(challenger.account);
+    challenger.source = source;
+    // A late correction in the current bars cannot revise the source signal.
+    challenger.hours.records = [];
+    challenger.quarters.records = [];
+    const decision = decideBaseline(challenger);
+    expect(decision.state).toBe("candidate_long");
+    expect(decision.signal).toEqual(source.signal);
+    expect(decision.command!.order.quantity_btc_raw).toBe(
+      original.command!.order.quantity_btc_raw,
+    );
+    tick(challenger, AT + 5000);
+    expect(decideBaseline(challenger).state).toBe("missed_decision_window");
+  });
+});

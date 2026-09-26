@@ -1,5 +1,9 @@
 import type { SecretValue } from "../config.js";
-import { JEV_QUESTION, type JevTransport } from "./jev-contract.js";
+import {
+  JevWireResponse,
+  JEV_QUESTION,
+  type JevTransport,
+} from "./jev-contract.js";
 
 /** Direct HTTP avoids the SDK's default retry policy. Endpoint is fixed so a
  * config typo cannot send the backend secret to another host. Supplying a test
@@ -46,7 +50,7 @@ export function createTypeSafeTransport(
             throw new Error("JEV_RESPONSE_REJECTED");
           chunks.push(value);
         }
-        return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+        return new JevWireResponse(Buffer.concat(chunks).toString("utf8"));
       } finally {
         await reader.cancel();
         reader.releaseLock();

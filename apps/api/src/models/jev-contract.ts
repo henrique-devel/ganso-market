@@ -63,7 +63,16 @@ export type JevReason =
   | "malformed_response"
   | "recovered_uncertain"
   | "storage_error";
+/** Exact successful HTTP body; parsing happens in the adapter so replay retains
+ * whitespace, original numbers and malformed JSON. No headers or credentials. */
+export class JevWireResponse {
+  constructor(public readonly body: string) {}
+}
 export interface JevResult {
+  input: JevInput | null;
+  original_response: string | null;
+  response_hash: string | null;
+  response_received_at: string | null;
   version: typeof JEV_VERSION;
   prompt_version: typeof JEV_PROMPT_VERSION;
   prompt_hash: string;

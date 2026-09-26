@@ -43,7 +43,8 @@ async function control(
     row.identity.account.mode !== "paper" ||
     !(
       row.identity.account.purpose === "manual" ||
-      (funding && row.identity.account.purpose === "baseline")
+      (funding &&
+        ["baseline", "challenger"].includes(row.identity.account.purpose))
     )
   )
     throw new Error("BTC_DESK_MANUAL_REQUIRED");

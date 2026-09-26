@@ -82,6 +82,18 @@ class WorkflowWiringTests(unittest.TestCase):
 
 
 class LedgerDeploymentTests(unittest.TestCase):
+    def test_disabled_challenger_preserves_the_running_collector(self) -> None:
+        paths = [
+            "apps/api/src/storage/challenger-runtime.ts",
+            "apps/api/src/storage/baseline-runtime.ts",
+            "apps/api/src/storage/baseline-policy.ts",
+            "apps/api/src/storage/desk-consumer.ts",
+            "apps/api/test/trading/challenger.pg.test.ts",
+            "migrations/0045_btc_jev_challenger.sql",
+            "deploy/deploy_paths.py",
+        ]
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+
     def test_disabled_jev_adapter_only_deploys_api_and_additive_schema(self) -> None:
         paths = [
             "apps/api/src/models/jev.ts",

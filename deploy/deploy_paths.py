@@ -114,6 +114,8 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/src/models/jev-contract.ts",
             "apps/api/src/models/jev-typesafe.ts",
             "apps/api/src/storage/jevstore.ts",
+            "apps/api/src/storage/challenger-runtime.ts",
+            "apps/api/test/trading/challenger.pg.test.ts",
             "apps/api/test/trading/jev-fixture.ts",
             "apps/api/test/trading/jev.test.ts",
             "apps/api/test/trading/jev.pg.test.ts",

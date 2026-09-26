@@ -32,15 +32,19 @@ export type RegistrationRow = {
   evidence_id: string;
   enabled: boolean;
 };
-export async function baselineRegistrationTx(tx: SqlExecutor, account: string) {
+export async function baselineRegistrationTx(
+  tx: SqlExecutor,
+  account: string,
+  purpose: "baseline" | "challenger" = "baseline",
+) {
   const row = (
     await tx.query<RegistrationRow>(
       `SELECT r.registration,r.evidence_id,c.enabled
     FROM btc_baseline_registrations r JOIN btc_desk_controls c USING(account_id)
     JOIN btc_ledger_accounts a USING(account_id) WHERE r.account_id=$1
-    AND a.identity->'account'->>'purpose'='baseline' AND a.identity->'account'->>'mode'='paper'
+    AND a.identity->'account'->>'purpose'=$2 AND a.identity->'account'->>'mode'='paper'
     AND c.broker='ioc' AND c.latency_ms=1000`,
-      [account],
+      [account, purpose],
     )
   ).rows[0];
   if (!row) throw new Error("BTC_BASELINE_REGISTRATION_REQUIRED");

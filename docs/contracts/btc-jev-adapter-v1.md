@@ -3,7 +3,8 @@
 Backend library only, disabled by default. No scheduler, challenger registration,
 account, endpoint, environment switch, secret, funded budget or real call is
 created by this delivery. G2-08.2/3 own candidate admission and activation.
-Baseline policy, fingerprint, owner/fence, ledger, exits and risk are unchanged.
+Baseline fingerprint, financial policy, ledger, exits and risk remain unchanged.
+See [S2 challenger contract](btc-jev-challenger-v1.md) for candidate ownership and replay.
 
 `apps/api/src/models/jev.ts` lives outside the pure `src/trading` boundary.
 `createJevAdapter` accepts a replaceable `JevTransport` and `JevStore`. The
@@ -75,9 +76,9 @@ hashes, origin, start/deadline/duration, reserved amount, measured cost or null,
 usage, validated answer and failure reason. Finalized receipts are immutable.
 A pending record conservatively says `recovered_uncertain`; `finished_at IS NULL`
 distinguishes it. Duration measures adapter elapsed time through response
-handling, including reservation; it is not a provider latency assertion. Full
-input and original wire response replay/admission belong to S2; S1 persists the
-validated judgment and tariff snapshot. Error bodies and credentials are never
+handling, including reservation; it is not a provider latency assertion. S2 additionally persists the full input, exact bounded successful HTTP body,
+body hash and original receipt time, including malformed/unknown-cost evidence.
+Candidate replay/admission is specified in the S2 contract. Error bodies and credentials are never
 logged or persisted. Zero cost on a pre-dispatch refusal is distinguishable from
 unknown potentially incurred cost (`null`) after an attempt.
 
