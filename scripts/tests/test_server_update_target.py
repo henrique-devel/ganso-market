@@ -183,6 +183,22 @@ class ServerUpdateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 update.previous_release(root)
 
+    def test_baseline_runtime_targets_api_web_and_additive_migration_only(self) -> None:
+        self.assertEqual(
+            affected_services(
+                [
+                    "apps/api/src/baseline-activate-cli.ts",
+                    "apps/api/src/storage/baseline-runtime.ts",
+                    "apps/api/src/storage/baseline-store.ts",
+                    "apps/api/test/trading/baseline-runtime.pg.test.ts",
+                    "apps/web/src/BtcDesk.tsx",
+                    "packages/contracts/src/trading/desk.ts",
+                    "migrations/0043_btc_baseline_runtime.sql",
+                ]
+            ),
+            {"api", "web", "migrate"},
+        )
+
     def test_operation_reads_preserve_running_collector(self) -> None:
         self.assertEqual(
             affected_services(

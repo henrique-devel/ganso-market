@@ -113,6 +113,7 @@ async function accessTx(
   tx: SqlExecutor,
   account: string,
   token: string,
+  action: DeskCommand["action"],
   lock = false,
 ): Promise<Access> {
   const session = (
@@ -135,7 +136,10 @@ async function accessTx(
   if (!row) fail(404, "TRADING_ACCOUNT_UNAVAILABLE");
   if (
     row.identity.account.mode !== "paper" ||
-    row.identity.account.purpose !== "manual"
+    !(
+      row.identity.account.purpose === "manual" ||
+      (row.identity.account.purpose === "baseline" && action === "pause")
+    )
   )
     fail(403, "TRADING_PAPER_MANUAL_REQUIRED");
   return { ...row, ...session };
@@ -205,7 +209,12 @@ export async function previewDeskCommand(
   validateDeskCommand(command, key);
   return pool.readOnly(1500, async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-    const access = await accessTx(tx, command.account_id, token);
+    const access = await accessTx(
+      tx,
+      command.account_id,
+      token,
+      command.action,
+    );
     const prior = (
       await tx.query<{ request: DeskCommand }>(
         "SELECT request FROM btc_desk_commands WHERE account_id=$1 AND idempotency_key=$2",
@@ -401,7 +410,7 @@ export async function acceptDeskCommand(
     fail(400, "TRADING_INTENT_MISMATCH");
   const command = ticket.command;
   const initial = await pool.readOnly(1500, (tx) =>
-    accessTx(tx, command.account_id, token),
+    accessTx(tx, command.account_id, token, command.action),
   );
   const verify = (a: Access) => {
     if (
@@ -417,7 +426,13 @@ export async function acceptDeskCommand(
       worker,
       scope,
       async (tx) => {
-        const access = await accessTx(tx, command.account_id, token, true);
+        const access = await accessTx(
+          tx,
+          command.account_id,
+          token,
+          command.action,
+          true,
+        );
         verify(access);
         const prior = (
           await tx.query<{ request: DeskCommand; result: DeskCommandReceipt }>(

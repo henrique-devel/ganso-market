@@ -184,6 +184,12 @@ export function baselineBars(
     .slice(0, required);
   const refs: BaselineRef[] = [...unique];
   let invalid = false;
+  const dependencies = new Map<string, BaselineBars["dependencies"]>();
+  for (const d of input.dependencies) {
+    const records = dependencies.get(d.object_id) ?? [];
+    records.push(d);
+    dependencies.set(d.object_id, records);
+  }
   for (const r of unique) {
     const b = r.payload;
     try {
@@ -226,7 +232,7 @@ export function baselineBars(
       )
         invalid = true;
       for (const id of b.input_ids) {
-        const ds = input.dependencies.filter((d) => d.object_id === id);
+        const ds = dependencies.get(id) ?? [];
         const d = ds[0];
         if (
           ds.length !== 1 ||
