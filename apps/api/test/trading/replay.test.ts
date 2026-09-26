@@ -125,11 +125,11 @@ describe("bounded captured BTC dataset replay", () => {
   it("reduces reservations through partial fills and release, with no PnL charge", () => {
     const d = dataset(),
       o = order("order:1", {
-        quantity_btc_raw: "2000000",
+        quantity_btc_raw: "1500000",
         valid_until: iso(start + 10000),
       });
-    const held = reservationHold(o, 2000000n),
-      partial = reservationHold(o, 1000000n);
+    const held = reservationHold(o, 1500000n),
+      partial = reservationHold(o, 500000n);
     d.reservations = [
       {
         sequence: "1",
@@ -155,7 +155,7 @@ describe("bounded captured BTC dataset replay", () => {
     ];
     d.cut.reservation_sequence = "2";
     const r = replayDataset(sealReplayDataset(d));
-    expect(r.active_reserved_usd_raw).toBe("650650000");
+    expect(r.active_reserved_usd_raw).toBe("325325000");
     expect(r.financials.balance_usd_raw).toBe("1009650000");
     d.reservations.push({
       sequence: "3",
