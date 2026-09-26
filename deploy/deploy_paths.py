@@ -93,6 +93,11 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/test/btc-worker.test.ts",
             "apps/api/test/btc-worker-runtime.test.ts",
             "apps/api/test/btc-runtime-diagnostics.test.ts",
+            "apps/api/test/btc-context-poll.test.ts",
+            "apps/api/src/venues/hyperliquid/feed.ts",
+            "apps/api/src/venues/hyperliquid/context-snapshot.ts",
+            "apps/api/test/venues/hyperliquid-feed.test.ts",
+            "apps/api/test/venues/hyperliquid-context.test.ts",
         }:
             selected.add("btc-worker")
         elif any(path == f"apps/api/src/{name}.ts" for name in LEGACY):

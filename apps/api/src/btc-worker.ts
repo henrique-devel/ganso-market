@@ -1,4 +1,5 @@
 import { createCollectorRuntimeDiagnostics } from "./btc/runtime-diagnostics.js";
+import { createContextPoll } from "./btc/context-poll.js";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, statfs, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -92,16 +93,23 @@ export async function runBtcWorker() {
     applicationName: "ganso-btc-collector",
   });
   const diagnostics = createCollectorRuntimeDiagnostics();
+  const stopSignal = new AbortController();
+  let contextPoll: ReturnType<typeof createContextPoll> | undefined;
   const observe = diagnostics.run;
   const publishStatus = (state: unknown) =>
     observe("publish", () =>
-      publish({ ...(state as object), failure: diagnostics.failure() }),
+      publish({
+        ...(state as object),
+        failure: diagnostics.failure(),
+        context_http: contextPoll?.status(),
+      }),
     );
   let collector: ReturnType<typeof createCollector> | undefined;
   let stopRequested = false;
   let feed: ReturnType<typeof startHyperliquidBtcFeed> | undefined;
   const shutdown = () => {
     stopRequested = true;
+    stopSignal.abort();
     feed?.stop();
   };
   const reconnect = () => feed?.reconnect();
@@ -140,6 +148,12 @@ export async function runBtcWorker() {
     let metadata = await observe("metadata", () => adapter.getBtcMetadata());
     if (stopRequested) return;
     feed = startHyperliquidBtcFeed(metadata, "http_snapshot");
+    contextPoll = createContextPoll({
+      now: Date.now,
+      signal: stopSignal.signal,
+      fetch: () => fetchBtcContextSnapshot(metadata, stopSignal.signal),
+      unavailable: () => feed!.contextUnavailable(),
+    });
     collector = createCollector({
       feed,
       sessionId: randomUUID(),
@@ -152,25 +166,32 @@ export async function runBtcWorker() {
         observe("close_bars", () => closeBtcMarketBars(pool, at, true)),
     });
     let refreshed = Date.now(),
-      logged = 0,
-      contextRefreshed = 0;
+      logged = 0;
     while (!stopRequested) {
       const cycleStarted = Date.now();
       if (feed.status().socket.connected) {
-        const contextDue = Date.now() - contextRefreshed >= 2000;
-        const [book, context] = await Promise.all([
-          observe("book_snapshot", () => fetchBtcBookSnapshot(metadata)),
-          contextDue
-            ? observe("context_snapshot", () =>
-                fetchBtcContextSnapshot(metadata),
+        const results = await Promise.allSettled([
+          observe("book_snapshot", async () => {
+            try {
+              return await fetchBtcBookSnapshot(metadata, stopSignal.signal);
+            } catch (error) {
+              if (
+                stopSignal.signal.aborted &&
+                error === stopSignal.signal.reason
               )
-            : Promise.resolve(null),
+                return null;
+              throw error;
+            }
+          }),
+          observe("context_snapshot", () => contextPoll!.poll()),
         ]);
-        feed.observeSnapshot(book);
-        if (context) {
-          feed.observeSnapshot(context);
-          contextRefreshed = Date.now();
+        for (const result of results) {
+          if (result.status === "rejected") throw result.reason;
         }
+        if (stopRequested) break;
+        for (const result of results)
+          if (result.status === "fulfilled" && result.value)
+            feed.observeSnapshot(result.value);
       }
       if (Date.now() - refreshed >= 60_000) {
         const current = await observe("metadata", async () => {
@@ -189,7 +210,12 @@ export async function runBtcWorker() {
       await collector.tick();
       await publishStatus(collector.status());
       if (Date.now() - logged >= 30_000) {
-        console.info(JSON.stringify(collector.status()));
+        console.info(
+          JSON.stringify({
+            ...collector.status(),
+            context_http: contextPoll.status(),
+          }),
+        );
         logged = Date.now();
       }
       // Start-to-start cadence: IO time must not add another full interval
@@ -210,12 +236,14 @@ export async function runBtcWorker() {
       JSON.stringify({
         ...(collector?.status() ?? { status: "stopped", reason }),
         failure: diagnostics.failure(),
+        context_http: contextPoll?.status(),
       }),
     );
     await publishStatus(
       collector?.status() ?? { status: "stopped", gap_open: true, reason },
     );
   } finally {
+    stopSignal.abort();
     feed?.stop();
     try {
       if (collector) await publishStatus(collector.status());

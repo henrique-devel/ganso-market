@@ -168,7 +168,7 @@ export function startHyperliquidBtcFeed(
         now - openedAt >= limits.handshakeMs) ||
       (waitingPongAt !== null && now - waitingPongAt >= limits.pongTimeoutMs) ||
       state.channels.book.status === "stale" ||
-      state.channels.context.status === "stale"
+      (contextMode === "ws" && state.channels.context.status === "stale")
     ) {
       socket.terminate();
       return;
@@ -182,7 +182,14 @@ export function startHyperliquidBtcFeed(
   }, 1000);
   connect();
   return {
+    contextUnavailable: () => {
+      // Invalidate the current state without inventing a failed observation or
+      // disconnecting the independent trade socket. Persist the existing gap contract.
+      if (!stopped && contextMode === "http_snapshot")
+        machine.invalid("context", Date.now());
+    },
     observeSnapshot: (event: TradingMarketObservation) => {
+      if (stopped) return;
       if (
         contextMode !== "http_snapshot" ||
         !["book", "context"].includes(event.channel) ||

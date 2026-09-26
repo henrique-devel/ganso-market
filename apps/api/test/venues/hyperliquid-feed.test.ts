@@ -100,6 +100,81 @@ function snapshots() {
 }
 
 describe("Hyperliquid feed parsing", () => {
+  it("invalidates only HTTP context, keeps its gap through silence and revalidates with a new snapshot", () => {
+    const feed = startHyperliquidBtcFeed(metadata, "http_snapshot");
+    feeds.push(feed);
+    current().open();
+    current().frame({
+      channel: "subscriptionResponse",
+      data: {
+        method: "subscribe",
+        subscription: { type: "trades", coin: "BTC" },
+      },
+    });
+    const observe = (channel: "book" | "context", id: string) => {
+      const event = {
+        ...normalizeHyperliquidFeed(
+          channel,
+          channel === "book" ? book() : ctx,
+          new Date(Date.now()).toISOString(),
+          "v1",
+          id,
+        )[0]!,
+        source_id: "hyperliquid:mainnet:info" as const,
+      };
+      feed.observeSnapshot(event);
+      return event;
+    };
+    const previous = observe("context", "first");
+    observe("book", "initial-book");
+    feed.drain();
+    feed.contextUnavailable();
+    const epoch = feed.status().channels.context.gap_epoch;
+    expect(feed.status().channels.context).toMatchObject({
+      status: "invalid",
+      needs_revalidation: true,
+    });
+    expect(feed.status().channels.book.status).toBe("healthy");
+    feed.observeSnapshot(previous); // Identical old evidence cannot close the gap.
+    expect(feed.drain()).toEqual([]);
+    for (let i = 0; i < 17; i++) {
+      current().frame({ channel: "pong" });
+      observe("book", `book-${i}`);
+      feed.drain();
+      vi.advanceTimersByTime(1000);
+    }
+    expect(feed.status()).toMatchObject({
+      retries: 0,
+      socket: { connected: true },
+      channels: {
+        context: {
+          status: "stale",
+          needs_revalidation: true,
+          gap_epoch: epoch,
+        },
+      },
+    });
+    observe("context", "recovered");
+    expect(feed.drain()).toMatchObject([
+      {
+        channel: "context",
+        source_timestamp: null,
+        quality: "unknown",
+        gap_epoch: epoch,
+        revalidation: "current_state_only",
+        continuity: "unproven",
+      },
+    ]);
+    expect(feed.status().gaps.find((g) => g.epoch === epoch)).toMatchObject({
+      reason: "invalid",
+      resumed_at: Date.now(),
+      recovery: "current_state_only",
+    });
+    feed.stop();
+    observe("context", "late-after-stop");
+    expect(feed.drain()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("preserves fixed-point amounts, timestamps, current funding precision and unknown source time", () => {
     expect(parse("book", book())[0]).toMatchObject({
       source_timestamp: at,

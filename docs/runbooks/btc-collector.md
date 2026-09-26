@@ -125,8 +125,29 @@ Aceitar essa observação requer HTTPS oficial sem redirect, `Miss from cloudfro
 Age ausente/zero, Date válido, resposta de até 256 KiB e 1,5 s, coerência de
 relógios (resolução HTTP de 1 s), BTC e versão de metadados compatíveis. O relógio
 HTTP envelhece até 5 s; contexto legado WS sem tempo continua degradado.
-Resposta ausente, cache, timeout, incompatibilidade ou tempo inválido encerra a
-coleta; nenhum retry irrestrito ou timestamp sintético. Limites de idade de risco
+Resposta recusada, cache, incompatibilidade ou tempo inválido encerra a coleta.
+Somente o `TimeoutError` do contexto HTTP permite recuperação limitada: até três
+timeouts tolerados por sessão; o quarto é terminal. Sucesso zera a sequência,
+mas não repõe o orçamento da sessão. Esperas após conclusão: 2/4/4 s para falhas
+consecutivas, e pelo menos 2 s após sucesso. Não há retry interno ao transporte,
+fila de tentativas ou rajada de compensação. O deadline permanece 1,5 s e a
+captura mantém o ciclo nominal de 1 s, descontando o tempo de IO.
+
+Cada timeout invalida somente o canal de contexto (`invalid`, gap aberto e
+`needs_revalidation=true`); após silêncio ele pode ficar `stale`. Livro/trades e
+capturas continuam sujeitos aos mesmos guards. O watchdog não reconecta o WS
+por silêncio do contexto HTTP. A lacuna fica persistida nas capturas, incluindo
+o intervalo até a recuperação, que prova apenas estado atual (`current_state_only`,
+continuidade `unproven`). Contexto anterior não é reapresentado como novo; somente
+outra resposta válida pode revalidar o canal. Resposta tardia é recusada, inclusive
+quando o event loop atrasa o timer; stop aborta as consultas e impede entrega tardia.
+
+`context_http` no health/log informa contagem total/consecutiva, orçamento, próxima
+tentativa, esgotamento e último timeout com hora local e diagnóstico sanitizado.
+Um timeout recuperável não ocupa o campo terminal `failure`; no esgotamento este
+campo conserva `stage=context_snapshot` e `error_type=TimeoutError`. Falhas em
+livro, metadata, payload/proveniência, persistência ou capacidade seguem terminais.
+Não há timestamp sintético. Limites de idade de risco
 permanecem 2/5 s, incluindo recepção, capture e revalidação de gap.
 
 O worker usa uma subscription pública (trades) e no máximo 60 consultas L2/min
@@ -160,8 +181,8 @@ O campo `failure` preserva a primeira etapa que falhou (`capacity`, `metadata`,
 o tipo de erro e um código técnico permitido quando disponível. Não inclui
 mensagem, stack, URL ou payload. `TimeoutError` em um snapshot distingue seu
 deadline de erro SQL em captura/capacidade; ausência desse campo em um log
-antigo não permite reconstruir a causa. Esse diagnóstico não adiciona retries
-nem amplia os timeouts.
+antigo não permite reconstruir a causa. O diagnóstico terminal não amplia timeouts; a única recuperação nova é o
+orçamento explícito de contexto descrito acima.
 
 Não reenviar lote rejeitado como completo; restart usa sessão nova e o cursor
 persistido registra descontinuidade. O status terminal fica no filesystem do
