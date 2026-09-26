@@ -235,7 +235,14 @@ describe("bounded captured BTC dataset replay", () => {
         dependencies: [],
       },
     ];
+    d.decision_selection = { mode: "ids", ids: [decision.decision_id] };
     const result = replayDataset(sealReplayDataset(d));
+    expect(result.decision_selection).toEqual(d.decision_selection);
+    const wrong = structuredClone(d);
+    wrong.decision_selection = { mode: "ids", ids: ["f".repeat(64)] };
+    expect(() => replayDataset(sealReplayDataset(wrong))).toThrow(
+      "DECISION_SELECTION",
+    );
     expect(result.decisions[0]).toEqual(decision);
     expect(result.fidelity[0]!.state).toBe("data_unavailable");
     expect(result.fidelity[0]!.missing_inputs.length).toBeGreaterThan(0);

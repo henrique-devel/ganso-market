@@ -68,6 +68,8 @@ export interface ReplayDataset {
     reservation_sequence: string;
     semantics: "locked_account_snapshot";
   };
+  /** Omitted only in original v1 exports, where every decision was captured. */
+  decision_selection?: { mode: "all" } | { mode: "ids"; ids: string[] };
   identity: LedgerIdentity;
   ledger: LedgerEvent[];
   reservations: ReplayReservation[];
@@ -125,6 +127,19 @@ export function replayDataset(artifact: ReplayArtifact) {
     /^[a-f0-9]{40}$/.test(d.code_sha) &&
       d.cut.semantics === "locked_account_snapshot",
     "MANIFEST",
+  );
+  const selection = d.decision_selection ?? { mode: "all" };
+  requireReplay(
+    selection.mode === "all" ||
+      (selection.mode === "ids" &&
+        selection.ids.length > 0 &&
+        selection.ids.length <= REPLAY_LIMITS.decisions &&
+        new Set(selection.ids).size === selection.ids.length &&
+        same(
+          [...selection.ids].sort(),
+          d.decisions.map((x) => x.decision.decision_id).sort(),
+        )),
+    "DECISION_SELECTION",
   );
   const cut = baselineTime(d.cut.captured_at);
   validateLedgerIdentity(d.identity);
@@ -344,6 +359,7 @@ export function replayDataset(artifact: ReplayArtifact) {
     dataset_id: artifact.dataset_id,
     schema_version: REPLAY_VERSION,
     cut: d.cut,
+    decision_selection: selection,
     financials,
     reservations,
     decisions: decisions.map((x) => x.decision),

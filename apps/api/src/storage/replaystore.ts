@@ -24,6 +24,7 @@ async function boundedRows<T>(
   account: string,
   limit: number,
   budget: { bytes: number; deadline: number },
+  extra: readonly unknown[] = [],
 ): Promise<T[]> {
   requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
   // Size is checked server-side before any potentially large JSON reaches Node.
@@ -31,7 +32,7 @@ async function boundedRows<T>(
     `WITH bounded AS MATERIALIZED (${sql} LIMIT $2)
     SELECT CASE WHEN sum(octet_length(row_to_json(b)::text)) OVER () <= $3 THEN row_to_json(b) ELSE NULL END AS value,
       octet_length(row_to_json(b)::text) AS bytes FROM bounded b`,
-    [account, limit + 1, REPLAY_LIMITS.bytes - budget.bytes],
+    [account, limit + 1, REPLAY_LIMITS.bytes - budget.bytes, ...extra],
   );
   requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
   requireReplay(rows.rows.length <= limit, "ROW_LIMIT");
@@ -50,11 +51,20 @@ export async function captureReplayDataset(
   pool: Pick<DatabasePool, "transaction">,
   account: string,
   codeSha: string,
+  decisionIds?: readonly string[],
 ): Promise<ReplayArtifact> {
   requireReplay(
     /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(account) &&
       /^[a-f0-9]{40}$/.test(codeSha),
     "REQUEST",
+  );
+  requireReplay(
+    !decisionIds ||
+      (decisionIds.length > 0 &&
+        decisionIds.length <= REPLAY_LIMITS.decisions &&
+        new Set(decisionIds).size === decisionIds.length &&
+        decisionIds.every((id) => /^[a-f0-9]{64}$/.test(id))),
+    "DECISION_SELECTION",
   );
   return pool.transaction(async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
@@ -94,19 +104,27 @@ export async function captureReplayDataset(
       REPLAY_LIMITS.rows,
       budget,
     );
+    const selection = decisionIds ? " AND decision_id=ANY($4::text[])" : "";
+    const extra = decisionIds ? [decisionIds] : [];
     const decisions = await boundedRows<ReplayDataset["decisions"][number]>(
       tx,
-      "SELECT decision,evidence_id FROM btc_baseline_decisions WHERE account_id=$1 ORDER BY bar_end_at",
+      `SELECT decision,evidence_id FROM btc_baseline_decisions WHERE account_id=$1${selection} ORDER BY bar_end_at`,
       account,
       REPLAY_LIMITS.decisions,
       budget,
+      extra,
+    );
+    requireReplay(
+      !decisionIds || decisions.length === decisionIds.length,
+      "DECISION_SELECTION_MISSING",
     );
     const jev = await boundedRows<ReplayDataset["jev"][number]>(
       tx,
-      "SELECT decision_id,evidence_id,state,origin,model,request_id,request,outcome FROM btc_jev_challenger_requests WHERE account_id=$1 ORDER BY bar_end_at",
+      `SELECT decision_id,evidence_id,state,origin,model,request_id,request,outcome FROM btc_jev_challenger_requests WHERE account_id=$1${selection} ORDER BY bar_end_at`,
       account,
       REPLAY_LIMITS.decisions,
       budget,
+      extra,
     );
     const roots = new Set<string>();
     // Indexed by account. Do not scan the marketstore or historical raw feed.
@@ -198,6 +216,9 @@ export async function captureReplayDataset(
         reservation_sequence: reservations.at(-1)?.sequence ?? "0",
         semantics: "locked_account_snapshot",
       },
+      decision_selection: decisionIds
+        ? { mode: "ids", ids: [...decisionIds].sort() }
+        : { mode: "all" },
       identity: rows[0].identity,
       ledger,
       reservations,

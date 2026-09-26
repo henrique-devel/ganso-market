@@ -29,7 +29,7 @@ async function input(): Promise<ReplayArtifact[]> {
   return (Array.isArray(parsed) ? parsed : [parsed]) as ReplayArtifact[];
 }
 async function main() {
-  const [action, id] = process.argv.slice(2);
+  const [action, id, ...decisionIds] = process.argv.slice(2);
   if (action === "version") {
     console.log(
       JSON.stringify({
@@ -51,7 +51,7 @@ async function main() {
   }
   if (!id || !["capture", "export"].includes(action ?? ""))
     throw new Error(
-      "usage: btc-replay-cli version | capture ACCOUNT | export DATASET_ID | replay < artifact.json | compare < [artifact,artifact]",
+      "usage: btc-replay-cli version | capture ACCOUNT [DECISION_ID ...] | export DATASET_ID | replay < artifact.json | compare < [artifact,artifact]",
     );
   const config = await loadConfig();
   const pool = createDatabasePool(config, {
@@ -74,6 +74,7 @@ async function main() {
             pool,
             id,
             (await readFile("/etc/ganso/release-sha", "utf8")).trim(),
+            decisionIds.length ? decisionIds : undefined,
           )
         : await loadReplayDataset(pool, id);
     console.log(JSON.stringify(artifact));
