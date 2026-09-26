@@ -43,6 +43,21 @@ class WorkflowWiringTests(unittest.TestCase):
         self.text = WORKFLOW.read_text(encoding="utf-8")
         self.deploy_job = self.text[self.text.index("\n  deploy:") :]
 
+    def test_replay_runner_only_updates_api(self) -> None:
+        self.assertEqual(
+            deploy_paths.affected_services(
+                [
+                    "apps/api/src/btc-replay-cli.ts",
+                    "apps/api/src/storage/replaystore.ts",
+                    "apps/api/src/storage/replay-dataset.ts",
+                    "apps/api/test/trading/replay.test.ts",
+                    "apps/api/test/trading/replay.pg.test.ts",
+                    "docs/contracts/btc-replay-dataset-v1.md",
+                ]
+            ),
+            {"api"},
+        )
+
     def test_the_deploy_job_asks_the_classifier(self) -> None:
         self.assertIn("id: paths", self.deploy_job)
         self.assertIn("python3 deploy/deploy_paths.py", self.deploy_job)
