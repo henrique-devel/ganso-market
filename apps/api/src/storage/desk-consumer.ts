@@ -1,3 +1,8 @@
+import {
+  createDeskRuntimeDiagnostics,
+  type DeskFailureFields,
+  type DeskPurpose,
+} from "../btc/runtime-diagnostics.js";
 import { createOperationalChallenger } from "./challenger-operations.js";
 import type { ChallengerConfig } from "../models/jev-config.js";
 import { consumeBaselineAccount } from "./baseline-runtime.js";
@@ -321,16 +326,21 @@ export async function fundDeskAccount(
 /** Bounded sequential loops, existing API pool only; no live adapter; baseline requires its separate explicit registration. */
 export function startDeskConsumer(
   pool: Pool,
-  log: (reason: string) => void,
+  log: (reason: string, fields?: DeskFailureFields) => void,
   config?: ChallengerConfig,
 ) {
-  const challenger = createOperationalChallenger(pool, config, log);
+  const diagnostics = createDeskRuntimeDiagnostics(log);
+  const challenger = createOperationalChallenger(pool, config, (reason) => {
+    // This legacy notification carries no error object or account identity.
+    diagnostics.start("challenger_gate", null, "challenger").fail(null, reason);
+  });
   let stopped = false,
     timer: ReturnType<typeof setTimeout> | undefined;
   let funding: Promise<void> | null = null;
   const lastFunding = new Map<string, number>();
   let running: Promise<void> = Promise.resolve();
   const tick = async () => {
+    const selection = diagnostics.start("select_accounts");
     try {
       const accounts = await pool.readOnly(
         1500,
@@ -347,44 +357,75 @@ export function startDeskConsumer(
       )
         throw new Error("BTC_DESK_ACCOUNT_LIMIT");
       for (const { account_id, purpose } of accounts) {
+        const operation = diagnostics.start(
+          purpose === "baseline"
+            ? "baseline_cycle"
+            : purpose === "challenger"
+              ? "challenger_cycle"
+              : "manual_cycle",
+          account_id,
+          purpose as DeskPurpose,
+        );
         try {
           if (purpose === "baseline")
-            await consumeBaselineAccount(pool, account_id);
+            await consumeBaselineAccount(
+              pool,
+              account_id,
+              undefined,
+              operation.stage,
+            );
           else if (purpose === "challenger") await challenger.tick(account_id);
           else await consumeDeskAccount(pool, account_id);
         } catch (e) {
-          const reason =
-            e instanceof Error && /^BTC_[A-Z0-9_]+$/.test(e.message)
-              ? e.message
-              : "BTC_DESK_CONSUMER_FAILED";
-          await pool.transaction((tx) =>
-            tx.query(
-              `INSERT INTO btc_desk_runtime(account_id,ready,reason) VALUES($1,false,$2)
-            ON CONFLICT(account_id) DO UPDATE SET observed_at=clock_timestamp(),ready=false,reason=EXCLUDED.reason`,
-              [account_id, reason],
-            ),
+          // Emit the original cause before attempting to persist the failed heartbeat.
+          const reason = operation.fail(e, "BTC_DESK_CONSUMER_FAILED");
+          const persistence = diagnostics.start(
+            "persist_failure",
+            account_id,
+            purpose as DeskPurpose,
+            operation.correlation_id,
           );
-          log(reason);
+          try {
+            await pool.transaction((tx) =>
+              tx.query(
+                `INSERT INTO btc_desk_runtime(account_id,ready,reason) VALUES($1,false,$2)
+            ON CONFLICT(account_id) DO UPDATE SET observed_at=clock_timestamp(),ready=false,reason=EXCLUDED.reason`,
+                [account_id, reason],
+              ),
+            );
+          } catch (error) {
+            persistence.fail(error, "BTC_DESK_CONSUMER_UNAVAILABLE");
+            // Keep the existing fail-closed scheduling: abort this cycle if status cannot persist.
+            return;
+          }
         }
         if (
           !funding &&
           Date.now() - (lastFunding.get(account_id) ?? 0) >= 30000
         ) {
           lastFunding.set(account_id, Date.now());
+          const observation = diagnostics.start(
+            "funding",
+            account_id,
+            purpose as DeskPurpose,
+          );
           funding = fundDeskAccount(pool, account_id)
-            .catch(() => log("BTC_DESK_FUNDING_UNAVAILABLE"))
+            .catch((error) => {
+              observation.fail(error, "BTC_DESK_FUNDING_UNAVAILABLE");
+            })
             .finally(() => {
               funding = null;
             });
         }
       }
-    } catch {
-      log("BTC_DESK_CONSUMER_UNAVAILABLE");
+    } catch (error) {
+      selection.fail(error, "BTC_DESK_CONSUMER_UNAVAILABLE");
+    } finally {
+      if (!stopped)
+        timer = setTimeout(() => {
+          running = tick();
+        }, 1000);
     }
-    if (!stopped)
-      timer = setTimeout(() => {
-        running = tick();
-      }, 1000);
   };
   running = tick();
   return async () => {

@@ -192,3 +192,53 @@ Para contenção/rollback: `docker compose ... stop btc-worker`, manter restart=
 configurar `enabled:false` e escala zero no overlay. Não apagar dados, pins,
 volumes nem migrations; não reiniciar Polymarket. Voltar imagem do coletor somente
 quando compatível com schema, nunca reativar o placeholder pré-G2-04.4.
+
+
+## Diagnóstico contido da API e das contas (G2-11.1)
+
+A versão `btc.desk-diagnostics.v1` aparece no log `api_started` e nos erros
+`paper_desk_consumer`. Falhas trazem `component`, `account_purpose`, `account_ref`
+(SHA-256 do ID, sem expor conteúdo arbitrário), `stage`, `sqlstate`, `error_code`,
+`error_type`, `cause`, `duration_ms` da etapa e `operation_duration_ms` do ciclo,
+e um UUID `correlation_id`. Etapas da baseline distinguem registro, relógio,
+projeção, preparo das barras, transação de risco e liquidação. A etapa é o limite
+da operação que falhou, não a identificação da query ou do detentor de um lock.
+`57014` significa cancelamento de query; sozinho não prova quem cancelou.
+`55P03` indica lock indisponível, sem distinguir sozinho NOWAIT de timeout.
+SQLSTATE/códigos/tipos e recusas de domínio usam listas permitidas; demais erros
+ficam `unknown`, sem mensagem, stack, SQL, parâmetros, payloads ou headers.
+
+O erro original é registrado **antes** de gravar `ready=false`. Se essa gravação
+falhar, `stage=persist_failure` conserva a mesma correlação e a causa original
+continua no log. Funding usa correlação própria, pois pode ocorrer em paralelo.
+Logs de falha têm uma emissão por conta/etapa e no máximo oito por janela de
+30 s por processo; `suppressed_since_last_log` conta falhas suprimidas até a
+próxima emissão. O limite não reduz as tentativas de persistir o heartbeat,
+não muda o período do consumidor e não ativa logging de queries.
+
+Separar as leituras: `/api/health/live` comprova resposta HTTP; `/api/health/ready`
+faz `SELECT 1`; `btc_desk_runtime.observed_at/ready/reason` mostra o resultado
+do consumidor; `btc_recovery_heads.lease_until/status/generation` mostra o lease;
+`btc_market_head.last_capture_at` e o último registro de cada canal mostram
+frescor. Heartbeat/lease recente não torna um capture antigo admissível. Comparar
+explicitamente `lease_until` com o relógio do banco: `status=ready` pode estar
+persistido mesmo com lease vencido. Última decisão por conta: índice
+`btc_baseline_decisions(account_id,bar_end_at)`, `ORDER BY bar_end_at DESC LIMIT 1`.
+
+Para correlacionar um ID conhecido sem registrar dados do ledger, calcular
+`encode(sha256(convert_to(account_id,'UTF8')),'hex')` nas até três contas.
+Usar transação `READ ONLY`, `SET LOCAL statement_timeout='2000ms'` e
+`SET LOCAL lock_timeout='500ms'`; limitar contas a quatro e atividade PG a doze.
+Para cada canal, usar o índice `(kind,received_at DESC,object_id)` com `LIMIT 1`.
+Medir filesystem, memória, CPU e tamanhos das relações nomeadas por catálogo;
+não contar/percorrer todo o acervo. Em nova falha, guardar etapa/SQLSTATE/duração/
+correlação e observar `pg_stat_activity` (PID, application_name, estado,
+wait_event, idade da transação e `pg_blocking_pids`), sem selecionar `query`.
+Amostras sem bloqueador não excluem lock anterior; coincidência temporal entre
+55P03 do coletor e falha da baseline não estabelece causalidade.
+
+Nesta fatia, deploy seleciona somente API entre os serviços ativos. Preservar
+coletor parado, HOLD, caps, banco, schema e dados. Não provocar falhas/rearmar
+produção para validar diagnósticos: fixtures usam ambiente descartável; uma
+leitura breve da versão e dos campos disponíveis comprova a implantação, não
+estabilidade sustentada nem resultado econômico.

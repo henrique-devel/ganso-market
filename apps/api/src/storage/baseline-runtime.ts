@@ -1,3 +1,4 @@
+import type { DeskStage } from "../btc/runtime-diagnostics.js";
 import { createLedgerAccount } from "./ledgerstore.js";
 import type { LedgerIdentity } from "./ledger-contract.js";
 import type { DatabasePool, SqlExecutor } from "../database.js";
@@ -369,13 +370,17 @@ export async function consumeBaselineAccount(
   pool: Pool,
   account: string,
   challenger?: ChallengerStage,
+  onStage: (stage: DeskStage) => void = () => {},
 ) {
+  onStage("baseline_registration");
   const r = await pool.readOnly(1500, (tx) =>
     baselineRegistrationTx(tx, account, challenger ? "challenger" : "baseline"),
   );
   validateBaselineRegistration(r.registration);
+  onStage("baseline_clock");
   const now = await pool.readOnly(1500, baselineClock);
   if (now < r.registration.start_at) return;
+  onStage("baseline_projection");
   const pending = await pool.readOnly(
     1500,
     async (tx) =>
@@ -390,6 +395,7 @@ export async function consumeBaselineAccount(
   if (pending) await createLedgerAccount(pool, pending.identity);
   // Decode/hash bulky immutable market history without excluding the collector.
   // Account/risk/admission remain inside the fence after exact head revalidation.
+  onStage("baseline_prepare");
   const prepared = await pool.readOnly(1500, async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
     const at = await baselineClock(tx);
@@ -431,6 +437,7 @@ export async function consumeBaselineAccount(
     };
   });
   return withDeskWorker(pool, account, async (worker) => {
+    onStage("baseline_risk_transaction");
     const liquidate = await riskTransaction(
       worker,
       r.registration.scope,
@@ -562,6 +569,7 @@ export async function consumeBaselineAccount(
       },
       true,
     );
+    onStage("baseline_liquidation");
     for (const position_id of liquidate)
       await liquidateIsolatedPosition(worker, r.registration.scope, {
         position_id,

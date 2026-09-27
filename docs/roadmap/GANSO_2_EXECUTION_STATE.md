@@ -4,7 +4,7 @@ Atualizado em **27/09/2026**. [PRD vigente](../PRD-GANSO-2.0.md) · [Roteiro dos
 
 ## Continuação planejada — G2-11–17 (27/09/2026)
 
-O proprietário solicitou o [roadmap operacional](GANSO_2_OPERATIONAL_ROADMAP.md) e [22 prompts](../../prompts/ganso-2-operacao/README.md) para seguir a análise de prontidão. **Pacote documental criado; 22 sessões pending, nenhuma executada por esta publicação. Próxima: G2-11.1.** Preparação Jev pode ser adiantada; ativação e janelas seguem os gates da RFC-053. Este é o acompanhamento único; o fecho de 45 sessões abaixo permanece histórico e não inclui estas novas linhas.
+O proprietário solicitou o [roadmap operacional](GANSO_2_OPERATIONAL_ROADMAP.md) e [22 prompts](../../prompts/ganso-2-operacao/README.md) para seguir a análise de prontidão. **G2-11.1 em execução isolada; demais 21 sessões pending. Nenhuma próxima sessão iniciada.** Preparação Jev pode ser adiantada; ativação e janelas seguem os gates da RFC-053. Este é o acompanhamento único; o fecho de 45 sessões abaixo permanece histórico e não inclui estas novas linhas.
 
 A análise de 27/09 09:49–09:53 UTC confirmou coletor parado e acrescentou consumidor baseline indisponível, 250 falhas genéricas em 15 min, 39 decisões e zero ordens/fills. Jev sem arquivos configurados/budget/calls. Código apresenta lacunas de equity, janela comum e escala do replay detalhadas no novo roadmap. São observações daquela análise, **não nova medição desta publicação**. Sete dias/30 dias continuam não comprovados. Não houve restart, rearme, chamada paga, alteração de orçamento ou limpeza por criar o plano.
 
@@ -236,7 +236,7 @@ Cobertura: OPS-01..07, DB-01..04, DATA-01..05, FIN-01..07, QA-01, EXEC-01..05, F
 
 | Sessão | Estado | Entrega / validação / implantação |
 | --- | --- | --- |
-| [G2-11.1](../../prompts/ganso-2-operacao/g2-11-1-diagnostico-e-erros.md) | pending | Planejada; revalidar a operação e tornar falhas diagnosticáveis. Nenhuma execução nesta publicação. |
+| [G2-11.1](../../prompts/ganso-2-operacao/g2-11-1-diagnostico-e-erros.md) | in-progress | Main `b2bdb9e`; leitura read-only de 27/09 21:35 UTC: release `980c66c`, schema45, HTTP/PG saudáveis; manual ready/lease vigente, baseline `BTC_DESK_CONSUMER_FAILED` e lease vencido (21:01), última decisão 26/09 13:45, capture 26/09 22:07; coletor parado, PG sem restart. Disco 71%/91,7GB disponíveis; amostra API/PG 22,35%/24,86% CPU, memória 179,7/296,8MiB; relações BTC nomeadas ~2,05GB. **Fato:** baseline falha sem causa preservada e amostra PG tinha IO/IPC sem blockers. **Hipótese:** timeout no preparo/leitura, ainda não confirmado; 55P03 histórico não atribuído à baseline. **Próxima reprodução:** observar falha natural com etapa/SQLSTATE/duração/correlação e atividade PG limitada, sem query/payload ou rearme. Código diagnóstico em validação; deploy seletivo API pendente, coletor permanece contido. |
 | [G2-11.2](../../prompts/ganso-2-operacao/g2-11-2-locks-e-consumidor.md) | pending | Planejada; corrigir contenção e falhas do consumidor baseline. Nenhuma execução nesta publicação. |
 | [G2-11.3](../../prompts/ganso-2-operacao/g2-11-3-recuperacao-do-feed.md) | pending | Planejada; recuperar falhas transitórias sem inventar continuidade. Nenhuma execução nesta publicação. |
 | [G2-12.1](../../prompts/ganso-2-operacao/g2-12-1-plano-de-capacidade.md) | pending | Planejada; fechar a solução de capacidade e custo. Nenhuma execução nesta publicação. |
