@@ -37,7 +37,8 @@ export function accountMetrics(
   let lastFill = from,
     lastArrival = from,
     exposureOrder = true,
-    everExposed = false;
+    everExposed = false,
+    capitalFlowsPresent = false;
   const positions = new Map<string, bigint>(),
     curve: (string | null)[] = [];
   const daily = new Map<string, { fees: bigint; funding: bigint }>();
@@ -52,7 +53,10 @@ export function accountMetrics(
       if (p.reason === "initial_allocation") {
         capital += BigInt(p.delta.raw);
         flatEquity += BigInt(p.delta.raw);
-      } else transfers += BigInt(p.delta.raw);
+      } else {
+        transfers += BigInt(p.delta.raw);
+        capitalFlowsPresent = true;
+      }
     }
     if (p.event_type === "fill") {
       if (at < lastFill) exposureOrder = false;
@@ -143,6 +147,7 @@ export function accountMetrics(
     units: { money: "USD/6", quantity: "BTC/8", ratios: "signed_ppm_floor" },
     capital_usd_raw: capital.toString(),
     transfers_usd_raw: transfers.toString(),
+    capital_flows_present: capitalFlowsPresent,
     trading: {
       realized_pnl_usd_raw: f.realized_pnl_usd_raw,
       fees_usd_raw: f.fees_usd_raw,
@@ -151,10 +156,10 @@ export function accountMetrics(
       equity_usd_raw: exposed() ? null : f.balance_usd_raw,
       net_pnl_usd_raw: net?.toString() ?? null,
       net_return_ppm:
-        net === null || transfers !== 0n ? null : ratio(net, capital),
+        net === null || capitalFlowsPresent ? null : ratio(net, capital),
       status: exposed()
         ? "missing_as_of_mark"
-        : transfers !== 0n
+        : capitalFlowsPresent
           ? "return_unavailable_capital_flows"
           : "available",
     },
@@ -170,8 +175,9 @@ export function accountMetrics(
     },
     turnover: {
       gross_notional_usd_raw: floor(notional14, 100000000n).toString(),
-      initial_capital_multiple_ppm:
-        transfers !== 0n ? null : ratio(notional14, capital * 100000000n),
+      initial_capital_multiple_ppm: capitalFlowsPresent
+        ? null
+        : ratio(notional14, capital * 100000000n),
       convention: "sum_absolute_fill_notional_both_sides",
     },
     operational_costs: {
@@ -184,7 +190,7 @@ export function accountMetrics(
     after_operational_costs: {
       net_pnl_usd_raw: after?.toString() ?? null,
       net_return_ppm:
-        after === null || transfers !== 0n ? null : ratio(after, capital),
+        after === null || capitalFlowsPresent ? null : ratio(after, capital),
     },
     decisions: {
       count: d.decisions.length,
@@ -293,8 +299,8 @@ export function compareMetrics(
   const comparable =
     contract.baseline_risk_hash === contract.challenger_risk_hash &&
     baseline.capital_usd_raw === challenger.capital_usd_raw &&
-    baseline.transfers_usd_raw === "0" &&
-    challenger.transfers_usd_raw === "0";
+    !baseline.capital_flows_present &&
+    !challenger.capital_flows_present;
   const a = baseline.trading.net_pnl_usd_raw,
     b = challenger.trading.net_pnl_usd_raw;
   const ao = baseline.after_operational_costs.net_pnl_usd_raw,
