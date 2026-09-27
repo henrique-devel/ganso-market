@@ -1,3 +1,4 @@
+import { registerExperimentRoutes } from "./experiments-api.js";
 import type { ChallengerConfig } from "./models/jev-config.js";
 import { registerTradingCommandRoutes } from "./trading-commandapi.js";
 import { registerTradingReadRoutes } from "./trading-readapi.js";
@@ -253,6 +254,11 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
       authService: options.authService,
     });
     const readPool = budgetedPool(options.pool);
+    registerExperimentRoutes(app, {
+      pool: readPool,
+      authService: options.authService,
+      clock,
+    });
     registerTradingReadRoutes(app, {
       ...(options.challengerConfig
         ? { challengerConfig: options.challengerConfig }

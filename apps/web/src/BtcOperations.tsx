@@ -1,3 +1,4 @@
+import { Experiments } from "./Experiments.tsx";
 import { useEffect, useState } from "react";
 import type {
   DeskAccount,
@@ -454,26 +455,7 @@ export function BtcWorkspace(props: Access & { tab: string }) {
       ) : props.tab === "Operações" ? (
         <Operations key={selected} {...props} accountId={selected} />
       ) : (
-        <section className="btc-desk">
-          <h2>Experimentos BTC</h2>
-          <p>Conta selecionada: {selected}.</p>
-          <p>
-            Avaliação econômica ainda indisponível. Não há comparação de
-            desempenho ou promoção de modelo disponível nesta tela. As decisões
-            das contas de estratégia estão na Mesa e seus fills/custos em
-            Operações.
-          </p>
-          <p>
-            Versão cadastrada:{" "}
-            {known.find((a) => a.account.account_id === selected)
-              ?.strategy_version ?? "não disponível"}
-            . Cadastro não comprova execução, sinal ou warmup concluído.
-          </p>
-          <p>
-            Resultados históricos Polymarket permanecem em Acervo legado →
-            Sombra.
-          </p>
-        </section>
+        <Experiments key={selected} {...props} accountId={selected} />
       )}
     </>
   );

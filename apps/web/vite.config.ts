@@ -47,6 +47,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     proxy: {
+      "/api/trading/experiment-datasets": apiProxy,
+      "/api/trading/experiments": apiProxy,
+      "/api/trading/experiment-system": apiProxy,
       "/api/health/live": apiProxy,
       "/api/health/ready": apiProxy,
       "/api/auth/login": apiProxy,

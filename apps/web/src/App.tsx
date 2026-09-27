@@ -1,3 +1,4 @@
+import { ExperimentSystem } from "./Experiments.tsx";
 import { BtcWorkspace } from "./BtcOperations.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -308,6 +309,10 @@ function Dashboard({
         <section className="btc-desk">
           <h2>Sistema</h2>
           <StatusPanel status={status} />
+          <ExperimentSystem
+            accessToken={session.accessToken}
+            onUnauthorized={onUnauthorized}
+          />
           <p>
             A saúde da API não certifica frescor do mercado, warmup ou prontidão
             para enviar ordens. Consulte a conta na Mesa.

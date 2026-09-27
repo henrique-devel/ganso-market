@@ -102,7 +102,7 @@ wait_for_code 200 "$gateway/api/health/ready"
 wait_for_code 401 "$gateway/api/auth/session"
 wait_for_code 401 "$gateway/api/polymarket/overview"
 # G2-06.1: exact desk reads reach authentication; commands remain closed.
-for path in accounts account positions orders; do
+for path in accounts account positions orders experiment-datasets experiments experiment-system; do
   wait_for_code 401 "$gateway/api/trading/$path"
   code="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST "$gateway/api/trading/$path")"
   test "$code" = 404

@@ -140,3 +140,38 @@
     grid-template-columns: 1fr;
   }
 }
+
+.experiment-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.experiment-comparison .btc-balances {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.experiment-curve {
+  margin: 0;
+}
+.experiment-curve svg {
+  width: 100%;
+  color: #7fceb7;
+}
+.experiment-curve figcaption {
+  font-weight: 700;
+}
+.btc-desk textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  background: #16212b;
+  color: inherit;
+  border: 1px solid #617487;
+  border-radius: 4px;
+  padding: 0.65rem;
+}
+@media (max-width: 900px) {
+  .experiment-comparison {
+    grid-template-columns: 1fr;
+  }
+}
