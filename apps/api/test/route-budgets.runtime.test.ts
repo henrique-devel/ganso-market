@@ -153,6 +153,8 @@ const SAMPLE_PARAMS: Readonly<Record<string, string>> = {
  * is what lets the assertion below actually check them.
  */
 const SAMPLE_QUERY: Readonly<Record<string, () => string>> = {
+  "/trading/experiments": () =>
+    `?account_id=manual&dataset_id=btc-replay:${"a".repeat(64)}`,
   "/trading/account": () => "?account_id=manual",
   "/trading/positions": () => "?account_id=manual",
   "/trading/orders": () => "?account_id=manual",

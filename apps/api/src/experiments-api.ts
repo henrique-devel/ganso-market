@@ -38,6 +38,10 @@ export function registerExperimentRoutes(
     if (!token || (await deps.authService.session(token)).status !== "ok")
       return reply.code(401).send({ reason_code: "AUTH_UNAUTHENTICATED" });
   }
+  // CLI replay loads allow 5s; HTTP must stay inside the existing 4s API ceiling.
+  const reportPool: Pick<DatabasePool, "readOnly"> = {
+    readOnly: (_ms, run) => deps.pool.readOnly(currentBudgetMs() ?? 4000, run),
+  };
   let reportBusy = false;
   function handler(run: (request: FastifyRequest) => Promise<unknown>) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -128,12 +132,12 @@ export function registerExperimentRoutes(
           throw new Error("EXPERIMENT_INVALID_QUERY");
         }
       }
-      const artifact = await loadReplayDataset(deps.pool, q.dataset_id);
+      const artifact = await loadReplayDataset(reportPool, q.dataset_id);
       if (artifact.dataset.identity.account.account_id !== q.account_id)
         throw new Error("EXPERIMENT_ACCOUNT_MISMATCH");
       const baseline = accountMetrics(artifact);
       const challenger = q.challenger_id
-        ? accountMetrics(await loadReplayDataset(deps.pool, q.challenger_id))
+        ? accountMetrics(await loadReplayDataset(reportPool, q.challenger_id))
         : null;
       let comparison;
       try {

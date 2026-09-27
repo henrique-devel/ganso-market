@@ -43,7 +43,7 @@
           "/polymarket/graph/violations": 500,
           "/polymarket/graph/vetoes": 500,
           "/trading/experiment-datasets": 1500,
-          "/trading/experiments": 5000,
+          "/trading/experiments": 4000,
           "/trading/experiment-system": 1500,
           "/trading/accounts": 1500,
           "/trading/jev": 1500,
