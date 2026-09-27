@@ -94,3 +94,30 @@ They do not mean avoided losses. Same bar decisions form market clusters across
 accounts; even distinct bars are not claimed statistically independent. Independent
 sample size and causal contribution remain null. No lookahead, counterfactual fills,
 loss exclusions, statistical significance or 7/30-day maturity claim is inferred.
+
+## Authenticated panel reads — G2-09.3
+
+The single-user desk now exposes GET-only `/trading/experiment-datasets`
+(50 immutable IDs per keyset page, optional `after`), `/trading/experiments`
+(required `account_id`, `dataset_id`; optional `challenger_id`, `comparison` JSON,
+maximum 2048 characters per parameter), and `/trading/experiment-system`
+(20 recovery accounts per page, optional `after`). Nginx publishes only these
+exact paths under `/api`. All use the existing owner session and no-store.
+The report loads only the explicitly selected captured artifacts, never captures,
+pins, queries providers or resolves external input references. Only one report
+runs per API instance at a time. A missing/invalid comparison declaration yields
+side-by-side metrics with a reason and no delta. Costs without an allocation
+remain unknown; this UI does not submit billing attestations.
+
+Additive metrics fields: `equity_curve` contains timestamped observations at
+committed ledger boundaries (including capital transfers), never an interpolated
+price path. All observations after the first exposure are null without historical
+marks, even after closing. The existing drawdown remains capital-flow adjusted.
+`decisions.by_reason` counts recorded reasons in the selected decisions.
+
+System diagnostics read the market singleton, quota counters, relation sizes and
+indexed recovery heads/latest checkpoints. A capture older than 60 seconds is
+labelled stale; a recent capture does not certify per-channel freshness or
+continuity. Docker status/restarts and host filesystem capacity are unavailable
+in this API and stay null. Worker ceilings and SQL quotas are shown separately.
+Opening these screens does not restart a collector or reconcile an account.

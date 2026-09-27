@@ -41,6 +41,7 @@ export function accountMetrics(
     capitalFlowsPresent = false;
   const positions = new Map<string, bigint>(),
     curve: (string | null)[] = [];
+  const equityPoints: { at: string; equity_usd_raw: string | null }[] = [];
   const daily = new Map<string, { fees: bigint; funding: bigint }>();
   const exposed = () => [...positions.values()].some((q) => q !== 0n);
   for (let i = 0; i < d.ledger.length; i++) {
@@ -81,6 +82,12 @@ export function accountMetrics(
     // for missing intratrade equity. Bound is inherited (4096 ledger rows).
     if (d.ledger[i + 1]?.transaction_id !== e.transaction_id) {
       curve.push(everExposed ? null : flatEquity.toString());
+      equityPoints.push({
+        at: e.recorded_at,
+        equity_usd_raw: everExposed
+          ? null
+          : (flatEquity + transfers).toString(),
+      });
     }
   }
   if (exposed()) exposedMs += to - lastFill;
@@ -163,6 +170,13 @@ export function accountMetrics(
           ? "return_unavailable_capital_flows"
           : "available",
     },
+    equity_curve: {
+      basis: "committed_ledger_boundaries_no_interpolation",
+      points: equityPoints,
+      status: everExposed
+        ? "missing_equity_history"
+        : "ledger_observations_only",
+    },
     drawdown: drawdown(everExposed ? [...curve, null] : curve),
     exposure: {
       exposed_ms: exposureOrder ? exposedMs : null,
@@ -200,6 +214,15 @@ export function accountMetrics(
           .map((state) => [
             state,
             d.decisions.filter((x) => x.decision.state === state).length,
+          ]),
+      ),
+      by_reason: Object.fromEntries(
+        [...new Set(d.decisions.flatMap((x) => x.decision.reasons))]
+          .sort()
+          .map((reason) => [
+            reason,
+            d.decisions.filter((x) => x.decision.reasons.includes(reason))
+              .length,
           ]),
       ),
       filter_vetoes: veto,

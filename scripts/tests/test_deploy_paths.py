@@ -47,6 +47,9 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertEqual(
             deploy_paths.affected_services(
                 [
+                    "apps/api/src/experiments-api.ts",
+                    "apps/api/test/trading/experiments.test.ts",
+                    "apps/api/test/trading/experiments.pg.test.ts",
                     "apps/api/src/btc-metrics-cli.ts",
                     "apps/api/src/storage/metrics.ts",
                     "apps/api/src/trading/metrics.ts",

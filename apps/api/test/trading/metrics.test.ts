@@ -252,6 +252,10 @@ describe("BTC read-only economic metrics", () => {
       time_exposed_ppm: "400000",
     });
     expect(r.drawdown.max_usd_raw).toBeNull();
+    expect(r.equity_curve.status).toBe("missing_equity_history");
+    expect(r.equity_curve.points.some((p) => p.equity_usd_raw === null)).toBe(
+      true,
+    );
     expect(r.after_operational_costs.net_pnl_usd_raw).toBe("5650000");
     expect(r.operational_costs.total_usd_raw).toBe("4000000");
   });
