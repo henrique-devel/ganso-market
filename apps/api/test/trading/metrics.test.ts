@@ -418,6 +418,41 @@ describe("BTC read-only economic metrics", () => {
       independent_observations: null,
     });
   });
+  it("does not hide capital flows when a deposit and withdrawal cancel", () => {
+    const d = fixture();
+    for (const [i, raw] of ["1000000000", "-1000000000"].entries()) {
+      d.ledger.push(
+        ...materializeLedgerBatch(
+          {
+            transaction_id: `transfer:${i}`,
+            events: [
+              command(
+                `transfer:${i}`,
+                { event_type: "cash", reason: "transfer", delta: usd(raw) },
+                ledgerScope(d.identity),
+                start + (i + 1) * 1000,
+              ),
+            ],
+          },
+          String(d.ledger.length),
+          iso(start + (i + 1) * 1000),
+        ),
+      );
+    }
+    d.cut.ledger_sequence = "3";
+    const a = report(d),
+      b = report(fixture("challenger"));
+    expect(a).toMatchObject({
+      transfers_usd_raw: "0",
+      capital_flows_present: true,
+      trading: { net_pnl_usd_raw: "0", net_return_ppm: null },
+      turnover: { initial_capital_multiple_ppm: null },
+    });
+    expect(compareMetrics(a, b, comparison(a, b))).toMatchObject({
+      status: "risk_or_capital_differs",
+      delta: null,
+    });
+  });
   it("keeps account-level ledger financials with a decision subset and excludes capital transfers from profit", () => {
     const d = fixture();
     d.ledger.push(
