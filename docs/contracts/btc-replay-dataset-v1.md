@@ -12,8 +12,8 @@ in per-decision fidelity; a missing dependency of a retained object is an error.
 
 The content-addressed `dataset_id` hashes the whole canonical payload: cut UTC,
 ledger/reservation high-water sequences, immutable identity/genesis, exporter code
-SHA, reducer versions, all captured outputs and the complete retained evidence
-closure. Registration evidence includes original policy/code/manifest/contract;
+SHA, reducer versions, all captured outputs and the declared evidence profile
+(embedded closure or immutable pinned references). Registration evidence includes original policy/code/manifest/contract;
 market evidence includes original source/parser/build versions and timestamps.
 Financial values retain USD6, BTC8, USD_PER_BTC6 and USD14 cost basis.
 Canonical JSON sorts object keys, preserves array order and accepts finite
@@ -60,6 +60,29 @@ mode avoids silently truncating a large history; any selected closure that still
 exceeds a bound is refused without increasing limits. Original v1 exports without
 the selection field mean `all`.
 
+### Reference manifest for large raw closures
+
+`capture-references` explicitly stores a reference manifest within the same
+16 MiB cap. It embeds the selected decisions and registrations, full financial
+streams and captured Jev outcomes. Every present decision input and financial
+root is a direct dataset dependency; the existing SQL graph/pins protect all
+transitive dependencies without loading/copying the raw closure. The manifest
+records original `recorded_at` and producer hashes where the decision provided
+them. Other immutable financial roots expose `payload_hash: null` until resolved.
+
+Replay declares `evidence_mode: references`, the number of retained inputs not
+embedded, and `input_audit: resolve_retained_inputs_to_verify_payload_hash_and_source_time`.
+That is metadata/as-of validation, not a claim that external raw payloads have
+been independently audited offline. Truly absent inputs remain missing. The
+`evidence` CLI resolves one declared root/input, verifies timestamp and any
+producer hash, and returns the payload, digest and dependency IDs. It never
+contacts the venue/model. Transitive raw closure stays in the pinned source;
+this manifest is not a self-contained raw-data archive or backup.
+
+Embedded mode retains its full closure checks/depth limit. Reference mode bounds
+manifest roots to 16,384 and each evidence resolution to 16 MiB, with the existing
+SQL budgets. Both modes hash their declarations and refuse implicit comparisons.
+
 ## On-demand CLI (workdir `/workspace/apps/api` inside the deployed API)
 
 - `node dist/btc-replay-cli.js version`: inspect runner/contracts/limits, no DB.
@@ -67,6 +90,10 @@ the selection field mean `all`.
   stdout is the product JSON export, not an administrative evidence report.
 - `node dist/btc-replay-cli.js capture baseline <decision-id> [<decision-id> ...]`:
   explicitly capture only those decision outputs, keeping the full account ledger.
+- `node dist/btc-replay-cli.js capture-references baseline <decision-id>`:
+  retain a declared reference manifest when embedding the raw tree is too large.
+- `node dist/btc-replay-cli.js evidence <dataset-id> <object-id>`:
+  resolve one declared root/input, under the same byte/SQL bounds.
 - `node dist/btc-replay-cli.js export btc-replay:<sha256>`: load the pinned export.
 - `node dist/btc-replay-cli.js replay < dataset.json`: offline replay, no DB/config.
 - `node dist/btc-replay-cli.js compare < pair.json`: requires exactly two artifacts

@@ -12,6 +12,7 @@ import { ledgerScope } from "../../src/trading/ledger.js";
 import {
   captureReplayDataset,
   loadReplayDataset,
+  loadReplayEvidence,
 } from "../../src/storage/replaystore.js";
 import { replayDataset } from "../../src/storage/replay-dataset.js";
 import {
@@ -96,6 +97,14 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
         [d.bar_end_at, d.decision_id, JSON.stringify(d), id],
       );
     }
+    await storeRetentionObject(pool, {
+      id: input.account.object_id,
+      class: "financial",
+      identity: decisions[0]!.registration.scope,
+      recordedAt: new Date(input.account.recorded_at),
+      payload: input.account.payload,
+      dependencies: [],
+    });
     const selected = [decisions[0]!.decision_id];
     const a = await captureReplayDataset(
       pool,
@@ -114,6 +123,31 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
       },
     });
     expect(await loadReplayDataset(pool, a.dataset_id)).toEqual(a);
+    const reference = await captureReplayDataset(
+      pool,
+      "baseline",
+      "a".repeat(40),
+      selected,
+      "references",
+    );
+    const output = replayDataset(reference);
+    expect(output.evidence_mode).toBe("references");
+    expect(output.fidelity[0]!.retained_inputs_not_embedded).toBe(1);
+    expect(
+      reference.dataset.evidence.some(
+        (o) => o.object_id === input.account.object_id,
+      ),
+    ).toBe(false);
+    const resolved = await loadReplayEvidence(
+      pool,
+      reference.dataset_id,
+      input.account.object_id,
+    );
+    expect(resolved.payload).toEqual(input.account.payload);
+    expect(resolved.producer_hash_verified).toBe(true);
+    await expect(
+      loadReplayEvidence(pool, reference.dataset_id, "undeclared"),
+    ).rejects.toThrow("EVIDENCE_NOT_DECLARED");
     await expect(
       captureReplayDataset(pool, "baseline", "a".repeat(40), ["f".repeat(64)]),
     ).rejects.toThrow("DECISION_SELECTION_MISSING");

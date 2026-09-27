@@ -15,6 +15,7 @@ import {
   type ReplayArtifact,
   type ReplayDataset,
   type ReplayEvidence,
+  type RetainedReplayRef,
 } from "./replay-dataset.js";
 
 /** Fixed SQL projections only; never accepts arbitrary table/column names from CLI. */
@@ -52,6 +53,7 @@ export async function captureReplayDataset(
   account: string,
   codeSha: string,
   decisionIds?: readonly string[],
+  evidenceMode: "embedded" | "references" = "embedded",
 ): Promise<ReplayArtifact> {
   requireReplay(
     /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(account) &&
@@ -126,7 +128,12 @@ export async function captureReplayDataset(
       budget,
       extra,
     );
+    requireReplay(
+      ["embedded", "references"].includes(evidenceMode),
+      "EVIDENCE_MODE",
+    );
     const roots = new Set<string>();
+    const embedded = new Set(decisions.map((d) => d.evidence_id));
     // Indexed by account. Do not scan the marketstore or historical raw feed.
     for (const table of [
       "btc_baseline_registrations",
@@ -144,7 +151,11 @@ export async function captureReplayDataset(
         REPLAY_LIMITS.rows,
         budget,
       );
-      for (const row of records) roots.add(row.evidence_id);
+      for (const row of records) {
+        roots.add(row.evidence_id);
+        if (table === "btc_baseline_registrations")
+          embedded.add(row.evidence_id);
+      }
     }
     for (const d of decisions) roots.add(d.evidence_id);
     for (const j of jev) roots.add(j.evidence_id);
@@ -163,8 +174,47 @@ export async function captureReplayDataset(
         )
       ).rows)
         roots.add(row.object_id);
+    requireReplay(roots.size <= REPLAY_LIMITS.objects, "OBJECT_LIMIT");
+    const retainedRefs: RetainedReplayRef[] = [];
+    if (evidenceMode === "references") {
+      const hashes = new Map<
+        string,
+        { payload_hash: string; recorded_at: string }
+      >();
+      for (const d of decisions)
+        for (const r of d.decision.input_refs) {
+          const old = hashes.get(r.object_id);
+          requireReplay(
+            !old ||
+              (old.payload_hash === r.payload_hash &&
+                old.recorded_at === r.recorded_at),
+            "REFERENCE_COLLISION",
+          );
+          hashes.set(r.object_id, r);
+        }
+      for (const r of (
+        await tx.query<{ object_id: string; recorded_at: Date }>(
+          "SELECT object_id,recorded_at FROM btc_retention_objects WHERE object_id=ANY($1::text[]) ORDER BY object_id",
+          [[...roots]],
+        )
+      ).rows) {
+        const expected = hashes.get(r.object_id);
+        requireReplay(
+          !expected || expected.recorded_at === r.recorded_at.toISOString(),
+          "REFERENCE_AS_OF",
+        );
+        retainedRefs.push({
+          object_id: r.object_id,
+          recorded_at: r.recorded_at.toISOString(),
+          payload_hash: expected?.payload_hash ?? null,
+        });
+      }
+      requireReplay(retainedRefs.length === roots.size, "DEPENDENCY_MISSING");
+    }
     const evidence = new Map<string, ReplayEvidence>();
-    let frontier = [...roots].sort();
+    let frontier = [
+      ...(evidenceMode === "references" ? embedded : roots),
+    ].sort();
     for (let depth = 0; frontier.length; depth++) {
       requireReplay(
         depth <= REPLAY_LIMITS.depth && Date.now() - started < 10000,
@@ -201,7 +251,7 @@ export async function captureReplayDataset(
             payload_hash: replayHash(r.value.payload),
           });
           for (const id of r.value.dependencies)
-            if (!evidence.has(id)) next.add(id);
+            if (evidenceMode === "embedded" && !evidence.has(id)) next.add(id);
         }
       }
       frontier = [...next].filter((id) => !evidence.has(id)).sort();
@@ -219,6 +269,8 @@ export async function captureReplayDataset(
       decision_selection: decisionIds
         ? { mode: "ids", ids: [...decisionIds].sort() }
         : { mode: "all" },
+      evidence_mode: evidenceMode,
+      retained_refs: retainedRefs,
       identity: rows[0].identity,
       ledger,
       reservations,
@@ -282,5 +334,47 @@ export async function loadReplayDataset(
     );
     replayDataset(r.payload);
     return r.payload;
+  });
+}
+
+/** Resolve one declared root/input, never a provider call or unbounded export.
+ * References with a producer hash must match; other immutable dependency roots
+ * disclose their freshly computed digest without pretending it was captured. */
+export async function loadReplayEvidence(
+  pool: Pick<DatabasePool, "readOnly">,
+  datasetId: string,
+  objectId: string,
+) {
+  const a = await loadReplayDataset(pool, datasetId);
+  const ref = a.dataset.retained_refs?.find((r) => r.object_id === objectId);
+  const embedded = a.dataset.evidence.find((r) => r.object_id === objectId);
+  requireReplay(ref || embedded, "EVIDENCE_NOT_DECLARED");
+  return pool.readOnly(5000, async (tx) => {
+    const row = (
+      await tx.query<{
+        recorded_at: Date;
+        payload: unknown;
+        dependencies: string[];
+      }>(
+        "SELECT recorded_at,payload,dependencies FROM btc_retention_objects WHERE object_id=$1 AND octet_length(jsonb_build_object('payload',payload,'dependencies',dependencies)::text)<=$2",
+        [objectId, REPLAY_LIMITS.bytes - 1024],
+      )
+    ).rows[0];
+    requireReplay(row, "EVIDENCE_MISSING_OR_OVERSIZE");
+    const hash = replayHash(row.payload),
+      expected = ref ?? embedded!;
+    requireReplay(
+      expected.recorded_at === row.recorded_at.toISOString() &&
+        (expected.payload_hash === null || expected.payload_hash === hash),
+      "EVIDENCE_HASH_OR_TIME",
+    );
+    return {
+      object_id: objectId,
+      recorded_at: row.recorded_at.toISOString(),
+      payload_hash: hash,
+      producer_hash_verified: expected.payload_hash !== null,
+      payload: row.payload,
+      dependencies: row.dependencies,
+    };
   });
 }
