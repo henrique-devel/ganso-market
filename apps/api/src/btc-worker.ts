@@ -1,5 +1,9 @@
 import { createCollectorRuntimeDiagnostics } from "./btc/runtime-diagnostics.js";
 import { createContextPoll } from "./btc/context-poll.js";
+import type {
+  TradingInstrumentMetadata,
+  TradingMarketObservation,
+} from "@ganso-market/contracts/trading";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, statfs, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -10,6 +14,7 @@ import { startHyperliquidBtcFeed } from "./venues/hyperliquid/feed.js";
 import {
   fetchBtcContextSnapshot,
   fetchBtcBookSnapshot,
+  fetchBtcMetadataSnapshot,
 } from "./venues/hyperliquid/context-snapshot.js";
 import {
   captureBtcMarketBatch,
@@ -94,7 +99,12 @@ export async function runBtcWorker() {
   });
   const diagnostics = createCollectorRuntimeDiagnostics();
   const stopSignal = new AbortController();
-  let contextPoll: ReturnType<typeof createContextPoll> | undefined;
+  let contextPoll:
+    ReturnType<typeof createContextPoll<TradingMarketObservation>> | undefined;
+  let bookPoll:
+    ReturnType<typeof createContextPoll<TradingMarketObservation>> | undefined;
+  let metadataPoll:
+    ReturnType<typeof createContextPoll<TradingInstrumentMetadata>> | undefined;
   const observe = diagnostics.run;
   const publishStatus = (state: unknown) =>
     observe("publish", () =>
@@ -102,6 +112,8 @@ export async function runBtcWorker() {
         ...(state as object),
         failure: diagnostics.failure(),
         context_http: contextPoll?.status(),
+        book_http: bookPoll?.status(),
+        metadata_http: metadataPoll?.status(),
       }),
     );
   let collector: ReturnType<typeof createCollector> | undefined;
@@ -148,11 +160,23 @@ export async function runBtcWorker() {
     let metadata = await observe("metadata", () => adapter.getBtcMetadata());
     if (stopRequested) return;
     feed = startHyperliquidBtcFeed(metadata, "http_snapshot");
+    const cooldown = { until: 0 };
+    bookPoll = createContextPoll({
+      now: Date.now,
+      signal: stopSignal.signal,
+      fetch: () => fetchBtcBookSnapshot(metadata, stopSignal.signal),
+      unavailable: () => feed!.contextUnavailable("book"),
+      intervalMs: COLLECTOR_LIMITS.intervalMs,
+      startToStart: true,
+      stage: "book_snapshot",
+      cooldown,
+    });
     contextPoll = createContextPoll({
       now: Date.now,
       signal: stopSignal.signal,
       fetch: () => fetchBtcContextSnapshot(metadata, stopSignal.signal),
       unavailable: () => feed!.contextUnavailable(),
+      cooldown,
     });
     collector = createCollector({
       feed,
@@ -167,44 +191,62 @@ export async function runBtcWorker() {
     });
     let refreshed = Date.now(),
       logged = 0;
+    let metadataUnavailable = false;
+    metadataPoll = createContextPoll({
+      now: Date.now,
+      signal: stopSignal.signal,
+      stage: "metadata",
+      deadlineMs: 8000,
+      cooldown,
+      unavailable: () => {
+        metadataUnavailable = true;
+        feed!.contextUnavailable("book");
+        feed!.contextUnavailable("context");
+      },
+      fetch: async () => {
+        const next = await fetchBtcMetadataSnapshot(stopSignal.signal);
+        if (
+          next.instrument.instrument_version !==
+          metadata.instrument.instrument_version
+        )
+          throw new Error("BTC_COLLECTOR_METADATA_CHANGED");
+        return next;
+      },
+    });
     while (!stopRequested) {
       const cycleStarted = Date.now();
-      if (feed.status().socket.connected) {
+      if (Date.now() - refreshed >= 60_000) {
+        const next = await observe("metadata", () => metadataPoll!.poll());
+        if (stopRequested) break;
+        if (next) {
+          metadata = next;
+          metadataUnavailable = false;
+          refreshed = Date.now();
+        }
+      }
+      if (
+        !metadataUnavailable &&
+        !stopRequested &&
+        feed.status().socket.connected
+      ) {
+        const generation = feed.status().generation;
         const results = await Promise.allSettled([
-          observe("book_snapshot", async () => {
-            try {
-              return await fetchBtcBookSnapshot(metadata, stopSignal.signal);
-            } catch (error) {
-              if (
-                stopSignal.signal.aborted &&
-                error === stopSignal.signal.reason
-              )
-                return null;
-              throw error;
-            }
-          }),
+          observe("book_snapshot", () => bookPoll!.poll()),
           observe("context_snapshot", () => contextPoll!.poll()),
         ]);
         for (const result of results) {
           if (result.status === "rejected") throw result.reason;
         }
         if (stopRequested) break;
-        for (const result of results)
-          if (result.status === "fulfilled" && result.value)
-            feed.observeSnapshot(result.value);
-      }
-      if (Date.now() - refreshed >= 60_000) {
-        const current = await observe("metadata", async () => {
-          const next = await adapter.getBtcMetadata();
-          if (
-            next.instrument.instrument_version !==
-            metadata.instrument.instrument_version
-          )
-            throw new Error("BTC_COLLECTOR_METADATA_CHANGED");
-          return next;
-        });
-        metadata = current;
-        refreshed = Date.now();
+        // A completed read from before a disconnect cannot revalidate its
+        // successor, even if the new connection opened while HTTP was pending.
+        if (
+          feed.status().socket.connected &&
+          feed.status().generation === generation
+        )
+          for (const result of results)
+            if (result.status === "fulfilled" && result.value)
+              feed.observeSnapshot(result.value);
       }
       if (stopRequested) break;
       await collector.tick();
@@ -214,6 +256,8 @@ export async function runBtcWorker() {
           JSON.stringify({
             ...collector.status(),
             context_http: contextPoll.status(),
+            book_http: bookPoll.status(),
+            metadata_http: metadataPoll.status(),
           }),
         );
         logged = Date.now();
@@ -237,6 +281,8 @@ export async function runBtcWorker() {
         ...(collector?.status() ?? { status: "stopped", reason }),
         failure: diagnostics.failure(),
         context_http: contextPoll?.status(),
+        book_http: bookPoll?.status(),
+        metadata_http: metadataPoll?.status(),
       }),
     );
     await publishStatus(

@@ -7,6 +7,11 @@ import { canonicalFingerprint } from "../../trading/replay.js";
 import { contextSnapshotTime } from "../../trading/valuation.js";
 import { normalizeHyperliquidFeed } from "./feed-normalizer.js";
 import { parseHyperliquidBtcMetadata } from "./metadata.js";
+import {
+  SnapshotTransportError,
+  snapshotNetworkError,
+  httpRetryAfter,
+} from "./recovery.js";
 
 /** Official metaAndAssetCtxs current-state endpoint; 20 weight / request, at most
  * 30/minute (<1200/minute IP allowance). No credentials, retries or paid API.
@@ -47,16 +52,30 @@ export async function fetchBtcBookSnapshot(
     parser_version: "hyperliquid.book-snapshot.v1",
   };
 }
-async function fetchSnapshot(request: object, stopSignal?: AbortSignal) {
+// Periodic metadata read uses the existing public-adapter deadline. Bootstrap
+// still requires a first valid identity before starting any collector session.
+export async function fetchBtcMetadataSnapshot(signal?: AbortSignal) {
+  const { body, timing } = await fetchSnapshot(
+    { type: "meta", dex: "" },
+    signal,
+    8000,
+  );
+  return parseHyperliquidBtcMetadata(body, timing.receivedAt);
+}
+async function fetchSnapshot(
+  request: object,
+  stopSignal?: AbortSignal,
+  deadlineMs = 1500,
+) {
   const requestedAt = new Date().toISOString();
-  const deadline = AbortSignal.timeout(1500);
+  const deadline = AbortSignal.timeout(deadlineMs);
   const signal = stopSignal
     ? AbortSignal.any([deadline, stopSignal])
     : deadline;
   const checkDeadline = () => {
     signal.throwIfAborted();
     // Also reject a late completion when event-loop delay postpones the timer.
-    if (Date.now() - Date.parse(requestedAt) > 1500)
+    if (Date.now() - Date.parse(requestedAt) > deadlineMs)
       throw new DOMException("Snapshot deadline exceeded", "TimeoutError");
   };
   const response = await fetch("https://api.hyperliquid.xyz/info", {
@@ -68,9 +87,23 @@ async function fetchSnapshot(request: object, stopSignal?: AbortSignal) {
       "Cache-Control": "no-cache, no-store",
     },
     body: JSON.stringify(request),
+  }).catch((error: unknown) => {
+    if (signal.aborted) throw signal.reason;
+    throw snapshotNetworkError(error);
   });
   if (!response.ok || !response.body) {
     await response.body?.cancel().catch(() => {});
+    checkDeadline();
+    if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+      throw new SnapshotTransportError(
+        response.status === 429 ? "rate_limited" : "http_unavailable",
+        httpRetryAfter(
+          response.headers.get("retry-after"),
+          response.status,
+          Date.now(),
+        ),
+      );
+    }
     throw new Error("BTC_CONTEXT_RESPONSE_REFUSED");
   }
   const reader = response.body.getReader();
@@ -93,7 +126,7 @@ async function fetchSnapshot(request: object, stopSignal?: AbortSignal) {
       signal.aborted
     )
       throw signal.reason;
-    throw error;
+    throw snapshotNetworkError(error);
   } finally {
     // Cancelling an already-aborted body can reject with AbortError; that must
     // not replace the original TimeoutError or payload refusal diagnostic.
