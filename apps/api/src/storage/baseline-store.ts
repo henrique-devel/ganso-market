@@ -351,25 +351,39 @@ export async function baselineBarsTx(
     baselineRecord(x.object_id, x.payload, x.recorded_at.toISOString()),
   );
   const ids = [...new Set(records.flatMap((r) => r.payload.input_ids))];
-  const dependencies = ids.length
-    ? (
-        await tx.query<{
-          object_id: string;
-          payload: unknown;
-          recorded_at: Date;
-          received_at: Date | null;
-        }>(
-          `SELECT o.object_id,o.payload,o.recorded_at,r.received_at
-    FROM btc_retention_objects o LEFT JOIN btc_market_records r USING(object_id) WHERE o.object_id=ANY($1::text[])`,
-          [ids],
-        )
-      ).rows.map((x) => ({
+  const dependencies: BaselineBars["dependencies"] = [];
+  // The old ANY/LEFT JOIN can hash-join by scanning every market record once
+  // a bar has thousands of inputs. Bound decode/hash work per statement and
+  // force PK probes for this sparse set, independent of corpus cardinality.
+  // The caller's repeatable-read snapshot spans all batches; exact bar heads
+  // are still revalidated under the writer fence before persisting/pinning.
+  for (let offset = 0; offset < ids.length; offset += 256) {
+    const { rows } = await tx.query<{
+      object_id: string;
+      payload: unknown;
+      recorded_at: Date;
+      received_at: Date | null;
+    }>(
+      `SELECT o.object_id,o.payload,o.recorded_at,r.received_at
+       FROM unnest($1::text[]) requested(object_id)
+       CROSS JOIN LATERAL (
+         SELECT object_id,payload,recorded_at FROM btc_retention_objects
+         WHERE object_id=requested.object_id OFFSET 0
+       ) o
+       LEFT JOIN LATERAL (
+         SELECT received_at FROM btc_market_records
+         WHERE object_id=requested.object_id OFFSET 0
+       ) r ON true`,
+      [ids.slice(offset, offset + 256)],
+    );
+    for (const x of rows)
+      dependencies.push({
         object_id: x.object_id,
         payload_hash: baselineHash(x.payload),
         recorded_at: x.recorded_at.toISOString(),
         received_at: (x.received_at ?? x.recorded_at).toISOString(),
-      }))
-    : [];
+      });
+  }
   return { records, dependencies, first_complete_start_at: null };
 }
 export const decisionBoundary = (at: string) =>

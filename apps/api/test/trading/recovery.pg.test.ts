@@ -220,6 +220,71 @@ describe.skipIf(!url)("S9 durable recovery on disposable PostgreSQL", () => {
     ).rejects.toThrow("NOT_FOUND");
     expect(await snapshot()).toEqual(before);
   });
+  it.each(["timeout", "cancel"])(
+    "rolls back a %s during recovery without poisoning ownership or financial history",
+    async (mode) => {
+      await reserve();
+      const before = await snapshot();
+      await expire();
+      const head = (await f.pool.query("SELECT * FROM btc_recovery_heads"))
+        .rows;
+      const owners = (
+        await f.pool.query(
+          "SELECT * FROM btc_recovery_owners ORDER BY generation",
+        )
+      ).rows;
+      w = worker();
+      let fired = false;
+      w.hook(async (sql, tx) => {
+        if (fired || !sql.includes("SELECT to_jsonb(t)")) return;
+        fired = true;
+        if (mode === "timeout") {
+          await tx.query("SET LOCAL statement_timeout='30ms'");
+          await tx.query("SELECT pg_sleep(10)");
+        } else {
+          const pid = (await tx.query("SELECT pg_backend_pid() AS pid"))
+            .rows[0]!.pid;
+          const sleeping = tx
+            .query("SELECT pg_sleep(10)")
+            .catch((error: unknown) => error);
+          await expect
+            .poll(
+              async () =>
+                (
+                  await f.pool.query(
+                    "SELECT wait_event FROM pg_stat_activity WHERE pid=$1",
+                    [pid],
+                  )
+                ).rows[0]?.wait_event,
+            )
+            .toBe("PgSleep");
+          await f.pool.query("SELECT pg_cancel_backend($1)", [pid]);
+          throw await sleeping;
+        }
+      });
+      await expect(recoverAccount(w.pool, scope)).rejects.toMatchObject({
+        code: "57014",
+      });
+      w.hook(null);
+      expect(
+        (await f.pool.query("SELECT * FROM btc_recovery_heads")).rows,
+      ).toEqual(head);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT * FROM btc_recovery_owners ORDER BY generation",
+          )
+        ).rows,
+      ).toEqual(owners);
+      expect(await snapshot()).toEqual(before);
+      await expect(recoverAccount(w.pool, scope)).resolves.toMatchObject({
+        status: "ready",
+      });
+      const l = await ledger();
+      expect(replayLedger(l.identity, l.events)).toEqual(l.projection);
+    },
+  );
+
   it("fences in-flight writes if the lease expires before commit", async () => {
     const before = await snapshot();
     let fired = false;

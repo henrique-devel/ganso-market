@@ -82,6 +82,30 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     await fixture?.dispose();
   });
 
+  it("reads committed capacity while a decision owns the writer fence, without bypassing capture quota", async () => {
+    const before = await retentionCapacity(pool);
+    const decision = await fixture.pool.connect();
+    try {
+      await decision.query("BEGIN");
+      await decision.query("SELECT pg_advisory_xact_lock(741044, 4)");
+      await decision.query("UPDATE btc_retention_policy SET raw_quota_bytes=1");
+      // This preflight is advisory. A reader must neither wait for the decision
+      // nor report its uncommitted quota. Capture still rechecks under the fence.
+      const start = performance.now();
+      expect(await retentionCapacity(pool)).toEqual(before);
+      expect(performance.now() - start).toBeLessThan(1500);
+      await decision.query("COMMIT");
+      await expect(
+        storeRetentionObject(pool, object("over-quota")),
+      ).rejects.toThrow("BTC_RETENTION_CAPACITY_REFUSED");
+      expect(await ids()).toEqual([]);
+      expect((await retentionCapacity(pool)).raw_bytes).toBe("0");
+    } finally {
+      await decision.query("ROLLBACK");
+      decision.release();
+    }
+  });
+
   it("validates a full 36,865-input bar inside the existing SQL write budget", async () => {
     // Worst permitted builder fan-in: 32,768 trades + 4,096 captures + metadata.
     // Realistic incompressible event IDs expose repeated array detoasting/scanning.
