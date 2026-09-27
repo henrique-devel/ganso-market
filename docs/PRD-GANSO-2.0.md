@@ -342,4 +342,4 @@ Decisões a fechar no bloco correspondente: detalhe da regra-base antes da colet
 - Custo total dentro do teto e disco com reserva.
 - Nenhum saldo real, chave de negociação ou promoção automática foi habilitado.
 
-**Próxima entrega indicada: G2-00, iniciando pela urgência de capacidade e reinícios em conjunto com o diagnóstico de G2-01.** Este documento prepara esse trabalho; não registra sua execução.
+**Indicação original de 22/09:** G2-00 e diagnóstico G2-01. A construção G2-00–10 foi posteriormente encerrada nos aceites delimitados. **Próximo roteiro solicitado em 27/09:** [continuação operacional G2-11–17](roadmap/GANSO_2_OPERATIONAL_ROADMAP.md), iniciando por G2-11.1 quando selecionado. Esse plano não altera os contratos financeiros nem comprova prontidão; resultados ficam no estado único.

@@ -1,18 +1,25 @@
 # Ganso Market
 
 Ferramenta pessoal e single-user para pesquisa e operações simuladas com dados
-reais. A direção aprovada do **Ganso Market 2.0** começa por BTC na Hyperliquid,
-US$ 1.000 fictícios e Jev como filtro opcional. A implementação existente ainda
-é majoritariamente Polymarket e será reconciliada conforme o novo PRD.
+reais. O **Ganso Market 2.0** implementa BTC na Hyperliquid, contas de
+US$ 1.000 fictícios e Jev como filtro opcional. A construção foi entregue nos
+aceites delimitados; estabilização, ativação Jev e maturidade continuam pendentes.
+O legado Polymarket é preservado como módulo/acervo especializado.
 
 Este repositório começa pelos documentos que governam o desenvolvimento. A
 implementação deve seguir o PRD e uma RFC ativa por vez.
 
-**Ciclo vigente (22/09/2026):** [PRD Ganso 2.0](docs/PRD-GANSO-2.0.md),
+**Próximo ciclo (27/09/2026):** [roadmap de operação](docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md),
+[22 prompts G2-11–17](prompts/ganso-2-operacao/README.md) e
+[estado único](docs/roadmap/GANSO_2_EXECUTION_STATE.md). Começar por G2-11.1;
+gerar o plano não executa os prompts. Preparação Jev pode começar cedo,
+ativação depende de coleta/capacidade/jornada/comparação prontas.
+
+**Ciclo de construção (22/09/2026):** [PRD Ganso 2.0](docs/PRD-GANSO-2.0.md),
 [45 prompts para sessões isoladas](prompts/ganso-2/README.md),
 [estado de execução](docs/roadmap/GANSO_2_EXECUTION_STATE.md) e
 [auditoria do servidor/custo](docs/research/ganso-2-infraestrutura-2026-09-22.md).
-Começar reconciliando a base e contendo crescimento/reinícios antes de nova coleta.
+A ordem antiga de reconciliação permanece histórica; próximas ações seguem o roadmap operacional.
 O [ciclo BTC anterior](prompts/roadmap/btc/README.md) permanece como referência do legado.
 
 **Transição de escopo:** Polymarket será preservada como módulo/acervo especializado;
@@ -20,6 +27,12 @@ não é requisito do primeiro experimento 2.0. Solana permanece fora do escopo.
 O PRD é planejamento, não comprovação de que a transição já foi implementada.
 
 ## Estado implementado
+
+O ciclo BTC entregou dados públicos, ledger/reservas/broker/margem/funding/risco,
+mesa manual, baseline e integração opcional Jev, replay e painel. A análise de
+27/09 encontrou coleta e baseline indisponíveis, Jev desativado e lacunas de
+avaliação. A [continuação operacional](docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md)
+trata esses pontos; a lista legada abaixo não deve orientar o próximo bloco.
 
 - API Fastify com autenticação single-user (RFC-002), o recorder Polymarket
   (dados públicos, RFC-007) preservado e o modelo fundamental
@@ -33,7 +46,9 @@ após confirmar ausência de consumidores de negócio. O código anterior perman
 no Git em `a6e381685eea5996d39850910c7fca9ae27f2ba1`; contratos de health/correlação
 continuam em `packages/contracts` e na API. Python continua necessário aos scripts
 operacionais. Nenhuma migration, volume ou dado Polymarket foi retirado.
-Os cinco workers legados seguem parados e BTC permanece inativo até G2-04.4.
+Os cinco workers legados seguem quiescentes. BTC foi implementado e ativado no ciclo;
+a disponibilidade atual deve ser conferida no estado, pois o coletor estava parado
+na análise de 27/09. Código publicado não comprova coleta em andamento.
 
 O modo operacional é `paper`: há decisões, ordens simuladas, ledger, posições,
 replay e painel. Não há executor/signer de ordens reais. A estratégia fast tem
@@ -108,7 +123,7 @@ nas tarefas solicitadas, respeitando os gates e o escopo de cada entrega.
 - [Evidência de verificação da RFC-001](docs/test-results/RFC-001.md)
 - [Handoff e continuidade do projeto](docs/HANDOFF.md)
 
-## Ordem de desenvolvimento
+## Ordem histórica de desenvolvimento do legado
 
 1. RFC-001 — Fundação e runtime (implementada).
 2. Bootstrap standalone — implementado neste rebuild.

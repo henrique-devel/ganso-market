@@ -2,6 +2,12 @@
 
 Atualizado em **27/09/2026**. [PRD vigente](../PRD-GANSO-2.0.md) · [Roteiro dos prompts](../../prompts/ganso-2/README.md) · [Protocolo enxuto](../../prompts/ganso-2/00-protocolo.md).
 
+## Continuação planejada — G2-11–17 (27/09/2026)
+
+O proprietário solicitou o [roadmap operacional](GANSO_2_OPERATIONAL_ROADMAP.md) e [22 prompts](../../prompts/ganso-2-operacao/README.md) para seguir a análise de prontidão. **Pacote documental criado; 22 sessões pending, nenhuma executada por esta publicação. Próxima: G2-11.1.** Preparação Jev pode ser adiantada; ativação e janelas seguem os gates da RFC-053. Este é o acompanhamento único; o fecho de 45 sessões abaixo permanece histórico e não inclui estas novas linhas.
+
+A análise de 27/09 09:49–09:53 UTC confirmou coletor parado e acrescentou consumidor baseline indisponível, 250 falhas genéricas em 15 min, 39 decisões e zero ordens/fills. Jev sem arquivos configurados/budget/calls. Código apresenta lacunas de equity, janela comum e escala do replay detalhadas no novo roadmap. São observações daquela análise, **não nova medição desta publicação**. Sete dias/30 dias continuam não comprovados. Não houve restart, rearme, chamada paga, alteração de orçamento ou limpeza por criar o plano.
+
 ## Fecho do ciclo G2-09–G2-10 — 27/09/2026
 
 **As oito sessões foram executadas separadamente e em ordem; o ciclo de desenvolvimento está encerrado, com aceite operacional/econômico ainda pendente.** As 45 linhas agora somam **34 `production-verified`, cinco `code-verified`, quatro `superseded` e duas `observing`** (G2-09.4/5), sem `pending` neste roteiro. G2-02.2/3 continuam retirados. Isso não significa sistema 100% operante, sete dias contínuos, 30 dias elegíveis ou vantagem econômica comprovada. Base documental deste fecho: **main 74b8c99**; última publicação funcional **API/web 980c66c, schema 45**. A atualização das oito linhas ocorreu somente ao fim do ciclo, conforme pedido do proprietário; os registros históricos abaixo foram preservados.
@@ -223,3 +229,32 @@ Dependência de retirada dos stubs: [Compose](../../docker-compose.yml) → [Mak
 Para os cinco processos Polymarket, Compose usa o perfil `polymarket` e entrypoints da imagem da API; o smoke atual sobe o perfil `model`, sem validar os cinco workers. Parar a execução exige o manifesto e a ordem de transição de G2-01.2; remover seu código exige antes transferir consumidores de API/UI, replay e retenção. G2-03.4 não autoriza apagar indiscriminadamente `apps/api/src/polymarket/` nem o banco. Na retirada efetiva, registrar commit/tag de referência e motivo; esta base `ab76a7c` já identifica o acervo inventariado.
 
 Cobertura: OPS-01..07, DB-01..04, DATA-01..05, FIN-01..07, QA-01, EXEC-01..05, FRESH-01..03, BTC-01..07, REPLAY-01..04, EXP-01..03 e GATE-01..03 têm destino e responsável lógico acima. As linhas do [estado BTC](BTC_EXECUTION_STATE.md) permanecem históricas; “arquivar/substituir” não significa corrigir, implementar ou aprovar. Nenhuma pendência real é encerrada apenas por existir um recibo ou por sua implementação ser exclusiva do produto aposentado.
+
+## Sessões da continuação operacional — G2-11–17
+
+[RFC-053](../rfcs/RFC-053-ganso-2-prontidao-operacional.md). Atualizar estas linhas sem reclassificar o histórico G2-00–10.
+
+| Sessão | Estado | Entrega / validação / implantação |
+| --- | --- | --- |
+| [G2-11.1](../../prompts/ganso-2-operacao/g2-11-1-diagnostico-e-erros.md) | pending | Planejada; revalidar a operação e tornar falhas diagnosticáveis. Nenhuma execução nesta publicação. |
+| [G2-11.2](../../prompts/ganso-2-operacao/g2-11-2-locks-e-consumidor.md) | pending | Planejada; corrigir contenção e falhas do consumidor baseline. Nenhuma execução nesta publicação. |
+| [G2-11.3](../../prompts/ganso-2-operacao/g2-11-3-recuperacao-do-feed.md) | pending | Planejada; recuperar falhas transitórias sem inventar continuidade. Nenhuma execução nesta publicação. |
+| [G2-12.1](../../prompts/ganso-2-operacao/g2-12-1-plano-de-capacidade.md) | pending | Planejada; fechar a solução de capacidade e custo. Nenhuma execução nesta publicação. |
+| [G2-12.2](../../prompts/ganso-2-operacao/g2-12-2-persistencia-sustentavel.md) | pending | Planejada; implementar persistência sustentável preservando evidências. Nenhuma execução nesta publicação. |
+| [G2-12.3](../../prompts/ganso-2-operacao/g2-12-3-admissao-e-retomada.md) | pending | Planejada; admitir capacidade e retomar o coletor. Nenhuma execução nesta publicação. |
+| [G2-13.1](../../prompts/ganso-2-operacao/g2-13-1-prontidao-visivel.md) | pending | Planejada; expor prontidão operacional e telemetria útil. Nenhuma execução nesta publicação. |
+| [G2-13.2](../../prompts/ganso-2-operacao/g2-13-2-jornada-manual.md) | pending | Planejada; validar a jornada manual paper ponta a ponta. Nenhuma execução nesta publicação. |
+| [G2-13.3](../../prompts/ganso-2-operacao/g2-13-3-periodos-e-rearme.md) | pending | Planejada; tratar horizonte do experimento e rearme controlado. Nenhuma execução nesta publicação. |
+| [G2-13.4](../../prompts/ganso-2-operacao/g2-13-4-baseline-operacional.md) | pending | Planejada; retomar a baseline e demonstrar o ciclo automático. Nenhuma execução nesta publicação. |
+| [G2-14.1](../../prompts/ganso-2-operacao/g2-14-1-historico-de-patrimonio.md) | pending | Planejada; persistir patrimônio com marcação temporal verificável. Nenhuma execução nesta publicação. |
+| [G2-14.2](../../prompts/ganso-2-operacao/g2-14-2-curva-e-drawdown.md) | pending | Planejada; calcular curva, pnl aberto e drawdown. Nenhuma execução nesta publicação. |
+| [G2-14.3](../../prompts/ganso-2-operacao/g2-14-3-janela-comum.md) | pending | Planejada; comparar baseline e jev com inícios diferentes. Nenhuma execução nesta publicação. |
+| [G2-14.4](../../prompts/ganso-2-operacao/g2-14-4-replay-da-janela.md) | pending | Planejada; cobrir a janela completa sem truncar replay. Nenhuma execução nesta publicação. |
+| [G2-14.5](../../prompts/ganso-2-operacao/g2-14-5-custos-referencias-painel.md) | pending | Planejada; completar custos, referências e painel de avaliação. Nenhuma execução nesta publicação. |
+| [G2-15.1](../../prompts/ganso-2-operacao/g2-15-1-preparar-acesso-jev.md) | pending | Planejada; preparar acesso, tarifa e cobertura jev. Nenhuma execução nesta publicação. |
+| [G2-15.2](../../prompts/ganso-2-operacao/g2-15-2-configuracao-e-orcamento-jev.md) | pending | Planejada; entregar configuração e ciclo de orçamento jev. Nenhuma execução nesta publicação. |
+| [G2-15.3](../../prompts/ganso-2-operacao/g2-15-3-ativar-jev-real.md) | pending | Planejada; ativar e validar a comparação jev real. Nenhuma execução nesta publicação. |
+| [G2-16.1](../../prompts/ganso-2-operacao/g2-16-1-falhas-e-janela-operacional.md) | pending | Planejada; verificar recuperação e iniciar observação operacional. Nenhuma execução nesta publicação. |
+| [G2-16.2](../../prompts/ganso-2-operacao/g2-16-2-aceite-sete-dias.md) | pending | Planejada; concluir o aceite de sete dias de estabilidade. Nenhuma execução nesta publicação. |
+| [G2-17.1](../../prompts/ganso-2-operacao/g2-17-1-cobertura-economica.md) | pending | Planejada; verificar cobertura da janela econômica prospectiva. Nenhuma execução nesta publicação. |
+| [G2-17.2](../../prompts/ganso-2-operacao/g2-17-2-decisao-economica.md) | pending | Planejada; concluir o experimento e delimitar a próxima hipótese. Nenhuma execução nesta publicação. |

@@ -2,7 +2,13 @@
 
 As RFCs deste projeto são prompts operacionais para a IA de desenvolvimento. Cada uma delimita contexto, tarefas, artefatos, testes e condições de parada.
 
-## Ciclo vigente — Ganso 2.0 (22/09/2026)
+## Continuação operacional — Ganso 2.0 (27/09/2026)
+
+[Roadmap operacional](roadmap/GANSO_2_OPERATIONAL_ROADMAP.md) · [22 prompts G2-11–17](../prompts/ganso-2-operacao/README.md) · [estado único](roadmap/GANSO_2_EXECUTION_STATE.md).
+
+[RFC-053 — prontidão operacional](rfcs/RFC-053-ganso-2-prontidao-operacional.md): estabilidade, capacidade, jornada paper, avaliação, Jev, sete dias e diagnóstico econômico. Próxima sessão G2-11.1, somente quando selecionada. Pacote documental; nenhum bloco executado ou ativado por sua criação. A autorização contínua e os gates se aplicam sem novo recibo obrigatório.
+
+## Ciclo de construção — Ganso 2.0 (22/09/2026)
 
 [PRD 2.0](PRD-GANSO-2.0.md) · [45 prompts pequenos](../prompts/ganso-2/README.md) · [acompanhamento único](roadmap/GANSO_2_EXECUTION_STATE.md).
 
