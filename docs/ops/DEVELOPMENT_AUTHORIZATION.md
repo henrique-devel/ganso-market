@@ -138,7 +138,8 @@ isoladas, reiterando expressamente autorização de **código, criação de PR,
 merge e produção** em cada fatia. Também dispensou evidência formal por sessão
 para não gastar tempo com documentação de execução.
 
-Para qualquer prompt selecionado em [prompts/ganso-2](../../prompts/ganso-2/README.md),
+Para qualquer prompt selecionado em [prompts/ganso-2](../../prompts/ganso-2/README.md)
+ou na [continuação operacional G2-11–17](../../prompts/ganso-2-operacao/README.md),
 estão autorizados implementação, branch/commit/push, criação e correção do PR,
 merge após os checks e implantação dos serviços afetados. Inclui migrations
 aditivas, configuração, restart seletivo, quiescência reversível e ativação paper
@@ -177,3 +178,7 @@ autorizações específicas já existentes sem perguntá-las de novo; quando fal
 uma decisão desse tipo, preparar resultado concreto e pedir somente o que falta.
 Identidade SSH, proteções de branch e permissões efetivas das ferramentas continuam
 necessárias. Preservar trabalho local de outras sessões.
+
+## Continuidade documental de 27/09/2026
+
+Pedido do proprietário: “Crie o roadmap e os prompts para seguir essa ordem recomendada para a gente progredir no projeto”. A entrega é o pacote G2-11–17, com o mesmo acompanhamento e fluxo de entrega já autorizado; não é uma ordem de executar todos os prompts. Esta nota aplica a autorização contínua às sessões futuras selecionadas e não amplia autorização de compra, consumo pago, descarte, capital, caps ou perímetro. Backup continua fora do pré-requisito. Preparação Jev não equivale a cobertura de consumo nem ativação.

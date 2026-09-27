@@ -2,6 +2,10 @@
 
 Pacote de desenvolvimento de 22/09/2026: **11 RFCs e 45 prompts pequenos**, derivados do [PRD aprovado](../../docs/PRD-GANSO-2.0.md). Roteiro criado; nenhum bloco de implementação foi executado por gerar estes arquivos.
 
+## Continuação de 27/09/2026
+
+A construção deste roteiro foi encerrada nos aceites delimitados. Para as próximas correções/ativações, usar [G2-11–17](../ganso-2-operacao/README.md) e o [roadmap operacional](../../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md), começando por G2-11.1 quando selecionado. O roteiro abaixo permanece histórico; não reiniciar G2-00 por sua ordem antiga. As linhas G2-09.4/5 em observação não viram aprovadas por essa mudança.
+
 ## Como começar uma sessão
 
 Por decisão do proprietário em 22/09, backup fica fora do ciclo até o sistema estar 100% operante. G2-02.2/3 foram retirados, sem implementação; os demais IDs permanecem estáveis. Nenhuma sessão depende desses blocos.

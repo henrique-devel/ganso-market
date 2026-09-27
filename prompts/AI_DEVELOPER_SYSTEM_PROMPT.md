@@ -9,7 +9,9 @@ runtime migrado, autorização de compra ou ativação de dinheiro real.
 
 ## Rota atual e contexto mínimo
 
-Para o ciclo 2.0, começar no prompt selecionado em [ganso-2](ganso-2/README.md),
+Desde 27/09, a próxima sequência planejada é [G2-11–17: estabilização e operação](ganso-2-operacao/README.md), conforme o [roadmap operacional](../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md). Ler o prompt selecionado, seu protocolo e somente a seção da RFC-053. Usar o mesmo estado 2.0. A construção G2-00–10 está encerrada nos aceites delimitados; não executar G2-00 novamente por indicação histórica. Criar esse pacote não iniciou suas sessões nem concede gasto/limpeza/live.
+
+Para retomar uma fatia histórica G2-00–10, começar no prompt selecionado em [ganso-2](ganso-2/README.md),
 no [protocolo curto](ganso-2/00-protocolo.md), na seção exata da RFC e na linha do
 [estado 2.0](../docs/roadmap/GANSO_2_EXECUTION_STATE.md). Consultar o PRD por seção,
 sem reler tudo. G2-00.1 reconcilia a base; G2-01.1/2 diagnosticam e contêm o legado.
