@@ -185,13 +185,14 @@ export async function recoveryTransaction<T>(
         await checkpoint(tx, id, head.generation);
       }
     } catch (error) {
-      // Persist closure without mutating authoritative history, risk anchors,
-      // pins or ownership. SQL errors also roll back the boot savepoint.
+      // Only a proven domain violation closes the account. A cancelled query,
+      // timeout or lost connection says nothing about authoritative integrity:
+      // propagate its original cause and roll back the entire owner claim.
+      if (!(error instanceof Error) || !/^BTC_[A-Z_]+$/.test(error.message))
+        throw error;
+      // Persist closure without mutating history, risk anchors or pins.
       await tx.query("ROLLBACK TO SAVEPOINT recovery_boot");
-      const reason =
-        error instanceof Error && /^BTC_[A-Z_]+$/.test(error.message)
-          ? error.message
-          : "BTC_RECOVERY_INVALID_HISTORY";
+      const reason = error.message;
       await tx.query(
         "UPDATE btc_recovery_heads SET status='blocked',reason=$2 WHERE account_id=$1",
         [id, reason],

@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import type { QueryResultRow } from "pg";
 import { randomUUID } from "node:crypto";
 import { hashToken } from "../../src/auth/tokens.js";
 import {
@@ -52,6 +53,7 @@ let pool: Pick<DatabasePool, "transaction" | "readOnly">,
   r: BaselineRegistration;
 let input: ReturnType<typeof fixture>;
 let measurements: { sql: string; ms: number }[] | null = null;
+let lockMeasurements: { order: string[]; heldMs: number[] }[] | null = null;
 async function renewedMetadata(
   mutate = (_m: ReturnType<typeof parseHyperliquidBtcMetadata>) => {},
   received = now,
@@ -99,13 +101,28 @@ async function environment() {
 const makeWorker = () => {
   const w = f.worker();
   const transaction = w.pool.transaction.bind(w.pool);
-  w.pool.transaction = (run) =>
-    transaction((tx) =>
+  w.pool.transaction = (run) => {
+    const held = new Map<string, number>();
+    return transaction((tx) =>
       run({
-        query: async (sql, params) => {
+        query: async <R extends QueryResultRow>(
+          sql: string,
+          params?: readonly unknown[],
+        ) => {
           const start = performance.now();
           try {
-            return await tx.query(sql, params);
+            const result = await tx.query<R>(sql, params);
+            const lock = sql.includes("pg_advisory_xact_lock")
+              ? "retention"
+              : sql.includes("btc_ledger_accounts") &&
+                  sql.includes("FOR UPDATE")
+                ? "account"
+                : sql.includes("btc_recovery_heads") &&
+                    sql.includes("FOR UPDATE")
+                  ? "recovery_head"
+                  : null;
+            if (lock && !held.has(lock)) held.set(lock, performance.now());
+            return result;
           } finally {
             measurements?.push({
               sql: sql.slice(0, 160),
@@ -114,11 +131,19 @@ const makeWorker = () => {
           }
         },
       }),
-    );
+    ).finally(() => {
+      if (held.size)
+        lockMeasurements?.push({
+          order: [...held.keys()],
+          heldMs: [...held.values()].map((at) => performance.now() - at),
+        });
+    });
+  };
   return Object.assign(w.pool, {
-    readOnly: <U>(_ms: number, run: (tx: SqlExecutor) => Promise<U>) =>
+    readOnly: <U>(ms: number, run: (tx: SqlExecutor) => Promise<U>) =>
       w.pool.transaction(async (tx) => {
         await tx.query("SET TRANSACTION READ ONLY");
+        await tx.query(`SET LOCAL statement_timeout = ${ms}`);
         return run(tx);
       }),
   });
@@ -141,6 +166,26 @@ async function market(
     for (const [kind, row] of Object.entries(input.market)) {
       if (!row || !kinds.includes(kind)) continue;
       const id = `test:${kind}:${now}`;
+      await storeRetentionObjectTx(tx, {
+        id,
+        class: "raw",
+        identity: r.scope,
+        recordedAt: new Date(now),
+        payload: row.payload,
+        dependencies: [],
+      });
+      await tx.query(
+        "INSERT INTO btc_market_records(object_id,kind,source_at,received_at) VALUES($1,$2,$3,$4)",
+        [id, kind, kind === "context" ? null : iso(now), iso(now)],
+      );
+    }
+  });
+}
+async function concurrentCapture(worker: typeof pool, sequence: number) {
+  return withBtcRetentionTransaction(worker, async (tx) => {
+    for (const [kind, row] of Object.entries(input.market)) {
+      if (!row) continue;
+      const id = `concurrent:${sequence}:${kind}`;
       await storeRetentionObjectTx(tx, {
         id,
         class: "raw",
@@ -401,6 +446,119 @@ describe.skipIf(!url)(
       await consumeBaselineAccount(pool, "baseline");
       expect((await decisions())[0].state).toBe("candidate_long");
     });
+    it("cancels evidence preparation while capture and another account reconcile without financial divergence", async () => {
+      await seedBars("neutral");
+      const before = await ledger();
+      const read = pool.readOnly.bind(pool);
+      let enter!: (pid: number) => void;
+      const entered = new Promise<number>((resolve) => {
+        enter = resolve;
+      });
+      let injected = false;
+      pool.readOnly = (ms, run) =>
+        read(ms, (tx) =>
+          run({
+            async query(sql, params) {
+              if (
+                !injected &&
+                sql.includes("FROM unnest($1::text[]) requested")
+              ) {
+                injected = true;
+                const pid = (await tx.query("SELECT pg_backend_pid() AS pid"))
+                  .rows[0]!.pid;
+                const sleeping = tx
+                  .query("SELECT pg_sleep(10)")
+                  .catch((error: unknown) => error);
+                enter(pid);
+                throw await sleeping;
+              }
+              return tx.query(sql, params);
+            },
+          }),
+        );
+      const outcome = consumeBaselineAccount(pool, "baseline").catch(
+        (error: unknown) => error,
+      );
+      const pid = await entered;
+      try {
+        await expect
+          .poll(
+            async () =>
+              (
+                await f.pool.query(
+                  "SELECT wait_event FROM pg_stat_activity WHERE pid=$1",
+                  [pid],
+                )
+              ).rows[0]?.wait_event,
+          )
+          .toBe("PgSleep");
+        expect(
+          (
+            await f.pool.query(
+              "SELECT count(*)::int n FROM pg_locks WHERE pid=$1 AND locktype='advisory'",
+              [pid],
+            )
+          ).rows[0].n,
+        ).toBe(0);
+        await Promise.all([
+          concurrentCapture(makeWorker(), 0),
+          withDeskWorker(pool, "manual", (worker) =>
+            riskTransaction(
+              worker,
+              ledgerScope(identity()),
+              async () => null,
+              true,
+            ),
+          ),
+        ]);
+      } finally {
+        await f.pool.query("SELECT pg_cancel_backend($1)", [pid]);
+      }
+      expect(await outcome).toMatchObject({ code: "57014" });
+      expect(await ledger()).toEqual(before);
+      expect(await decisions()).toHaveLength(0);
+      expect(await orders()).toHaveLength(0);
+      await consumeBaselineAccount(pool, "baseline");
+      expect((await decisions())[0].state).toBe("neutral");
+    });
+    it("retries an uncertain decision COMMIT without duplicate decision, ledger or pins", async () => {
+      await seedBars("neutral");
+      const transaction = pool.transaction.bind(pool);
+      let loseReply = true;
+      pool.transaction = async (run) => {
+        let decisionWritten = false;
+        const result = await transaction((tx) =>
+          run({
+            async query(sql, params) {
+              if (sql.includes("INSERT INTO btc_baseline_decisions"))
+                decisionWritten = true;
+              return tx.query(sql, params);
+            },
+          }),
+        );
+        if (decisionWritten && loseReply) {
+          loseReply = false;
+          throw new Error("simulated lost COMMIT response");
+        }
+        return result;
+      };
+      await expect(consumeBaselineAccount(pool, "baseline")).rejects.toThrow(
+        "lost COMMIT response",
+      );
+      const committed = await decisions(),
+        financials = await ledger();
+      const pins = (
+        await f.pool.query("SELECT * FROM btc_retention_pins ORDER BY pin_id")
+      ).rows;
+      expect(committed).toHaveLength(1);
+      await consumeBaselineAccount(pool, "baseline");
+      expect(await decisions()).toEqual(committed);
+      expect(await ledger()).toEqual(financials);
+      expect(
+        (await f.pool.query("SELECT * FROM btc_retention_pins ORDER BY pin_id"))
+          .rows,
+      ).toEqual(pins);
+    });
     it("defers a prepared decision when a collector quality revision changes a bar before the writer fence", async () => {
       await seedBars();
       let injected = false;
@@ -516,7 +674,7 @@ describe.skipIf(!url)(
         ).toBe(!fresh);
       },
     );
-    it("keeps a representative retained-bar decision and owner restart compatible with a concurrent collector capacity probe", async () => {
+    it("keeps a representative retained-bar decision and owner restart compatible with concurrent captures", async () => {
       const data = fixture("neutral"),
         n = 320;
       // 27 bars x 320 immutable inputs = 8,640 inputs, comparable to the 8,151
@@ -565,6 +723,7 @@ describe.skipIf(!url)(
       });
       const collector = makeWorker();
       measurements = [];
+      lockMeasurements = [];
       let finished = false,
         probes = 0,
         longestProbeMs = 0;
@@ -572,11 +731,7 @@ describe.skipIf(!url)(
       const probe = (async () => {
         while (!finished) {
           const start = performance.now();
-          await withBtcRetentionTransaction(collector, (tx) =>
-            tx.query(
-              "SELECT raw_bytes,total_bytes,hold FROM btc_retention_policy",
-            ),
-          );
+          await concurrentCapture(collector, probes);
           longestProbeMs = Math.max(longestProbeMs, performance.now() - start);
           probes++;
           await new Promise<void>((resolve) => setTimeout(resolve, 5));
@@ -609,15 +764,34 @@ describe.skipIf(!url)(
       } finally {
         finished = true;
         await probe;
+        expect(
+          lockMeasurements.some(
+            (x) => x.order.join(",") === "retention,account,recovery_head",
+          ),
+        ).toBe(true);
         if (process.env.GANSO_BASELINE_MEASURE)
-          console.log(
+          process.stdout.write(
             JSON.stringify({
+              inputs: 27 * n,
               decisionMs,
               restartMs,
-              slow: measurements.sort((a, b) => b.ms - a.ms).slice(0, 15),
-            }),
+              lockOrder: "retention -> account -> recovery_head",
+              maxHeldMs: Object.fromEntries(
+                ["retention", "account", "recovery_head"].map((lock) => [
+                  lock,
+                  Math.max(
+                    ...lockMeasurements!.map(
+                      (x) => x.heldMs[x.order.indexOf(lock)] ?? 0,
+                    ),
+                  ),
+                ]),
+              ),
+              longestCaptureMs: longestProbeMs,
+              captures: probes,
+            }) + "\n",
           );
         measurements = null;
+        lockMeasurements = null;
       }
       expect(probeError).toBe(null);
       expect(probes).toBeGreaterThan(0);
@@ -633,16 +807,6 @@ describe.skipIf(!url)(
         EXCEPT SELECT object_id FROM protected) missing`)
       ).rows[0].n;
       expect(missing).toBe(0);
-      if (process.env.GANSO_BASELINE_MEASURE)
-        console.log(
-          JSON.stringify({
-            inputs: 27 * n,
-            decisionMs,
-            restartMs,
-            longestProbeMs,
-            probes,
-          }),
-        );
     }, 30000);
     it.each(["neutral", "gap", "absent"])(
       "persists %s skip without orders and repeated polling returns first result",

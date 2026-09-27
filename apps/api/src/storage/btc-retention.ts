@@ -52,7 +52,15 @@ async function capacity(tx: SqlExecutor) {
   };
 }
 export async function retentionCapacity(pool: StorePool) {
-  return withBtcRetentionTransaction(pool, capacity);
+  // Advisory preflight only: an MVCC read must not queue behind decisions or
+  // checkpoints. Every capture still checks current quota in the write triggers
+  // under the retention lock; this snapshot never authorizes an insert.
+  return pool.transaction(async (tx) => {
+    await tx.query("SET TRANSACTION READ ONLY");
+    await tx.query("SET LOCAL statement_timeout = '5s'");
+    await tx.query("SET LOCAL lock_timeout = '2s'");
+    return capacity(tx);
+  });
 }
 /** Capacity failures roll back the whole capture. Callers must mark a gap/stop
  * admission; never silently truncate payload, skip dependencies or retry as financial. */
