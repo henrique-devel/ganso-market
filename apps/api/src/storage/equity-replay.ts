@@ -1,5 +1,12 @@
-import { ledgerScope, replayLedger } from "../trading/ledger.js";
+import { createHash } from "node:crypto";
+import { canonicalFingerprint } from "../trading/replay.js";
 import {
+  createLedgerReducer,
+  ledgerScope,
+  replayLedger,
+} from "../trading/ledger.js";
+import {
+  createFinancialReducer,
   projectFinancials,
   valueFinancials,
   type MarketEvidence,
@@ -35,17 +42,21 @@ interface Observation {
 }
 /** Pure, bounded verification of the versioned snapshot extension. Never resolves
  * references over SQL/network and never backfills absent historical marks. */
-export function replayEquityHistory(d: ReplayDataset) {
+export function replayEquityHistory(
+  d: ReplayDataset,
+  limits: { rows: number } = REPLAY_LIMITS,
+) {
   const history = d.equity_history;
   if (!history) return null;
   requireReplay(
     history.schema_version === "btc.replay-equity.v1" &&
       Array.isArray(history.observation_ids) &&
-      history.observation_ids.length <= REPLAY_LIMITS.rows &&
+      history.observation_ids.length <= limits.rows &&
       new Set(history.observation_ids).size === history.observation_ids.length,
     "EQUITY_VERSION_OR_LIMIT",
   );
   const objects = new Map(d.evidence.map((o) => [o.object_id, o]));
+  const roots = new Set(d.roots);
   const from = utc(d.identity.experiment.started_at),
     to = utc(d.cut.captured_at);
   const firstSlot = Math.floor(from / CADENCE) * CADENCE;
@@ -53,8 +64,38 @@ export function replayEquityHistory(d: ReplayDataset) {
   const expected = Math.floor((finalSlot - firstSlot) / CADENCE) + 1;
   let previous = -1,
     previousLedger = 0,
-    previousReservations = 0,
-    prefixWork = 0;
+    previousReservations = 0;
+  const ledger = createLedgerReducer(d.identity),
+    financial = createFinancialReducer();
+  const ledgerHash = createHash("sha256").update("["),
+    reservationHash = createHash("sha256").update("[");
+  const active = new Map<
+    string,
+    ReplayDataset["reservations"][number]["reservation"]
+  >();
+  let capital = 0n,
+    flows = 0n;
+  const txLast = new Map(
+    d.ledger.map((e) => [e.transaction_id, Number(e.sequence)]),
+  );
+  const prefixTx = [0],
+    suffixTx = new Array<number>(d.reservations.length + 1).fill(Infinity);
+  for (const r of d.reservations)
+    prefixTx.push(
+      Math.max(
+        prefixTx.at(-1)!,
+        r.ledger_transaction_id === null
+          ? 0
+          : (txLast.get(r.ledger_transaction_id) ?? Infinity),
+      ),
+    );
+  for (let i = d.reservations.length - 1; i >= 0; i--) {
+    const id = d.reservations[i]!.ledger_transaction_id;
+    suffixTx[i] = Math.min(
+      suffixTx[i + 1]!,
+      id === null ? Infinity : (txLast.get(id) ?? Infinity),
+    );
+  }
   const points: {
     at: string;
     equity_usd_raw: string | null;
@@ -65,7 +106,7 @@ export function replayEquityHistory(d: ReplayDataset) {
   let lastMarket: Parameters<typeof valueFinancials>[1] | null = null;
   for (const id of history.observation_ids) {
     const object = objects.get(id);
-    requireReplay(object && d.roots.includes(id), "EQUITY_EVIDENCE");
+    requireReplay(object && roots.has(id), "EQUITY_EVIDENCE");
     const p = object.payload as Observation;
     requireReplay(
       p.schema_version === "btc.equity-observation.v1" &&
@@ -100,35 +141,46 @@ export function replayEquityHistory(d: ReplayDataset) {
           d.ledger[n]?.transaction_id !== d.ledger[n - 1]?.transaction_id),
       "EQUITY_PREFIX_BOUNDARY",
     );
-    prefixWork += n + m;
-    requireReplay(n > 0 && prefixWork <= 262144, "EQUITY_WORK_LIMIT");
-    previousLedger = n;
-    previousReservations = m;
-    const events = d.ledger.slice(0, n),
-      reservations = d.reservations.slice(0, m);
-    requireReplay(
-      events.every(
-        (e) => utc(e.recorded_at) <= at && utc(e.occurred_at) <= at,
-      ) &&
-        reservations.every((r) => utc(r.recorded_at) <= at) &&
-        replayHash(events) === p.ledger.hash &&
-        replayHash(
-          reservations.map((r) => ({
+    requireReplay(n > 0, "EQUITY_PREFIX");
+    for (let i = previousLedger; i < n; i++) {
+      const e = d.ledger[i]!;
+      requireReplay(
+        utc(e.recorded_at) <= at && utc(e.occurred_at) <= at,
+        "EQUITY_PREFIX_HASH",
+      );
+      ledgerHash.update((i ? "," : "") + canonicalFingerprint(e));
+      ledger.append(e);
+      financial.append(e);
+      if (e.payload.event_type === "cash") {
+        if (e.payload.reason === "initial_allocation")
+          capital += BigInt(e.payload.delta.raw);
+        else flows += BigInt(e.payload.delta.raw);
+      }
+    }
+    for (let i = previousReservations; i < m; i++) {
+      const r = d.reservations[i]!;
+      requireReplay(utc(r.recorded_at) <= at, "EQUITY_PREFIX_HASH");
+      reservationHash.update(
+        (i ? "," : "") +
+          canonicalFingerprint({
             sequence: r.sequence,
             reservation: r.reservation,
-          })),
-        ) === p.reservations.hash,
+          }),
+      );
+      active.set(r.reservation.order.order_id, r.reservation);
+    }
+    requireReplay(
+      ledgerHash.copy().update("]").digest("hex") === p.ledger.hash &&
+        reservationHash.copy().update("]").digest("hex") ===
+          p.reservations.hash,
       "EQUITY_PREFIX_HASH",
     );
-    const transactions = new Set(events.map((e) => e.transaction_id));
     requireReplay(
-      d.reservations.every(
-        (r, i) =>
-          r.ledger_transaction_id === null ||
-          transactions.has(r.ledger_transaction_id) === i < m,
-      ),
+      prefixTx[m]! <= n && suffixTx[m]! > n,
       "EQUITY_ATOMIC_PREFIX",
     );
+    previousLedger = n;
+    previousReservations = m;
     const evidence = <T>(key: string | null): T | null => {
       if (key === null) return null;
       const e = objects.get(key);
@@ -147,23 +199,9 @@ export function replayEquityHistory(d: ReplayDataset) {
         : null,
       capture: evidence<ValuationCapture>(p.capture_evidence_id),
     };
-    const financials = projectFinancials(
-      replayLedger(d.identity, events),
-      events,
-    );
+    const financials = financial.snapshot(ledger.snapshot());
     const v = valueFinancials(financials, market);
-    let capital = 0n,
-      flows = 0n,
-      held = 0n;
-    for (const e of events)
-      if (e.payload.event_type === "cash") {
-        if (e.payload.reason === "initial_allocation")
-          capital += BigInt(e.payload.delta.raw);
-        else flows += BigInt(e.payload.delta.raw);
-      }
-    const active = new Map(
-      reservations.map((r) => [r.reservation.order.order_id, r.reservation]),
-    );
+    let held = 0n;
     for (const r of active.values())
       if (r.status === "active")
         held += BigInt(r.margin_usd_raw) + BigInt(r.fee_usd_raw);

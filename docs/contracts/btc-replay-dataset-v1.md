@@ -105,3 +105,90 @@ Capture is an explicit operator action. Re-export the ID to retry a cut; a new
 capture has a new timestamp/identity. No account, event, decision, budget, risk
 state, registration or funding receipt is rewritten. Baseline can be replayed
 without a challenger or Jev credentials.
+
+
+## Paged window extension — G2-14.4
+
+`btc.replay.paged.v1` adds a separate `btc.replay-manifest.v1` export. The v1/v2
+commands, IDs, hashes and financial meanings remain supported. No migration or
+continuous replay worker is added. This BTC runner needs no JEV access or new
+provider call; any existing response is copied with its original state/origin.
+
+`capture-window ACCOUNT START END` records an explicit UTC window, aligned to
+15 minutes, at most 30 days, within the financial lifetime and no later than the
+actual capture. A window is a reporting selection, not a prospective experiment
+registration or proof of coverage. Its ledger and reservations retain the entire
+bounded prefix from genesis to snapshot, including old positions and obligations.
+An account exceeding the total bounds is refused; no invented opening state,
+truncation, dropped funding or reset of capital is permitted.
+
+Capture uses one REPEATABLE READ transaction, the existing retention/account lock
+order, a 30-second total work limit, 5-second SQL and 2-second lock limits. Source
+cursors fetch 16 rows at a time; JSON size is checked on the server before transfer.
+Evidence batches stay within 16 MiB. All immutable pages, manifest, source edges
+and final pin commit together. Failure/restart before commit rolls back everything.
+After commit, restart **export of the same dataset ID**; a new capture is a new cut.
+No exported database snapshot or mutable cursor survives the transaction. Decisions/responses are selected by bar end in (START, END]; equity samples by observed time in [START, END]. Financial roots and their older dependencies remain retained. Original response arrival times still belong to the captured snapshot, not an assertion that every response was available by END.
+
+Pages have a snapshot hash, sequential index, stream, offset and their own content
+hash. The manifest binds their order, hashes, counts, bytes, financial high waters,
+identity, code SHA, contracts and window. Offline verification rejects missing,
+repeated, reordered, altered and mixed pages before yielding any report. Cross-page
+transactions and reservations are reconstructed globally, not settled per page.
+
+Limits are **256 rows / 1 MiB per page**, **2,048 pages**, **64 MiB total encoded
+pages**, 65,536 rows per financial/observation stream, 4,096 decisions/responses,
+65,536 evidence objects/references and graph depth 32. The manifest is at most
+1 MiB; an indivisible row too large for a page is refused. Internal assembly is
+bounded by the total size; this is not an unlimited streaming archive. The legacy
+16 MiB/4,096-row/256-decision export remains unchanged. Dense actual histories may
+still exceed the new finite envelope and must report the specific failed bound.
+
+Equity verification hashes canonical prefixes incrementally and carries the same
+ledger/cost-basis reducers forward; the former repeated-prefix work ceiling is
+replaced by bounded linear event processing. Financial amounts, hashes and USD14
+rounding remain identical. A global drawdown uses one ordered curve and carries
+its peak; percentages and chunk drawdowns are never summed. Incomplete samples
+leave the complete maximum null and expose only the observed lower bound. Absent
+marks remain unknown for open exposure. Five-minute coverage, 15-minute window
+count and independent economic observations are distinct; intrabar extrema and
+independent sample size remain unknown.
+
+The `window` report includes opening/closing financial state and held reserves,
+external flows, exact ledger incidences in **(START, END]**, prior obligations and
+late funding IDs. Net PnL requires equity at both exact boundaries and subtracts
+external flows. Top-level financials retain genesis-to-snapshot semantics; events
+received after END do not change window incidence. Reserve remains a hold and
+slippage remains in actual fill prices. No causal attribution is added.
+
+Reference mode pins the original transitive source graph through root pages;
+it does not copy the raw archive. `window-evidence` resolves one declared embedded
+or retained reference by page index, timestamp and producer hash when present.
+Unverified raw dependencies and truly missing inputs retain their explicit status.
+
+### Commands and capacity
+
+- `capture-window ACCOUNT START END`: returns only the pinned manifest.
+- `manifest DATASET_ID`: retrieve that immutable manifest again.
+- `page DATASET_ID INDEX`: retrieve one exact page, safely repeatable after restart.
+- `window-evidence DATASET_ID PAGE_INDEX OBJECT_ID`: resolve a declared reference.
+- `replay-window DIRECTORY`: offline; reads `manifest.json` and `0.json`, `1.json`,
+  etc., one bounded file at a time, then validates the complete set.
+
+Capture reserves 128 MiB below the existing 6 GiB logical / 4 GiB physical replay
+worker ceilings and checks the existing 25% disk floor plus 1 GiB reserve. It does
+not relax HOLD, quotas, pins, collection admission, RAM/capital caps or budget.
+The large CLI capture also requires an existing-capacity, isolated Linux cgroup
+with a finite memory limit of 768 MiB–1 GiB; it refuses the serving API's 384 MiB
+container or an unlimited host. No container/service is provisioned automatically.
+Preflight host RAM/CPU/WAL/filesystem and current protected source volume before
+running an ephemeral job; the total host RAM budget stays below 13 GiB. Offline
+large replay should likewise run in an isolated bounded process. Oversized work
+may fail safely at a resource bound; the volume cap is not a memory guarantee.
+
+The disposable corpus covers 2,880 synthetic decisions, 8,641 five-minute equity
+observations and 6,005 ledger events, with transfers, fills, fee and late funding.
+It is a correctness/resource fixture, not production coverage, trading performance,
+a billing receipt or proof of 90-day sustainability. Production capture remains
+conditional on current capacity and the existing total US$80/month budget; unknown
+coverage of billing is not zero cost.

@@ -147,16 +147,23 @@ export function projectFinancials(
   ledger: LedgerProjection,
   events: readonly FinancialEvent[],
 ): FinancialProjection {
+  const reducer = createFinancialReducer();
+  for (const event of [...events].sort((a, b) =>
+    BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
+  ))
+    reducer.append(event);
+  return reducer.snapshot(ledger);
+}
+/** Cost basis and rounding carry across pages; only the snapshot rounds USD14. */
+export function createFinancialReducer() {
   const positions = new Map<string, Position>();
   let fees = 0n,
     funding = 0n;
-  for (const event of [...events].sort((a, b) =>
-    BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
-  )) {
+  const append = (event: FinancialEvent) => {
     const p = event.payload;
     if (p.event_type === "fee") fees += BigInt(p.delta.raw);
     if (p.event_type === "funding") funding += BigInt(p.delta.raw);
-    if (p.event_type !== "fill") continue;
+    if (p.event_type !== "fill") return;
     const prev = positions.get(p.position_id);
     const before = BigInt(prev?.quantity_btc_raw ?? "0"),
       quantity = BigInt(p.quantity.raw),
@@ -178,24 +185,31 @@ export function projectFinancials(
       cost_usd14_raw: cost.toString(),
       realized_usd14_raw: realized.toString(),
     });
-  }
-  const ordered = [...positions.values()].sort((a, b) =>
-    a.position_id < b.position_id ? -1 : a.position_id > b.position_id ? 1 : 0,
-  );
-  const realized = usd(
-    ordered.reduce((sum, p) => sum + BigInt(p.realized_usd14_raw), 0n),
-  );
-  return {
-    schema_version: VALUATION_VERSION,
-    ledger,
-    positions: ordered,
-    realized_pnl_usd_raw: realized,
-    balance_usd_raw: (
-      BigInt(ledger.cash_usd_raw) + BigInt(realized)
-    ).toString(),
-    fees_usd_raw: fees.toString(),
-    funding_usd_raw: funding.toString(),
   };
+  const snapshot = (ledger: LedgerProjection): FinancialProjection => {
+    const ordered = [...positions.values()].sort((a, b) =>
+      a.position_id < b.position_id
+        ? -1
+        : a.position_id > b.position_id
+          ? 1
+          : 0,
+    );
+    const realized = usd(
+      ordered.reduce((sum, p) => sum + BigInt(p.realized_usd14_raw), 0n),
+    );
+    return {
+      schema_version: VALUATION_VERSION,
+      ledger,
+      positions: ordered,
+      realized_pnl_usd_raw: realized,
+      balance_usd_raw: (
+        BigInt(ledger.cash_usd_raw) + BigInt(realized)
+      ).toString(),
+      fees_usd_raw: fees.toString(),
+      funding_usd_raw: funding.toString(),
+    };
+  };
+  return { append, snapshot };
 }
 export interface MarketEvidence {
   object_id: string;
