@@ -76,6 +76,32 @@ describe.skipIf(!url)("experiment reads on disposable PostgreSQL", () => {
         expect(report.json().baseline.trading.equity_usd_raw).toBe(
           "1000000000",
         );
+        const billing = await app.inject({
+          method: "POST",
+          url: `/trading/experiments?account_id=manual&dataset_id=${a.dataset_id}`,
+          headers,
+          payload: {
+            schema_version: "btc.evaluation-input.v1",
+            allocation: {
+              schema_version: "btc.cost-allocation.v1",
+              complete: true,
+              window: report.json().baseline.scope.window,
+              basis: "synthetic settled invoice",
+              bills: [
+                {
+                  id: "opaque-disposable-only",
+                  kind: "infrastructure",
+                  total_usd_raw: "1230000",
+                  shares: [{ account_id: "manual", usd_raw: "1230000" }],
+                },
+              ],
+            },
+          },
+        });
+        expect(billing.statusCode).toBe(200);
+        expect(
+          billing.json().baseline.after_operational_costs.net_pnl_usd_raw,
+        ).toBe("-1230000");
         const system = await app.inject({
           url: "/trading/experiment-system",
           headers,

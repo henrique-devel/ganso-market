@@ -7,6 +7,7 @@ import {
 } from "../trading/valuation.js";
 import {
   allocatedCosts,
+  drawdown,
   ratio,
   requireMetric,
   utc,
@@ -260,6 +261,30 @@ function windowMetrics(
       e.payload.event_type === "cash" &&
       e.payload.reason !== "initial_allocation",
   );
+  const points = (replay.equity_history?.points ?? []).filter(
+    (p) => p.at >= w.start_at && p.at <= w.end_at,
+  );
+  const expected = (utc(w.end_at) - utc(w.start_at)) / 300000 + 1;
+  const complete =
+    points.length === expected &&
+    points[0]?.at === w.start_at &&
+    points.at(-1)?.at === w.end_at &&
+    points.every((p) => p.adjusted_equity_usd_raw !== null);
+  const adjustedBoundary = (b: typeof opening) =>
+    b.equity_usd_raw === null
+      ? []
+      : [
+          (
+            BigInt(b.equity_usd_raw) - BigInt(b.external_flows_usd_raw)
+          ).toString(),
+        ];
+  const observed = drawdown([
+    ...adjustedBoundary(opening),
+    ...points.flatMap((p) =>
+      p.adjusted_equity_usd_raw === null ? [] : [p.adjusted_equity_usd_raw],
+    ),
+    ...adjustedBoundary(closing),
+  ]);
   return {
     schema_version: "btc.window-metrics.v1",
     dataset_id: artifact.dataset_id,
@@ -284,6 +309,18 @@ function windowMetrics(
     },
     opening,
     closing,
+    equity_curve: {
+      basis: "persisted_five_minute_observations_no_interpolation",
+      points,
+      status: complete ? "observed_cadence_only" : "incomplete_equity_history",
+      coverage: { expected_slots: expected, observed_slots: points.length },
+    },
+    drawdown: {
+      ...(complete ? observed : drawdown([null])),
+      observed_max_usd_raw: observed.max_usd_raw,
+      observed_max_ppm: observed.max_ppm,
+      intrabar_extreme: null,
+    },
     transfers_usd_raw: flows,
     capital_flows_present: hasFlows,
     trading: {

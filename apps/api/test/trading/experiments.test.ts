@@ -1,4 +1,6 @@
 import { pair } from "./comparison-fixture.js";
+import { sealReplayPages } from "../../src/storage/replay-pages.js";
+import { windowFixture } from "./replay-pages-fixture.js";
 import Fastify from "fastify";
 import { describe, it, expect, vi } from "vitest";
 import { registerExperimentRoutes } from "../../src/experiments-api.js";
@@ -85,7 +87,7 @@ describe("authenticated, bounded immutable experiment reads", () => {
             headers,
           })
         ).statusCode,
-      ).toBe(404);
+      ).toBe(path === "experiments" ? 401 : 404);
     }
     expect(s.readOnly).not.toHaveBeenCalled();
     await s.app.close();
@@ -230,6 +232,95 @@ describe("authenticated, bounded immutable experiment reads", () => {
     expect(r.json()).toEqual({ items: [], next_cursor: null });
     expect(s.query.mock.calls[0]![0]).toContain("LIMIT 51");
     expect(s.query.mock.calls[0]![0]).not.toContain("payload");
+    await s.app.close();
+  });
+  it("accepts bounded private billing bodies read-only; invalid or oversize input is rejected", async () => {
+    const s = setup();
+    const payload = {
+      schema_version: "btc.evaluation-input.v1",
+      allocation: {
+        schema_version: "btc.cost-allocation.v1",
+        window: { start: iso(start), end: iso(start + 5000) },
+        complete: true,
+        basis: "synthetic invoice",
+        bills: [
+          {
+            id: "opaque",
+            kind: "infrastructure",
+            total_usd_raw: "1000000",
+            shares: [{ account_id: "manual", usd_raw: "1000000" }],
+          },
+        ],
+      },
+    };
+    const u = `/trading/experiments?account_id=manual&dataset_id=${a.dataset_id}`;
+    for (let i = 0; i < 2; i++) {
+      const r = await s.app.inject({
+        method: "POST",
+        url: u,
+        headers,
+        payload,
+      });
+      expect(r.statusCode).toBe(200);
+      expect(r.json().baseline.after_operational_costs.net_pnl_usd_raw).toBe(
+        "-1000000",
+      );
+      expect(r.json().evaluation.references[1].net_pnl_usd_raw).toBeNull();
+    }
+    expect(
+      s.query.mock.calls.every(([sql]) => /^SELECT payload/.test(sql)),
+    ).toBe(true);
+    s.query.mockClear();
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: u,
+          headers,
+          payload: { ...payload, invoice: "private" },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(s.query).not.toHaveBeenCalled();
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: u,
+          headers,
+          payload: { data: "x".repeat(32769) },
+        })
+      ).statusCode,
+    ).toBe(413);
+    await s.app.close();
+  });
+  it("reads one paginated page without running large replay or claiming financial coverage", async () => {
+    const s = setup(),
+      b = sealReplayPages(windowFixture(6));
+    s.query.mockImplementation(async (_sql, args) => ({
+      rows: [
+        {
+          payload: (args?.[0] === b.artifact.dataset_id
+            ? b.artifact
+            : b.pages[0]) as never,
+        },
+      ],
+      rowCount: 1,
+    }));
+    const u = `/trading/experiments?account_id=${b.artifact.manifest.header.identity.account.account_id}&dataset_id=${b.artifact.dataset_id}`;
+    const manifest = await s.app.inject({ url: u, headers });
+    expect(manifest.statusCode).toBe(200);
+    expect(manifest.json().financial_metrics).toBeNull();
+    expect(manifest.json().verified_page).toBeNull();
+    const page = await s.app.inject({ url: u + "&page=0", headers });
+    expect(page.statusCode).toBe(200);
+    expect(page.json().verified_page.index).toBe(0);
+    expect(
+      (await s.app.inject({ url: u + "&page=9999", headers })).statusCode,
+    ).toBe(400);
+    expect(
+      s.query.mock.calls.every(([sql]) => /^SELECT payload/.test(sql)),
+    ).toBe(true);
     await s.app.close();
   });
 });
