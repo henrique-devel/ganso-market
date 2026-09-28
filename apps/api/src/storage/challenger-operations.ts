@@ -19,8 +19,11 @@ import { createChallengerConsumer } from "./challenger-runtime.js";
 import { baselineClock } from "./baseline-store.js";
 import { baselineHash, type BaselineRegistration } from "./baseline-inputs.js";
 
+import type { ComparisonWindow } from "./comparison-window.js";
+
 export interface ChallengerBinding {
-  version: "btc.jev-comparison.v1";
+  version: "btc.jev-comparison.v1" | "btc.jev-comparison.v2";
+  evaluation?: ComparisonWindow;
   source_account: string;
   source_registration_hash: string;
   source_start_at: string;
@@ -136,6 +139,16 @@ export async function challengerReadinessTx(
     if (registration.registration.start_at > gate.now)
       gate.reasons.push("prospective_start_pending");
     const binding = registration.binding;
+    if (
+      binding.version === "btc.jev-comparison.v2" &&
+      (!binding.evaluation || gate.now >= binding.evaluation.end_at)
+    )
+      gate.reasons.push("comparison_period_expired_or_missing");
+    if (
+      binding.version === "btc.jev-comparison.v2" &&
+      gate.now < binding.comparison_start_at
+    )
+      gate.reasons.push("comparison_start_pending");
     const identity = challengerIdentity(config, origin);
     if (
       Object.entries(identity).some(

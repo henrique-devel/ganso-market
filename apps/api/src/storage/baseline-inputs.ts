@@ -47,6 +47,8 @@ export interface BaselineRecord<T> extends BaselineRef {
   payload: T;
 }
 export interface BaselineRegistration {
+  /** New challenger only: explicit future common start, never rewrites a v1 genesis. */
+  schema_version?: "btc.baseline-registration.v2";
   scope: TradingScope;
   policy_version: typeof BASELINE_POLICY;
   manifest_fingerprint: typeof BASELINE_FINGERPRINT;
@@ -118,7 +120,12 @@ export function validateBaselineRegistration(r: BaselineRegistration) {
     r.manifest_fingerprint !== BASELINE_FINGERPRINT ||
     !/^[a-f0-9]{40}$/.test(r.code_sha) ||
     !/^[a-f0-9]{64}$/.test(r.metadata_hash) ||
-    start !== (Math.floor(registered / 900000) + 1) * 900000
+    (r.schema_version === undefined
+      ? start !== (Math.floor(registered / 900000) + 1) * 900000
+      : r.schema_version !== "btc.baseline-registration.v2" ||
+        r.scope.account_id !== "challenger" ||
+        start <= registered ||
+        start % 900000 !== 0)
   )
     throw new TypeError("BTC_BASELINE_REGISTRATION");
 }

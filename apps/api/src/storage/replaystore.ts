@@ -179,6 +179,26 @@ export async function captureReplayDataset(
           embedded.add(row.evidence_id);
       }
     }
+    const binding = (
+      await tx.query<{
+        evaluation: {
+          source_evidence_id: string;
+          source_period_evidence_id: string;
+        } | null;
+      }>(
+        `SELECT o.payload->'challenger'->'evaluation' AS evaluation FROM btc_baseline_registrations r
+       JOIN btc_retention_objects o ON o.object_id=r.evidence_id WHERE r.account_id=$1`,
+        [account],
+      )
+    ).rows[0]?.evaluation;
+    if (binding)
+      for (const id of [
+        binding.source_evidence_id,
+        binding.source_period_evidence_id,
+      ]) {
+        roots.add(id);
+        embedded.add(id);
+      }
     for (const d of decisions) roots.add(d.evidence_id);
     for (const j of jev) roots.add(j.evidence_id);
     const refs = [

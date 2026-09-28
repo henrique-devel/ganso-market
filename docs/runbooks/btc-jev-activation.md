@@ -43,14 +43,20 @@ Nenhuma chamada real de teste é feita pelo CLI.
 ## Registro explícito, prospectivo e idempotente
 
 Depois dos checks e implantação, com as condições anteriores satisfeitas, enviar
-`{manifest,contract}` pelo stdin ao `apps/api/dist/challenger-activate-cli.js OWNER`
+`{manifest,contract,window:{start_at,end_at,purpose}}` pelo stdin ao `apps/api/dist/challenger-activate-cli.js OWNER`
 no container API, nos mesmos moldes do CLI baseline. Os bytes são os arquivos
 congelados `config/trading/baseline.json` e
 `docs/contracts/btc-baseline-manifest-v1.md`; o SHA vem da imagem publicada.
 
 O dono autenticado precisa ser o mesmo do baseline. A conta fixa `challenger`
-recebe experimento próprio, início na próxima fronteira UTC de 15 minutos,
-registro imutável e metadata original pinada do baseline. O vínculo fixa hash do
+recebe experimento próprio, início futuro explícito em fronteira UTC de 15 minutos,
+registro v2 imutável e metadata original pinada do baseline. Fixar início e fim
+antes de observar: `purpose` é `operational_pilot` ou `economic_evaluation`.
+Avaliação exige 30 dias inteiros cobertos pelo período fonte; quando o original
+não comportar essa duração, registrar antes o sucessor G2-13.3 de propósito
+`economic_evaluation`, sem mudar o início financeiro original. O CLI não cria o
+sucessor nem ajusta datas automaticamente. O remanescente curto só admite piloto.
+Ver [contrato da janela](../contracts/btc-jev-challenger-v1.md#prospective-common-window--g2-143). O vínculo fixa hash do
 registro fonte, modelo, origem, versão/hash do prompt, tarifa, atestado de limite,
 manifesto e código. Repetir retorna o original; não muda início, risco ou pausa.
 Mudar a identidade configurada desabilita novas consultas; não substitui o registro.
@@ -90,3 +96,12 @@ PostgreSQL. Rollback anterior à composição não gere saídas challenger: só 
 flat, sem reservas e entradas contidas, preservando registros, pins, ledger e
 compatibilidade funding v2/RATE18. Testes financeiros só em PostgreSQL descartável;
 fixtures marcadas MOCK não são evidência de ativação, fills ou mercado produtivo.
+
+### Compatibilidade de implantação G2-14.3
+
+API apenas, sem migration ou ativação nesta entrega. Continuam schema48 e leitores
+replay v1/v2. Antes de rollback para binário anterior, conter novas entradas;
+registros prospectivos v2 exigem leitores desta versão e não podem ser apagados ou
+convertidos para v1. Preservar o gestor de posições/obrigações existentes. Não
+registrar janela produtiva enquanto faltarem admissão G2-12.3, fontes, jornada e
+cobertura total do teto de US$80/mês. Datas de fixture não são escolha operacional.

@@ -1,3 +1,4 @@
+import { pair } from "./comparison-fixture.js";
 import Fastify from "fastify";
 import { describe, it, expect, vi } from "vitest";
 import { registerExperimentRoutes } from "../../src/experiments-api.js";
@@ -193,6 +194,30 @@ describe("authenticated, bounded immutable experiment reads", () => {
     ).json();
     expect(r.reason).toBe("BTC_METRICS_COMPARISON_WINDOW_OR_CONTRACT");
     expect(r.delta).toBeNull();
+    await s.app.close();
+  });
+  it("compares different starts through the persisted v2 registration without writes", async () => {
+    const s = setup(),
+      { x, y, c } = pair().seal();
+    s.query.mockImplementation(async (_sql, args) => ({
+      rows: [{ payload: args?.[0] === x.dataset_id ? x : y }],
+      rowCount: 1,
+    }));
+    const q = new URLSearchParams({
+      account_id: "baseline",
+      dataset_id: x.dataset_id,
+      challenger_id: y.dataset_id,
+      comparison: JSON.stringify(c),
+    });
+    const r = await s.app.inject({ url: `/trading/experiments?${q}`, headers });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().status).toBe("observational_comparison");
+    expect(r.json().baseline.scope.financial_start_at).not.toBe(
+      r.json().challenger.scope.financial_start_at,
+    );
+    expect(
+      s.query.mock.calls.every(([sql]) => /^SELECT payload/.test(sql)),
+    ).toBe(true);
     await s.app.close();
   });
   it("bounds catalog range and never fetches replay payloads while listing", async () => {

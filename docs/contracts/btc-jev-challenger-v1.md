@@ -84,3 +84,68 @@ collector and other running services. No test writes production trading records.
 Validation uses explicit MOCK responses with the real adapter, SQL cost store,
 recovery fences, risk and broker on disposable PostgreSQL. This integration does
 not establish model accuracy, live profitability, or availability of paid credit.
+
+## Prospective common window — G2-14.3
+
+New activations require `window: {start_at, end_at, purpose}` in the operator CLI
+input. They persist `btc.jev-comparison.v2` with a `btc.comparison-window.v1`
+evaluation and `btc.baseline-registration.v2` **for the new challenger only**.
+The latter allows an explicitly selected future UTC 15-minute boundary instead
+of forcing the next boundary. Original unversioned registrations, their genesis,
+and v1 reports retain their original semantics; no upgrade/backfill is performed.
+
+Registration precedes `comparison_start_at`; end is fixed simultaneously, aligned
+to 15 minutes and at most 30 days later. `economic_evaluation` requires exactly
+30 days; a shorter original-period remainder is `operational_pilot`. The source
+registration and, when applicable, a G2-13.3 successor are pinned dependencies.
+The source period must cover the **entire** interval, and an economic window
+cannot use an operational-pilot successor. Neither the CLI nor the report extends
+entry eligibility, resets capital, rearms risk, enables a budget or calls Jev.
+A retry with different dates/purpose conflicts; an old v1 registration cannot be
+retrofitted with a comparison selected after observing results. Gates still apply
+at activation, dispatch and admission; the v2 end blocks entries, while existing
+funding, risk and exits keep managing old obligations.
+
+`btc.economic-comparison.v2` keeps the v1 dataset/risk/market hashes and declared
+version differences, and adds `registration_evidence_id`. Dates are resolved from
+the immutable **captured challenger registration**, not from HTTP query dates.
+Reference-mode exports embed the source registration and selected period as well.
+Both artifacts must cover the fixed end and have compatible instrument/replay
+contracts; older v1 economic comparison continues to require equal starts.
+Authenticated `GET /api/trading/experiments` returns `btc.experiments.v2` for the
+v2 comparison (and v1 for previous requests); unsupported/missing evidence remains
+`not_comparable`, never a fabricated delta. Pure offline entrypoint:
+`compareWindowArtifacts(baselineArtifact, challengerArtifact, contract, allocation?)`.
+
+The window report reconstructs opening and closing ledger/reservation prefixes,
+including hashes, original financial starts, positions with cost basis, active
+reservations, equity/mark quality and original genesis persistence time. Prefixes
+end at committed transaction boundaries. Opening includes records known at start;
+window attribution is **(start, end] by recorded time**, with each economic timestamp
+preserved. A newly born account uses its single contractual genesis as opening
+endowment even if its first tick persists it later; that time is disclosed. No
+other late event is moved backwards, and no missing market mark is synthesized.
+Marks available at each boundary are independently revalidated at that boundary;
+a later fresh mark cannot price the earlier opening.
+
+Window PnL = closing equity − opening equity − external flows received in the
+window. Realized PnL, fees, funding and change in unrealized PnL are also separate;
+closing an old position does not count its pre-window unrealized gain twice.
+Late old funding/fees received within the window are included once and identified
+as prior obligations. Events received after end remain in the captured account
+history and disclosed count; they do not rewrite this as-of result or forgive the
+obligation. Reservations are state, not expense; fill prices already include
+slippage. Operational bills must allocate exactly this window; absent bills or
+marks are unknown. Even offsetting external flows disable a simple return/delta.
+
+Different opening capital/equity, risk, exposure or reservations produce labeled
+side-by-side results with no delta. Otherwise the numerical delta is observational;
+causal filter contribution is always null. Export AND registered code/policy/
+manifest differences must be declared. Risk/market hashes remain declarations,
+not an external audit. No account balances or scenario results are summed.
+
+This delivery adds no producer, migration or admission. Existing 4096-row,
+4096-observation, 16-MiB and equity-prefix-work limits continue to refuse overflow;
+G2-14.4 must cover longer windows with bounded cuts. Window drawdown/coverage are
+not inferred from the inception report or two endpoints. G2-17 must assess gaps
+and full coverage separately; a pilot is never promoted to a 30-day evaluation.

@@ -1,3 +1,9 @@
+import { baselinePeriodTx } from "./storage/baseline-periods.js";
+import {
+  validateComparisonWindow,
+  type ComparisonWindow,
+  type ComparisonWindowRequest,
+} from "./storage/comparison-window.js";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -14,7 +20,6 @@ import { withBtcRetentionTransaction } from "./storage/btc-retention.js";
 import { validateBaselineManifest } from "./storage/baseline-manifest.js";
 import {
   baselineHash,
-  baselineIso,
   validateBaselineRegistration,
   type BaselineRegistration,
 } from "./storage/baseline-inputs.js";
@@ -37,6 +42,7 @@ export async function activateChallenger(
   contract: string,
   config: ChallengerConfig,
   origin: "real" | "mock" = "real",
+  window?: ComparisonWindowRequest,
 ) {
   validateBaselineManifest(manifestSource, contract);
   if (!/^[a-f0-9]{40}$/.test(codeSha))
@@ -76,12 +82,21 @@ export async function activateChallenger(
         )
       ).rowCount;
       if (!sameOwner) throw new Error("BTC_CHALLENGER_OWNER_CONFLICT");
-      if (!prior.binding || prior.binding.origin !== origin)
+      if (
+        !prior.binding ||
+        prior.binding.origin !== origin ||
+        (window &&
+          (!prior.binding.evaluation ||
+            window.start_at !== prior.binding.evaluation.start_at ||
+            window.end_at !== prior.binding.evaluation.end_at ||
+            window.purpose !== prior.binding.evaluation.purpose))
+      )
         throw new Error("BTC_CHALLENGER_REGISTRATION_CONFLICT");
       return {
         status: "duplicate",
         registration: prior.registration,
         binding: prior.binding,
+        evidence_id: prior.evidence_id,
       };
     }
     if (
@@ -95,10 +110,26 @@ export async function activateChallenger(
     const gate = await challengerGateTx(tx, config, origin);
     if (gate.reasons.length)
       return { status: "disabled", reasons: gate.reasons };
+    if (!window) throw new Error("BTC_CHALLENGER_COMPARISON_WINDOW_REQUIRED");
     const registered_at = await baselineClock(tx),
-      start_at = baselineIso(
-        (Math.floor(Date.parse(registered_at) / 900000) + 1) * 900000,
-      );
+      start_at = window.start_at;
+    const period = await baselinePeriodTx(tx, source.registration, start_at);
+    const evaluation: ComparisonWindow = {
+      ...window,
+      version: "btc.comparison-window.v1",
+      registered_at,
+      source_evidence_id: source.evidence_id,
+      source_period: period?.payload ?? null,
+      source_period_evidence_id: period?.object_id ?? source.evidence_id,
+      source_registration_hash: baselineHash(source.registration),
+      source_code_sha: source.registration.code_sha,
+      challenger_code_sha: codeSha,
+      source_manifest: source.registration.manifest_fingerprint,
+      challenger_manifest: source.registration.manifest_fingerprint,
+      source_policy: source.registration.policy_version,
+      challenger_policy: source.registration.policy_version,
+    };
+    validateComparisonWindow(evaluation, source.registration);
     const experiment_id = `challenger:paper:${baselineHash([start_at, codeSha, source.registration]).slice(0, 32)}`;
     const identity: LedgerIdentity = structuredClone(source.identity);
     Object.assign(identity.account, {
@@ -112,6 +143,7 @@ export async function activateChallenger(
     });
     const registration: BaselineRegistration = {
       ...source.registration,
+      schema_version: "btc.baseline-registration.v2",
       scope: ledgerScope(identity),
       code_sha: codeSha,
       registered_at,
@@ -119,11 +151,12 @@ export async function activateChallenger(
     };
     validateBaselineRegistration(registration);
     const binding: ChallengerBinding = {
-      version: "btc.jev-comparison.v1",
+      version: "btc.jev-comparison.v2",
+      evaluation,
       source_account: "baseline",
       source_registration_hash: baselineHash(source.registration),
       source_start_at: source.registration.start_at,
-      comparison_start_at: start_at,
+      comparison_start_at: window.start_at,
       ...challengerIdentity(config, origin),
     };
     await tx.query(
@@ -153,13 +186,19 @@ export async function activateChallenger(
         contract,
       },
       registered_at,
-      [source.evidence_id, source.payload.metadata_id],
+      [
+        ...new Set([
+          source.evidence_id,
+          source.payload.metadata_id,
+          evaluation.source_period_evidence_id,
+        ]),
+      ],
     );
     await tx.query(
       "INSERT INTO btc_baseline_registrations(account_id,registration,evidence_id) VALUES('challenger',$1::jsonb,$2)",
       [JSON.stringify(registration), evidence_id],
     );
-    return { status: "registered", registration, binding };
+    return { status: "registered", registration, binding, evidence_id };
   });
 }
 if (
@@ -169,13 +208,14 @@ if (
   const username = process.argv[2];
   if (!username)
     throw new Error(
-      "usage: challenger-activate-cli OWNER < {manifest,contract}",
+      "usage: challenger-activate-cli OWNER < {manifest,contract,window:{start_at,end_at,purpose}}",
     );
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
     manifest: string;
     contract: string;
+    window: ComparisonWindowRequest;
   };
   const config = await loadConfig(),
     jev = await loadChallengerConfig();
@@ -193,6 +233,8 @@ if (
           input.manifest,
           input.contract,
           jev,
+          "real",
+          input.window,
         ),
       ),
     );
