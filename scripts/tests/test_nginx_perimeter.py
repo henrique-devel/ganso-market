@@ -46,7 +46,11 @@ class NginxPerimeterTests(unittest.TestCase):
             self.assertIn("proxy_set_header Host $http_host", body)
         for path in expected:
             body = next(body for spec, body in locations() if spec == f"= {path}")
-            self.assertEqual(re.findall(r"\$request_method\s*!=\s*(\w+)", body), ["GET"])
+            if path == "/api/trading/experiments":
+                self.assertIn("$request_method !~ ^(GET|POST)$", body)
+                self.assertIn("client_max_body_size 32k", body)
+            else:
+                self.assertEqual(re.findall(r"\$request_method\s*!=\s*(\w+)", body), ["GET"])
             self.assertIn("return 404", body)
 
     def test_unknown_and_retired_api_routes_are_closed(self) -> None:

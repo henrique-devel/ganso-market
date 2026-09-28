@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 import { displayRaw } from "./btc-ticket.js";
+import {
+  EvaluationSources,
+  WindowResults,
+  OfflinePagedImport,
+  PagedCoverageView,
+  type WindowReport,
+  type PagedCoverage,
+} from "./EvaluationViews.js";
 
 type Access = { accessToken: string; onUnauthorized: () => void };
 type Metric = {
@@ -14,6 +22,7 @@ type Metric = {
   capital_usd_raw: string;
   transfers_usd_raw: string;
   trading: {
+    unrealized_pnl_usd_raw?: string | null;
     equity_usd_raw: string | null;
     net_pnl_usd_raw: string | null;
     realized_net_usd_raw: string;
@@ -21,10 +30,16 @@ type Metric = {
     funding_usd_raw: string;
     net_return_ppm: string | null;
   };
-  drawdown: { max_usd_raw: string | null; max_ppm: string | null };
+  drawdown: {
+    max_usd_raw: string | null;
+    max_ppm: string | null;
+    observed_max_usd_raw?: string | null;
+  };
   equity_curve: {
     points: { at: string; equity_usd_raw: string | null }[];
     status: string;
+    basis?: string;
+    coverage?: Record<string, unknown>;
   };
   operational_costs: {
     ai_usd_raw: string | null;
@@ -45,6 +60,7 @@ type Metric = {
   late_funding_event_ids: string[];
 };
 export type ExperimentReport = {
+  evaluation?: Parameters<typeof EvaluationSources>[0]["value"];
   status: string;
   reason?: string;
   baseline: Metric;
@@ -132,6 +148,7 @@ export function useExperimentRead<T>(
   path: string | null,
   access: Access,
   revision = 0,
+  privateInput?: string,
 ) {
   const [state, setState] = useState<{
     path: string;
@@ -148,7 +165,12 @@ export function useExperimentRead<T>(
     void (async () => {
       try {
         const response = await fetch(`/api/trading/${path}`, {
-          headers: { authorization: `Bearer ${access.accessToken}` },
+          method: privateInput ? "POST" : "GET",
+          headers: {
+            authorization: `Bearer ${access.accessToken}`,
+            ...(privateInput ? { "content-type": "application/json" } : {}),
+          },
+          ...(privateInput ? { body: privateInput } : {}),
           cache: "no-store",
           signal: controller.signal,
         });
@@ -179,7 +201,7 @@ export function useExperimentRead<T>(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [path, access.accessToken, access.onUnauthorized, revision]);
+  }, [path, access.accessToken, access.onUnauthorized, revision, privateInput]);
   return state?.path === path &&
     state.token === access.accessToken &&
     state.revision === revision
@@ -212,7 +234,11 @@ const decisionReason: Record<string, string> = {
   risk_pause: "Entradas pausadas pelo risco",
   no_signal: "Sem sinal registrado",
 };
-export function EquityCurve({ metric }: { metric: Metric }) {
+export function EquityCurve({
+  metric,
+}: {
+  metric: Pick<Metric, "scope" | "equity_curve">;
+}) {
   const points = metric.equity_curve.points;
   const known = points.filter(
     (p): p is { at: string; equity_usd_raw: string } =>
@@ -230,9 +256,13 @@ export function EquityCurve({ metric }: { metric: Metric }) {
         {points.length}
       </figcaption>
       <p>
-        Somente limites de transações do ledger. Sem interpolação ou marcas
-        históricas inventadas. Aportes e saques afetam o patrimônio; não são
-        lucro.
+        {metric.equity_curve.basis ===
+          "committed_ledger_boundaries_no_interpolation" ||
+        !metric.equity_curve.basis
+          ? "Somente limites de transações do ledger."
+          : "Observações persistidas de equity; cadência de cinco minutos, sem medir extremo intrabar."}{" "}
+        Sem interpolação ou marcas históricas inventadas. Aportes e saques
+        afetam o patrimônio; não são lucro.
       </p>
       {known.length > 0 ? (
         <>
@@ -330,6 +360,12 @@ function MetricCard({ metric, label }: { metric: Metric; label: string }) {
         <time>{metric.scope.window.end}</time> (UTC).
       </p>
       <div className="btc-balances">
+        {metric.trading.unrealized_pnl_usd_raw !== undefined && (
+          <p>
+            PnL aberto
+            <strong>{money(metric.trading.unrealized_pnl_usd_raw)}</strong>
+          </p>
+        )}
         <p>
           Patrimônio no corte
           <strong>{money(metric.trading.equity_usd_raw)}</strong>
@@ -374,7 +410,23 @@ function MetricCard({ metric, label }: { metric: Metric; label: string }) {
           "Sem trades neste corte; saldo preservado não comprova desempenho."}
       </p>
       <EquityCurve metric={metric} />
-      <h4>Custos e influência Jev</h4>
+      {metric.drawdown.observed_max_usd_raw !== undefined && (
+        <p>
+          Drawdown mínimo observado:{" "}
+          {money(metric.drawdown.observed_max_usd_raw)}. Gaps deixam o máximo
+          completo desconhecido.
+        </p>
+      )}
+      {metric.equity_curve.coverage && (
+        <p>
+          Cobertura de equity:{" "}
+          {Object.entries(metric.equity_curve.coverage)
+            .map(([k, v]) => `${k}: ${String(v)}`)
+            .join(" · ")}
+          . Cobertura de amostras não comprova continuidade de mercado.
+        </p>
+      )}
+      <h4>Custos e integração futura</h4>
       <p>
         IA alocada: {money(metric.operational_costs.ai_usd_raw)}. Infraestrutura
         alocada: {money(metric.operational_costs.infrastructure_usd_raw)}. Sem
@@ -382,7 +434,8 @@ function MetricCard({ metric, label }: { metric: Metric; label: string }) {
         são despesas.
       </p>
       <p>
-        Subtotal Jev real capturado na seleção:{" "}
+        JEV permanece adiado; não é condição para avaliar BTC. Subtotal Jev real
+        capturado na seleção:{" "}
         {money(metric.operational_costs.captured_real_ai_usd_raw)};{" "}
         {metric.operational_costs.captured_unknown_ai_calls} chamada(s) com
         custo desconhecido. Informativo, sem novo débito e sem provar custo zero
@@ -448,6 +501,8 @@ function MetricCard({ metric, label }: { metric: Metric; label: string }) {
   );
 }
 export function ExperimentResults({ report }: { report: ExperimentReport }) {
+  if ("opening" in report.baseline)
+    return <WindowResults report={report as unknown as WindowReport} />;
   const versions = report.challenger
     ? (["code_sha", "strategy", "manifest_hash"] as const).filter(
         (k) => report.baseline.versions[k] !== report.challenger!.versions[k],
@@ -493,46 +548,91 @@ export function ExperimentResults({ report }: { report: ExperimentReport }) {
           <MetricCard metric={report.challenger} label="Cenário comparado" />
         )}
       </div>
+      <EvaluationSources value={report.evaluation} />
     </>
   );
 }
 export function Experiments(props: Access & { accountId: string }) {
   const [cursor, setCursor] = useState("");
+  const [kind, setKind] = useState("");
   const catalog = useExperimentRead<Catalog>(
-    `experiment-datasets${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`,
+    `experiment-datasets?${new URLSearchParams({ ...(cursor ? { after: cursor } : {}), ...(kind ? { kind } : {}) })}`,
     props,
   );
   const [dataset, setDataset] = useState("");
   const [challenger, setChallenger] = useState("");
   const [manifest, setManifest] = useState("");
+  const [evaluation, setEvaluation] = useState("");
+  const [privateInput, setPrivateInput] = useState<string>();
+  const [inputError, setInputError] = useState("");
   const [path, setPath] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
-  const result = useExperimentRead<ExperimentReport>(path, props, revision);
+  useEffect(() => {
+    setPath(null);
+    setDataset("");
+    setChallenger("");
+    setManifest("");
+    setEvaluation("");
+    setPrivateInput(undefined);
+  }, [props.accountId]);
+  const result = useExperimentRead<ExperimentReport | PagedCoverage>(
+    path,
+    props,
+    revision,
+    privateInput,
+  );
   const cuts =
     catalog?.value?.items.filter((c) => c.account_id === props.accountId) ?? [];
   return (
     <section className="btc-desk">
       <h2>Experimentos BTC</h2>
       <p>
-        SIMULAÇÃO · selecione cortes imutáveis. A janela disponível vai do
-        início da conta até cada corte; não há recorte arbitrário nem captura
-        automática ao abrir a tela.
+        SIMULAÇÃO · selecione cortes imutáveis ou uma janela paginada.
+        Comparações usam a janela prospectiva registrada, quando presente. Abrir
+        a tela não cria datasets, consulta provedores ou altera saldo.
       </p>
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          setInputError("");
+          try {
+            if (evaluation.trim()) JSON.parse(evaluation);
+          } catch {
+            setInputError("Entradas inválidas: confira o JSON.");
+            return;
+          }
           const q = new URLSearchParams({
             account_id: props.accountId,
             dataset_id: dataset,
           });
           if (challenger) q.set("challenger_id", challenger);
           if (manifest.trim()) q.set("comparison", manifest.trim());
+          setPrivateInput(evaluation.trim() || undefined);
           setPath(`experiments?${q}`);
           setRevision((x) => x + 1);
         }}
       >
         <fieldset>
           <legend>Janela e cenários</legend>
+          <label>
+            Tipo de corte
+            <select
+              value={kind}
+              onChange={(e) => {
+                setKind(e.target.value);
+                setCursor("");
+                setDataset("");
+                setChallenger("");
+                setManifest("");
+                setEvaluation("");
+                setPrivateInput(undefined);
+                setPath(null);
+              }}
+            >
+              <option value="">Desde a gênese / comparação prospectiva</option>
+              <option value="window">Janela paginada</option>
+            </select>
+          </label>
           <label>
             Corte da conta {props.accountId}
             <select
@@ -586,6 +686,7 @@ export function Experiments(props: Access & { accountId: string }) {
           <label>
             Comparar com dataset (opcional)
             <input
+              disabled={kind === "window"}
               value={challenger}
               maxLength={75}
               placeholder="btc-replay:…"
@@ -609,14 +710,17 @@ export function Experiments(props: Access & { accountId: string }) {
             </summary>
             <p>
               Para calcular delta, forneça o manifesto
-              btc.economic-comparison.v1 com IDs dos datasets, hashes de mercado
-              e risco e diferenças de versões declaradas. O manifesto é usado
-              somente nesta leitura.
+              btc.economic-comparison.v1 ou v2 com IDs dos datasets, hashes de
+              mercado e risco e diferenças de versões declaradas. O manifesto é
+              usado somente nesta leitura. A versão v2 exige o registro
+              prospectivo da janela comum; risco, capital e exposição diferentes
+              impedem delta.
             </p>
             <label>
               Manifesto JSON
               <textarea
                 rows={7}
+                disabled={kind === "window"}
                 maxLength={2048}
                 value={manifest}
                 onChange={(e) => {
@@ -629,6 +733,54 @@ export function Experiments(props: Access & { accountId: string }) {
               />
             </label>
           </details>
+          {kind !== "window" && (
+            <details>
+              <summary>Custos reais e referências (opcional)</summary>
+              <p>
+                Importe o arquivo de rateio e fontes preparado para esta janela.
+                Use identificadores de referência, sem anexar faturas, dados
+                pessoais ou credenciais. As entradas são usadas somente neste
+                cálculo autenticado; não são salvas. Omissão significa
+                desconhecido. Declarar o rateio completo exige todas as despesas
+                da janela.
+              </p>
+              <label>
+                Arquivo de custos e referências
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    setPath(null);
+                    setInputError("");
+                    if (!file) return;
+                    try {
+                      if (file.size > 32768) throw new Error();
+                      const value = await file.text();
+                      JSON.parse(value);
+                      setEvaluation(value);
+                    } catch {
+                      setEvaluation("");
+                      setInputError("Arquivo inválido ou acima de 32 KiB.");
+                    }
+                  }}
+                />
+              </label>
+              <label>
+                Entradas privadas JSON
+                <textarea
+                  rows={8}
+                  maxLength={32768}
+                  value={evaluation}
+                  onChange={(e) => {
+                    setEvaluation(e.target.value);
+                    setPath(null);
+                  }}
+                />
+              </label>
+            </details>
+          )}
+          {inputError && <p role="alert">{inputError}</p>}
           <button
             disabled={!dataset || (path !== null && !result)}
             type="submit"
@@ -641,7 +793,24 @@ export function Experiments(props: Access & { accountId: string }) {
         <p role="status">Calculando a projeção dos cortes selecionados…</p>
       )}
       {result?.error && <p role="alert">{result.error}</p>}
-      {result?.value && <ExperimentResults report={result.value} />}
+      {result?.value &&
+        ("schema_version" in result.value &&
+        result.value.schema_version === "btc.paged-coverage.v1" ? (
+          <PagedCoverageView
+            value={result.value}
+            selectPage={(page) => {
+              const q = new URLSearchParams({
+                account_id: props.accountId,
+                dataset_id: dataset,
+                page: String(page),
+              });
+              setPath(`experiments?${q}`);
+            }}
+          />
+        ) : (
+          <ExperimentResults report={result.value as ExperimentReport} />
+        ))}
+      <OfflinePagedImport accountId={props.accountId} />
     </section>
   );
 }

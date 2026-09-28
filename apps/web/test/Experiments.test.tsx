@@ -1,6 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  EvaluationSources,
+  WindowResults,
+  PagedCoverageView,
+  parsePagedReport,
+} from "../src/EvaluationViews.js";
+import {
   ExperimentResults,
   ExperimentSystemView,
   type ExperimentReport,
@@ -96,6 +102,123 @@ const system: ExperimentSystem = {
   next_cursor: null,
 };
 describe("experiment operator information", () => {
+  it("renders common-window positions and gaps without expecting legacy metric fields", () => {
+    const boundary = {
+      equity_usd_raw: null,
+      capital_usd_raw: "1000000000",
+      reserved_usd_raw: "20000000",
+      unrealized_pnl_usd_raw: null,
+      positions: [{ quantity_btc_raw: "1000000" }],
+    };
+    const m = {
+      scope: {
+        ...metric.scope,
+        financial_start_at: "2026-09-01T00:00:00.000Z",
+      },
+      opening: boundary,
+      closing: boundary,
+      trading: {
+        net_pnl_usd_raw: null,
+        unrealized_change_usd_raw: null,
+        fees_usd_raw: "-1000000",
+        funding_usd_raw: "0",
+      },
+      operational_costs: metric.operational_costs,
+      after_operational_costs: metric.after_operational_costs,
+      prior_obligations_received: [],
+      equity_curve: {
+        points: [{ at: metric.scope.window.start, equity_usd_raw: null }],
+        status: "incomplete_equity_history",
+        basis: "persisted_five_minute_observations",
+      },
+      drawdown: { max_usd_raw: null, observed_max_usd_raw: "1000000" },
+    };
+    const html = renderToStaticMarkup(
+      <WindowResults
+        report={{
+          baseline: m,
+          challenger: { ...m, scope: { ...m.scope, account_id: "other" } },
+          reasons: ["opening_exposure_or_reservations"],
+          delta: null,
+        }}
+      />,
+    );
+    for (const s of [
+      "Janela comum prospectiva",
+      "Início financeiro",
+      "Posições iniciais",
+      "PnL aberto",
+      "Gaps",
+      "Não disponível",
+      "sem contribuição causal",
+    ])
+      expect(html).toContain(s);
+  });
+  it("shows source, signed fees/funding, uncertain references and separate spot", () => {
+    const ref = {
+      kind: "perpetual",
+      exposure_bps: 2500,
+      capital_usd_raw: "1000000000",
+      window: metric.scope.window,
+      net_pnl_usd_raw: null,
+      fees_usd_raw: "-1000000",
+      funding_usd_raw: null,
+      source: "synthetic_btc",
+      fee_basis: "synthetic_fee",
+      funding_basis: null,
+      missing: ["funding"],
+      prices: null,
+    };
+    const html = renderToStaticMarkup(
+      <EvaluationSources
+        value={{
+          cost_status: "unknown",
+          cost_basis: null,
+          input_hash: null,
+          references: [ref, { ...ref, kind: "spot" }],
+        }}
+      />,
+    );
+    for (const s of [
+      "Fatura e rateio ausentes",
+      "BTC perpétuo passivo",
+      "BTC spot (separado)",
+      "synthetic_fee",
+      "Dados faltantes: funding",
+      "Reservas de IA não são faturas",
+    ])
+      expect(html).toContain(s);
+  });
+  it("does not equate one checked page with complete replay; refuses malformed/wrong-account imported output", () => {
+    const html = renderToStaticMarkup(
+      <PagedCoverageView
+        value={{
+          schema_version: "btc.paged-coverage.v1",
+          dataset_id: "btc-replay-window:" + "a".repeat(64),
+          window: {
+            start_at: metric.scope.window.start,
+            end_at: metric.scope.window.end,
+          },
+          pages: 30,
+          counts: { observations: 8641 },
+          verified_page: { index: 0, stream: "ledger", rows: 256 },
+        }}
+        selectPage={() => {}}
+      />,
+    );
+    expect(html).toContain("não certifica as demais páginas");
+    expect(html).toContain("replay completo fora da API");
+    for (const x of [
+      "{}",
+      "null",
+      JSON.stringify({
+        schema_version: "btc.paged-evaluation.v1",
+        mode: "paper",
+        scope: { account_id: "wrong" },
+      }),
+    ])
+      expect(() => parsePagedReport(x, "manual")).toThrow();
+  });
   it("distinguishes legitimate no-trade zero from unknown costs and inconclusive short window", () => {
     const html = renderToStaticMarkup(<ExperimentResults report={report} />);
     for (const text of [

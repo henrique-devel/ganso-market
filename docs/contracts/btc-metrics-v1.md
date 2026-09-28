@@ -106,8 +106,8 @@ exact paths under `/api`. All use the existing owner session and no-store.
 The report loads only the explicitly selected captured artifacts, never captures,
 pins, queries providers or resolves external input references. Only one report
 runs per API instance at a time. A missing/invalid comparison declaration yields
-side-by-side metrics with a reason and no delta. Costs without an allocation
-remain unknown; this UI does not submit billing attestations.
+side-by-side metrics with a reason and no delta. Costs without an allocation remain unknown. The original GET has no billing
+body; G2-14.5 adds a private read-only POST calculation below.
 
 Additive metrics fields: `equity_curve` contains timestamped observations at
 committed ledger boundaries (including capital transfers), never an interpolated
@@ -248,3 +248,113 @@ checks. A stale terminal mark returns null even if the last stored sample was
 valid. A closed account needs no mark. This read makes no SQL/provider calls,
 creates no financial activity and confers no risk authorization. API and CLI use
 the same projection. Pilot/evaluation periods do not reset financial inception.
+
+
+## Costs, references and evaluation panel — G2-14.5
+
+The existing authenticated `/trading/experiments` path additionally accepts POST
+with the same query selection as GET and a **32 KiB private JSON body**. This is
+an ephemeral calculation: it uses only the bounded READ ONLY pool, does not store
+inputs, mutate ledger/pins, create a capture, invoke AI or query prices/providers.
+The bearer session and no-store policy remain mandatory. Unsupported methods and
+unknown routes remain closed. Inputs are not URL parameters or request-log fields.
+Do not supply invoice documents, credentials, customer identifiers or private
+billing details. Keep the operator's source records outside Git. There is no new
+migration, collector, model activation, capital allocation or cost commitment.
+
+`btc.evaluation-input.v1` accepts optional `allocation` (the existing complete
+cost-allocation v1 contract) and `references`. Unknown fields, incomplete
+attestations, duplicate bills/owners/references, negative shares, nonconserving
+allocations, unsupported versions and mismatched windows/capital fail explicitly.
+Limits: 64 bills, 32 shares per bill, eight references, and the overall body bound.
+The hash of the complete input and allocation basis identify the exact calculation;
+changing a cost changes the hash, never historical ledger or older reports.
+Omitting allocation is unknown. An explicit complete empty bill list is an
+operator attestation of zero, **not** independent proof of billing completeness.
+Reserved model credit, mock costs and captured real model subtotals are not
+additional debits. JEV remains deferred and unnecessary for BTC evaluation.
+
+A synthetic example (USD6 strings, not a real invoice):
+
+```json
+{
+  "schema_version": "btc.evaluation-input.v1",
+  "allocation": {
+    "schema_version": "btc.cost-allocation.v1",
+    "window": {"start":"2026-09-01T00:00:00.000Z","end":"2026-09-02T00:00:00.000Z"},
+    "complete": true,
+    "basis": "Synthetic settled infrastructure cost for this exact interval",
+    "bills": [{"id":"opaque-example-1","kind":"infrastructure","total_usd_raw":"2000000",
+      "shares":[{"account_id":"baseline","usd_raw":"2000000"}]}]
+  },
+  "references": [{
+    "kind":"perpetual","exposure_bps":2500,"capital_usd_raw":"1000000000",
+    "window":{"start":"2026-09-01T00:00:00.000Z","end":"2026-09-02T00:00:00.000Z"},
+    "prices":null,"fees_usd_raw":null,"funding_usd_raw":null,
+    "source":"Historical BTC perpetual observations unavailable",
+    "fee_basis":null,"funding_basis":null
+  }]
+}
+```
+
+Each supplied reference additionally requires `source`, `fee_basis` and
+`funding_basis` (the latter two are null exactly when that cost is unknown).
+Endpoint prices carry their observation times and evidence IDs as in v1. These
+are supplied observations, never automatically fetched or independently audited.
+The baseline's exact window and initial window capital are required; in common
+window v2 this is **opening equity**, not an invented new genesis. Cash defaults
+to the explicit no-interest/no-transaction assumption. The passive BTC perpetual
+25% comparator defaults to unknown price/fee/funding until supplied; it never
+silently substitutes spot or current prices. Optional spot stays in a separate
+row. Benchmark trading net includes signed fees/funding, not infrastructure/AI;
+no causal delta against a strategy with different risk/exposure is inferred.
+Unknown or nonpositive opening equity leaves reference capital unavailable.
+
+The panel supports both inception metrics and persisted common-window metrics,
+showing original financial starts, boundary equity/positions/reservations, open
+PnL, prior obligations, window-scoped observed curves/drawdown and differences
+in risk/capital/exposure. Window drawdown is complete only with all exact
+five-minute boundary slots; observed lower bounds include known boundary values
+and preserve gaps. No curve bridges missing observations. Neither coverage nor
+zero-trade results establish maturity or operational readiness. G2-13.1 system
+telemetry remains available, with no new polling or provider calls.
+
+### Paged windows and offline full evaluation
+
+`experiment-datasets?kind=window` lists immutable paged-window IDs separately by
+indexed keyset (50/page). GET `experiments?account_id=...&dataset_id=btc-replay-window:...`
+returns `btc.paged-coverage.v1`: validated manifest window/counts, page count and
+bytes. Optional `page=N` verifies exactly one page's hash and reports its stream
+and row count. Financial metrics remain null: a manifest or one page is not a
+complete replay. The API never assembles the 64 MiB dataset in its serving budget.
+Allocation/comparison input is rejected for this manifest-only route.
+
+After exporting the immutable manifest and every `N.json` page with the existing
+replay CLI, run in an isolated offline environment with adequate memory:
+
+```sh
+node dist/btc-metrics-cli.js report-window /private/export-directory < /private/evaluation-input.json > /private/evaluation-report.json
+# Without cost/reference inputs: use an empty stdin, and costs remain unknown.
+```
+
+The CLI enforces bounded files, validates every page and the full replay before
+emitting `btc.paged-evaluation.v1`. Missing/corrupt/reordered pages fail; no partial
+metric escapes. Window PnL/flows and drawdown are from the global replay, never a
+sum of page returns. Operational allocation is applied once for the complete
+window. The CLI uses no database/provider; it does not create a productive export.
+The existing `report` action also accepts the persisted v2 comparison contract.
+
+Open the resulting report via **Abrir avaliação de replay completo** in the panel.
+The file stays in browser memory (maximum 8 MiB); there is no server upload or
+persistent storage. Import validates structure, account and numeric values,
+**not** the original replay or the producer's authenticity. It is visibly labelled
+operator-supplied offline output. Keep the verified export and input alongside it
+for reproduction. This separation is intentional: increasing serving-API memory,
+creating productive captures or claiming that an imported file was server-audited
+are outside this delivery. Fees/infrastructure remain unknown without inputs.
+
+Rollout affects API/web and the exact gateway method rule only. Preserve existing
+schema/pins and leave collection/equity admissions and paid consumption unchanged.
+Rollback may restore the prior API/web/gateway together; no schema downgrade or
+financial rewrite is needed. Production invoice completeness, current capacity,
+source freshness and full operational/economic acceptance remain independent.
