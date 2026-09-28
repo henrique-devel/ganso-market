@@ -27,6 +27,8 @@ import {
 } from "./baseline-inputs.js";
 import { canonicalBaselineJson } from "./baseline-manifest.js";
 
+import { baselinePeriodTx } from "./baseline-periods.js";
+
 export type RegistrationRow = {
   registration: BaselineRegistration;
   evidence_id: string;
@@ -266,6 +268,7 @@ export async function baselineEnvironmentTx(
   const env: BaselineEnvironment = {
     enabled: r.enabled,
     registration: r.registration,
+    period: await baselinePeriodTx(tx, r.registration, at),
     metadata: metadataValidation.compatible ? metadataValidation.frozen : null,
     account,
     market,
@@ -398,8 +401,11 @@ export async function nextBaselineBarTx(
   return (
     (
       await tx.query<{ bar: Date }>(
-        `SELECT g AS bar FROM generate_series($2::timestamptz,
-    LEAST($3::timestamptz,$2::timestamptz+interval '30 days'-interval '15 minutes'),interval '15 minutes') g
+        `WITH periods AS (
+      SELECT $2::timestamptz AS start_at, $2::timestamptz+interval '30 days' AS end_at
+      UNION ALL SELECT start_at,end_at FROM btc_baseline_periods WHERE account_id=$1 AND start_at <= $3
+    ) SELECT g AS bar FROM periods CROSS JOIN LATERAL generate_series(start_at,
+    LEAST($3::timestamptz,end_at-interval '15 minutes'),interval '15 minutes') g
     WHERE NOT EXISTS(SELECT 1 FROM btc_baseline_decisions d WHERE d.account_id=$1 AND d.bar_end_at=g)
     ORDER BY (g=$3::timestamptz) DESC,g LIMIT 1`,
         [

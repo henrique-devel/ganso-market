@@ -1,3 +1,12 @@
+import {
+  operateBaseline,
+  BASELINE_PERIOD_MS,
+  baselinePeriodTx,
+} from "../../src/storage/baseline-periods.js";
+import {
+  nextBaselineBarTx,
+  baselineRegistrationTx,
+} from "../../src/storage/baseline-store.js";
 import Fastify from "fastify";
 import type { QueryResultRow } from "pg";
 import { randomUUID } from "node:crypto";
@@ -323,6 +332,226 @@ describe.skipIf(!url)(
     afterEach(async () => {
       vi.useRealTimers();
       await f?.dispose();
+    });
+    const operate = (
+      input: Parameters<typeof operateBaseline>[3],
+      owner = "baseline-owner",
+    ) =>
+      withDeskWorker(pool, "baseline", (w) =>
+        operateBaseline(
+          Object.assign(w, { readOnly: pool.readOnly }),
+          owner,
+          "c".repeat(40),
+          input,
+        ),
+      );
+    const rearm = {
+      action: "rearm" as const,
+      operation_id: "reviewed-rearm",
+      reason: "disposable operator test",
+    };
+    const futurePeriod = () => ({
+      action: "register_period" as const,
+      operation_id: "successor-1",
+      reason: "prospective evaluation",
+      purpose: "economic_evaluation" as const,
+      start_at: iso(T + BASELINE_PERIOD_MS),
+    });
+    it("protects operator rearm by owner, retained feed/funding and preserves anchors across concurrent retries and a later pause", async () => {
+      await expect(operate(rearm, "wrong-owner")).rejects.toThrow(
+        "BTC_BASELINE_OWNER_REQUIRED",
+      );
+      now += 6000;
+      vi.setSystemTime(now);
+      await expect(operate(rearm)).rejects.toThrow("BTC_BASELINE_REARM_DATA");
+      await market();
+      const before = (await environment()).observed.checkpoint;
+      const result = await Promise.all([operate(rearm), operate(rearm)]);
+      expect(result[0]).toEqual(result[1]);
+      const after = (await environment()).observed.checkpoint;
+      expect(after.state).toBe("NORMAL");
+      expect(after.daily_anchor_usd_raw).toBe(before.daily_anchor_usd_raw);
+      expect(after.high_water_usd_raw).toBe(before.high_water_usd_raw);
+      await withDeskWorker(pool, "baseline", (w) =>
+        applyRisk(w, r.scope, {
+          action: "reduce_only",
+          operation_id: "later-pause",
+          reason: "operator pause",
+        }),
+      );
+      await operate(rearm);
+      expect((await environment()).observed.checkpoint.state).toBe(
+        "REDUCE_ONLY",
+      );
+      await expect(operate({ ...rearm, reason: "different" })).rejects.toThrow(
+        "IDEMPOTENCY_COLLISION",
+      );
+      expect(
+        (
+          await f.pool.query(
+            "SELECT 1 FROM btc_risk_events WHERE operation_id='baseline-rearm:reviewed-rearm'",
+          )
+        ).rowCount,
+      ).toBe(1);
+    });
+    it("refuses fresh feed with missing funding and an independent or expired recovery owner", async () => {
+      await expect(
+        operateBaseline(makeWorker(), "baseline-owner", "c".repeat(40), rearm),
+      ).rejects.toThrow("BTC_RECOVERY_OWNED");
+      const oldPool = pool;
+      now += 3600000;
+      vi.setSystemTime(now);
+      await market();
+      await expect(
+        operateBaseline(oldPool, "baseline-owner", "c".repeat(40), rearm),
+      ).rejects.toThrow("BTC_RECOVERY_FENCED");
+      await expect(
+        operate({ ...rearm, operation_id: "missing-funding" }),
+      ).rejects.toThrow("BTC_BASELINE_REARM_DATA");
+      expect(
+        (
+          await f.pool.query(
+            "SELECT 1 FROM btc_risk_events WHERE request->>'action'='rearm'",
+          )
+        ).rowCount,
+      ).toBe(0);
+    });
+    it("appends future periods once, refuses overlaps/backdating, retains pins and original ledger/registration", async () => {
+      await withDeskWorker(pool, "baseline", (w) =>
+        applyRisk(w, r.scope, {
+          action: "reduce_only",
+          operation_id: "before-period",
+          reason: "operator pause",
+        }),
+      );
+      const before = await ledger();
+      const registration = (
+        await f.pool.query(
+          "SELECT * FROM btc_baseline_registrations WHERE account_id='baseline'",
+        )
+      ).rows;
+      const input = futurePeriod();
+      const results = await Promise.all([operate(input), operate(input)]);
+      expect(results[0]).toEqual(results[1]);
+      await expect(operate({ ...input, reason: "changed" })).rejects.toThrow(
+        "IDEMPOTENCY_COLLISION",
+      );
+      await expect(
+        operate({
+          ...input,
+          operation_id: "overlap",
+          start_at: iso(T + BASELINE_PERIOD_MS + 900000),
+        }),
+      ).rejects.toThrow("PERIOD_OVERLAP");
+      await expect(
+        operate({
+          ...input,
+          operation_id: "original-overlap",
+          start_at: iso(T + 900000),
+        }),
+      ).rejects.toThrow("PERIOD_INVALID");
+      await expect(
+        f.pool.query("UPDATE btc_baseline_periods SET operation_id='rewrite'"),
+      ).rejects.toThrow();
+      await expect(
+        f.pool.query("DELETE FROM btc_baseline_periods"),
+      ).rejects.toThrow();
+      const periods = (
+        await f.pool.query(
+          "SELECT p.*, EXISTS(SELECT 1 FROM btc_retention_pins pin WHERE pin.object_id=p.evidence_id) AS pinned FROM btc_baseline_periods p",
+        )
+      ).rows;
+      expect(periods).toHaveLength(1);
+      expect(periods[0].pinned).toBe(true);
+      expect(periods[0].period.previous_evidence_id).toBe(
+        registration[0].evidence_id,
+      );
+      expect(await ledger()).toEqual(before);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT * FROM btc_baseline_registrations WHERE account_id='baseline'",
+          )
+        ).rows,
+      ).toEqual(registration);
+      expect((await environment()).observed.checkpoint.state).toBe(
+        "REDUCE_ONLY",
+      );
+    });
+    it("selects original and successor boundaries without early decisions or duplicate signals", async () => {
+      await operate(futurePeriod());
+      const select = (at: number) =>
+        pool.readOnly(1500, async (tx) =>
+          nextBaselineBarTx(
+            tx,
+            await baselineRegistrationTx(tx, "baseline"),
+            iso(at),
+          ),
+        );
+      expect(await select(T + BASELINE_PERIOD_MS - 900000 + 10000)).toBe(
+        iso(T + BASELINE_PERIOD_MS - 900000),
+      );
+      expect(await select(T + BASELINE_PERIOD_MS + 9999)).not.toBe(
+        iso(T + BASELINE_PERIOD_MS),
+      );
+      expect(await select(T + BASELINE_PERIOD_MS + 10000)).toBe(
+        iso(T + BASELINE_PERIOD_MS),
+      );
+      expect(
+        await pool.readOnly(1500, (tx) =>
+          baselinePeriodTx(tx, r, iso(T + BASELINE_PERIOD_MS - 1)),
+        ),
+      ).toBeUndefined();
+      now = T + BASELINE_PERIOD_MS + 10000;
+      vi.setSystemTime(now);
+      await Promise.all([
+        consumeBaselineAccount(pool, "baseline"),
+        consumeBaselineAccount(pool, "baseline"),
+      ]);
+      const current = (await decisions()).filter(
+        (d) => d.bar_end_at === iso(T + BASELINE_PERIOD_MS),
+      );
+      expect(current).toHaveLength(1);
+      expect(current[0].period?.payload.version).toBe("btc.baseline-period.v1");
+      expect(current[0].registration).toEqual(r);
+      expect(current[0].state).toBe("data_unavailable");
+      expect(await orders()).toHaveLength(0);
+      await expect(
+        operate({
+          ...futurePeriod(),
+          operation_id: "retroactive",
+          start_at: iso(T + BASELINE_PERIOD_MS),
+        }),
+      ).rejects.toThrow("PERIOD_INVALID");
+    });
+    it("expires original entries while retaining and managing the old position", async () => {
+      await seedBars();
+      await consumeBaselineAccount(pool, "baseline");
+      await step(1100, "100000");
+      const history = (await ledger()).events;
+      expect((await ledger()).projection.positions[0]!.quantity_btc_raw).toBe(
+        "100000",
+      );
+      now = T + BASELINE_PERIOD_MS;
+      vi.setSystemTime(now);
+      await market();
+      await consumeBaselineAccount(pool, "baseline");
+      expect(
+        (await orders()).filter((o) => o.order.intent === "reduce"),
+      ).toHaveLength(1);
+      await step(1100);
+      expect((await ledger()).projection.positions[0]!.quantity_btc_raw).toBe(
+        "0",
+      );
+      expect((await ledger()).events.slice(0, history.length)).toEqual(history);
+      expect(
+        (await orders()).filter((o) => o.order.intent === "open"),
+      ).toHaveLength(1);
+      expect(
+        (await decisions()).every(
+          (d) => d.bar_end_at < iso(T + BASELINE_PERIOD_MS),
+        ),
+      ).toBe(true);
     });
     it("freezes activation/start/owner/metadata, preserves unique independent genesis and refuses mutations", async () => {
       expect(r.start_at).toBe(baselineIso(T));

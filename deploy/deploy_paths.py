@@ -144,6 +144,8 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/test/trading/jev.pg.test.ts",
             "config/trading/baseline.json",
             "apps/api/src/baseline-activate-cli.ts",
+            "apps/api/src/baseline-operate-cli.ts",
+            "apps/api/src/storage/baseline-periods.ts",
             "apps/api/src/storage/baseline-store.ts",
             "apps/api/src/storage/baseline-runtime.ts",
             "apps/api/test/trading/baseline-runtime.pg.test.ts",

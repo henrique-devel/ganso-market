@@ -170,6 +170,8 @@ class LedgerDeploymentTests(unittest.TestCase):
             "apps/api/src/storage/baseline-manifest.ts",
             "apps/api/src/trading/strategies/baseline.ts",
             "apps/api/src/storage/baseline-inputs.ts",
+            "apps/api/src/storage/baseline-periods.ts",
+            "apps/api/src/baseline-operate-cli.ts",
             "apps/api/src/storage/baseline-policy.ts",
             "apps/api/src/storage/baseline-exits.ts",
             "apps/api/test/trading/baseline-fixture.ts",
