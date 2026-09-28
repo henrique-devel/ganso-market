@@ -392,3 +392,20 @@ links locais/scan/diff e checks obrigatórios do PR. Sem alteração de SQL fina
 ou testes de escrita produtivos; fixtures de CI não demonstram capacidade de produção.
 Deploy dispensado por documentação. **Aceite observado: diagnóstico e plano;
 ativação, sete dias, 90 dias e custo completo não aceitos.**
+
+### Contabilidade da prontidão visível — G2-13.1
+
+A leitura `btc.operational-readiness.v1` reutiliza `btc_market_records` e os
+registros de conta já contabilizados; não cria série SQL, arquivo ou cópia
+retida adicional (crescimento persistente incremental da funcionalidade: zero).
+O histórico faz duas buscas indexadas por intervalo, 672 intervalos de 15min
+em sete dias, dentro do budget HTTP/SQL existente de 1,5s. Mede somente bordas
+com tolerância de 60s: lacunas internas não são medidas e ausência de registro
+continua desconhecida. Não substitui o aceite contínuo de sete dias.
+
+CPU acumulada, RSS e uptime vêm do processo API, sem atribuir essas medidas ao
+host. Não há produtor novo, timer, serviço contratado, leitura de docker.sock
+ou reset de contadores. Fontes de host/container não compartilhadas com a API
+ficam indisponíveis. A série histórica de `capacity_series.py` permanece
+inativa/inalterada e não é reinterpretada como telemetria atual. Nenhuma destas
+leituras admite coleta nem resolve a folga/fatura ainda bloqueadas em G2-12.

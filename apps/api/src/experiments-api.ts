@@ -8,6 +8,12 @@ import {
 } from "./storage/metrics.js";
 import { loadReplayDataset } from "./storage/replaystore.js";
 
+import {
+  consumerReadiness,
+  readOperationalReadiness,
+  type ConsumerObservation,
+} from "./storage/operational-readiness.js";
+
 const datasetId = /^btc-replay:[a-f0-9]{64}$/;
 const accountId = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
 function params(request: FastifyRequest, allowed: string[]) {
@@ -184,22 +190,45 @@ export function registerExperimentRoutes(
           )
         ).rows[0];
         const recovery = (
-          await tx.query(
-            `SELECT h.account_id,h.generation::text,h.status,h.reason,h.lease_until,
+          await tx.query<
+            ConsumerObservation & {
+              account_id: string;
+              generation: string | null;
+              reason: string | null;
+              lease_alive: boolean;
+              checkpoint_at: Date | null;
+            }
+          >(
+            `SELECT a.account_id,h.generation::text,h.status,h.reason,h.lease_until,
+        d.enabled,r.ready AS consumer_ready,r.observed_at AS consumer_at,r.reason AS consumer_reason,
         h.lease_until > clock_timestamp() AS lease_alive, CASE WHEN c.generation=h.generation THEN c.recorded_at ELSE NULL END AS checkpoint_at
-        FROM btc_recovery_heads h LEFT JOIN LATERAL
+        FROM btc_ledger_accounts a LEFT JOIN btc_recovery_heads h USING(account_id)
+        LEFT JOIN btc_desk_controls d USING(account_id) LEFT JOIN btc_desk_runtime r USING(account_id) LEFT JOIN LATERAL
         (SELECT recorded_at,generation FROM btc_recovery_checkpoints WHERE account_id=h.account_id
          ORDER BY sequence DESC LIMIT 1) c ON true
-        WHERE h.account_id > $1 ORDER BY h.account_id LIMIT 21`,
+        WHERE a.account_id > $1 ORDER BY a.account_id LIMIT 21`,
             [q.after ?? ""],
           )
         ).rows;
         const now = deps.clock();
+        const operational = await readOperationalReadiness(tx, now);
+        const accounts = recovery.slice(0, 20).map((row) => ({
+          ...row,
+          readiness: consumerReadiness(row, now.getTime()),
+        }));
         const age = head
           ? now.getTime() - new Date(head.last_capture_at).getTime()
           : null;
         return {
           as_of: now.toISOString(),
+          operational: {
+            ...operational,
+            account_scope: "current_page",
+            accounts_ready:
+              accounts.length > 0 &&
+              accounts.every((a) => a.readiness.status === "ready"),
+            risk_authorization: false,
+          },
           capacity,
           worker_limits: {
             raw_bytes: "4294967296",
@@ -221,7 +250,7 @@ export function registerExperimentRoutes(
             continuity: "unproven",
             stale_after_ms: 60000,
           },
-          recovery: recovery.slice(0, 20),
+          recovery: accounts,
           next_cursor: recovery.length > 20 ? recovery[19]!.account_id : null,
         };
       });
