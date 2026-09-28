@@ -102,12 +102,22 @@ wait_for_code 200 "$gateway/api/health/ready"
 wait_for_code 401 "$gateway/api/auth/session"
 wait_for_code 404 "$gateway/api/polymarket/overview"
 wait_for_code 401 "$gateway/api/trading/accounts"
-# G2-06.1: exact desk reads reach authentication; commands remain closed.
+# Exact reads reach authentication; only the private report POST is allowed.
 for path in accounts account positions orders experiment-datasets experiments experiment-system; do
   wait_for_code 401 "$gateway/api/trading/$path"
   code="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST "$gateway/api/trading/$path")"
-  test "$code" = 404
+  if [ "$path" = experiments ]; then
+    test "$code" = 401
+  else
+    test "$code" = 404
+  fi
 done
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X DELETE "$gateway/api/trading/experiments")" = 404
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Content-Type: application/json' --data '{"private_input":"synthetic-billing-body-must-not-be-logged"}' "$gateway/api/trading/experiments")" = 401
+if docker compose logs --no-color nginx api web | grep --fixed-strings 'synthetic-billing-body-must-not-be-logged' >/dev/null; then
+  echo "compose smoke failed: private report body reached logs" >&2
+  exit 1
+fi
 wait_for_code 404 "$gateway/api/trading/unpublished"
 
 docker compose run --rm --no-deps migrate
