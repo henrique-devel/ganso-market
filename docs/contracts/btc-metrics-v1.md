@@ -200,3 +200,51 @@ Physical retained row sizes were about 7.3–7.7 kB and root transaction WAL abo
 projection. At twelve slots/hour, two unshared fixture closures would be
 490,920 B/h before other workloads; real source payloads can be larger. This is
 why lower root cadence alone does not establish the 90-day storage gate.
+
+## Observed curve and drawdown — G2-14.2
+
+New captures use `btc.replay.captured.v2` and the required
+`btc.replay-equity.v1` extension; reports use `btc.metrics.v2`. Readers still
+accept unmodified v1 artifacts and keep their original null fields/results.
+The CLI version response lists both supported report versions. Older binaries
+must not read v2 captures; rollback keeps this reader when v2 artifacts exist.
+No migration, new producer, historical rewrite or production admission is added.
+
+The bounded capture includes all persisted observations visible at its snapshot
+(up to 4096, failing rather than truncating), their context and capture evidence,
+also in reference mode. The existing 16 MiB, object, time and financial prefix
+bounds remain. This is not the multi-cut export of G2-14.4. A missing slot remains
+missing. New roots/dependencies are charged and pinned under existing gates;
+this delivery does not establish capacity or authorize capture in production.
+
+Offline replay verifies each observation's account/inception, ordered unique
+five-minute slot, timestamp, immutable ledger/reservation prefix hashes, complete
+transaction boundary and recomputed financial values. Verification refuses more
+than 262,144 cumulative prefix events (ledger plus reservations), bounding CPU
+work even when many samples share long prefixes. It uses the embedded mark
+and capture at the observation time; missing evidence fails verification, while
+an explicitly unavailable mark retains null equity. Reservations are holds, not
+expenses; slippage is already in actual fill prices. Late funding affects only
+prefixes that contain it, retaining the earlier observations unchanged.
+
+The curve reports actual observation times, equity, unrealized PnL and equity
+minus cumulative external flows. Drawdown includes the verified initial allocation as its opening anchor and
+uses the adjusted samples, USD6 differences and
+positive-peak ppm; zero/negative equity is preserved and loss may exceed 100%.
+Simple returns remain null when external flows exist (no time-weighted return
+claim). Operational bills remain separate and unknown without allocation.
+
+Coverage counts slots from unchanged financial inception through capture cut,
+including the partial first/last slots. Any absent or unavailable slot makes the
+full-window drawdown incomplete/null. `observed_max_usd_raw` and
+`observed_max_ppm` retain lower bounds from known samples, including across gaps;
+they are not a complete-window maximum. Even complete slot coverage observes only
+the sample cadence, never the intrabar extreme (`intrabar_extreme: null`).
+No interpolation, resampling or removal of prior losses is performed.
+
+Final open PnL is recomputed from the final ledger using the latest observation's
+embedded mark/capture **at the final cut**, with the existing freshness and gap
+checks. A stale terminal mark returns null even if the last stored sample was
+valid. A closed account needs no mark. This read makes no SQL/provider calls,
+creates no financial activity and confers no risk authorization. API and CLI use
+the same projection. Pilot/evaluation periods do not reset financial inception.
