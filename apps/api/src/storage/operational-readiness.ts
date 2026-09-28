@@ -26,7 +26,7 @@ export type ConsumerObservation = {
 export function consumerReadiness(row: ConsumerObservation, now: number) {
   const reasons: string[] = [];
   if (row.enabled !== true) reasons.push("consumer_not_enabled");
-  const age = freshness(row.consumer_at, now, 5000);
+  const age = freshness(row.consumer_at, now, 4999);
   if (age !== "recent") reasons.push(`consumer_${age}`);
   if (row.consumer_ready !== true) reasons.push("consumer_not_ready");
   if (row.status !== "ready") reasons.push("reconciliation_not_ready");

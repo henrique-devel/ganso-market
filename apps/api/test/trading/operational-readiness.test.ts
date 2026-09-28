@@ -169,3 +169,41 @@ it("distinguishes interval edge samples, gaps and absent history without certify
     sampling: "interval_edges_15m_internal_gaps_unmeasured",
   });
 });
+
+it("keeps exact consumer expiry exclusive and admits only two fresh matching channels", async () => {
+  expect(
+    consumerReadiness(
+      { ...ready, consumer_at: new Date(now.getTime() - 5000) },
+      now.getTime(),
+    ).reasons,
+  ).toContain("consumer_stale");
+  const channels = {
+    book: { status: "healthy", needs_revalidation: false, gap_epoch: 2 },
+    context: { status: "healthy", needs_revalidation: false, gap_epoch: 2 },
+  };
+  const query = vi
+    .fn()
+    .mockResolvedValueOnce({
+      rows: ["book", "context"].map((kind) => ({
+        kind,
+        source_at: now,
+        received_at: now,
+        quality: "fresh",
+        gap_epoch: 2,
+      })),
+    })
+    .mockResolvedValueOnce({
+      rows: [
+        {
+          at: now,
+          restarted: false,
+          socket: { alive: true, connected: true },
+          channels,
+        },
+      ],
+    })
+    .mockResolvedValueOnce({ rows: [] });
+  const result = await readOperationalReadiness({ query } as SqlExecutor, now);
+  expect(result.status).toBe("sources_recent");
+  expect(result.channels.every((c) => c.reasons.length === 0)).toBe(true);
+});
