@@ -17,6 +17,10 @@ replay e histórico permanecem. O estado medido e a decisão de hospedagem estã
 
 ## G2-10.1 — Permanecer no host provisionado (27/09/2026 UTC)
 
+Atualização: o [plano G2-12.1 de 28/09](ganso-2-capacity-plan.md) revalida
+capacidade/custo e substitui as projeções abaixo para nova admissão. As medições
+de G2-10.1 permanecem históricas; a permanência contida continua vigente.
+
 **Decisão: permanecer, sem migração, contratação ou aumento de gasto.** Preservar
 API/painel/PostgreSQL e manter o coletor parado. Isso permite consulta ao acervo;
 não aprova coleta contínua, sete dias de operação nem sustentabilidade financeira.
