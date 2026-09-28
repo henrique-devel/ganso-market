@@ -1,3 +1,4 @@
+import { sampleAdmittedEquity } from "./equity-history.js";
 import {
   createDeskRuntimeDiagnostics,
   type DeskFailureFields,
@@ -338,9 +339,21 @@ export function startDeskConsumer(
     timer: ReturnType<typeof setTimeout> | undefined;
   let funding: Promise<void> | null = null;
   const lastFunding = new Map<string, number>();
+  let lastEquity = 0;
+  let equity: Promise<void> | null = null;
   let running: Promise<void> = Promise.resolve();
   const tick = async () => {
     const selection = diagnostics.start("select_accounts");
+    if (!equity && Date.now() - lastEquity >= 300000) {
+      lastEquity = Date.now();
+      equity = sampleAdmittedEquity(pool)
+        .catch(() => {
+          log("BTC_EQUITY_SAMPLE_UNAVAILABLE");
+        })
+        .finally(() => {
+          equity = null;
+        });
+    }
     try {
       const accounts = await pool.readOnly(
         1500,
@@ -433,6 +446,7 @@ export function startDeskConsumer(
     clearTimeout(timer);
     await running;
     await funding;
+    await equity;
     await challenger.stop();
   };
 }

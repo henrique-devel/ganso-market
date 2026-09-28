@@ -1,3 +1,4 @@
+import { sampleAdmittedEquity } from "../src/storage/equity-history.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DatabasePool, SqlExecutor } from "../src/database.js";
 import { consumeBaselineAccount } from "../src/storage/baseline-runtime.js";
@@ -13,6 +14,10 @@ vi.mock("../src/venues/hyperliquid/funding.js", () => ({
 }));
 vi.mock("../src/storage/challenger-operations.js", () => ({
   createOperationalChallenger: () => ({ tick: vi.fn(), stop: vi.fn() }),
+}));
+
+vi.mock("../src/storage/equity-history.js", () => ({
+  sampleAdmittedEquity: vi.fn(),
 }));
 
 function fixture() {
@@ -59,6 +64,7 @@ function fixture() {
 }
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.mocked(sampleAdmittedEquity).mockReset().mockResolvedValue();
   vi.setSystemTime(new Date("2026-09-27T21:00:00Z"));
   vi.mocked(consumeBaselineAccount).mockReset();
   vi.mocked(fetchFinalBtcFunding)
@@ -148,4 +154,23 @@ describe("desk consumer catch diagnostics", () => {
     expect(consumeBaselineAccount).not.toHaveBeenCalled();
     await stop();
   });
+});
+
+it("equity runs once per five minutes without delaying trading and shutdown joins it", async () => {
+  const { pool } = fixture();
+  const log = vi.fn();
+  let complete!: () => void;
+  vi.mocked(sampleAdmittedEquity).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        complete = resolve;
+      }),
+  );
+  const stop = startDeskConsumer(pool, log);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(consumeBaselineAccount).toHaveBeenCalled();
+  expect(sampleAdmittedEquity).toHaveBeenCalledTimes(1);
+  const stopped = stop();
+  complete();
+  await stopped;
 });

@@ -121,3 +121,82 @@ labelled stale; a recent capture does not certify per-channel freshness or
 continuity. Docker status/restarts and host filesystem capacity are unavailable
 in this API and stay null. Worker ceilings and SQL quotas are shown separately.
 Opening these screens does not restart a collector or reconcile an account.
+
+
+## Persisted equity observations — G2-14.1
+
+`btc.equity-observation.v1` is independent of the v1 report/replay artifact.
+G2-14.2/4 integrate the curve and window export; existing artifacts keep their
+original meaning. `verifyEquityObservation` verifies a stored cut with immutable
+ledger/reservation prefixes and retained context/capture; it does not manufacture
+missing observations or use current prices. No data discard is enabled.
+
+The existing API consumer schedules at most one sampling task every five minutes,
+with two sequential accounts maximum, without delaying its trading loop. No new
+service, external call or paid API. Migration 0048 seeds **no admissions**.
+`btc_equity_admissions` is an operational gate, not a risk permission. Production
+activation is blocked by G2-12.3. A future admitted window must be prospective,
+no longer than 90 days, name its approved capacity basis, and cover total logical,
+physical, pinned-source and WAL costs. Removing an admission stops new samples
+without deleting observations; it never rearms trading. No public write route.
+
+Each sample belongs to the UTC five-minute slot in which it was actually taken;
+`observed_at` is its actual database clock, not an invented slot-boundary mark.
+Only the first committed observation per account/slot survives retries. A crash
+rolls back sample, charge, edges and pin together. Restart skips elapsed slots.
+No interpolation, backfill, resampling after a late cost or current-price fallback.
+
+Knowledge is the REPEATABLE READ visible snapshot, recorded as immutable ledger
+and reservation sequence prefixes plus canonical hashes. Timestamp alone does
+not imply a concurrent transaction was visible/committed. The entire visible
+prefix is accepted or refused (future economic/recorded events are refused),
+never part of a transaction. Both prefixes are bounded to 4096 events; overflow
+fails explicitly and leaves a missing slot. Later funding/fees, even with earlier
+economic times, cannot change a stored cut. Ledger/reservation SQL tables are
+append-only; their prefixes are retained without copying them every five minutes.
+
+Amounts remain fixed-point USD6/BTC8. Equity = initial capital + external flows
++ realized PnL + signed fees + signed funding + marked unrealized PnL. Reservations
+are separately reported holds, never debited again. Funding is the known paper
+ledger approximation, not proof of complete venue settlement. Mark carries source,
+receipt, freshness basis and pinned context/capture; HTTP Date is snapshot evidence,
+not venue event time. Missing, stale, future or gap-affected mark gives null equity
+for open positions. Flat equity needs no mark; mark quality remains explicit.
+
+Financial inception is unchanged. A sample links the selected prospective
+baseline successor (and its pilot/evaluation purpose) when present, and the
+original registration. Original purpose remains unspecified rather than inferred
+as an economic evaluation. Manual inception is the account experiment's start.
+Sampling cannot reset a balance, shorten an original period or hide its losses.
+
+### Capacity and rollout
+
+The original plan reserves 491,520 B/h for two accounts × 60 × 4096 B. Actual
+retention charging includes 1024 B per dependency edge; a 4096 B sample cap is
+therefore insufficient. This implementation instead caps the **complete new root
+charge** at 12,288 B per account/five-minute slot, refusing larger samples without
+truncation. Maximum two-account root rate: 294,912 B/h; 49,545,216 B/7 days,
+212,336,640 B/30 days, 637,009,920 B/90 days. This is below the plan's root reserve;
+it is **not** the total storage cost or a sustainability claim.
+
+Pinned existing mark/capture/metadata closure extends retention beyond normal raw
+expiry and must be added to the admission calculation (shared dependencies only
+once). Index pages, WAL, temporary work and filesystem headroom also require their
+own measurement. Root writes check the 6 GiB worker logical guard, retaining the
+existing SQL quotas, HOLD and pins. Fiscal coverage and filesystem admission are
+external prerequisites, not inferred from the SQL guard. No production admission
+is created by code, startup, migration or this delivery.
+
+Deploy schema48 then the API, leaving admissions empty. Validate module presence,
+zero observations/admissions, health, HOLD and existing service identities.
+Rollback first disables admissions, then restores the previous API; keep schema48
+and all observations/pins. Projection/schema46 and baseline/schema47 compatibility
+requirements remain. Production remains unactivated until actual admission.
+
+Disposable PostgreSQL fixtures (synthetic HTTP mark) measured a 5,048 B root
+charge and 20,455 B complete pinned closure, including preexisting source objects.
+Physical retained row sizes were about 7.3–7.7 kB and root transaction WAL about
+3.9–4.5 kB in these small fixtures; neither includes a sustained-load filesystem
+projection. At twelve slots/hour, two unshared fixture closures would be
+490,920 B/h before other workloads; real source payloads can be larger. This is
+why lower root cadence alone does not establish the 90-day storage gate.
