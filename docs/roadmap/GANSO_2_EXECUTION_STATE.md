@@ -10,7 +10,7 @@ bugs nem remoção física. Dados BTC e dependências continuam protegidos.
 
 | Entrega | Estado | Resultado / próxima ação |
 | --- | --- | --- |
-| Retirada de escopo Polymarket | in-progress | Documentos, índices, autorização e roadmap alinhados; revisão/CI, merge e sincronização documental no servidor pendentes. |
+| Retirada de escopo Polymarket | code-verified | [PR #302](https://github.com/henrique-devel/ganso-market/pull/302); documentos, índices, autorização e roadmap alinhados. 705 alvos de links locais, diff/scan e classificador só texto verificados; CI, merge e sincronização documental no servidor acompanhados no PR. Código/dados ainda pendentes nas linhas seguintes. |
 | Retirada de código/operação Polymarket | pending | Autorizada; inventariar consumidores BTC e remover componentes exclusivos em entrega própria. |
 | Descarte de dados Polymarket | pending | Autorizado; delimitar conjunto exclusivo e dependências BTC, executar e medir recuperação de espaço em entrega própria. |
 
