@@ -10,6 +10,8 @@ tracking: docs/roadmap/GANSO_2_EXECUTION_STATE.md
 
 # G2-15.3 — Ativar e validar a comparação Jev real
 
+**Adiado por decisão de 28/09/2026.** JEV é evolução futura conforme [escopo vigente](../../docs/SCOPE.md). Não executar esta sessão no marco BTC atual; o contrato abaixo só se aplica após seleção futura explícita.
+
 Execute somente esta sessão. Leia o [protocolo](00-protocolo.md), o contrato comum e a [seção S5 da RFC-053](../../docs/rfcs/RFC-053-ganso-2-prontidao-operacional.md#s5), e sua linha no [estado único](../../docs/roadmap/GANSO_2_EXECUTION_STATE.md). Consulte o [roadmap](../../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md) somente para dependência ou decisão concreta. Não reler todo o histórico.
 
 ## Entrega

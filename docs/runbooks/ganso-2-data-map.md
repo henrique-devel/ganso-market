@@ -1,5 +1,7 @@
 # G2-02.1 — Mapa de preservação e retenção
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 Contrato documental `g2-02.1-v1`, base `a8e4833`, [RFC-044/S1](../rfcs/RFC-044-ganso-2-preservacao-retencao.md#s1), RF-15/RF-16.
 **O conjunto liberado para descarte é vazio.** Financeiro, versões, decisões e
 corpus de pesquisa permanecem no banco; o raw legado continua sob HOLD integral.

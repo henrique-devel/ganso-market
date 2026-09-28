@@ -1,5 +1,7 @@
 # Roadmap operacional — Ganso Market 2.0
 
+**Revisado em 28/09/2026:** [escopo vigente](../SCOPE.md). Polymarket aposentada; retirada autorizada. JEV adiado. Prioridade atual: BTC/Hyperliquid operante e avaliação da baseline sem IA.
+
 Criado em **27/09/2026**, a pedido do proprietário, após análise de prontidão. **Sete etapas, 22 prompts; nenhuma executada por esta publicação.** O roteiro G2-00–10 encerrou a construção nos aceites delimitados; G2-11–17 tratam as lacunas para operar e avaliar.
 
 [Abrir os prompts](../../prompts/ganso-2-operacao/README.md) · [Protocolo](../../prompts/ganso-2-operacao/00-protocolo.md) · [RFC-053](../rfcs/RFC-053-ganso-2-prontidao-operacional.md) · [Acompanhamento único](GANSO_2_EXECUTION_STATE.md).
@@ -18,17 +20,22 @@ Código examinado mostrou: reconexões limitadas por sessão; equity/drawdown in
 | G2-12 — Capacidade e custo sustentáveis | Plano → persistência → admissão/retomada | Coleta cabe no período planejado e preserva reserva, evidência e orçamento. |
 | G2-13 — Jornada paper e retomada controlada | Prontidão → manual → períodos/rearme → baseline | Operações e saídas reconciliadas; prontidão sem sinal não equivale a trade. |
 | G2-14 — Avaliação completa | Equity → drawdown → janela comum → replay → painel/custos | Contas com inícios distintos são comparáveis e a janela não é truncada. |
-| G2-15 — Jev real | Acesso/cobertura → configuração/orçamento → ativação | Resposta real, custo e origem comprovados; credencial ausente não é ativação. |
+| G2-15 — JEV futuro (adiado) | Acesso/cobertura → configuração/orçamento → ativação | Resposta real, custo e origem comprovados; credencial ausente não é ativação. |
 | G2-16 — Aceite operacional | Falhas/retomada → sete dias | Sete dias efetivos e critérios de prontidão aprovados no escopo declarado. |
 | G2-17 — Diagnóstico econômico | Cobertura → decisão | Cerca de 30 dias futuros, custos completos e conclusão proporcional à amostra. |
 
-Fluxo principal: **estabilidade → capacidade → jornada paper → avaliação → Jev → sete dias → diagnóstico econômico**. A prioridade segue essa ordem; dependências técnicas exatas estão nos prompts. Nenhuma sessão inicia a seguinte automaticamente.
+Fluxo principal: **estabilidade → capacidade → jornada paper → avaliação BTC → sete dias → diagnóstico econômico**. A prioridade segue essa ordem; dependências técnicas exatas estão nos prompts. Nenhuma sessão inicia a seguinte automaticamente.
 
-**Primeiro prompt:** [G2-11.1 — diagnóstico e erros](../../prompts/ganso-2-operacao/g2-11-1-diagnostico-e-erros.md).
+**Próxima entrega:** retirada do escopo Polymarket; depois, código/operação e dados conforme inventário. Retomar a sequência BTC pela linha atual do acompanhamento, sem reiniciar blocos concluídos.
 
-**Trabalho adiantável:** G2-15.1 e preparação de G2-15.2 podem começar após diagnóstico, sem cobrança. Código de métricas pode avançar com ambiente descartável se falta sinal de mercado/decisão externa; somente ativação e aceite dependentes ficam retidos. Sessões concorrentes exigem pedido e coordenação dos arquivos, não são criadas por este roteiro.
+**Trabalho independente:** métricas e correções BTC podem avançar em ambiente
+descartável quando faltar capacidade ou sinal de mercado. Preparação JEV fica
+adiada. Sessões concorrentes exigem pedido e coordenação.
 
-## Quando Jev entra
+## JEV — evolução futura, fora do marco atual
+
+G2-15.1–3 ficam adiados até seleção futura explícita. Os passos abaixo são
+contratos para essa evolução, não tarefas atuais nem dependências de G2-16/17.
 
 1. Preparar conta, chave por canal protegido, tarifa fixada, cobertura e limite em G2-15.1. A documentação oficial atual é revalidada nessa sessão; preço publicado não comprova saldo.
 2. Entregar configuração/provisionamento e ciclo mensal em G2-15.2. O backend atual procura `/etc/ganso/jev/config.json` e `/run/secrets/jev_api_key`; não basta adicionar uma variável genérica. Chave não autoriza gasto.
@@ -56,12 +63,12 @@ As datas antigas 03/10 e 26/10 eram retornos condicionais, não compromissos des
 
 | Decisão concreta | Preparação responsável | Como seguir enquanto faltar |
 | --- | --- | --- |
-| Capacidade não cabe preservando acervo | G2-12.1 delimita bytes, alternativa, custo e gates; descarte exige conjunto exato | Publicar correções/código seguro; não retomar coleta sem capacidade |
+| Capacidade BTC ainda insuficiente | Revalidar após retirada autorizada do legado; preservar dados BTC e conferir conjunto exato | Publicar correções/código seguro; não retomar coleta sem capacidade |
 | Acesso e consumo Jev | G2-15.1 confirma credencial/cobertura sem expor segredo; 15.2 entrega configuração | Baseline e avaliação sem IA continuam |
 | Fatura/custo desconhecido | G2-12.1/14.5 identificam valores e método de rateio faltantes | Trading continua reportado; resultado após custos permanece desconhecido |
 | Horizonte precisa novo período | G2-13.3 prepara registro prospectivo e continuidade sem capital novo | Preservar saídas/histórico e suspender novas entradas expiradas |
 
-Reutilizar autorizações anteriores aplicáveis. Compra, migração, descarte, mudança de caps/perímetro e dinheiro real não estão aprovados por criar prompts. Backup continua fora do pré-requisito até o marco operacional, conforme decisão vigente. Não reativar Polymarket para concluir BTC.
+Reutilizar autorizações anteriores aplicáveis. Compra, migração, descarte, mudança de caps/perímetro e dinheiro real não estão aprovados por criar prompts. Backup continua fora do pré-requisito até o marco operacional, conforme decisão vigente. A autorização de 28/09 cobre retirada do legado em local e produção; delimitar conjuntos e preservar dependências BTC. Não reativar Polymarket.
 
 ## Registro e conclusão
 

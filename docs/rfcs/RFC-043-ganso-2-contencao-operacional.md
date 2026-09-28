@@ -1,5 +1,7 @@
 # RFC-043 — Contenção e estabilidade do legado
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 **Status:** accepted para execução de seus prompts quando selecionados. **Data:** 22/09/2026. **Marco:** G2-01. Criar esta RFC não implementa nem ativa o resultado.
 
 **Fonte:** [PRD 2.0](../PRD-GANSO-2.0.md), seções 2, 4 e 10.2. **Requisitos:** RF-10, RF-15, RF-16. **Roteiro:** [prompts](../../prompts/ganso-2/README.md). **Acompanhamento:** [estado 2.0](../roadmap/GANSO_2_EXECUTION_STATE.md).

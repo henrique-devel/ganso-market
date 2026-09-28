@@ -1,10 +1,28 @@
 # Estado de execução — Ganso Market 2.0
 
+## Decisão vigente — 28/09/2026
+
+[Escopo BTC/Hyperliquid](../SCOPE.md): Polymarket aposentada; retirada de escopo,
+código/operação e dados exclusivos autorizada desde local até produção. JEV
+adiado até seleção futura. Esta decisão substitui preservação obrigatória e
+pendências exclusivas do legado, inclusive issue 198; não afirma correção dos
+bugs nem remoção física. Dados BTC e dependências continuam protegidos.
+
+| Entrega | Estado | Resultado / próxima ação |
+| --- | --- | --- |
+| Retirada de escopo Polymarket | code-verified | [PR #302](https://github.com/henrique-devel/ganso-market/pull/302); documentos, índices, autorização e roadmap alinhados. 705 alvos de links locais, diff/scan e classificador só texto verificados; CI, merge e sincronização documental no servidor acompanhados no PR. Código/dados ainda pendentes nas linhas seguintes. |
+| Retirada de código/operação Polymarket | pending | Autorizada; inventariar consumidores BTC e remover componentes exclusivos em entrega própria. |
+| Descarte de dados Polymarket | pending | Autorizado; delimitar conjunto exclusivo e dependências BTC, executar e medir recuperação de espaço em entrega própria. |
+
+Resultados datados abaixo são históricos; não restabelecem preservação do
+acervo aposentado nem preparação JEV imediata.
+
+
 Atualizado em **28/09/2026**. [PRD vigente](../PRD-GANSO-2.0.md) · [Roteiro dos prompts](../../prompts/ganso-2/README.md) · [Protocolo enxuto](../../prompts/ganso-2/00-protocolo.md).
 
 ## Continuação planejada — G2-11–17 (27/09/2026)
 
-O proprietário solicitou o [roadmap operacional](GANSO_2_OPERATIONAL_ROADMAP.md) e [22 prompts](../../prompts/ganso-2-operacao/README.md) para seguir a análise de prontidão. **G2-11.1 production-verified no diagnóstico/API; G2-11.2 code-verified, correção publicada e API implantada/verificada, aceite operacional pendente; G2-11.3 code-verified, recuperação publicada contida e sem ativação/aceite sustentado; G2-12.1 blocked para admissão, com plano documental entregue; G2-12.2 code-verified, redução não destrutiva implantada na API, sustentabilidade/admissão ainda bloqueadas; G2-12.3 blocked após revalidação produtiva, sem retomada; G2-13.1 production-verified na prontidão visível/API/web, operação permanece não pronta; G2-13.2 blocked para jornada produtiva, checks independentes concluídos sem operação; G2-13.3 code-verified, mecanismo de períodos/rearme implantado e leitores verificados, sem rearme nem sucessor produtivo; G2-13.4 blocked para retomada/ciclo automático produtivo, verificações independentes concluídas; G2-14.1 code-verified, histórico/contrato implantados com zero admissões/amostras, ativação bloqueada; G2-14.2 code-verified, curva/drawdown publicados e API implantada, leitura v1 verificada e aceite v2 bloqueado; demais 10 sessões pending. Próxima sessão autorizada do fluxo sequencial: G2-14.3, janela comum; ativação continua condicionada aos gates; decisão de armazenamento/tetos e fatura permanecem pendentes em G2-12.1. Coletor permanece contido; correção de código não equivale a retomada.** Preparação Jev pode ser adiantada; ativação e janelas seguem os gates da RFC-053. Este é o acompanhamento único; o fecho de 45 sessões abaixo permanece histórico e não inclui estas novas linhas.
+O proprietário solicitou o [roadmap operacional](GANSO_2_OPERATIONAL_ROADMAP.md) e [22 prompts](../../prompts/ganso-2-operacao/README.md) para seguir a análise de prontidão. **G2-11.1 production-verified no diagnóstico/API; G2-11.2 code-verified, correção publicada e API implantada/verificada, aceite operacional pendente; G2-11.3 code-verified, recuperação publicada contida e sem ativação/aceite sustentado; G2-12.1 blocked para admissão, com plano documental entregue; G2-12.2 code-verified, redução não destrutiva implantada na API, sustentabilidade/admissão ainda bloqueadas; G2-12.3 blocked após revalidação produtiva, sem retomada; G2-13.1 production-verified na prontidão visível/API/web, operação permanece não pronta; G2-13.2 blocked para jornada produtiva, checks independentes concluídos sem operação; G2-13.3 code-verified, mecanismo de períodos/rearme implantado e leitores verificados, sem rearme nem sucessor produtivo; G2-13.4 blocked para retomada/ciclo automático produtivo, verificações independentes concluídas; G2-14.1 code-verified, histórico/contrato implantados com zero admissões/amostras, ativação bloqueada; G2-14.2 code-verified, curva/drawdown publicados e API implantada, leitura v1 verificada e aceite v2 bloqueado; demais sete sessões pending e três sessões JEV adiadas. Próxima sessão autorizada do fluxo sequencial: G2-14.3, janela comum; ativação continua condicionada aos gates; decisão de armazenamento/tetos e fatura permanecem pendentes em G2-12.1. Coletor permanece contido; correção de código não equivale a retomada.** JEV fica adiado por decisão de 28/09; os gates BTC seguem a RFC-053. Este é o acompanhamento único; o fecho de 45 sessões abaixo permanece histórico e não inclui estas novas linhas.
 
 A análise de 27/09 09:49–09:53 UTC confirmou coletor parado e acrescentou consumidor baseline indisponível, 250 falhas genéricas em 15 min, 39 decisões e zero ordens/fills. Jev sem arquivos configurados/budget/calls. Código apresenta lacunas de equity, janela comum e escala do replay detalhadas no novo roadmap. São observações daquela análise, **não nova medição desta publicação**. Sete dias/30 dias continuam não comprovados. Não houve restart, rearme, chamada paga, alteração de orçamento ou limpeza por criar o plano.
 
@@ -251,9 +269,9 @@ Cobertura: OPS-01..07, DB-01..04, DATA-01..05, FIN-01..07, QA-01, EXEC-01..05, F
 | [G2-14.3](../../prompts/ganso-2-operacao/g2-14-3-janela-comum.md) | pending | Planejada; comparar baseline e jev com inícios diferentes. Nenhuma execução nesta publicação. |
 | [G2-14.4](../../prompts/ganso-2-operacao/g2-14-4-replay-da-janela.md) | pending | Planejada; cobrir a janela completa sem truncar replay. Nenhuma execução nesta publicação. |
 | [G2-14.5](../../prompts/ganso-2-operacao/g2-14-5-custos-referencias-painel.md) | pending | Planejada; completar custos, referências e painel de avaliação. Nenhuma execução nesta publicação. |
-| [G2-15.1](../../prompts/ganso-2-operacao/g2-15-1-preparar-acesso-jev.md) | pending | Planejada; preparar acesso, tarifa e cobertura jev. Nenhuma execução nesta publicação. |
-| [G2-15.2](../../prompts/ganso-2-operacao/g2-15-2-configuracao-e-orcamento-jev.md) | pending | Planejada; entregar configuração e ciclo de orçamento jev. Nenhuma execução nesta publicação. |
-| [G2-15.3](../../prompts/ganso-2-operacao/g2-15-3-ativar-jev-real.md) | pending | Planejada; ativar e validar a comparação jev real. Nenhuma execução nesta publicação. |
+| [G2-15.1](../../prompts/ganso-2-operacao/g2-15-1-preparar-acesso-jev.md) | superseded | Adiada por decisão de 28/09: JEV é evolução futura. Retomar somente após seleção explícita; não bloqueia aceite BTC.
+| [G2-15.2](../../prompts/ganso-2-operacao/g2-15-2-configuracao-e-orcamento-jev.md) | superseded | Adiada por decisão de 28/09: JEV é evolução futura. Retomar somente após seleção explícita; não bloqueia aceite BTC.
+| [G2-15.3](../../prompts/ganso-2-operacao/g2-15-3-ativar-jev-real.md) | superseded | Adiada por decisão de 28/09: JEV é evolução futura. Retomar somente após seleção explícita; não bloqueia aceite BTC.
 | [G2-16.1](../../prompts/ganso-2-operacao/g2-16-1-falhas-e-janela-operacional.md) | pending | Planejada; verificar recuperação e iniciar observação operacional. Nenhuma execução nesta publicação. |
 | [G2-16.2](../../prompts/ganso-2-operacao/g2-16-2-aceite-sete-dias.md) | pending | Planejada; concluir o aceite de sete dias de estabilidade. Nenhuma execução nesta publicação. |
 | [G2-17.1](../../prompts/ganso-2-operacao/g2-17-1-cobertura-economica.md) | pending | Planejada; verificar cobertura da janela econômica prospectiva. Nenhuma execução nesta publicação. |
