@@ -284,14 +284,16 @@ async function capture(
     ];
     requireReplay(refs.length <= limits.objects, "OBJECT_LIMIT");
     // Missing legacy references are retained as fidelity warnings, not fabricated.
-    if (refs.length)
+    for (let i = 0; i < refs.length; i += 256) {
+      requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
       for (const row of (
         await tx.query<{ object_id: string }>(
           "SELECT object_id FROM btc_retention_objects WHERE object_id=ANY($1::text[])",
-          [refs],
+          [refs.slice(i, i + 256)],
         )
       ).rows)
         roots.add(row.object_id);
+    }
     requireReplay(roots.size <= limits.objects, "OBJECT_LIMIT");
     const retainedRefs: RetainedReplayRef[] = [];
     if (evidenceMode === "references") {
@@ -310,22 +312,26 @@ async function capture(
           );
           hashes.set(r.object_id, r);
         }
-      for (const r of (
-        await tx.query<{ object_id: string; recorded_at: Date }>(
-          "SELECT object_id,recorded_at FROM btc_retention_objects WHERE object_id=ANY($1::text[]) ORDER BY object_id",
-          [[...roots]],
-        )
-      ).rows) {
-        const expected = hashes.get(r.object_id);
-        requireReplay(
-          !expected || expected.recorded_at === r.recorded_at.toISOString(),
-          "REFERENCE_AS_OF",
-        );
-        retainedRefs.push({
-          object_id: r.object_id,
-          recorded_at: r.recorded_at.toISOString(),
-          payload_hash: expected?.payload_hash ?? null,
-        });
+      const rootIds = [...roots].sort();
+      for (let i = 0; i < rootIds.length; i += 256) {
+        requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
+        for (const r of (
+          await tx.query<{ object_id: string; recorded_at: Date }>(
+            "SELECT object_id,recorded_at FROM btc_retention_objects WHERE object_id=ANY($1::text[]) ORDER BY object_id",
+            [rootIds.slice(i, i + 256)],
+          )
+        ).rows) {
+          const expected = hashes.get(r.object_id);
+          requireReplay(
+            !expected || expected.recorded_at === r.recorded_at.toISOString(),
+            "REFERENCE_AS_OF",
+          );
+          retainedRefs.push({
+            object_id: r.object_id,
+            recorded_at: r.recorded_at.toISOString(),
+            payload_hash: expected?.payload_hash ?? null,
+          });
+        }
       }
       requireReplay(retainedRefs.length === roots.size, "DEPENDENCY_MISSING");
     }
