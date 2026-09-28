@@ -6,6 +6,10 @@ padrão desabilitada e escala zero; ativação exige configuração paper explí
 
 ## Admissão no host existente
 
+**Revalidação de 28/09:** o [plano G2-12.1](ganso-2-capacity-plan.md) mediu o
+contador lógico acima do teto de 6 GiB. A folga histórica abaixo não autoriza
+retomada; admissão atual bloqueada, sem mudança dos limites/HOLD.
+
 Antes de ativar, conferir identidade SSH em `docs/ops/SERVER_ACCESS.md`, versão
 instalada, migrations 0027/0028, health da API, HOLD/pins e quiescência legada.
 Usar Compose efetivo com `deploy/server.env`, incluindo o overlay de contenção.
