@@ -538,7 +538,10 @@ export async function consumeBaselineAccount(
               account,
               bar,
               decision.decision_id,
-              JSON.stringify(decision),
+              JSON.stringify({
+                ...decision,
+                storage_version: "btc.decision-projection.v1",
+              }),
               evidence.object_id,
             ],
           );
