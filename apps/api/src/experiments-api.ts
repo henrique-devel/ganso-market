@@ -1,3 +1,7 @@
+import {
+  compareWindowArtifacts,
+  type WindowComparison,
+} from "./storage/window-metrics.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { DatabasePool } from "./database.js";
 import { currentBudgetMs } from "./budgets.js";
@@ -124,7 +128,7 @@ export function registerExperimentRoutes(
         (q.comparison && !q.challenger_id)
       )
         throw new Error("EXPERIMENT_INVALID_QUERY");
-      let contract: EconomicComparison | undefined;
+      let contract: EconomicComparison | WindowComparison | undefined;
       if (q.comparison) {
         try {
           const c: unknown = JSON.parse(q.comparison);
@@ -141,28 +145,40 @@ export function registerExperimentRoutes(
       const artifact = await loadReplayDataset(reportPool, q.dataset_id);
       if (artifact.dataset.identity.account.account_id !== q.account_id)
         throw new Error("EXPERIMENT_ACCOUNT_MISMATCH");
-      const baseline = accountMetrics(artifact);
-      const challenger = q.challenger_id
-        ? accountMetrics(await loadReplayDataset(reportPool, q.challenger_id))
+      const challengerArtifact = q.challenger_id
+        ? await loadReplayDataset(reportPool, q.challenger_id)
         : null;
       let comparison;
       try {
-        comparison = compareMetrics(baseline, challenger, contract);
+        comparison =
+          contract?.schema_version === "btc.economic-comparison.v2" &&
+          challengerArtifact
+            ? compareWindowArtifacts(artifact, challengerArtifact, contract)
+            : compareMetrics(
+                accountMetrics(artifact),
+                challengerArtifact ? accountMetrics(challengerArtifact) : null,
+                contract as EconomicComparison | undefined,
+              );
       } catch (e) {
         const reason = e instanceof Error ? e.message : "";
         if (!/^BTC_METRICS_COMPARISON_[A-Z_]+$/.test(reason)) throw e;
         comparison = {
           status: "not_comparable",
           reason,
-          baseline,
-          challenger,
+          baseline: accountMetrics(artifact),
+          challenger: challengerArtifact
+            ? accountMetrics(challengerArtifact)
+            : null,
           delta: null,
         };
       }
       return {
-        schema_version: "btc.experiments.v1",
         mode: "paper",
         ...comparison,
+        schema_version:
+          contract?.schema_version === "btc.economic-comparison.v2"
+            ? "btc.experiments.v2"
+            : "btc.experiments.v1",
       };
     }),
   );

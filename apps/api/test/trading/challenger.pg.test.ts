@@ -273,6 +273,11 @@ describe.skipIf(!url)(
         contract,
         config,
         "mock",
+        {
+          start_at: new Date(T).toISOString(),
+          end_at: new Date(T + 86400000).toISOString(),
+          purpose: "operational_pilot",
+        },
       );
       if (!registered.registration) throw new Error("mock registration failed");
       cr = registered.registration;
