@@ -58,6 +58,10 @@ retomar não remove dados nem zera ocupação. Nenhum descarte legado é autoriz
 
 ## Ativação seletiva
 
+**G2-11.3 entrega a recuperação contida.** Publicar este código não autoriza
+executar os comandos de ativação abaixo. Retomada sustentada pertence a G2-12.3,
+após capacidade admitida; conservar coletor parado, HOLD, caps e `restart: no`.
+
 Após merge/checks/deploy e preflight aprovados, criar fora do checkout
 `/etc/ganso/btc-worker.json` com `schema_version: 1`, `execution_mode: "paper"`,
 `enabled: true`. Criar `/etc/ganso/btc-collector.compose.yml`:
@@ -125,38 +129,64 @@ Aceitar essa observação requer HTTPS oficial sem redirect, `Miss from cloudfro
 Age ausente/zero, Date válido, resposta de até 256 KiB e 1,5 s, coerência de
 relógios (resolução HTTP de 1 s), BTC e versão de metadados compatíveis. O relógio
 HTTP envelhece até 5 s; contexto legado WS sem tempo continua degradado.
-Resposta recusada, cache, incompatibilidade ou tempo inválido encerra a coleta.
-Somente o `TimeoutError` do contexto HTTP permite recuperação limitada: até três
-timeouts tolerados por sessão; o quarto é terminal. Sucesso zera a sequência,
-mas não repõe o orçamento da sessão. Esperas após conclusão: 2/4/4 s para falhas
-consecutivas, e pelo menos 2 s após sucesso. Não há retry interno ao transporte,
-fila de tentativas ou rajada de compensação. O deadline permanece 1,5 s e a
-captura mantém o ciclo nominal de 1 s, descontando o tempo de IO.
+Cache, incompatibilidade, identidade ou tempo inválido encerram a coleta.
+A recuperação pública usa **`hyperliquid-read-recovery.v1`**: até seis retries
+por janela móvel de cinco minutos, por transporte/canal, e no máximo seis
+falhas consecutivas recuperáveis. A seguinte é terminal, mesmo após cooldown
+longo. Falhas antigas expiram da janela; sucesso zera somente a sequência,
+nunca o consumo recente da janela. O total da sessão continua observável.
+Não existe rearme automático após esgotamento nem retry de escrita.
 
-Cada timeout invalida somente o canal de contexto (`invalid`, gap aberto e
-`needs_revalidation=true`); após silêncio ele pode ficar `stale`. Livro/trades e
-capturas continuam sujeitos aos mesmos guards. O watchdog não reconecta o WS
-por silêncio do contexto HTTP. A lacuna fica persistida nas capturas, incluindo
-o intervalo até a recuperação, que prova apenas estado atual (`current_state_only`,
-continuidade `unproven`). Contexto anterior não é reapresentado como novo; somente
-outra resposta válida pode revalidar o canal. Resposta tardia é recusada, inclusive
-quando o event loop atrasa o timer; stop aborta as consultas e impede entrega tardia.
+São transitórios: desconexão WS, handshake/ack/pong expirados, source stale no WS,
+deadline de leitura HTTP, erros de rede identificados (`ECONNRESET`, `EAI_AGAIN`,
+timeouts/socket do transporte) e HTTP 408/429/500/502/503/504. TLS/upgrade inválido,
+fechamento WS por protocolo/política/tamanho, payload inválido, duplicata
+contraditória, regressão da fonte, overflow, metadata incompatível, proveniência,
+capacidade, SQL, resultado de COMMIT incerto e erros desconhecidos são terminais.
+O bootstrap exige uma primeira identidade válida; falhar nessa leitura não inicia
+sessão de captura. O refresh posterior de metadata também recupera só transporte,
+invalidando livro/contexto até nova identidade validada; mantém o deadline de 8 s.
 
-`context_http` no health/log informa contagem total/consecutiva, orçamento, próxima
-tentativa, esgotamento e último timeout com hora local e diagnóstico sanitizado.
-Um timeout recuperável não ocupa o campo terminal `failure`; no esgotamento este
-campo conserva `stage=context_snapshot` e `error_type=TimeoutError`. Falhas em
-livro, metadata, payload/proveniência, persistência ou capacidade seguem terminais.
-Não há timestamp sintético. Limites de idade de risco
+Backoff exponencial tem teto de 30 s e jitter entre metade e total do teto da
+tentativa, com piso de cadência: WS/livro 1 s, contexto/refresh de metadata 2 s.
+Falhas esperam a partir da conclusão; sucesso preserva livro a cada início de
+ciclo de 1 s e contexto pelo menos 2 s após conclusão. Deadline livro/contexto
+permanece 1,5 s. Não há fila, replay da resposta, compensação de ciclos ou retry
+interno ao fetch. `Retry-After` em segundos/data é respeitado; HTTP 429 exige
+ao menos 60 s de cooldown compartilhado por livro, contexto e metadata.
+Um cooldown solicitado acima de cinco minutos para terminalmente, sem tentar
+antes da permissão da venue. Reads já em voo podem concluir; nenhum novo é
+iniciado no cooldown. Handshake WS respeita o mesmo header no seu próprio budget.
+
+Falha HTTP invalida somente seu canal (`invalid`, gap aberto,
+`needs_revalidation=true`); após silêncio ele pode ficar `stale`. Capturas e os
+outros canais continuam pelos mesmos guards. O watchdog não reconecta o WS por
+silêncio de livro/contexto HTTP. Cada gap persiste nas capturas; retorno prova
+apenas estado atual (`current_state_only`) ou entrega de trades
+(`delivery_resumed_only`), sempre continuidade `unproven`. Não se preenchem
+barras históricas. Uma resposta iniciada em outra geração do socket é descartada,
+assim como conclusão tardia ou posterior a stop. Cada canal revalida separadamente;
+ack/pong e retomada de um canal não tornam os demais utilizáveis.
+
+`book_http`, `context_http`, `metadata_http` e `feed.recovery` no health/log expõem
+budget, falhas consecutivas, retries na janela/total, próximo horário, cooldown e
+esgotamento. Contadores/diagnóstico anteriores de timeout ficam compatíveis;
+`last_failure.kind` classifica transporte sem payload/header/mensagem livre.
+Falha recuperável não ocupa o campo terminal `failure`; no esgotamento este
+conserva etapa/tipo original. O identificador da política é aditivo no health;
+não altera `btc-current-state.v1`, timestamps, objetos antigos ou o contrato de
+gap persistido. Não há timestamp sintético. Limites de idade de risco
 permanecem 2/5 s, incluindo recepção, capture e revalidação de gap.
 
 O worker usa uma subscription pública (trades) e no máximo 60 consultas L2/min
 (peso 2), 30 contexto/min (peso 20), mais metadata/min (peso 20): teto de 740 do
 limite público de 1200/min/IP, sem cliente privado, credencial ou API paga.
-Fontes oficiais revalidadas nesta correção:
+Fontes oficiais revalidadas em 27/09/2026 (limite agregado por IP, compartilhado
+com outros consumidores, sem reservar toda a cota para este processo):
 [WebSocket](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions),
 [Info](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals),
 [limites](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits),
+[heartbeat](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/timeouts-and-heartbeats),
 [Date HTTP](https://www.rfc-editor.org/rfc/rfc9110.html#name-date).
 
 Barras/warmup são consultadas por `readBtcMarketView`; início parcial, restart,
@@ -170,7 +200,7 @@ sustentabilidade de 7/90 dias nem ausência futura de gaps.
 `docker kill --signal=USR1 <ID exato do btc-worker>` provoca uma reconexão pública
 pelo caminho normal, com gap/revalidação e retry limitado; não mexe em PG/rede do
 host. Usar uma vez na aceitação, observar aumento de retries e retomada por canal.
-Os três retries são limite por sessão; esgotamento encerra o worker. Metadados
+O probe consome o mesmo orçamento por janela; esgotamento encerra o worker. Metadados
 são reconsultados a cada minuto; incompatibilidade/mudança de versão interrompe
 coleta para não misturar regras antigas e novas.
 
@@ -181,8 +211,8 @@ O campo `failure` preserva a primeira etapa que falhou (`capacity`, `metadata`,
 o tipo de erro e um código técnico permitido quando disponível. Não inclui
 mensagem, stack, URL ou payload. `TimeoutError` em um snapshot distingue seu
 deadline de erro SQL em captura/capacidade; ausência desse campo em um log
-antigo não permite reconstruir a causa. O diagnóstico terminal não amplia timeouts; a única recuperação nova é o
-orçamento explícito de contexto descrito acima.
+antigo não permite reconstruir a causa. O diagnóstico terminal não amplia timeouts;
+a recuperação é restrita às leituras públicas descritas acima.
 
 Não reenviar lote rejeitado como completo; restart usa sessão nova e o cursor
 persistido registra descontinuidade. O status terminal fica no filesystem do

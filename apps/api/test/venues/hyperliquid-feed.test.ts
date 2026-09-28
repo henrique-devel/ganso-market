@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TradingInstrumentMetadata } from "@ganso-market/contracts/trading";
+import { RECOVERY_LIMITS } from "../../src/venues/hyperliquid/recovery.js";
 import {
   HYPERLIQUID_FEED_LIMITS as limits,
   normalizeHyperliquidFeed,
@@ -79,6 +80,7 @@ let feeds: ReturnType<typeof startHyperliquidBtcFeed>[];
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(time);
+  vi.spyOn(Math, "random").mockReturnValue(1);
   mocks.sockets.length = 0;
   feeds = [];
 });
@@ -300,7 +302,7 @@ describe("bounded opt-in public transport", () => {
   });
   it("bounds operator and transport reconnects and cleans up every timer", () => {
     const feed = startFeed();
-    for (const delay of [1000, 2000, 4000]) {
+    for (const delay of [1000, 2000, 4000, 8000, 16000, 30000]) {
       current().open();
       current().ack();
       feed.reconnect();
@@ -308,15 +310,15 @@ describe("bounded opt-in public transport", () => {
     }
     current().open();
     current().terminate();
-    expect(mocks.sockets).toHaveLength(4);
+    expect(mocks.sockets).toHaveLength(7);
     expect(feed.status()).toMatchObject({
-      retries: 3,
+      retries: 6,
       stopped: true,
       terminal_reason: "retries_exhausted",
     });
     expect(vi.getTimerCount()).toBe(0);
   });
-  it("rejects incompatible frames, records loss and ignores late events on old sockets", () => {
+  it("makes invalid identity terminal and ignores late events without a retry", () => {
     const feed = startFeed();
     current().open();
     current().ack();
@@ -326,12 +328,145 @@ describe("bounded opt-in public transport", () => {
     old.frame({ channel: "l2Book", data: { ...book(), coin: "ETH" } });
     expect(feed.status().counters.invalid).toBe(1);
     vi.advanceTimersByTime(1000);
-    current().open();
-    current().ack();
     old.frame({ channel: "l2Book", data: book() });
     expect(feed.drain()).toHaveLength(0);
+    expect(feed.status()).toMatchObject({
+      stopped: true,
+      terminal_reason: "invalid_frame",
+      retries: 0,
+    });
+    expect(mocks.sockets).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("recovers twelve spaced disconnects, retaining gaps and revalidating each channel separately", () => {
+    const feed = startFeed();
+    current().open();
+    current().ack();
     snapshots();
-    expect(feed.drain()).toHaveLength(2);
+    feed.drain();
+    for (let i = 0; i < 12; i++) {
+      vi.setSystemTime(Date.now() + RECOVERY_LIMITS.windowMs);
+      const old = current();
+      feed.reconnect();
+      old.frame({ channel: "l2Book", data: book() });
+      expect(feed.drain()).toEqual([]);
+      vi.advanceTimersByTime(30_000);
+      current().open();
+      current().ack();
+      current().frame({ channel: "l2Book", data: book() });
+      expect(feed.status().channels.context.needs_revalidation).toBe(true);
+      expect(feed.status().channels.trades.needs_revalidation).toBe(true);
+      expect(feed.status().recovery.consecutive_failures).toBeGreaterThan(0);
+      current().frame({ channel: "activeAssetCtx", data: ctx });
+      current().frame({
+        channel: "trades",
+        data: [{ ...trade(), time: Date.now(), tid: i }],
+      });
+      expect(feed.status().recovery.consecutive_failures).toBe(0);
+      expect(feed.drain().map((e) => e.revalidation)).toEqual([
+        "current_state_only",
+        "current_state_only",
+        "delivery_resumed_only",
+      ]);
+    }
+    expect(feed.status()).toMatchObject({
+      retries: 12,
+      stopped: false,
+      continuity: "unproven",
+    });
+    expect(feed.status().counters.gaps).toBeGreaterThan(12);
+  });
+  it("stops on contradictory duplicate evidence and inbound queue overflow", () => {
+    const feed = startFeed();
+    current().open();
+    current().ack();
+    current().frame({ channel: "trades", data: [trade()] });
+    current().frame({ channel: "trades", data: [{ ...trade(), sz: "0.02" }] });
+    expect(feed.status().terminal_reason).toBe("inconsistent_evidence");
+    const overflow = startFeed();
+    current().open();
+    current().ack();
+    current().frame({
+      channel: "trades",
+      data: Array.from({ length: 512 }, (_, tid) => ({ ...trade(), tid })),
+    });
+    current().frame({ channel: "trades", data: [{ ...trade(), tid: 1000 }] });
+    expect(overflow.status()).toMatchObject({
+      stopped: true,
+      terminal_reason: "buffer_overflow",
+      retries: 0,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([1002, 1008, 1009])(
+    "does not reconnect protocol/policy close %s",
+    (code) => {
+      const feed = startFeed();
+      current().open();
+      current().emit("close", code);
+      expect(feed.status()).toMatchObject({ stopped: true, retries: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+  it("respects handshake Retry-After and rejects invalid upgrade/TLS instead of looping", () => {
+    const feed = startFeed();
+    current().emit(
+      "unexpected-response",
+      { destroy: vi.fn() },
+      { statusCode: 429, headers: { "retry-after": "90" }, destroy: vi.fn() },
+    );
+    vi.advanceTimersByTime(89_999);
+    expect(mocks.sockets).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(mocks.sockets).toHaveLength(2);
+    current().emit("error", new Error("Invalid Sec-WebSocket-Accept header"));
+    expect(feed.status()).toMatchObject({
+      stopped: true,
+      terminal_reason: "transport_protocol_or_identity",
+    });
+    const tls = startFeed();
+    current().emit(
+      "error",
+      Object.assign(new Error("private"), {
+        code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      }),
+    );
+    expect(tls.status()).toMatchObject({ stopped: true, retries: 0 });
+  });
+  it("stop cancels a pending reconnect and old callbacks cannot revive it", () => {
+    const feed = startFeed();
+    const old = current();
+    old.open();
+    feed.reconnect();
+    feed.stop();
+    vi.advanceTimersByTime(300_000);
+    old.open();
+    old.frame({ channel: "l2Book", data: book() });
+    expect(mocks.sockets).toHaveLength(1);
+    expect(feed.drain()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("does not recycle the trade socket for an unavailable HTTP book", () => {
+    const feed = startHyperliquidBtcFeed(metadata, "http_snapshot");
+    feeds.push(feed);
+    current().open();
+    current().frame({
+      channel: "subscriptionResponse",
+      data: {
+        method: "subscribe",
+        subscription: { type: "trades", coin: "BTC" },
+      },
+    });
+    feed.contextUnavailable("book");
+    for (let i = 0; i < 20; i++) {
+      current().frame({ channel: "pong" });
+      vi.advanceTimersByTime(1000);
+    }
+    expect(feed.status()).toMatchObject({
+      retries: 0,
+      socket: { connected: true },
+      channels: { book: { needs_revalidation: true } },
+    });
   });
   it("times out missing acknowledgements even with incoming channel data", () => {
     const feed = startFeed();

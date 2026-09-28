@@ -11,6 +11,7 @@ import {
 import { health, metadata, start, iso, trade } from "./trading/bars-fixture.js";
 import { HYPERLIQUID_FEED_LIMITS } from "../src/venues/hyperliquid/feed-normalizer.js";
 import { normalizeHyperliquidFeed } from "../src/venues/hyperliquid/feed-normalizer.js";
+import { createReadRecovery } from "../src/venues/hyperliquid/recovery.js";
 
 const sample: CapacitySample = {
   diskTotalBytes: String(300 * 1024 ** 3),
@@ -29,6 +30,8 @@ function fixture() {
   const state = {
     ...health(start),
     retries: 0,
+    generation: 1,
+    recovery: createReadRecovery(() => start).status(),
     stopped: false,
     terminal_reason: null,
     subscriptions_confirmed: 3,
@@ -261,6 +264,8 @@ describe("BTC collector admission and terminal refusal", () => {
         "private context",
       );
       expect(deps.closeBars).not.toHaveBeenCalled();
+      await expect(collector.tick()).rejects.toThrow("STOPPED");
+      expect(deps.capture).toHaveBeenCalledOnce();
     },
   );
   it("stops on lost buffer admission without persisting a truncated batch", async () => {

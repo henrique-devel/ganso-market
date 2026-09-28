@@ -95,8 +95,11 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/test/btc-runtime-diagnostics.test.ts",
             "apps/api/test/btc-context-poll.test.ts",
             "apps/api/src/venues/hyperliquid/feed.ts",
+            "apps/api/src/venues/hyperliquid/feed-normalizer.ts",
+            "apps/api/src/venues/hyperliquid/recovery.ts",
             "apps/api/src/venues/hyperliquid/context-snapshot.ts",
             "apps/api/test/venues/hyperliquid-feed.test.ts",
+            "apps/api/test/venues/hyperliquid-recovery.test.ts",
             "apps/api/test/venues/hyperliquid-context.test.ts",
         }:
             selected.add("btc-worker")

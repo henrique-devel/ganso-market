@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TradingMarketObservation } from "@ganso-market/contracts/trading";
 import {
+  RECOVERY_LIMITS,
+  SnapshotTransportError,
+} from "../src/venues/hyperliquid/recovery.js";
+import {
   createContextPoll,
   CONTEXT_POLL_LIMITS,
 } from "../src/btc/context-poll.js";
@@ -19,6 +23,7 @@ function fixture() {
     signal: controller.signal,
     fetch,
     unavailable,
+    random: () => 1,
   });
   return {
     poll,
@@ -60,10 +65,10 @@ describe("bounded context timeout recovery", () => {
       consecutive_timeouts: 0,
     });
   });
-  it("backs off 2/4/4 seconds and terminates at the fourth timeout without replenishing its session budget", async () => {
+  it("bounds a burst by its rolling window, then remains terminal", async () => {
     const f = fixture();
     f.fetch.mockRejectedValue(timeout());
-    for (const backoff of [2000, 4000, 4000]) {
+    for (const backoff of [2000, 4000, 8000, 16000, 30000, 30000]) {
       expect(await f.poll.poll()).toBeNull();
       f.advance(backoff - 1);
       const calls = f.fetch.mock.calls.length;
@@ -74,21 +79,20 @@ describe("bounded context timeout recovery", () => {
     await expect(f.poll.poll()).rejects.toMatchObject({ name: "TimeoutError" });
     expect(f.poll.status()).toMatchObject({
       exhausted: true,
-      timeouts: 4,
+      timeouts: 7,
       in_flight: false,
     });
     f.advance(60_000);
     await expect(f.poll.poll()).rejects.toThrow("EXHAUSTED");
-    expect(f.fetch).toHaveBeenCalledTimes(4);
+    expect(f.fetch).toHaveBeenCalledTimes(7);
     expect(CONTEXT_POLL_LIMITS).toEqual({
       intervalMs: 2000,
-      maxTimeouts: 3,
-      maxBackoffMs: 4000,
+      deadlineMs: 1500,
     });
   });
   it("does not turn intermittent success into an unlimited retry allowance", async () => {
     const f = fixture();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < RECOVERY_LIMITS.maxRetries; i++) {
       f.fetch.mockRejectedValueOnce(timeout());
       await f.poll.poll();
       f.advance(2000);
@@ -98,6 +102,63 @@ describe("bounded context timeout recovery", () => {
     f.fetch.mockRejectedValueOnce(timeout());
     await expect(f.poll.poll()).rejects.toMatchObject({ name: "TimeoutError" });
     expect(f.poll.status().consecutive_timeouts).toBe(1);
+  });
+  it("recovers many spaced failures without a lifetime budget or forged evidence", async () => {
+    const f = fixture();
+    for (let i = 0; i < 12; i++) {
+      f.fetch.mockRejectedValueOnce(timeout());
+      expect(await f.poll.poll()).toBeNull();
+      f.advance(2000);
+      expect(await f.poll.poll()).toBe(f.event);
+      f.advance(RECOVERY_LIMITS.windowMs);
+    }
+    expect(f.poll.status()).toMatchObject({ timeouts: 12, exhausted: false });
+    expect(f.unavailable).toHaveBeenCalledTimes(12);
+  });
+  it("rejects a late completion even without a fired abort timer", async () => {
+    const f = fixture();
+    f.fetch.mockImplementationOnce(async () => {
+      f.advance(1501);
+      return f.event;
+    });
+    expect(await f.poll.poll()).toBeNull();
+    expect(f.poll.status().timeouts).toBe(1);
+    expect(f.unavailable).toHaveBeenCalledOnce();
+  });
+  it("shares Retry-After across book and context without a request queue", async () => {
+    let now = 1000;
+    const cooldown = { until: 0 };
+    const signal = new AbortController().signal;
+    const fetch = vi
+      .fn<() => Promise<TradingMarketObservation>>()
+      .mockRejectedValueOnce(new SnapshotTransportError("rate_limited", 60_000))
+      .mockResolvedValue({} as TradingMarketObservation);
+    const deps = {
+      now: () => now,
+      cooldown,
+      signal,
+      fetch,
+      unavailable: vi.fn(),
+    };
+    const book = createContextPoll({ ...deps, intervalMs: 1000 });
+    const context = createContextPoll(deps);
+    await book.poll();
+    expect(await context.poll()).toBeNull();
+    now += 59_999;
+    expect(await book.poll()).toBeNull();
+    expect(await context.poll()).toBeNull();
+    expect(fetch).toHaveBeenCalledOnce();
+    now++;
+    await context.poll();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("refuses Retry-After beyond the operational bound instead of retrying early", async () => {
+    const f = fixture();
+    f.fetch.mockRejectedValue(
+      new SnapshotTransportError("rate_limited", 300_001),
+    );
+    await expect(f.poll.poll()).rejects.toBeInstanceOf(SnapshotTransportError);
+    expect(f.poll.status().exhausted).toBe(true);
   });
   it.each([
     new DOMException("operator", "AbortError"),

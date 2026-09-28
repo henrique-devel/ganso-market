@@ -11,6 +11,7 @@ import type {
   TradingMarketData,
 } from "@ganso-market/contracts/trading";
 import { FeedQualityMachine, type FeedChannel } from "../../trading/feed.js";
+import { createReadRecovery, httpRetryAfter } from "./recovery.js";
 import {
   HYPERLIQUID_FEED_LIMITS as limits,
   WIRE_CHANNELS,
@@ -24,7 +25,7 @@ const subscriptions = [
   { type: "activeAssetCtx", coin: "BTC" },
 ] satisfies (L2BookRequest | TradesRequest | ActiveAssetCtxRequest)[];
 
-/** Explicit opt-in only: not imported by server/worker. Public socket, no storage,
+/** Explicit opt-in only. Public socket, no storage,
  * credentials, environment, execution client or unbounded retry/outbound queue.
  * ws is already installed; SDK 0.33.3's transport does not expose maxPayload.
  * https://github.com/nktkas/hyperliquid/blob/v0.33.3/src/transport/websocket/mod.ts
@@ -40,6 +41,7 @@ export function startHyperliquidBtcFeed(
   )
     throw new TypeError("Expected standard BTC metadata");
   const machine = new FeedQualityMachine<TradingMarketObservation>();
+  const recovery = createReadRecovery(Date.now);
   const selectedSubscriptions = subscriptions.filter(
     (s) => contextMode === "ws" || s.type === "trades",
   );
@@ -54,16 +56,40 @@ export function startHyperliquidBtcFeed(
   let lastPing = 0;
   let waitingPongAt: number | null = null;
   let acked = new Set<string>();
+  let generation = 0;
+  function checkEvidence(
+    invalidBefore = machine.status(Date.now()).counters.invalid,
+  ) {
+    const state = machine.status(Date.now());
+    if (state.counters.dropped > 0) stop("buffer_overflow");
+    else if (
+      state.counters.invalid > invalidBefore ||
+      state.counters.out_of_order > 0
+    )
+      stop("inconsistent_evidence");
+    else if (
+      acked.size === selectedSubscriptions.length &&
+      selectedSubscriptions.every((s) => {
+        const channel = WIRE_CHANNELS[s.type];
+        return (
+          state.channels[channel].status === "healthy" &&
+          !state.channels[channel].needs_revalidation
+        );
+      })
+    )
+      recovery.success();
+  }
   function send(message: unknown) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     if (socket.bufferedAmount > limits.outboundBytes) {
-      socket.terminate();
+      stop("outbound_overflow");
       return;
     }
     socket.send(JSON.stringify(message)); // At most 3 subscriptions and one outstanding ping.
   }
   function stop(reason = "stopped") {
     if (stopped) return;
+    generation++;
     stopped = true;
     terminalReason = reason;
     clearTimeout(retryTimer);
@@ -73,6 +99,7 @@ export function startHyperliquidBtcFeed(
   }
   function connect() {
     if (stopped) return;
+    generation++;
     acked = new Set();
     waitingPongAt = null;
     const current = new WebSocket(URL, {
@@ -82,6 +109,24 @@ export function startHyperliquidBtcFeed(
       followRedirects: false,
     });
     socket = current;
+    let retryAfter = 0;
+    let refusedTransientHandshake = false;
+    current.on("unexpected-response", (request, response) => {
+      if (stopped || current !== socket) return;
+      if (![408, 429, 500, 502, 503, 504].includes(response.statusCode ?? 0)) {
+        stop("transport_protocol_or_identity");
+      } else {
+        refusedTransientHandshake = true;
+        retryAfter = httpRetryAfter(
+          response.headers["retry-after"] ?? null,
+          response.statusCode!,
+          Date.now(),
+        );
+        current.terminate();
+      }
+      response.destroy();
+      request.destroy();
+    });
     current.on("open", () => {
       if (stopped || current !== socket) return;
       openedAt = Date.now();
@@ -122,6 +167,7 @@ export function startHyperliquidBtcFeed(
           )
             throw new TypeError("Invalid subscription ack");
           acked.add(sub.type);
+          checkEvidence();
           return;
         }
         if (!Object.hasOwn(WIRE_CHANNELS, frame.channel))
@@ -136,27 +182,58 @@ export function startHyperliquidBtcFeed(
           metadata.instrument.instrument_version,
           `${session}:${++observation}`,
         );
+        const invalidBefore = machine.status(now).counters.invalid;
         for (const event of events) machine.accept(event);
+        checkEvidence(invalidBefore);
       } catch {
         if (channel) machine.invalid(channel, now);
         else
           for (const item of Object.values(WIRE_CHANNELS))
             machine.invalid(item, now);
         // Incompatible or oversized frames cannot be silently ignored as continuity.
-        current.terminate();
+        stop("invalid_frame");
       }
     });
-    current.on("error", () => {
+    current.on("error", (error: Error & { code?: string }) => {
+      if (current !== socket || stopped) return;
+      const network = [
+        "ECONNRESET",
+        "ECONNREFUSED",
+        "EPIPE",
+        "ETIMEDOUT",
+        "EAI_AGAIN",
+        "ENETUNREACH",
+        "EHOSTUNREACH",
+      ].includes(error.code ?? "");
+      if (
+        !network &&
+        !refusedTransientHandshake &&
+        error.message !== "Opening handshake has timed out" &&
+        error.message !==
+          "WebSocket was closed before the connection was established"
+      )
+        stop("transport_protocol_or_identity");
       /* close drives bounded retry; no raw payload logging */
     });
-    current.on("close", () => {
+    current.on("close", (code: number) => {
       if (current !== socket || stopped) return;
+      socket = null; // Old socket callbacks cannot affect a later generation.
+      acked.clear();
       machine.disconnect(Date.now());
-      if (retries >= limits.maxRetries) {
+      if (
+        code !== undefined &&
+        ![1000, 1001, 1005, 1006, 1011, 1012, 1013].includes(code)
+      ) {
+        stop("transport_protocol_or_identity");
+        return;
+      }
+      const backoff = recovery.fail(1000, retryAfter);
+      if (backoff === null) {
         stop("retries_exhausted");
         return;
       }
-      retryTimer = setTimeout(connect, Math.min(1000 * 2 ** retries++, 4000));
+      retries++;
+      retryTimer = setTimeout(connect, backoff);
     });
   }
   const watchdog = setInterval(() => {
@@ -167,7 +244,7 @@ export function startHyperliquidBtcFeed(
       (acked.size !== selectedSubscriptions.length &&
         now - openedAt >= limits.handshakeMs) ||
       (waitingPongAt !== null && now - waitingPongAt >= limits.pongTimeoutMs) ||
-      state.channels.book.status === "stale" ||
+      (contextMode === "ws" && state.channels.book.status === "stale") ||
       (contextMode === "ws" && state.channels.context.status === "stale")
     ) {
       socket.terminate();
@@ -182,11 +259,11 @@ export function startHyperliquidBtcFeed(
   }, 1000);
   connect();
   return {
-    contextUnavailable: () => {
+    contextUnavailable: (channel: "book" | "context" = "context") => {
       // Invalidate the current state without inventing a failed observation or
       // disconnecting the independent trade socket. Persist the existing gap contract.
       if (!stopped && contextMode === "http_snapshot")
-        machine.invalid("context", Date.now());
+        machine.invalid(channel, Date.now());
     },
     observeSnapshot: (event: TradingMarketObservation) => {
       if (stopped) return;
@@ -196,7 +273,9 @@ export function startHyperliquidBtcFeed(
         event.source_id !== "hyperliquid:mainnet:info"
       )
         throw new Error("BTC_CONTEXT_RESPONSE_REFUSED");
+      const invalidBefore = machine.status(Date.now()).counters.invalid;
       machine.accept(event);
+      checkEvidence(invalidBefore);
     },
     stop: () => stop(),
     // Operator transport probe uses the same bounded retry/gap path as a failure.
@@ -207,6 +286,8 @@ export function startHyperliquidBtcFeed(
     status: () => ({
       ...machine.status(Date.now()),
       retries,
+      generation,
+      recovery: recovery.status(),
       stopped,
       terminal_reason: terminalReason,
       subscriptions_confirmed: acked.size,

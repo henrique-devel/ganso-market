@@ -21,7 +21,6 @@ export const HYPERLIQUID_FEED_LIMITS = Object.freeze({
   maxTradesPerFrame: 512,
   maxBookLevels: 20,
   maxDecimalPlaces: 18,
-  maxRetries: 3,
   handshakeMs: 8000,
   heartbeatMs: 5000,
   pongTimeoutMs: 10_000,

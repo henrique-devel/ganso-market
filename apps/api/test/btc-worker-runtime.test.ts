@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   observe: vi.fn(),
   unavailable: vi.fn(),
+  reconnect: vi.fn(),
+  metadata: vi.fn(),
 }));
 vi.mock("node:timers/promises", () => ({
   setTimeout: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -57,6 +59,7 @@ vi.mock("../src/venues/hyperliquid/context-snapshot.js", async (original) => ({
   ...(await original<object>()),
   fetchBtcBookSnapshot: mocks.book,
   fetchBtcContextSnapshot: mocks.context,
+  fetchBtcMetadataSnapshot: mocks.metadata,
 }));
 vi.mock("../src/storage/btc-marketstore.js", () => ({
   captureBtcMarketBatch: mocks.capture,
@@ -74,11 +77,18 @@ vi.mock("../src/venues/hyperliquid/feed.js", async () => {
         machine.disconnect(Date.now());
       });
       mocks.observe.mockImplementation((event) => machine.accept(event));
-      mocks.unavailable.mockImplementation(() =>
-        machine.invalid("context", Date.now()),
+      mocks.unavailable.mockImplementation((channel = "context") =>
+        machine.invalid(channel, Date.now()),
       );
+      let generation = 1;
+      mocks.reconnect.mockImplementation(() => {
+        machine.disconnect(Date.now());
+        generation++;
+        machine.open(Date.now());
+      });
       return {
-        status: () => ({ ...machine.status(Date.now()), stopped }),
+        status: () => ({ ...machine.status(Date.now()), stopped, generation }),
+        reconnect: mocks.reconnect,
         stop: mocks.stop,
         observeSnapshot: mocks.observe,
         contextUnavailable: mocks.unavailable,
@@ -95,13 +105,16 @@ import type { TradingMarketObservation } from "@ganso-market/contracts/trading";
 import { normalizeBtcContextSnapshot } from "../src/venues/hyperliquid/context-snapshot.js";
 import { normalizeHyperliquidFeed } from "../src/venues/hyperliquid/feed-normalizer.js";
 import { runBtcWorker } from "../src/btc-worker.js";
+import { SnapshotTransportError } from "../src/venues/hyperliquid/recovery.js";
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(start);
+  vi.spyOn(Math, "random").mockReturnValue(1);
   vi.stubEnv("GANSO_BTC_WORKER_CONFIG_FILE", "/fixture.json");
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   mocks.capture.mockResolvedValue({ stored: 1, duplicates: 0 });
+  mocks.metadata.mockResolvedValue(metadata);
   mocks.book.mockImplementation(async () => ({
     ...normalizeHyperliquidFeed(
       "book",
@@ -159,9 +172,7 @@ afterEach(() => {
 });
 it("keeps the failed operation in both terminal publications, stops admission and releases the pool", async () => {
   vi.stubEnv("GANSO_BTC_WORKER_CONFIG_FILE", "/fixture.json");
-  mocks.book.mockRejectedValue(
-    new DOMException("private detail", "TimeoutError"),
-  );
+  mocks.book.mockRejectedValue(new SyntaxError("private detail"));
   mocks.context.mockResolvedValue(null);
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   await runBtcWorker();
@@ -179,7 +190,7 @@ it("keeps the failed operation in both terminal publications, stops admission an
       reason: "BTC_COLLECTOR_RUNTIME_FAILED",
       failure: {
         stage: "book_snapshot",
-        error_type: "TimeoutError",
+        error_type: "SyntaxError",
         error_code: null,
       },
     });
@@ -193,6 +204,107 @@ function publications() {
     JSON.parse(call[1]),
   );
 }
+it("persists a book gap through a transient failure while context and trades continue", async () => {
+  mocks.book.mockRejectedValueOnce(new SnapshotTransportError("network"));
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(2000);
+  process.emit("SIGTERM");
+  await vi.advanceTimersByTimeAsync(1000);
+  await worker;
+  const initial = publications().find((p) => p.last_capture_at === iso(start));
+  expect(initial).toMatchObject({
+    failure: null,
+    book_http: { recovery: { total_retries: 1 } },
+    consumer_freshness: {
+      book: { available: false },
+      mark: { available: true },
+    },
+  });
+  expect(
+    publications().find((p) => p.last_capture_at === iso(start + 1000)),
+  ).toMatchObject({ consumer_freshness: { book: { available: true } } });
+});
+it("discards responses started on an old socket generation before revalidation", async () => {
+  const normal = mocks.book.getMockImplementation()!;
+  mocks.book.mockImplementationOnce(async (...args) => {
+    const event = await normal(...args);
+    process.emit("SIGUSR1");
+    return event;
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.reconnect).toHaveBeenCalledOnce();
+  expect(mocks.observe).not.toHaveBeenCalled();
+  expect(publications()[0]).toMatchObject({
+    consumer_freshness: {
+      book: { available: false },
+      mark: { available: false },
+    },
+  });
+  process.emit("SIGTERM");
+  await vi.advanceTimersByTimeAsync(1000);
+  await worker;
+});
+it("revalidates metadata after transient loss before accepting more book/context observations", async () => {
+  mocks.metadata.mockRejectedValueOnce(new SnapshotTransportError("network"));
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(63_000);
+  process.emit("SIGTERM");
+  await vi.advanceTimersByTimeAsync(1000);
+  await worker;
+  expect(
+    publications().find((p) => p.last_capture_at === iso(start + 60_000)),
+  ).toMatchObject({
+    failure: null,
+    consumer_freshness: {
+      book: { available: false },
+      mark: { available: false },
+    },
+    metadata_http: { recovery: { total_retries: 1 } },
+  });
+  expect(
+    publications().find((p) => p.last_capture_at === iso(start + 62_000)),
+  ).toMatchObject({
+    consumer_freshness: {
+      book: { available: true },
+      mark: { available: true },
+    },
+  });
+  expect(mocks.metadata).toHaveBeenCalledTimes(2);
+});
+it("makes a changed metadata identity terminal without retrying or writing that cycle", async () => {
+  mocks.metadata.mockResolvedValue({
+    ...metadata,
+    instrument: { ...metadata.instrument, instrument_version: "changed" },
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(60_000);
+  await worker;
+  expect(mocks.metadata).toHaveBeenCalledOnce();
+  expect(publications().at(-1)).toMatchObject({
+    reason: "BTC_COLLECTOR_METADATA_CHANGED",
+    failure: { stage: "metadata" },
+  });
+  expect(publications().at(-1).last_capture_at).toBe(iso(start + 59_000));
+});
+it("a rate limit delays every public HTTP poll, including the periodic metadata read", async () => {
+  const normal = mocks.context.getMockImplementation()!;
+  mocks.context.mockImplementation(async (...args) => {
+    if (Date.now() === start + 58_000)
+      throw new SnapshotTransportError("rate_limited", 60_000);
+    return normal(...args);
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(mocks.metadata).not.toHaveBeenCalled();
+  const count = mocks.book.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(mocks.book).toHaveBeenCalledTimes(count);
+  expect(mocks.metadata).not.toHaveBeenCalled();
+  process.emit("SIGTERM");
+  await vi.advanceTimersByTimeAsync(1000);
+  await worker;
+});
 it("persists unavailable context and continuing books/trades, then new evidence closes only its current gap", async () => {
   const normalContext = mocks.context.getMockImplementation()!;
   mocks.context
@@ -258,14 +370,14 @@ it("persists unavailable context and continuing books/trades, then new evidence 
 it("exhausts consecutive timeouts terminally with diagnostics, no extra request and pool cleanup", async () => {
   mocks.context.mockRejectedValue(new DOMException("private", "TimeoutError"));
   const worker = runBtcWorker();
-  await vi.advanceTimersByTimeAsync(12000);
+  await vi.advanceTimersByTimeAsync(91_000);
   await worker;
-  expect(mocks.context).toHaveBeenCalledTimes(4);
+  expect(mocks.context).toHaveBeenCalledTimes(7);
   expect(publications().at(-1)).toMatchObject({
     status: "stopped",
     gap_open: true,
     failure: { stage: "context_snapshot", error_type: "TimeoutError" },
-    context_http: { timeouts: 4, exhausted: true },
+    context_http: { timeouts: 7, exhausted: true },
   });
   expect(process.exitCode).toBe(1);
   expect(mocks.end).toHaveBeenCalledOnce();

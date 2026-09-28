@@ -3,12 +3,14 @@ import {
   normalizeBtcContextSnapshot,
   fetchBtcContextSnapshot,
   fetchBtcBookSnapshot,
+  fetchBtcMetadataSnapshot,
 } from "../../src/venues/hyperliquid/context-snapshot.js";
 import { parseHyperliquidBtcMetadata } from "../../src/venues/hyperliquid/metadata.js";
 import { contextSnapshotTime } from "../../src/trading/valuation.js";
 import { financial, market } from "../trading/valuation-fixture.js";
 import { valueFinancials } from "../../src/trading/valuation.js";
 import { metadata, iso, start } from "../trading/bars-fixture.js";
+import { SnapshotTransportError } from "../../src/venues/hyperliquid/recovery.js";
 const snapshotBody = [
   {
     universe: [
@@ -46,6 +48,77 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("BTC current-state response provenance", () => {
+  it("refreshes the same public metadata identity with its existing eight-second deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () => new Response(JSON.stringify(snapshotBody[0])),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const result = await fetchBtcMetadataSnapshot();
+    expect(result.instrument.instrument_version).toBe(
+      metadata.instrument.instrument_version,
+    );
+    expect(timeout).toHaveBeenCalledWith(8000);
+    expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toEqual({
+      type: "meta",
+      dex: "",
+    });
+  });
+  it.each([408, 429, 500, 502, 503, 504])(
+    "classifies HTTP %s without retrying the request internally",
+    async (status) => {
+      const fetch = vi.fn(
+        async () =>
+          new Response("private response", {
+            status,
+            headers: { "Retry-After": "90" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      await expect(fetchBtcContextSnapshot(metadata)).rejects.toMatchObject({
+        kind: status === 429 ? "rate_limited" : "http_unavailable",
+        retryAfterMs: 90_000,
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
+  it.each([400, 401, 403, 404])("keeps HTTP %s terminal", async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("private", { status })),
+    );
+    await expect(fetchBtcBookSnapshot(metadata)).rejects.toThrow(
+      "BTC_CONTEXT_RESPONSE_REFUSED",
+    );
+  });
+  it("preserves Retry-After dates and classifies named network loss only", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("rate", {
+            status: 429,
+            headers: { "Retry-After": new Date(start + 120_000).toUTCString() },
+          }),
+      ),
+    );
+    await expect(fetchBtcBookSnapshot(metadata)).rejects.toMatchObject({
+      retryAfterMs: 120_000,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("private", { cause: { code: "ECONNRESET" } });
+      }),
+    );
+    await expect(fetchBtcBookSnapshot(metadata)).rejects.toBeInstanceOf(
+      SnapshotTransportError,
+    );
+  });
   it("preserves raw current state and HTTP timing without fabricating venue event time", () => {
     const e = snapshot();
     expect(e).toMatchObject({
