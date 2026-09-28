@@ -93,14 +93,20 @@ export function replayLedger(
   identity: LedgerIdentityInput,
   input: readonly LedgerReplayEvent[],
 ): LedgerProjection {
-  const scope = ledgerScope(identity);
-  const events = [...input].sort((a, b) =>
+  const reducer = createLedgerReducer(identity);
+  for (const event of [...input].sort((a, b) =>
     BigInt(a.sequence) < BigInt(b.sequence)
       ? -1
       : BigInt(a.sequence) > BigInt(b.sequence)
         ? 1
         : 0,
-  );
+  ))
+    reducer.append(event);
+  return reducer.snapshot();
+}
+/** Ordered incremental reduction; identical validation across page boundaries. */
+export function createLedgerReducer(identity: LedgerIdentityInput) {
+  const scope = ledgerScope(identity);
   let cash = 0n,
     sequence = 0n;
   const positions = new Map<string, bigint>();
@@ -114,7 +120,7 @@ export function replayLedger(
     funding = new Set<string>(),
     transactions = new Set<string>();
   let currentTransaction = "";
-  for (const event of events) {
+  const append = (event: LedgerReplayEvent) => {
     requireLedger(
       Object.entries(scope).every(
         ([key, value]) => event[key as keyof LedgerScope] === value,
@@ -227,18 +233,21 @@ export function replayLedger(
     }
     sequence += 1n;
     ids.add(event.event_id);
-  }
-  requireLedger(sequence > 0n, "GENESIS_REQUIRED");
-  return {
-    schema_version: LEDGER_VERSION,
-    scope,
-    last_sequence: sequence.toString(),
-    cash_usd_raw: cash.toString(),
-    positions: [...positions]
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([position_id, quantity]) => ({
-        position_id,
-        quantity_btc_raw: quantity.toString(),
-      })),
   };
+  const snapshot = (): LedgerProjection => {
+    requireLedger(sequence > 0n, "GENESIS_REQUIRED");
+    return {
+      schema_version: LEDGER_VERSION,
+      scope,
+      last_sequence: sequence.toString(),
+      cash_usd_raw: cash.toString(),
+      positions: [...positions]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([position_id, quantity]) => ({
+          position_id,
+          quantity_btc_raw: quantity.toString(),
+        })),
+    };
+  };
+  return { append, snapshot };
 }

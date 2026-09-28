@@ -28,6 +28,14 @@ import {
 import { projectFinancials, VALUATION_VERSION } from "../trading/valuation.js";
 import type { StorageIdentity } from "../trading/retention.js";
 
+export const REPLAY_PAGED_VERSION = "btc.replay.paged.v1";
+export const REPLAY_PAGED_LIMITS = Object.freeze({
+  rows: 65536,
+  decisions: 4096,
+  objects: 65536,
+  bytes: 64 * 1024 * 1024,
+  depth: 32,
+});
 export const REPLAY_VERSION = "btc.replay.captured.v1";
 export const REPLAY_EQUITY_VERSION = "btc.replay.captured.v2";
 export const REPLAY_LIMITS = Object.freeze({
@@ -70,16 +78,25 @@ export interface RetainedReplayRef {
   payload_hash: string | null;
 }
 export interface ReplayDataset {
+  window?: { start_at: string; end_at: string };
   equity_history?: {
     schema_version: "btc.replay-equity.v1";
     observation_ids: string[];
   };
   evidence_mode?: "embedded" | "references";
   retained_refs?: RetainedReplayRef[];
-  schema_version: typeof REPLAY_VERSION | typeof REPLAY_EQUITY_VERSION;
+  schema_version:
+    | typeof REPLAY_VERSION
+    | typeof REPLAY_EQUITY_VERSION
+    | typeof REPLAY_PAGED_VERSION;
   /** Export implementation; experiment code SHA remains in its captured registration. */
   code_sha: string;
-  contracts: typeof REPLAY_CONTRACTS | typeof REPLAY_EQUITY_CONTRACTS;
+  contracts:
+    | typeof REPLAY_CONTRACTS
+    | typeof REPLAY_EQUITY_CONTRACTS
+    | (Omit<typeof REPLAY_EQUITY_CONTRACTS, "replay"> & {
+        replay: typeof REPLAY_PAGED_VERSION;
+      });
   cut: {
     captured_at: string;
     ledger_sequence: string;
@@ -123,7 +140,10 @@ export function replayHash(value: unknown): string {
 export function sealReplayDataset(dataset: ReplayDataset): ReplayArtifact {
   assertEvidenceJson(dataset);
   requireReplay(
-    Buffer.byteLength(canonicalFingerprint(dataset)) <= REPLAY_LIMITS.bytes,
+    Buffer.byteLength(canonicalFingerprint(dataset)) <=
+      (dataset.schema_version === REPLAY_PAGED_VERSION
+        ? REPLAY_PAGED_LIMITS.bytes
+        : REPLAY_LIMITS.bytes),
     "BYTE_LIMIT",
   );
   return { dataset_id: `btc-replay:${replayHash(dataset)}`, dataset };
@@ -133,6 +153,10 @@ const same = (a: unknown, b: unknown) => replayHash(a) === replayHash(b);
  * model call, admission or broker. Reservations never become cash expenses. */
 export function replayDataset(artifact: ReplayArtifact) {
   const d = artifact.dataset;
+  const limits =
+    d.schema_version === REPLAY_PAGED_VERSION
+      ? REPLAY_PAGED_LIMITS
+      : REPLAY_LIMITS;
   requireReplay(
     sealReplayDataset(d).dataset_id === artifact.dataset_id,
     "HASH",
@@ -143,7 +167,14 @@ export function replayDataset(artifact: ReplayArtifact) {
       same(d.contracts, REPLAY_CONTRACTS)) ||
       (d.schema_version === REPLAY_EQUITY_VERSION &&
         !!d.equity_history &&
-        same(d.contracts, REPLAY_EQUITY_CONTRACTS)),
+        same(d.contracts, REPLAY_EQUITY_CONTRACTS)) ||
+      (d.schema_version === REPLAY_PAGED_VERSION &&
+        !!d.equity_history &&
+        !!d.window &&
+        same(d.contracts, {
+          ...REPLAY_EQUITY_CONTRACTS,
+          replay: REPLAY_PAGED_VERSION,
+        })),
     "CONTRACT_VERSION",
   );
   requireReplay(
@@ -156,7 +187,7 @@ export function replayDataset(artifact: ReplayArtifact) {
     selection.mode === "all" ||
       (selection.mode === "ids" &&
         selection.ids.length > 0 &&
-        selection.ids.length <= REPLAY_LIMITS.decisions &&
+        selection.ids.length <= limits.decisions &&
         new Set(selection.ids).size === selection.ids.length &&
         same(
           [...selection.ids].sort(),
@@ -177,7 +208,7 @@ export function replayDataset(artifact: ReplayArtifact) {
   );
   requireReplay(
     retained.size === (d.retained_refs?.length ?? 0) &&
-      retained.size <= REPLAY_LIMITS.objects &&
+      retained.size <= limits.objects &&
       (referenceMode || retained.size === 0),
     "REFERENCE_LIMIT",
   );
@@ -191,11 +222,11 @@ export function replayDataset(artifact: ReplayArtifact) {
     );
   validateLedgerIdentity(d.identity);
   requireReplay(
-    d.ledger.length <= REPLAY_LIMITS.rows &&
-      d.reservations.length <= REPLAY_LIMITS.rows &&
-      d.decisions.length <= REPLAY_LIMITS.decisions &&
-      d.jev.length <= REPLAY_LIMITS.decisions &&
-      d.evidence.length <= REPLAY_LIMITS.objects,
+    d.ledger.length <= limits.rows &&
+      d.reservations.length <= limits.rows &&
+      d.decisions.length <= limits.decisions &&
+      d.jev.length <= limits.decisions &&
+      d.evidence.length <= limits.objects,
     "ROW_LIMIT",
   );
   const objects = new Map(d.evidence.map((o) => [o.object_id, o]));
@@ -230,7 +261,7 @@ export function replayDataset(artifact: ReplayArtifact) {
   const reached = new Set<string>();
   const visit = (id: string, path: Set<string>) => {
     requireReplay(
-      !path.has(id) && path.size <= REPLAY_LIMITS.depth,
+      !path.has(id) && path.size <= limits.depth,
       "DEPENDENCY_CYCLE_OR_DEPTH",
     );
     if (reached.has(id)) return;
@@ -265,6 +296,12 @@ export function replayDataset(artifact: ReplayArtifact) {
     "HIGH_WATER",
   );
   const financials = projectFinancials(projection, events);
+  const batches = new Map<string, LedgerEvent[]>();
+  for (const e of events) {
+    const batch = batches.get(e.transaction_id) ?? [];
+    batch.push(e);
+    batches.set(e.transaction_id, batch);
+  }
   const pending = new Map<string, Reservation>();
   const operationIds = new Set<string>();
   for (const [i, r] of d.reservations.entries()) {
@@ -303,9 +340,7 @@ export function replayDataset(artifact: ReplayArtifact) {
             BigInt(q.price_usd_raw) <= BigInt(before.order.price_cap_usd_raw),
           "CONSUMPTION",
         );
-        const batch = events.filter(
-          (e) => e.transaction_id === r.ledger_transaction_id,
-        );
+        const batch = batches.get(r.ledger_transaction_id ?? "") ?? [];
         const fill = batch.find(
           (e) => e.payload.event_type === "fill",
         )?.payload;
@@ -422,7 +457,7 @@ export function replayDataset(artifact: ReplayArtifact) {
   return {
     dataset_id: artifact.dataset_id,
     schema_version: d.schema_version,
-    equity_history: replayEquityHistory(d),
+    equity_history: replayEquityHistory(d, limits),
     cut: d.cut,
     decision_selection: selection,
     evidence_mode: referenceMode ? "references" : "embedded",

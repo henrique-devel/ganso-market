@@ -1,3 +1,12 @@
+import { baselineTime } from "./baseline-inputs.js";
+import {
+  PAGE_LIMITS,
+  sealReplayPages,
+  validateManifest,
+  pageId,
+  type ReplayManifest,
+  type ReplayPage,
+} from "./replay-pages.js";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import { ledgerScope } from "../trading/ledger.js";
 import {
@@ -5,6 +14,8 @@ import {
   storeRetentionObjectTx,
 } from "./btc-retention.js";
 import {
+  REPLAY_PAGED_VERSION,
+  REPLAY_PAGED_LIMITS,
   REPLAY_EQUITY_CONTRACTS,
   REPLAY_EQUITY_VERSION,
   REPLAY_LIMITS,
@@ -24,10 +35,42 @@ async function boundedRows<T>(
   sql: string,
   account: string,
   limit: number,
-  budget: { bytes: number; deadline: number },
+  budget: {
+    bytes: number;
+    deadline: number;
+    maxBytes?: number;
+    paged?: boolean;
+  },
   extra: readonly unknown[] = [],
 ): Promise<T[]> {
   requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
+  if (budget.paged) {
+    await tx.query(
+      `DECLARE replay_batch NO SCROLL CURSOR FOR SELECT
+      CASE WHEN octet_length(row_to_json(b)::text)<=$3 THEN row_to_json(b) ELSE NULL END value,
+      octet_length(row_to_json(b)::text) bytes FROM (${sql} LIMIT $2) b`,
+      [account, limit + 1, PAGE_LIMITS.bytes - 1024, ...extra],
+    );
+    const values: T[] = [];
+    for (;;) {
+      requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
+      const page = await tx.query<{ value: T; bytes: number }>(
+        "FETCH FORWARD 16 FROM replay_batch",
+      );
+      if (!page.rows.length) break;
+      for (const row of page.rows) {
+        budget.bytes += row.bytes;
+        requireReplay(
+          row.value !== null && budget.bytes <= budget.maxBytes!,
+          "BYTE_LIMIT",
+        );
+        values.push(row.value);
+        requireReplay(values.length <= limit, "ROW_LIMIT");
+      }
+    }
+    await tx.query("CLOSE replay_batch");
+    return values;
+  }
   // Size is checked server-side before any potentially large JSON reaches Node.
   const rows = await tx.query<{ value: T; bytes: number }>(
     `WITH bounded AS MATERIALIZED (${sql} LIMIT $2)
@@ -48,13 +91,27 @@ async function boundedRows<T>(
 }
 /** One bounded snapshot per invocation. Lock order matches financial writers.
  * Captures now; never invents an old snapshot from current mutable state. */
-export async function captureReplayDataset(
+async function capture(
   pool: Pick<DatabasePool, "transaction">,
   account: string,
   codeSha: string,
   decisionIds?: readonly string[],
   evidenceMode: "embedded" | "references" = "embedded",
-): Promise<ReplayArtifact> {
+  window?: { start_at: string; end_at: string },
+): Promise<ReplayArtifact | ReplayManifest> {
+  const limits = window ? REPLAY_PAGED_LIMITS : REPLAY_LIMITS;
+  const workMs = window ? 30000 : 10000;
+  if (window) {
+    const from = baselineTime(window.start_at),
+      to = baselineTime(window.end_at);
+    requireReplay(
+      to > from &&
+        to - from <= 30 * 86400000 &&
+        from % 900000 === 0 &&
+        to % 900000 === 0,
+      "WINDOW",
+    );
+  }
   requireReplay(
     /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(account) &&
       /^[a-f0-9]{40}$/.test(codeSha),
@@ -63,7 +120,7 @@ export async function captureReplayDataset(
   requireReplay(
     !decisionIds ||
       (decisionIds.length > 0 &&
-        decisionIds.length <= REPLAY_LIMITS.decisions &&
+        decisionIds.length <= limits.decisions &&
         new Set(decisionIds).size === decisionIds.length &&
         decisionIds.every((id) => /^[a-f0-9]{64}$/.test(id))),
     "DECISION_SELECTION",
@@ -76,7 +133,12 @@ export async function captureReplayDataset(
     await tx.query("SET LOCAL TIME ZONE 'UTC'");
     await tx.query("SELECT pg_advisory_xact_lock(741044, 4)");
     const started = Date.now(),
-      budget = { bytes: 0, deadline: started + 10000 };
+      budget = {
+        bytes: 0,
+        deadline: started + workMs,
+        maxBytes: limits.bytes,
+        paged: !!window,
+      };
     const rows = await boundedRows<{ identity: ReplayDataset["identity"] }>(
       tx,
       "SELECT identity FROM btc_ledger_accounts WHERE account_id=$1 FOR UPDATE",
@@ -93,7 +155,7 @@ export async function captureReplayDataset(
         tx,
         "SELECT event FROM btc_ledger_events WHERE account_id=$1 ORDER BY sequence",
         account,
-        REPLAY_LIMITS.rows,
+        limits.rows,
         budget,
       )
     ).map((x) => x.event);
@@ -103,16 +165,30 @@ export async function captureReplayDataset(
       tx,
       "SELECT sequence::text, to_char(recorded_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS recorded_at,request,reservation,ledger_transaction_id FROM btc_reservation_events WHERE account_id=$1 ORDER BY sequence",
       account,
-      REPLAY_LIMITS.rows,
+      limits.rows,
       budget,
     );
-    const selection = decisionIds ? " AND decision_id=ANY($4::text[])" : "";
-    const extra = decisionIds ? [decisionIds] : [];
+    if (window)
+      requireReplay(
+        window.start_at >= rows[0].identity.experiment.started_at &&
+          window.end_at <= at,
+        "WINDOW",
+      );
+    const selection = window
+      ? " AND bar_end_at>$4 AND bar_end_at<=$5"
+      : decisionIds
+        ? " AND decision_id=ANY($4::text[])"
+        : "";
+    const extra = window
+      ? [window.start_at, window.end_at]
+      : decisionIds
+        ? [decisionIds]
+        : [];
     const decisions = await boundedRows<ReplayDataset["decisions"][number]>(
       tx,
       `SELECT decision,evidence_id FROM btc_baseline_decisions_full WHERE account_id=$1${selection} ORDER BY bar_end_at`,
       account,
-      REPLAY_LIMITS.decisions,
+      limits.decisions,
       budget,
       extra,
     );
@@ -124,7 +200,7 @@ export async function captureReplayDataset(
       tx,
       `SELECT decision_id,evidence_id,state,origin,model,request_id,request,outcome FROM btc_jev_challenger_requests WHERE account_id=$1${selection} ORDER BY bar_end_at`,
       account,
-      REPLAY_LIMITS.decisions,
+      limits.decisions,
       budget,
       extra,
     );
@@ -143,11 +219,11 @@ export async function captureReplayDataset(
       `SELECT e.evidence_id,o.payload->'mark'->>'evidence' AS mark_id,
       o.payload->>'capture_evidence_id' AS capture_id
       FROM btc_equity_observations e JOIN btc_retention_objects o ON o.object_id=e.evidence_id
-      WHERE e.account_id=$1 AND e.observed_at<=$4 ORDER BY e.slot`,
+      WHERE e.account_id=$1 AND e.observed_at<=$4${window ? " AND e.observed_at>=$5" : ""} ORDER BY e.slot`,
       account,
-      REPLAY_LIMITS.rows,
+      limits.rows,
       budget,
-      [at],
+      window ? [window.end_at, window.start_at] : [at],
     );
     for (const row of equity)
       for (const id of [row.evidence_id, row.mark_id, row.capture_id])
@@ -170,7 +246,7 @@ export async function captureReplayDataset(
         tx,
         `SELECT evidence_id FROM ${table} WHERE account_id=$1`,
         account,
-        REPLAY_LIMITS.rows,
+        limits.rows,
         budget,
       );
       for (const row of records) {
@@ -206,7 +282,7 @@ export async function captureReplayDataset(
         decisions.flatMap((d) => d.decision.input_refs.map((r) => r.object_id)),
       ),
     ];
-    requireReplay(refs.length <= REPLAY_LIMITS.objects, "OBJECT_LIMIT");
+    requireReplay(refs.length <= limits.objects, "OBJECT_LIMIT");
     // Missing legacy references are retained as fidelity warnings, not fabricated.
     if (refs.length)
       for (const row of (
@@ -216,7 +292,7 @@ export async function captureReplayDataset(
         )
       ).rows)
         roots.add(row.object_id);
-    requireReplay(roots.size <= REPLAY_LIMITS.objects, "OBJECT_LIMIT");
+    requireReplay(roots.size <= limits.objects, "OBJECT_LIMIT");
     const retainedRefs: RetainedReplayRef[] = [];
     if (evidenceMode === "references") {
       const hashes = new Map<
@@ -259,11 +335,11 @@ export async function captureReplayDataset(
     ].sort();
     for (let depth = 0; frontier.length; depth++) {
       requireReplay(
-        depth <= REPLAY_LIMITS.depth && Date.now() - started < 10000,
+        depth <= limits.depth && Date.now() - started < workMs,
         "WORK_LIMIT",
       );
       requireReplay(
-        evidence.size + frontier.length <= REPLAY_LIMITS.objects,
+        evidence.size + frontier.length <= limits.objects,
         "OBJECT_LIMIT",
       );
       const next = new Set<string>();
@@ -279,15 +355,12 @@ export async function captureReplayDataset(
           CASE WHEN sum(octet_length(row_to_json(b)::text)) OVER ()<=$2 THEN row_to_json(b) ELSE NULL END value
           FROM (SELECT object_id,class,identity,to_char(recorded_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') recorded_at,payload,dependencies
           FROM btc_retention_objects WHERE object_id=ANY($1::text[])) b`,
-          [ids, REPLAY_LIMITS.bytes - budget.bytes],
+          [ids, Math.min(REPLAY_LIMITS.bytes, limits.bytes - budget.bytes)],
         );
         requireReplay(result.rows.length === ids.length, "DEPENDENCY_MISSING");
         for (const r of result.rows) {
           budget.bytes += r.bytes;
-          requireReplay(
-            r.value && budget.bytes <= REPLAY_LIMITS.bytes,
-            "BYTE_LIMIT",
-          );
+          requireReplay(r.value && budget.bytes <= limits.bytes, "BYTE_LIMIT");
           evidence.set(r.object_id, {
             ...r.value,
             payload_hash: replayHash(r.value.payload),
@@ -299,13 +372,16 @@ export async function captureReplayDataset(
       frontier = [...next].filter((id) => !evidence.has(id)).sort();
     }
     const artifact = sealReplayDataset({
-      schema_version: REPLAY_EQUITY_VERSION,
+      schema_version: window ? REPLAY_PAGED_VERSION : REPLAY_EQUITY_VERSION,
+      ...(window ? { window } : {}),
       equity_history: {
         schema_version: "btc.replay-equity.v1",
         observation_ids: equity.map((e) => e.evidence_id),
       },
       code_sha: codeSha,
-      contracts: REPLAY_EQUITY_CONTRACTS,
+      contracts: window
+        ? { ...REPLAY_EQUITY_CONTRACTS, replay: REPLAY_PAGED_VERSION }
+        : REPLAY_EQUITY_CONTRACTS,
       cut: {
         captured_at: at,
         ledger_sequence: ledger.at(-1)?.sequence ?? "0",
@@ -328,7 +404,7 @@ export async function captureReplayDataset(
       ),
     });
     replayDataset(artifact);
-    requireReplay(Date.now() - started < 10000, "WORK_LIMIT");
+    requireReplay(Date.now() - started < workMs, "WORK_LIMIT");
     // Do not use the essential-evidence exemption to bypass finite worker budgets.
     const capacity = (
       await tx.query<{
@@ -338,13 +414,44 @@ export async function captureReplayDataset(
       (pg_total_relation_size('btc_retention_objects')+pg_total_relation_size('btc_retention_dependencies')+pg_total_relation_size('btc_retention_pins')+pg_total_relation_size('btc_market_records')+pg_total_relation_size('btc_market_bars')+pg_total_relation_size('btc_market_head'))::text physical
       FROM btc_retention_policy WHERE dataset_id='btc-paper-v1'`)
     ).rows[0];
-    const reserve = BigInt(REPLAY_LIMITS.bytes * 2);
+    const reserve = BigInt(limits.bytes * 2);
     requireReplay(
       capacity &&
         BigInt(capacity.total) + reserve < 6n * 1024n ** 3n &&
         BigInt(capacity.physical) + reserve < 4n * 1024n ** 3n,
       "CAPACITY",
     );
+    if (window) {
+      const bundle = sealReplayPages(artifact.dataset);
+      validateManifest(bundle.artifact);
+      for (const page of bundle.pages) {
+        requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
+        await storeRetentionObjectTx(tx, {
+          id: pageId(page),
+          class: "experiment",
+          identity: ledgerScope(rows[0].identity),
+          recordedAt: new Date(at),
+          payload: page,
+          dependencies: page.stream === "roots" ? (page.rows as string[]) : [],
+        });
+      }
+      await storeRetentionObjectTx(tx, {
+        id: bundle.artifact.dataset_id,
+        class: "experiment",
+        identity: ledgerScope(rows[0].identity),
+        recordedAt: new Date(at),
+        payload: bundle.artifact,
+        dependencies: bundle.artifact.manifest.pages.map((p) => p.id),
+      });
+      await pinRetentionObjectTx(
+        tx,
+        bundle.artifact.dataset_id,
+        bundle.artifact.dataset_id,
+        REPLAY_PAGED_VERSION,
+      );
+      requireReplay(Date.now() < budget.deadline, "WORK_LIMIT");
+      return bundle.artifact;
+    }
     await storeRetentionObjectTx(tx, {
       id: artifact.dataset_id,
       class: "experiment",
@@ -419,6 +526,124 @@ export async function loadReplayEvidence(
       recorded_at: row.recorded_at.toISOString(),
       payload_hash: hash,
       producer_hash_verified: expected.payload_hash !== null,
+      payload: row.payload,
+      dependencies: row.dependencies,
+    };
+  });
+}
+
+/** Existing v1/v2 capture contract stays bounded and unchanged. */
+export async function captureReplayDataset(
+  pool: Pick<DatabasePool, "transaction">,
+  account: string,
+  codeSha: string,
+  decisionIds?: readonly string[],
+  evidenceMode: "embedded" | "references" = "embedded",
+) {
+  return (await capture(
+    pool,
+    account,
+    codeSha,
+    decisionIds,
+    evidenceMode,
+  )) as ReplayArtifact;
+}
+export async function captureReplayWindow(
+  pool: Pick<DatabasePool, "transaction">,
+  account: string,
+  codeSha: string,
+  window: { start_at: string; end_at: string },
+) {
+  return (await capture(
+    pool,
+    account,
+    codeSha,
+    undefined,
+    "references",
+    window,
+  )) as ReplayManifest;
+}
+export async function loadReplayManifest(
+  pool: Pick<DatabasePool, "readOnly">,
+  id: string,
+) {
+  requireReplay(/^btc-replay-window:[a-f0-9]{64}$/.test(id), "DATASET_ID");
+  return pool.readOnly(5000, async (tx) => {
+    const row = (
+      await tx.query<{ payload: ReplayManifest }>(
+        "SELECT payload FROM btc_retention_objects WHERE object_id=$1 AND octet_length(payload::text)<=$2",
+        [id, PAGE_LIMITS.bytes * 2],
+      )
+    ).rows[0];
+    requireReplay(
+      row && row.payload.dataset_id === id,
+      "DATASET_MISSING_OR_OVERSIZE",
+    );
+    validateManifest(row.payload);
+    return row.payload;
+  });
+}
+export async function loadReplayPage(
+  pool: Pick<DatabasePool, "readOnly">,
+  id: string,
+  index: number,
+) {
+  const manifest = await loadReplayManifest(pool, id);
+  const ref = manifest.manifest.pages[index];
+  requireReplay(Number.isSafeInteger(index) && index >= 0 && ref, "PAGE_INDEX");
+  return pool.readOnly(5000, async (tx) => {
+    const row = (
+      await tx.query<{ payload: ReplayPage }>(
+        "SELECT payload FROM btc_retention_objects WHERE object_id=$1 AND octet_length(payload::text)<=$2",
+        [ref.id, PAGE_LIMITS.bytes * 2],
+      )
+    ).rows[0];
+    requireReplay(
+      row && pageId(row.payload) === ref.id,
+      "PAGE_MISSING_OR_HASH",
+    );
+    return row.payload;
+  });
+}
+
+export async function loadReplayWindowEvidence(
+  pool: Pick<DatabasePool, "readOnly">,
+  datasetId: string,
+  index: number,
+  objectId: string,
+) {
+  const page = await loadReplayPage(pool, datasetId, index);
+  requireReplay(
+    page.stream === "retained_refs" || page.stream === "evidence",
+    "EVIDENCE_NOT_DECLARED",
+  );
+  const ref = (page.rows as RetainedReplayRef[]).find(
+    (r) => r.object_id === objectId,
+  );
+  requireReplay(ref, "EVIDENCE_NOT_DECLARED");
+  return pool.readOnly(5000, async (tx) => {
+    const row = (
+      await tx.query<{
+        recorded_at: Date;
+        payload: unknown;
+        dependencies: string[];
+      }>(
+        "SELECT recorded_at,payload,dependencies FROM btc_retention_objects WHERE object_id=$1 AND octet_length(jsonb_build_object('payload',payload,'dependencies',dependencies)::text)<=$2",
+        [objectId, REPLAY_LIMITS.bytes - 1024],
+      )
+    ).rows[0];
+    requireReplay(row, "EVIDENCE_MISSING_OR_OVERSIZE");
+    const hash = replayHash(row.payload);
+    requireReplay(
+      row.recorded_at.toISOString() === ref.recorded_at &&
+        (ref.payload_hash === null || hash === ref.payload_hash),
+      "EVIDENCE_HASH_OR_TIME",
+    );
+    return {
+      object_id: objectId,
+      recorded_at: ref.recorded_at,
+      payload_hash: hash,
+      producer_hash_verified: ref.payload_hash !== null,
       payload: row.payload,
       dependencies: row.dependencies,
     };
