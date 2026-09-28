@@ -12,7 +12,7 @@ const RUNTIME = join(REPO, "config/runtime.json");
 const SRC = join(REPO, "apps/api/src");
 
 interface PublishedLocation {
-  /** The upstream path the edge proxies to, e.g. `/polymarket/overview`. */
+  /** The upstream path the edge proxies to, e.g. `/trading/accounts`. */
   readonly upstream: string;
   /** `^~` publishes every route under the path; `=` publishes only that path. */
   readonly prefix: boolean;
@@ -38,10 +38,7 @@ function publishedLocations(): PublishedLocation[] {
       continue;
     }
     const body = block.slice(0, block.indexOf("\n        }"));
-    const pass =
-      /proxy_pass\s+http:\/\/api:3000(\/(?:polymarket|trading)\S*?);/.exec(
-        body,
-      );
+    const pass = /proxy_pass\s+http:\/\/api:3000(\/trading\S*?);/.exec(body);
     if (pass === null) {
       continue;
     }
@@ -122,8 +119,8 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
   it("finds the perimeter it is supposed to be checking", () => {
     // A parser that silently matches nothing would make every assertion below
     // vacuously true, which is the failure mode this test cannot afford.
-    expect(locations.length).toBeGreaterThanOrEqual(11);
-    expect(routes.length).toBeGreaterThanOrEqual(20);
+    expect(locations.length).toBeGreaterThanOrEqual(5);
+    expect(routes.length).toBeGreaterThanOrEqual(10);
   });
 
   it("gives every GET route under a published location its own budget", () => {
@@ -132,10 +129,6 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
     );
     expect(published.length).toBeGreaterThan(0);
     const undeclared = published
-      // RFC-029 D3: the two shadow-replay reads open no database connection, so
-      // there is no statement for a statement budget to bound. They are excused
-      // here and held to that reason in route-budgets.runtime.test.ts, which
-      // fails if either of them ever runs a query.
       .filter((route) => !DISK_ONLY_ROUTES.includes(route.url))
       .filter((route) => budgets[route.url] === undefined)
       .map((route) => `${route.url} (${route.file})`);
@@ -151,7 +144,6 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
       (route) => route.method === "POST" && isPublished(route, locations),
     );
     expect(publishedWrites.map((route) => route.url)).toEqual([
-      "/polymarket/paper/kill-switch/rearm",
       "/trading/preview",
       "/trading/submit",
       "/trading/cancel",

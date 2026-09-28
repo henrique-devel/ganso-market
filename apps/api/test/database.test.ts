@@ -77,7 +77,7 @@ describe("database pool client errors", () => {
   it("survives the error event that killed every worker on deploy", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
     createDatabasePool(config(), {
-      applicationName: "ganso-market-polymarket-recorder",
+      applicationName: "ganso-market-btc-worker",
       queryTimeoutMs: 30_000,
     });
     const pool = pools[0];
@@ -96,7 +96,7 @@ describe("database pool client errors", () => {
   it("logs DB_POOL_CLIENT_ERROR with the detail the reason code alone hides", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     createDatabasePool(config(), {
-      applicationName: "ganso-market-polymarket-recorder",
+      applicationName: "ganso-market-btc-worker",
       queryTimeoutMs: 30_000,
     });
 
@@ -117,7 +117,7 @@ describe("database pool client errors", () => {
     expect(logged.detail).toBe(
       "terminating connection due to administrator command",
     );
-    expect(logged.application_name).toBe("ganso-market-polymarket-recorder");
+    expect(logged.application_name).toBe("ganso-market-btc-worker");
   });
 
   it("names the api when no application name is given", () => {

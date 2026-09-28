@@ -37,7 +37,7 @@ O proprietário autorizou alterações e remoções relacionadas ao legado desde
 ambiente local até produção, incluindo PR, merge e publicação. Não repetir
 pedidos de autorização para as etapas cobertas. A execução é dividida em:
 
-1. **Escopo (esta entrega):** alinhar instruções, PRD, índices e roadmap;
+1. **Escopo (entregue no PR #302):** alinhar instruções, PRD, índices e roadmap;
    publicar os mesmos documentos no servidor, sem recriar serviços por texto.
 2. **Código e operação:** inventariar e remover serviços, rotas, telas, timers,
    configurações, dependências e testes exclusivos. Extrair qualquer primitiva
@@ -57,7 +57,9 @@ preservada antes do descarte. Código removido é recuperável pelo Git; dados
 apagados não têm recuperação prometida. Backup continua fora do pré-requisito
 atual, conforme decisão anterior.
 
-Esta alteração documental **não comprova código ou dados removidos**. O registro
+A revisão de escopo do PR #302 foi documental. A retirada física agora está
+em execução por autorização explícita posterior; conferir o resultado no PR
+e no acompanhamento, sem inferir conclusão a partir deste texto. O registro
 único de entrega continua em [estado de execução](roadmap/GANSO_2_EXECUTION_STATE.md).
 Mudanças locais alheias à tarefa são preservadas, sem reset ou sobrescrita.
 

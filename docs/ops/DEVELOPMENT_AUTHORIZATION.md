@@ -22,6 +22,8 @@ mas não autoriza apagar dados BTC, remover volume compartilhado, alterar
 migrations aplicadas, desligar proteções globais, mudar perímetro/caps, contratar
 serviços ou ativar live. Não exige backup como condição adicional.
 
+**Confirmação posterior em 28/09:** “Autorizado a remoção de todo e qualquer codigo/dados do projeto Polymarket”. A entrega agora executa retirada física do código, serviços e conjuntos exclusivos inventariados, mantendo BTC/Hyperliquid e auth.
+
 ## Registro das autorizações anteriores
 
 As seções abaixo preservam decisões datadas; em conflito, prevalece a emenda acima.

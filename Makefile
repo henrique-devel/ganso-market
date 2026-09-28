@@ -9,10 +9,6 @@ SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
 
 .PHONY: help doctor install init-secrets format format-check lint test test-postgres build verify \
 	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \
-	recorder-up recorder-logs recorder-down \
-	estimator-up estimator-logs estimator-down \
-	paper-up paper-logs paper-down \
-	resolution-up resolution-logs resolution-down \
 	server-init server-config server-up server-health server-status server-logs server-update server-down
 
 help:
@@ -24,18 +20,6 @@ help:
 	@echo "  make integration    testa Compose, readiness e shutdown"
 	@echo "  make test-postgres  gate obrigatório em PostgreSQL descartável (Docker)"
 	@echo "  make down           encerra sem apagar volumes"
-	@echo "  make recorder-up    sobe o recorder Polymarket (dados públicos)"
-	@echo "  make recorder-logs  acompanha os logs do recorder Polymarket"
-	@echo "  make recorder-down  encerra o recorder Polymarket"
-	@echo "  make estimator-up   sobe o modelo fundamental (RFC-010)"
-	@echo "  make estimator-logs acompanha os logs do modelo fundamental"
-	@echo "  make estimator-down encerra o modelo fundamental"
-	@echo "  make paper-up       sobe o paper broker (RFC-011, simulação)"
-	@echo "  make paper-logs     acompanha os logs do paper broker"
-	@echo "  make paper-down     encerra o paper broker"
-	@echo "  make resolution-up  sobe o risco de resolução/grafo (RFC-012)"
-	@echo "  make resolution-logs acompanha os logs do risco de resolução"
-	@echo "  make resolution-down encerra o risco de resolução"
 	@echo "  make server-up      sobe o Ganso Market standalone na porta 80"
 	@echo "  make server-health  verifica frontend, API e banco"
 	@echo "  make server-status  mostra o estado dos containers"
@@ -109,43 +93,7 @@ resource-check:
 	$(PYTHON) scripts/check_runtime_memory.py
 
 down:
-	docker compose --profile btc --profile polymarket down --remove-orphans
-
-recorder-up: init-secrets
-	docker compose --profile polymarket up --build --detach polymarket-recorder
-
-recorder-logs:
-	docker compose --profile polymarket logs --follow --tail 100 polymarket-recorder
-
-recorder-down:
-	docker compose --profile polymarket rm --stop --force polymarket-recorder
-
-estimator-up: init-secrets
-	docker compose --profile polymarket up --build --detach polymarket-estimator
-
-estimator-logs:
-	docker compose --profile polymarket logs --follow --tail 100 polymarket-estimator
-
-estimator-down:
-	docker compose --profile polymarket rm --stop --force polymarket-estimator
-
-paper-up: init-secrets
-	docker compose --profile polymarket up --build --detach polymarket-paper
-
-paper-logs:
-	docker compose --profile polymarket logs --follow --tail 100 polymarket-paper
-
-paper-down:
-	docker compose --profile polymarket rm --stop --force polymarket-paper
-
-resolution-up: init-secrets
-	docker compose --profile polymarket up --build --detach polymarket-resolution
-
-resolution-logs:
-	docker compose --profile polymarket logs --follow --tail 100 polymarket-resolution
-
-resolution-down:
-	docker compose --profile polymarket rm --stop --force polymarket-resolution
+	docker compose --profile btc down --remove-orphans
 
 server-init:
 	@if [ ! -f "$(SERVER_ENV)" ]; then \
@@ -175,4 +123,4 @@ server-update: server-config
 	@SERVER_ENV="$(SERVER_ENV)" ./deploy/healthcheck.sh
 
 server-down:
-	$(SERVER_COMPOSE) --profile btc --profile polymarket down --remove-orphans
+	$(SERVER_COMPOSE) --profile btc down --remove-orphans
