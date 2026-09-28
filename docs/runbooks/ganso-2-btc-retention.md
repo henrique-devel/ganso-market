@@ -95,7 +95,10 @@ contrato completo. Leitura mista devolve exatamente o payload original; versões
 de captura, cálculo financeiro e hash da decisão não mudam. A projeção contém
 apenas uma versão de armazenamento, que não entra no hash econômico.
 
-Implantar migration antes da API; o coletor continua parado. **Rollback após
+Implantação em duas etapas: primeiro migration e leitores, com escritor antigo;
+verificar essa release em produção e só então publicar o escritor que solicita
+a projeção. Assim o rollback automático da segunda release encontra leitores
+compatíveis. O coletor continua parado. **Rollback após
 primeira projeção:** preservar schema 46 e estes leitores compatíveis, revertendo
 somente a emissão de `storage_version` no escritor (hotfix reconstruído/testado).
 Não retornar à imagem anterior sem o patch de leitura, pois ela interpreta a

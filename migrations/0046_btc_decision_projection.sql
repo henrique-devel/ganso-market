@@ -19,7 +19,7 @@ BEGIN
     OR evidence->>'decision_id' IS DISTINCT FROM NEW.decision_id
     OR evidence->'registration'->'scope'->>'account_id' IS DISTINCT FROM NEW.account_id
     OR (evidence->>'bar_end_at')::timestamptz IS DISTINCT FROM NEW.bar_end_at
-    OR NOT EXISTS(SELECT 1 FROM btc_retention_pins WHERE object_id=NEW.evidence_id)
+    OR NOT EXISTS(SELECT 1 FROM btc_retention_pins WHERE pin_id=NEW.evidence_id AND object_id=NEW.evidence_id)
   THEN RAISE EXCEPTION 'BTC_DECISION_EVIDENCE_MISMATCH'; END IF;
   NEW.decision := btc_decision_projection(evidence);
   RETURN NEW;
