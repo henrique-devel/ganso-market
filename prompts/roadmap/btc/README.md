@@ -1,5 +1,7 @@
 # Blocos BTC — roteiro de implementação e evidência
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../../../docs/SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 Pacote solicitado em **10/09/2026**. Novas RFCs são especificações; nenhuma mudança
 na aplicação, deploy ou limpeza foi executada na criação destes documentos.
 

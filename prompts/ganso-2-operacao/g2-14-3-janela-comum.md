@@ -10,6 +10,11 @@ tracking: docs/roadmap/GANSO_2_EXECUTION_STATE.md
 
 # G2-14.3 — Comparar baseline e Jev com inícios diferentes
 
+**Adaptação de escopo — 28/09:** entregar cortes/janelas BTC e comparadores
+genéricos sem exigir conta, chamada ou ativação JEV. A comparação com challenger
+abaixo é compatibilidade futura, verificável por fixtures. A avaliação produtiva
+atual é baseline versus referências BTC/caixa, conforme [escopo](../../docs/SCOPE.md).
+
 Execute somente esta sessão. Leia o [protocolo](00-protocolo.md), o contrato comum e a [seção S4 da RFC-053](../../docs/rfcs/RFC-053-ganso-2-prontidao-operacional.md#s4), e sua linha no [estado único](../../docs/roadmap/GANSO_2_EXECUTION_STATE.md). Consulte o [roadmap](../../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md) somente para dependência ou decisão concreta. Não reler todo o histórico.
 
 ## Entrega

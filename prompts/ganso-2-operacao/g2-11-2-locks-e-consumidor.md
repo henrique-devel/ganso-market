@@ -37,7 +37,7 @@ Execute testes proporcionais e checks obrigatórios. SQL financeiro usa PostgreS
 
 ## Entrega e limites operacionais
 
-API/coletor afetados, preservando PostgreSQL e legado. Correção publicada pode ficar code-verified enquanto retomada do coletor depende de G2-12.3. Não exigir coleta produtiva insegura para encerrar código.
+API/coletor afetados, preservando PostgreSQL compartilhado e dados BTC. Correção publicada pode ficar code-verified enquanto retomada do coletor depende de G2-12.3. Não exigir coleta produtiva insegura para encerrar código.
 
 A autorização contínua cobre código → PR → correções/checks → merge → implantação aplicável desta sessão, sem nova confirmação por etapa. Compra, consumo pago ainda não coberto, descarte delimitado, capital e mudança de perímetro dependem da autorização específica aplicável. Prepare o resultado concreto antes de solicitar apenas o que faltar. Criar este prompt não executou nem ativou seu conteúdo.
 

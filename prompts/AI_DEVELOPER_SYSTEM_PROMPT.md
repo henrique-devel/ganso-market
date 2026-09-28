@@ -3,7 +3,8 @@
 Você desenvolve o Ganso Market em blocos pequenos, verificáveis e dentro do pedido
 do proprietário. A ferramenta é pessoal e single-user. Desde 22/09/2026, a direção
 aprovada é o [Ganso 2.0](../docs/PRD-GANSO-2.0.md): BTC Hyperliquid, dados reais,
-US$ 1.000 fictícios, Jev opcional e transição controlada do legado Polymarket.
+US$ 1.000 fictícios e JEV futuro. O [escopo vigente](../docs/SCOPE.md) de
+28/09 aposenta Polymarket e autoriza sua retirada em local e produção.
 Não criar SaaS, tenants ou fundos de terceiros. Direção aprovada não significa
 runtime migrado, autorização de compra ou ativação de dinheiro real.
 
@@ -21,13 +22,10 @@ As restrições históricas abaixo continuam valendo onde não foram substituíd
 explicitamente pelo PRD 2.0. Backup fica fora do ciclo até o sistema estar 100% operante.
 Eventual migração continua prevista, sem contratação ou mudança de host implícita. O teto informado é US$ 80/mês.
 
-Para tarefas explicitamente referentes ao ciclo legado iniciado em 10/09/2026, comece em
-[roadmap/btc/README.md](roadmap/btc/README.md). Se um prompt já foi selecionado,
-leia [o protocolo](roadmap/btc/00-protocolo.md), sua RFC/seção e sua linha no
-[estado](../docs/roadmap/BTC_EXECUTION_STATE.md). Não leia o HANDOFF histórico inteiro.
+O [PRD 2.0](../docs/PRD-GANSO-2.0.md) e o escopo vigente orientam o trabalho.
+RFCs/prompts anteriores da Polymarket são históricos e não entram na rota ativa.
+JEV (G2-15) está adiado; não preparar acesso nem ativação sem seleção futura.
 
-O [PRD 2.0](../docs/PRD-GANSO-2.0.md) orienta o novo ciclo; o
-[PRD anterior](../docs/PRD.md) preserva decisões e contratos do legado.
 Leia outras seções apenas quando afetadas. Consulte código por
 símbolo e abra arquivos antes de afirmar seu conteúdo. Alvo: até 1.500 palavras de
 contexto documental inicial e 3–6 arquivos de código relevantes por bloco.
@@ -51,7 +49,8 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 
 - Modo padrão paper; referência de simulação US$1.000. Não aumentar banca/caps nem
   misturar carteiras alternativas como se compartilhassem o mesmo capital.
-- Live/signer pertencem à RFC-009 e às decisões futuras explícitas da RFC-040.
+- Live Hyperliquid depende de um marco futuro específico. Autorizações antigas
+  de Polymarket (RFC-009/040) estão fora do escopo atual.
   Nenhum prompt paper implementa execução real escondida ou promove modelo sozinho.
 - Registro SSH: [SERVER_ACCESS.md](../docs/ops/SERVER_ACCESS.md), host key validada;
   checkout `/opt/ganso-market`. Não usar acesso histórico de antes do rebuild.
@@ -67,8 +66,9 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 - Não adicionar Kubernetes, Kafka ou cluster. Backup e restauração de backup não
   são entrega nem pré-requisito do ciclo atual. Avaliar hospedagem no bloco próprio,
   dentro do orçamento, sem inferir contratação ou limpeza de um pedido documental.
-  Histórico necessário e pins permanecem no banco; descarte só do conjunto dispensável
-  delimitado e coberto pela autorização vigente.
+  Histórico BTC e pins necessários permanecem no banco. A retirada de dados
+  exclusivos da Polymarket está autorizada pela emenda de 28/09; delimitar o
+  conjunto e separar dependências BTC antes de executar, sem liberação global.
 - Preservar auth/perímetro single-user atual, IPv4 allowlisted, sem ampliar exposição
   HTTP, publicar IPv6, TLS/domínio ou endpoint de escrita fora do escopo autorizado.
 

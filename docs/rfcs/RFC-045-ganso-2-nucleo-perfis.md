@@ -1,5 +1,7 @@
 # RFC-045 — Núcleo neutro e perfil de serviços
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 **Status:** accepted para execução de seus prompts quando selecionados. **Data:** 22/09/2026. **Marco:** G2-03. Criar esta RFC não implementa nem ativa o resultado.
 
 **Fonte:** [PRD 2.0](../PRD-GANSO-2.0.md), seções 4.2 e 9. **Requisitos:** RF-01, RF-04, RF-16. **Roteiro:** [prompts](../../prompts/ganso-2/README.md). **Acompanhamento:** [estado 2.0](../roadmap/GANSO_2_EXECUTION_STATE.md).

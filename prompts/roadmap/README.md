@@ -1,5 +1,7 @@
 # Roadmap de prompts — do estado de 2026-08-31 até a execução real
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../../docs/SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 > **Rota atual de desenvolvimento (10/09): [blocos BTC](btc/README.md).**
 > Os prompts abaixo preservam o roteiro anterior. Para 021/022/028 use as emendas
 > no topo das RFCs e os blocos novos; não reexecute entregas já presentes em razão

@@ -1,6 +1,8 @@
 # PRD — Ganso Market 2.0
 
-Versão 1.2 · 22/09/2026 · Proprietário: operador do Ganso Market.
+**Revisão de escopo — 28/09/2026:** [decisão vigente](SCOPE.md). BTC/Hyperliquid agora; JEV futuro. Polymarket aposentada. Planos e fotografias anteriores abaixo não comprovam estado atual nem reabrem backlog.
+
+Versão 1.3 · 28/09/2026 · Proprietário: operador do Ganso Market.
 
 **Emenda de escopo de 22/09:** por decisão do proprietário, backup e restauração de backup ficam fora deste ciclo até o sistema estar 100% operante. Não são requisito de coleta, operação, merge, implantação ou conclusão do Ganso 2.0. O antigo RF-17 e os prompts G2-02.2/3 foram retirados; eventual desenvolvimento será definido depois. Reinício de processo e reconciliação do ledger continuam no RF-10.
 
@@ -14,9 +16,9 @@ Documento vigente para o novo ciclo. Substitui o direcionamento exclusivo Polyma
 
 O Ganso 2.0 será uma mesa pessoal para executar operações simuladas com dados reais, explicar cada decisão e comparar estratégias depois dos custos. O primeiro instrumento será o **perpétuo padrão de BTC da Hyperliquid**, com saldo inicial fictício de US$ 1.000, margem isolada simulada, configuração de alavancagem de 1x e limite inicial de exposição de 25% do patrimônio por conta experimental.
 
-O Ganso controla contas, reservas, ordens, risco, execução simulada e contabilidade. O Jev será um filtro opcional, versionado e comparável à estratégia sem IA. Não decide capital, alavancagem, limites nem procedimentos de emergência. O operador consegue comprar, vender, cancelar e encerrar posições simuladas pela interface e entender por que uma operação foi aceita ou recusada.
+O Ganso controla contas, reservas, ordens, risco, execução simulada e contabilidade. Em evolução futura, o JEV será um filtro opcional, versionado e comparável à estratégia sem IA. Não decide capital, alavancagem, limites nem procedimentos de emergência. O operador consegue comprar, vender, cancelar e encerrar posições simuladas pela interface e entender por que uma operação foi aceita ou recusada.
 
-A Polymarket fica preservada como módulo especializado e acervo de pesquisa. Seus processos contínuos deixam de ser obrigatórios para o 2.0 após um encerramento controlado. Não haverá reescrita integral, importação completa de bots externos nem conclusão automática de todas as funcionalidades antigas: cada pendência receberá um destino verificável.
+A Polymarket está aposentada. Remover seu escopo, código/operação e dados exclusivos em entregas verificadas, sem obrigação de manter módulo ou acervo. Primitivas e dependências usadas pelo BTC permanecem. Pendências exclusivas são substituídas pela retirada, sem reativar ou concluir funcionalidades antigas.
 
 O custo atual informado é **US$ 80/mês, sem backup**. A transição começa no servidor existente; o objetivo após estabilização é operar com custo total recorrente de até US$ 80/mês, buscando uma faixa de planejamento de US$ 30–50/mês quando houver cotação e capacidade comprovadas. Essa faixa é uma meta de orçamento, não uma oferta de provedor.
 
@@ -36,7 +38,7 @@ Usuário único: proprietário operando e avaliando estratégias próprias. Não
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Operar de ponta a ponta      | Ticket cria ordem simulada; reservas, fills parciais, cancelamento, fechamento e restart reconciliam com o mesmo ledger     |
 | Entender decisões            | Toda entrada, recusa e saída tem motivo, estado observado, versão, custos e vínculo à ordem                                 |
-| Produzir evidência econômica | Comparação prospectiva entre estratégia-base, variante Jev e referência BTC/caixa, com todos os custos e risco              |
+| Produzir evidência econômica | Comparação prospectiva entre estratégia-base e referência BTC/caixa; variante JEV futura, com todos os custos e risco              |
 | Encerrar a dívida herdada    | Todo componente e bloco anterior tem destino, justificativa, dependências e registro curto de encerramento ou transferência |
 | Operar com custo previsível  | Crescimento limitado, serviços necessários identificados, teto de IA e custo total dentro do orçamento                      |
 | Preservar evolução futura    | Adaptadores de mercado separados; mesma disciplina financeira para uma futura integração de execução real                   |
@@ -67,23 +69,23 @@ A [issue 198](https://github.com/henrique-devel/ganso-market/issues/198) permane
 | API Fastify, React/Vite, autenticação e PostgreSQL           | Manter                                                                         | Adaptar rotas e contratos sem perder autenticação, proteção de escrita e rastreabilidade                 |
 | `paper/financial*`, ownership, reservas e replay             | Extrair a parte genérica e adaptar                                             | Paridade com fixtures financeiras aprovadas; contratos próprios para perpétuos                           |
 | `fundamental/fixed.ts`, contratos monetários                 | Reaproveitar dinheiro/quantidade, separar probabilidade                        | Nenhuma limitação a preços entre 0 e 1 no domínio BTC; precisão e arredondamento explícitos              |
-| Broker e bridge Polymarket                                   | Preservar no adaptador legado; reutilizar padrões                              | Retirar taxas, atrasos e regras binárias do núcleo compartilhado                                         |
-| Kelly binário, EV `q−preço`, YES/NO e resolução              | Manter exclusivos da Polymarket                                                | Nenhum uso dessas fórmulas para dimensionar BTC perpétuo                                                 |
-| Recorder, estimator, resolution e portfolio Polymarket       | Encerrar execução contínua quando houver preservação e tratamento das posições | Manifesto de desligamento e timers; leitura do histórico continua possível                               |
+| Broker e bridge Polymarket                                   | Retirar; manter apenas primitivas usadas pelo BTC                              | Retirar taxas, atrasos e regras binárias do núcleo compartilhado                                         |
+| Kelly binário, EV `q−preço`, YES/NO e resolução              | Retirar com o domínio binário                                                | Nenhum uso dessas fórmulas para dimensionar BTC perpétuo                                                 |
+| Recorder, estimator, resolution e portfolio Polymarket       | Retirar processos e configurações após conferir dependências BTC | Sem reativação por timers; acervo exclusivo pode ser descartado                               |
 | `services/market-engine` Rust                                | Retirar do perfil padrão se confirmado apenas bootstrap/health                 | Remover dependências de readiness/Compose/CI correspondentes; não apenas esconder container              |
 | `workers/model-worker` Python                                | Arquivar o esqueleto sem modelo                                                | Retirar imagem/checks obrigatórios sem consumidores; histórico Git e contratos úteis preservados         |
-| Fast BTC/horário Polymarket, replay e modelos ainda parciais | Congelar implementação específica; transferir requisitos úteis                 | Mapa para blocos 2.0; não apresentar esqueleto como estratégia pronta                                    |
+| Fast BTC/horário Polymarket, replay e modelos ainda parciais | Retirar implementação específica; manter requisitos úteis ao BTC                 | Mapa para blocos 2.0; não apresentar esqueleto como estratégia pronta                                    |
 | Retenção, proteção de dados e HOLD                           | Reaproveitar seletores, quotas e proteções já integrados                       | Histórico necessário protegido no banco; descarte apenas do conjunto dispensável autorizado              |
-| Mesa, Decisões e Sistema                                     | Evoluir                                                                        | Fluxos simples para operador, detalhes técnicos sob demanda, acervo legado separado                      |
+| Mesa, Decisões e Sistema                                     | Evoluir                                                                        | Fluxos simples para operador, detalhes técnicos sob demanda, sem laboratório Polymarket                      |
 | Timers de watchdog, replay e série de capacidade             | Revisar individualmente                                                        | Nenhum supervisor pode ressuscitar serviços aposentados; crescimento passa a ter acompanhamento contínuo |
 
 O inventário definitivo é uma entrega do primeiro marco: a tabela acima é o destino de produto, não uma alegação de que todos os usos indiretos já foram eliminados.
 
 ## 5. Escopo da primeira versão utilizável
 
-**Incluído:** uma venue; um BTC perpétuo; dados públicos reais; três contas experimentais independentes (manual, base e Jev), cada uma com referência fictícia de US$ 1.000; ordens limite com validade e ordens executáveis imediatamente com limite de preço; execução parcial; cancelamento; reduce-only; margem/funding/liquidação simulados; limites; reconciliação; estratégia-base; comparação; explicações; retenção e orçamento operacional.
+**Incluído:** uma venue; um BTC perpétuo; dados públicos reais; contas experimentais independentes manual e base (JEV em evolução futura), cada uma com referência fictícia de US$ 1.000; ordens limite com validade e ordens executáveis imediatamente com limite de preço; execução parcial; cancelamento; reduce-only; margem/funding/liquidação simulados; limites; reconciliação; estratégia-base; comparação; explicações; retenção e orçamento operacional.
 
-As três contas são cenários alternativos, não uma banca única de US$ 3.000. O painel não soma seus patrimônios. A conta Jev começa desabilitada até concluir integração e orçamento; referências BTC/caixa são curvas normalizadas, sem reserva financeira compartilhada.
+As contas são cenários alternativos, não uma banca somada. O painel não soma seus patrimônios. A conta JEV permanece desabilitada e fora do marco atual; sua evolução depende de seleção futura, integração e orçamento; referências BTC/caixa são curvas normalizadas, sem reserva financeira compartilhada.
 
 **Fora desta versão:** dinheiro real, signer, depósito, saque, chaves de negociação, multiativos, arbitragem entre venues, market making subsegundo, otimização automática contínua, LLM local/GPU, treinamento distribuído, Kubernetes, Kafka, bancos gerenciados, multi-region e reconstrução de todos os produtos antigos. O adaptador live futuro será outro marco, com decisão própria de capital e orçamento de perda.
 
@@ -97,7 +99,7 @@ As três contas são cenários alternativos, não uma banca única de US$ 3.000.
 6. **Comparar versões:** observar retorno líquido, drawdown, tempo exposto, giro, custos e operações evitadas. Congelar uma versão e criar novo experimento; nunca apagar perdas para reiniciar a estatística.
 7. **Acompanhar o sistema:** ver interrupções, reconciliação, disco e custo mensal projetado em linguagem simples.
 
-A interface principal terá Mesa, Operações, Experimentos e Sistema. Polymarket fica em “Histórico / laboratório legado”, sem parecer uma segunda execução ativa por padrão. Explicações descrevem registros que causaram a decisão; não são justificativas inventadas depois do resultado.
+A interface principal terá Mesa, Operações, Experimentos e Sistema. Não haverá superfície Polymarket no produto após a retirada do código. Explicações descrevem registros que causaram a decisão; não são justificativas inventadas depois do resultado.
 
 ## 7. Requisitos funcionais e aceites
 
@@ -114,7 +116,7 @@ A interface principal terá Mesa, Operações, Experimentos e Sistema. Polymarke
 | RF-09 | Risco independente                | Jev não altera caps; ordens manuais também os respeitam; dados inválidos e divergência contábil bloqueiam aumento de risco                                                 |
 | RF-10 | Reinício e falha                  | Reiniciar no meio de fill/cancelamento/funding não duplica eventos; reconciliação precede reabertura de entradas                                                           |
 | RF-11 | Estratégia-base                   | Implementação determinística, fechada e versionada; parâmetros e saídas publicados antes da observação futura                                                              |
-| RF-12 | Challenger Jev                    | Mesmo candidato-base, filtragem delimitada; resposta registrada com deadline, versão e custo; erro/timeout causa abstenção de entrada                                      |
+| RF-12 (futuro) | Challenger JEV                    | Mesmo candidato-base, filtragem delimitada; resposta registrada com deadline, versão e custo; erro/timeout causa abstenção de entrada                                      |
 | RF-13 | Avaliação                         | Curvas independentes e comparáveis; resultado líquido, contribuição Jev, exposição e incerteza; todas as tentativas de configuração registradas                            |
 | RF-14 | Auditoria acessível               | Toda ordem chega ao input, decisão, reserva, fills e saída; recusa contém motivo útil sem expor segredos                                                                   |
 | RF-15 | Custos e retenção                 | Orçamento medido, limite de IA, crescimento e retenção por classe; pins financeiros não são removidos para cumprir quota                                                   |
@@ -155,13 +157,16 @@ Durante desconexão, marcar lacuna e suspender novos fills sem evidência. Repla
 
 ### 8.1 Primeiro experimento
 
+O marco atual avalia a baseline sem IA. Os contratos da variante JEV abaixo
+são especificação futura e não bloqueiam o aceite BTC.
+
 Hipótese: continuação de tendência em contexto de 1 h, com decisão em barras fechadas de 15 min e permanência máxima inicial de 6 h. O bloco da estratégia deve fechar uma única regra reproduzível de tendência, entrada, stop, saída e tamanho por volatilidade antes de observar desempenho futuro. Não haverá busca extensa de parâmetros como pré-requisito para começar o paper.
 
 O baseline não precisa provar lucro para operar ficticiamente; precisa cumprir qualidade de dados, execução e contabilidade. Inicialmente a variante Jev apenas permite ou veta entradas propostas pelo baseline, mantendo regra de tamanho e saídas. Isso torna a contribuição mensurável. Direção, tamanho ou política de saída diferentes exigem outro experimento.
 
 Referências: caixa sem remuneração e exposição passiva a BTC normalizada, com metodologia e custos explícitos. Exibir referência passiva de 25% e, opcionalmente, 100%, sem confundir diferenças de risco com qualidade da estratégia. Perpétuo passivo inclui funding; referência spot, se mostrada, recebe rótulo distinto.
 
-### 8.2 Merge dos projetos externos
+### 8.2 Referências para evolução futura com JEV
 
 | Origem                                                                               | Adoção                                                                   | Revisão necessária                                                                                   |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
@@ -191,7 +196,7 @@ Manter Node/TypeScript, Fastify, React e PostgreSQL. Começar com módulos claro
 flowchart LR
   H[Dados públicos Hyperliquid] --> W[Worker BTC: qualidade e features]
   W --> B[Estratégia-base]
-  B --> J[Filtro Jev opcional]
+  B -. evolução futura .-> J[Filtro JEV desativado]
   B --> R[Risco e reservas]
   J --> R
   U[Mesa do operador] --> A[API autenticada]
@@ -227,7 +232,10 @@ O validador atual exige menos de 4 GiB de limites Compose agregados. Alterá-lo 
 
 ## 10. Dados, preservação e encerramento do legado
 
-### 10.1 Política para novos dados
+### 10.1 Política para dados BTC e evolução JEV
+
+Estas proteções abrangem o produto BTC e suas dependências; não impõem manter
+o acervo exclusivo da Polymarket aposentada.
 
 | Classe                                                | Política inicial proposta                      | Proteção                                                                                  |
 | ----------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -240,18 +248,26 @@ O validador atual exige menos de 4 GiB de limites Compose agregados. Alterá-lo 
 
 No limite de raw, interromper coleta não essencial ou recusar novo experimento; pins prevalecem sobre quota. Se a fidelidade necessária não couber no orçamento, reduzir escopo de captura/estratégia e declarar a limitação. Não continuar escrevendo até encher o disco nem eliminar evidência para manter um indicador verde.
 
-### 10.2 Fecho do passivo existente
+### 10.2 Retirada da Polymarket
 
-1. Inventariar por componente: consumidor real, execução, dados, dependências, estado dos testes, última versão, custo e responsável pelo fecho.
-2. Salvar um manifesto das alterações locais; comparar com main, PRs e produção. Integrar apenas diferenças úteis; mudanças já integradas não serão aplicadas de novo. Branch/recibo sem implementação recebe estado explícito.
-3. Interromper novas intenções no legado na janela de transição. Reconciliar ordens, reservas e posições. Posições abertas devem ser encerradas com evidência executável ou congeladas como histórico pendente de marcação; não simular liquidação arbitrária para fechar o projeto.
-4. Preparar desligamento específico de recorder/estimator/resolution/paper/portfolio e timers dependentes. Desativação operacional não apaga código nem dados e não pode ser revertida automaticamente por watchdog.
-5. Separar histórico financeiro protegido, datasets de pesquisa pinados, raw sem consumidor e imagens/cache com manifesto exato. O volume não será classificado como descartável apenas por ser grande.
-6. Manter no banco os dados financeiros, versões e dependências de replay protegidos. Classificar como candidatos a descarte apenas dados sem referência e sem consumidor; estimar capacidade sem pressupor que todo o legado será removido.
-7. Preparar conjunto destrutivo concreto de dados dispensáveis, estimativa de espaço/tempo/locks/WAL e procedimento de interrupção por lote. Não prometer recuperar dados apagados. Aplicar somente com autorização específica vigente. HOLD e triggers não são desligados genericamente. Poda de linhas não implica recuperação física imediata do espaço.
-8. Remover código comprovadamente sem consumidores, dependências, serviços e testes exclusivos. Registrar tag/commit e motivo; não manter uma segunda base “nova” incompleta ao lado da antiga.
+A [decisão de 28/09](SCOPE.md) autoriza a retirada desde local até produção.
 
-O objetivo é que **100% das pendências tenham um destino**, não que todos os planos antigos sejam implementados. Itens exclusivos da Polymarket podem ser `superseded` com justificativa e caminho do acervo. “Removido”, “arquivado”, “corrigido” e “não comprovado” são estados distintos.
+1. Atualizar documentos e backlog ativos; marcar pendências exclusivas como
+   superseded por retirada, sem afirmar correção ou remoção ainda não realizada.
+2. Inventariar código, serviços, rotas, telas, timers, configurações e dados;
+   extrair dependências genéricas realmente usadas por BTC antes da remoção.
+3. Remover componentes exclusivos e impedir sua recriação por deploy/watchdog.
+   Validar BTC, auth e contratos financeiros; não reativar paper legado para fechar tarefas.
+4. Delimitar tabelas/arquivos/datasets exclusivos, inclusive proteções exclusivas,
+   conferir referências BTC, estimar espaço/locks/WAL e executar descarte autorizado.
+   A preservação obrigatória do acervo Polymarket foi revogada. Não apagar volume
+   compartilhado nem desabilitar HOLD/triggers globais; migrations aplicadas são imutáveis.
+5. Verificar saúde BTC, ausência de consumidores quebrados e espaço efetivamente
+   recuperado. Preservar dados BTC e histórico real de seus experimentos.
+
+O histórico de código permanece no Git; dados apagados não têm recuperação prometida.
+Backup não é pré-requisito. A primeira entrega é de escopo; remoção física é
+registrada quando executada, sem transformar publicação documental em aceite operacional.
 
 ## 11. Infraestrutura e orçamento
 
@@ -267,7 +283,12 @@ Orçamento inclui compute, disco, IP, tráfego, logs, IA, impostos e câmbio apl
 
 Dupla hospedagem é custo temporário separado: apresentar valor, duração e corte na proposta concreta. Migração é planejada neste PRD, mas contratação/cancelamento de servidor e mudanças de perímetro não ocorrem nesta entrega documental. A ausência desses detalhes não impede os blocos locais independentes.
 
-## 12. Plano de desenvolvimento e dependências
+## 12. Histórico do plano de construção e dependências
+
+O plano abaixo registra o ciclo de construção. A sequência vigente está no
+[roadmap operacional](roadmap/GANSO_2_OPERATIONAL_ROADMAP.md), com JEV adiado e
+retirada Polymarket autorizada. Obrigações de paridade/preservação do legado
+eram da transição e não são requisitos permanentes do produto BTC.
 
 Executar entregas pequenas sobre a base reconciliada. Cada prompt termina com PR, verificações adequadas, merge e implantação aplicável, conforme autorização vigente. Basta uma atualização curta no acompanhamento com PR/SHA, validação e deploy/pendência; não exigir recibo ou evidência formal separada. Testes financeiros/SQL e proteções de branch permanecem obrigatórios; documento entregue não significa runtime entregue.
 
@@ -308,7 +329,7 @@ O [estado do ciclo 2.0](roadmap/GANSO_2_EXECUTION_STATE.md) acompanha os 45 prom
 
 Antes de liberar operações manuais: long e short com ganho/perda; quantização e mínimos; taxa maker/taker; funding positivo/negativo/atrasado/duplicado; margem insuficiente; gap de preço e liquidação; duas reservas concorrentes; fill parcial seguido de cancelamento; retry após resposta ambígua; restart antes/depois do commit; reduce-only simultâneo; ausência de marca; replay com mesma ordenação econômica.
 
-Antes de automação: barras fechadas, atraso e gap; candidato expirado durante Jev; resposta malformada; orçamento excedido; direção e tamanho preservados; limite diário/drawdown com não realizado; pausa sem reentrada automática; conta-base independente da variante; custo já incluído no fill não debitado novamente.
+Antes de automação BTC: barras fechadas, atraso e gap; candidato expirado; direção e tamanho preservados; limite diário/drawdown com não realizado; pausa sem reentrada automática; custo já incluído no fill não debitado novamente. Casos de resposta malformada, deadline e orçamento JEV são contratos da evolução futura, sem bloquear o marco atual.
 
 Antes de declarar maturidade: ensaio de desconexão, restart e recuperação; nenhuma mutação financeira por endpoint de leitura; ausência de vazamento entre contas; métricas de reinícios/disco/CPU/RAM/conexões; resultados reproduzíveis sem nova chamada Jev. Testes unitários complementam os fluxos integrados; fixture não é evidência de lucratividade.
 
@@ -326,7 +347,7 @@ Antes de declarar maturidade: ensaio de desconexão, restart e recuperação; ne
 | Histórico financeiro antigo ainda não conciliado globalmente | Manter separado e identificado; nova conta nasce com evento de capital próprio, sem herdar saldo não comprovado                   |
 | Mudança de API, taxas ou termos                              | Versão de adaptador e metadados; revalidação antes de integração e de qualquer futura operação real                               |
 
-Decisões já fechadas: uso pessoal; BTC primeiro; US$ 1.000 fictícios; dados reais; Jev opcional; legado com destino explícito; custo atual US$ 80 sem backup. Não é necessário reabrir essas perguntas para começar G2-00.
+Decisões já fechadas: uso pessoal; BTC/Hyperliquid como foco atual; US$ 1.000 fictícios; dados reais; JEV futuro; Polymarket aposentada com retirada autorizada; teto de planejamento US$ 80 sem backup. Não reabrir essas decisões nem reiniciar G2-00.
 
 Decisões a fechar no bloco correspondente: detalhe da regra-base antes da coleta econômica, manifesto de dados apagáveis, orçamento temporário de migração e plano escolhido com disponibilidade real. Nenhuma delas impede o inventário, a preparação local ou o diagnóstico somente de leitura.
 
@@ -336,7 +357,7 @@ Decisões a fechar no bloco correspondente: detalhe da regra-base antes da colet
 - Serviços sem uso deixam o perfil padrão; nenhum timer reativa o legado encerrado.
 - Operador completa uma operação manual e automática BTC, incluindo saída e extrato.
 - Ledger, margem, custos, funding e reservas sobrevivem a falhas sem divergência.
-- Jev é substituível e sua contribuição/custo aparece separadamente; baseline opera sem ele.
+- Baseline e referências BTC/caixa são avaliadas sem IA. JEV desativado não impede o aceite; contribuição/custo do challenger serão avaliados na evolução futura.
 - Dados e decisões são rastreáveis; resultados futuros e históricos não se confundem.
 - Sete dias de operação e reinício com reconciliação demonstrados; amostra econômica recebe conclusão proporcional à evidência.
 - Custo total dentro do teto e disco com reserva.

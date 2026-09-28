@@ -1,5 +1,7 @@
 # Runbook — modelo fundamental Polymarket (RFC-010)
 
+**Runbook aposentado em 28/09/2026.** Polymarket está fora do produto conforme o [escopo vigente](../SCOPE.md). Comandos abaixo são referência histórica; não iniciar serviços, coleta ou execução. Para retirada, usar inventário específico e preservar dependências BTC.
+
 O serviço `polymarket-estimator` estima, para cada token do universo gravado
 pela RFC-007, a probabilidade `q` do desfecho YES com intervalo de incerteza
 `[q_lo, q_hi]`, e grava essas estimativas versionadas em

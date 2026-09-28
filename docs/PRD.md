@@ -1,5 +1,7 @@
 # PRD v0.3 — Ganso Market (histórico)
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 > **22/09/2026: nova direção aprovada.** O [PRD Ganso Market 2.0](PRD-GANSO-2.0.md)
 > passa a orientar o desenvolvimento: BTC Hyperliquid com US$ 1.000 fictícios,
 > dados reais, Jev opcional, encerramento do passivo e custo controlado.

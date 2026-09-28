@@ -1,5 +1,7 @@
 # Protocolo — Ganso 2.0 operacional
 
+**Escopo vigente:** [decisão de 28/09](../../docs/SCOPE.md). Polymarket aposentada, retirada local e produtiva autorizada; JEV futuro. Referências à preservação abrangem BTC e dependências utilizadas. Não reabrir backlog Polymarket nem pedir novamente autorização para sua retirada delimitada.
+
 Aplica-se a `prompts/ganso-2-operacao/*`. Pedido atual prevalece; [autorização contínua](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-ganso-20--entrega-com-registro-minimo-22092026), [RFC-053](../../docs/rfcs/RFC-053-ganso-2-prontidao-operacional.md) e [estado único](../../docs/roadmap/GANSO_2_EXECUTION_STATE.md).
 
 ## Entrada e fronteira
@@ -14,7 +16,7 @@ Ao selecionar uma sessão, código → branch/commit/push → PR → checks/revi
 
 O pedido de criar o pacote não seleciona todos os prompts nem autoriza sua execução automática. Credencial não autoriza consumo pago. Compra, custo novo, aumento de orçamento/caps, dados a descartar e perímetro exigem decisão específica quando não houver uma vigente. Preparar resultado concreto e concluir trabalho independente antes de pedir somente o que faltar; não solicitar novamente autorização já concedida.
 
-Backup fica para depois do marco operacional, como decidido pelo proprietário; não introduzir backup, restauração ou contratação como pré-requisito. Preservação do acervo, pins, ledger e reconciliação após reinício continuam obrigatórias.
+Backup fica para depois do marco operacional, como decidido pelo proprietário; não introduzir backup, restauração ou contratação como pré-requisito. Preservação dos dados BTC, pins, ledger e reconciliação após reinício continuam obrigatórias; acervo exclusivo da Polymarket tem retirada autorizada.
 
 ## Implementação e gates
 
@@ -24,7 +26,7 @@ Backup fica para depois do marco operacional, como decidido pelo proprietário; 
 - Capacidade considera worker/SQL/filesystem, WAL, equity e replay. Não liberar HOLD, elevar tetos ou executar DELETE/prune por consequência de uma meta. Gate inviável gera decisão concreta, não mudança silenciosa da meta.
 - SQL/testes financeiros em PostgreSQL descartável; jamais fabricar fixtures no banco produtivo. Casos de falha controlados ficam no ambiente apropriado. Dados produtivos de validação permanecem como história real da simulação.
 - Rodar testes proporcionais, scan/diff e checks exigidos. Sem bypass de proteção. Após aprovação, repetir somente por mudança/falha/risco novo.
-- Deploy seletivo com SHA/saúde/função conferidos; preservar PG, legado e gestão de posições. Código do coletor pode ser entregue desativado antes de capacidade admitida. Rollback precisa ser compatível com schema e dados.
+- Deploy seletivo com SHA/saúde/função conferidos; preservar PG compartilhado, dados BTC e gestão de posições. Código do coletor pode ser entregue desativado antes de capacidade admitida. Rollback precisa ser compatível com schema e dados.
 
 ## Registros e conclusão
 

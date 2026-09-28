@@ -10,13 +10,15 @@ tracking: docs/roadmap/GANSO_2_EXECUTION_STATE.md
 
 # G2-15.1 — Preparar acesso, tarifa e cobertura Jev
 
+**Adiado por decisão de 28/09/2026.** JEV é evolução futura conforme [escopo vigente](../../docs/SCOPE.md). Não executar esta sessão no marco BTC atual; o contrato abaixo só se aplica após seleção futura explícita.
+
 Execute somente esta sessão. Leia o [protocolo](00-protocolo.md), o contrato comum e a [seção S5 da RFC-053](../../docs/rfcs/RFC-053-ganso-2-prontidao-operacional.md#s5), e sua linha no [estado único](../../docs/roadmap/GANSO_2_EXECUTION_STATE.md). Consulte o [roadmap](../../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md) somente para dependência ou decisão concreta. Não reler todo o histórico.
 
 ## Entrega
 
 Checklist concreto de configuração com acesso/custo verificados ou lacuna específica identificada.
 
-Esta preparação pode ocorrer cedo, antes de G2-12 a G2-14. Consultar documentação oficial atual TypeSafe e o adaptador existente. Conferir acesso do proprietário, presença segura da credencial, versão fixada, tarifa, validade, cobrança de erros e limite total faturável. Não imprimir nem pedir chave/senha no chat. O requisito atual de atestado de teto por tentativa não está comprovado apenas por contexto máximo; obter evidência ou especificar em G2-15.2 um mecanismo verificável equivalente de controle de custo. Conferir consumo coberto e orçamento total com host/impostos/IA; US$5 é teto proposto, não crédito. Não supor que crédito promocional renova. Registrar somente referências não sensíveis e itens faltantes.
+Esta preparação fica adiada até seleção futura explícita. Consultar documentação oficial atual TypeSafe e o adaptador existente. Conferir acesso do proprietário, presença segura da credencial, versão fixada, tarifa, validade, cobrança de erros e limite total faturável. Não imprimir nem pedir chave/senha no chat. O requisito atual de atestado de teto por tentativa não está comprovado apenas por contexto máximo; obter evidência ou especificar em G2-15.2 um mecanismo verificável equivalente de controle de custo. Conferir consumo coberto e orçamento total com host/impostos/IA; US$5 é teto proposto, não crédito. Não supor que crédito promocional renova. Registrar somente referências não sensíveis e itens faltantes.
 
 ## Contexto de código
 

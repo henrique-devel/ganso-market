@@ -1,5 +1,7 @@
 # Ganso 2.0 — uma sessão por entrega
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../../docs/SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 Pacote de desenvolvimento de 22/09/2026: **11 RFCs e 45 prompts pequenos**, derivados do [PRD aprovado](../../docs/PRD-GANSO-2.0.md). Roteiro criado; nenhum bloco de implementação foi executado por gerar estes arquivos.
 
 ## Continuação de 27/09/2026
