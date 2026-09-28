@@ -59,8 +59,8 @@ atual, conforme decisão anterior.
 
 A revisão de escopo do PR #302 foi documental. A PR #303 retirou o runtime
 ativo e os dados produtivos Polymarket; a migration 0049 foi aplicada e os
-componentes BTC/auth foram verificados. O registro único de entrega e da
-limpeza restante de imagens antigas está no [estado de execução](roadmap/GANSO_2_EXECUTION_STATE.md).
+componentes BTC/auth foram verificados. As imagens antigas de rollback autorizadas também foram removidas. O registro
+único de entrega está no [estado de execução](roadmap/GANSO_2_EXECUTION_STATE.md).
 Mudanças locais alheias à tarefa são preservadas, sem reset ou sobrescrita.
 
 ## Limites mantidos
