@@ -1,3 +1,4 @@
+import { baselinePeriodTx } from "./baseline-periods.js";
 import type { DeskStage } from "../btc/runtime-diagnostics.js";
 import { createLedgerAccount } from "./ledgerstore.js";
 import type { LedgerIdentity } from "./ledger-contract.js";
@@ -507,6 +508,7 @@ export async function consumeBaselineAccount(
           const { hours, quarters } = prepared;
           const decision = decideBaseline({
             ...s.env,
+            period: await baselinePeriodTx(tx, current.registration, bar),
             enabled: s.env.enabled && (!challenger || challenger.enabled),
             ...(prepared.source ? { source: prepared.source.decision } : {}),
             decision_at: s.at,
@@ -523,6 +525,7 @@ export async function consumeBaselineAccount(
             s.at,
             [
               current.evidence_id,
+              ...(decision.period ? [decision.period.object_id] : []),
               // Account and bars already retain their immutable evidence graph.
               // Keep every hashed input in the decision, but do not duplicate
               // thousands of transitive edges under the shared collector lock.

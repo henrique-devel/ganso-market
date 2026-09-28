@@ -74,7 +74,21 @@ export interface BaselineMarket {
   context: BaselineRecord<TradingMarketData> | null;
   capture: BaselineRecord<ValuationCapture> | null;
 }
+export interface BaselinePeriod {
+  version: "btc.baseline-period.v1";
+  operation_id: string;
+  registration_hash: string;
+  code_sha: string;
+  previous_evidence_id: string;
+  registered_by: string;
+  reason: string;
+  registered_at: string;
+  start_at: string;
+  end_at: string;
+  purpose: "operational_pilot" | "economic_evaluation";
+}
 export interface BaselineEnvironment {
+  period?: BaselineRecord<BaselinePeriod> | undefined;
   enabled: boolean;
   registration: BaselineRegistration;
   metadata: BaselineRecord<TradingInstrumentMetadata> | null;

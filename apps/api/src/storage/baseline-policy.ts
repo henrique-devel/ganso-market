@@ -43,6 +43,9 @@ import {
   type BaselineRef,
 } from "./baseline-inputs.js";
 
+import { validateBaselinePeriod } from "./baseline-periods.js";
+import { knownRecord } from "./baseline-inputs.js";
+
 export type BaselineState =
   | "disabled"
   | "missed_decision_window"
@@ -77,6 +80,7 @@ export interface BaselineSignal {
   input_refs: BaselineRef[];
 }
 export interface BaselineDecision {
+  period?: BaselineEnvironment["period"];
   signal?: BaselineSignal | null;
   source_decision_id?: string;
   schema_version: typeof BASELINE_RESULT;
@@ -327,12 +331,14 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     at,
     r.scope.instrument_version,
   );
+  if (input.period) {
+    validateBaselinePeriod(input.period.payload, r);
+    if (!knownRecord(input.period, at))
+      throw new Error("BTC_BASELINE_PERIOD_EVIDENCE");
+  }
+  const start = baselineTime(input.period?.payload.start_at ?? r.start_at);
   const reasons: string[] = [];
-  if (
-    !input.enabled ||
-    t < baselineTime(r.start_at) ||
-    t >= baselineTime(r.start_at) + 30 * 86400000
-  )
+  if (!input.enabled || t < start || t >= start + 30 * 86400000)
     reasons.push("disabled");
   if (at < t + 10000 || at >= t + 60000) reasons.push("missed_decision_window");
   const unavailable = [...env.causes];
@@ -410,6 +416,7 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     decision_at: input.decision_at,
     bar_end_at: input.bar_end_at,
     registration: structuredClone(r),
+    ...(input.period ? { period: structuredClone(input.period) } : {}),
     state: "neutral",
     reasons: [],
     direction: null,
@@ -417,6 +424,7 @@ export function decideBaseline(input: BaselineDecisionInput): BaselineDecision {
     intent: null,
     command: null,
     input_refs: baselineRefs([
+      ...(input.period ? [input.period] : []),
       ...env.refs,
       ...(input.source
         ? (signal?.input_refs ?? [])
@@ -605,6 +613,18 @@ export function revalidateBaseline(
     ...priceCauses(env, c),
   ];
   if (!current.enabled) reasons.push("disabled");
+  if (decision.period)
+    validateBaselinePeriod(decision.period.payload, decision.registration);
+  const periodStart = baselineTime(
+    decision.period?.payload.start_at ?? decision.registration.start_at,
+  );
+  if (
+    baselineHash(decision.period ?? null) !==
+      baselineHash(current.period ?? null) ||
+    at < periodStart ||
+    at >= periodStart + 30 * 86400000
+  )
+    reasons.push("period_expired");
   if (
     env.account.last_closed_bar_end_at !== null &&
     decision.bar_end_at <= env.account.last_closed_bar_end_at

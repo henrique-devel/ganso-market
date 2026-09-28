@@ -105,3 +105,99 @@ reservas, e entradas desabilitadas antes da troca. Preservar schema 43,
 registro/decisões/eventos, ledger e pins; o binário também precisa compreender
 funding v2/RATE18. Nunca apagar gênese ou reiniciar o experimento para esconder
 perda, gap ou indisponibilidade.
+
+
+## G2-13.3 — Rearme protegido e períodos sucessores
+
+Esta entrega instala mecanismo e migration 47; não executa rearme nem registra
+um período produtivo. G2-13.4 só pode operar após a admissão de G2-12.3, fontes
+recentes/sem gaps, funding disponível, reconciliação, capacidade e custo total
+coberto no teto de US$80/mês. HOLD de retenção, ledger, pins e caps permanecem.
+
+A leitura produtiva somente leitura de 28/09/2026 04:29:50 UTC conferiu registro
+original às **26/09/2026 04:13:50.585 UTC**, início **26/09 04:15 UTC** e fim
+exclusivo **26/10 04:15 UTC**. O intervalo remanescente pode servir a um piloto;
+não fornece 30 dias completos futuros desde esta entrega. Pausas e ausência de
+dados permanecem nessa janela. Não transformar retrospectivamente o piloto
+ou os gaps em avaliação econômica completa.
+
+O CLI `apps/api/dist/baseline-operate-cli.js OWNER` recebe **um JSON pelo stdin**.
+`OWNER` precisa corresponder ao dono existente da baseline paper habilitada.
+O binário lê seu SHA de `/etc/ganso/release-sha`; não aceita saldo, checkpoint,
+capital, caps, flags de frescor ou identidade de worker fornecidos pelo operador.
+O resultado de stdout contém apenas ação, operation_id e status; o journal
+retém o checkpoint, sem exportar finanças pelo terminal.
+
+Rearme, somente após os gates atuais:
+
+```json
+{"action":"rearm","operation_id":"rearme-operacional-001","reason":"Gates atuais de capacidade, fontes e funding conferidos"}
+```
+
+A operação revalida o dono sob lock, usa recovery/reconciliação e fence finais,
+confere as evidências de metadata, livro, contexto, captura e funding e chama
+`applyRiskTx` dentro de `riskTransaction`. Não atualiza diretamente checkpoints.
+O journal conserva as âncoras; ganhos observados e mudança real do dia continuam
+seguindo o contrato de risco existente. Repetir o mesmo ID e conteúdo devolve o
+resultado anterior: **uma pausa posterior permanece pausada**, ainda que o recibo
+antigo diga NORMAL. Outra tentativa intencional requer novo ID e novos gates;
+conteúdo diferente sob o mesmo ID é recusado. A prontidão deve ser lida novamente
+após a operação. Fonte recuperada não dispara rearme automático.
+
+**Lease do CLI:** um processo independente recebe `BTC_RECOVERY_OWNED` enquanto
+outro consumidor tiver lease válido; worker antigo recebe `BTC_RECOVERY_FENCED`.
+Não copiar worker_id/generation, editar lease/checkpoint ou fazer retry agressivo.
+Planejar uma manutenção breve: pausar entradas de todas as contas geridas pela
+API pelos seus contratos autenticados, manter a gestão de saídas e só então
+confirmar **todas essas contas flat e sem ordens/reservas ativas**, para não
+interromper saídas manuais, baseline ou challenger. Se houver posições, adiar o
+CLI até flat; não parar o gestor para forçar rearme. Depois dos gates, parar
+somente API e aguardar expiração natural de seu lease. Rodar o comando no mesmo
+release:
+
+```sh
+docker compose --env-file deploy/server.env run --rm --no-deps -T \
+  --entrypoint node api apps/api/dist/baseline-operate-cli.js OWNER < operation.json
+```
+
+Restaurar somente a API e conferir Nginx/upstream, saúde, recuperação e prontidão;
+o CLI também deixa um lease de 30 segundos, que deve expirar naturalmente para
+o consumidor assumir. Fazer isso mesmo após erro, preservando a contenção de
+entradas. Não parar PostgreSQL, iniciar coletor, alterar restart/timers ou remover
+HOLD. Este procedimento **não foi executado em G2-13.3**.
+
+Um sucessor é registrado separadamente, antes do seu início, por exemplo:
+
+```json
+{"action":"register_period","operation_id":"avaliacao-futura-001","reason":"Janela prospectiva definida antes da observacao","purpose":"economic_evaluation","start_at":"2026-10-26T04:15:00.000Z"}
+```
+
+A data é um exemplo baseado no fim original, não autorização para executar nem
+cronograma automático; se já tiver passado, deve ser escolhida outra fronteira
+UTC de 15 minutos estritamente futura. `purpose` aceita `operational_pilot` ou
+`economic_evaluation`. Cada período dura exatamente 30 dias e começa no fim ou
+depois do predecessor; sobreposição, retroatividade e redução de janela são
+recusadas. Não cancelamos nem encurtamos o período original para excluir perdas.
+
+`btc.baseline-period.v1` guarda versão, SHA, dono, motivo, fingerprint do registro
+original e evidência anterior. Migration 47 é append-only, sem seeds; o payload
+entra na retenção existente com pin e arestas para original/predecessor, sujeito
+às mesmas quotas. Registro não deposita novos US$1.000, não materializa gênese,
+não muda saldo, funding, histórico ou pausas. A identidade financeira permanece
+original. A seleção prioriza a barra atual e usa a mesma chave única conta/barra:
+períodos futuros não executam cedo e não duplicam sinais. Decisões de sucessores
+carregam o período versionado e a referência pinada para replay. Histórico legado
+sem esse campo mantém sua interpretação original. Funding e todas as saídas
+antigas continuam, inclusive depois da expiração e entre períodos. Expiração é
+revalidada também na admissão/execução de entradas.
+
+Esta camada entrega seleção/horizonte; não certifica cobertura, estabilidade,
+comparação econômica ou 30 dias observados. G2-14/G2-17 devem mostrar as janelas
+selecionadas e os gaps sem misturar piloto e avaliação ou renomear o início
+financeiro. Nenhum período sucessor nem rearme é criado em startup/migration.
+
+Deploy: migration aditiva e somente API; PG/coletor/web e perímetro preservados.
+Rollback conserva schema 47/pins/histórico e leitores de projeção de decisões
+compatíveis com schema 46. Antes de retornar a um binário sem períodos, conter
+entradas: esse binário ignora sucessores e mantém apenas gestão histórica de
+saídas; não apagar períodos para fazê-lo parecer compatível com nova avaliação.

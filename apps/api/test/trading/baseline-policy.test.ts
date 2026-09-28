@@ -537,3 +537,64 @@ describe("shared exogenous baseline signal", () => {
     expect(decideBaseline(challenger).state).toBe("missed_decision_window");
   });
 });
+
+describe("prospective continuation preserves policy and original identity", () => {
+  it("only admits the registered successor, preserves sizing/decision key and rejects premature, expired or altered evidence", () => {
+    const input = fixture();
+    const original = decideBaseline(input);
+    input.registration.start_at = baselineIso(T - 30 * 86400000);
+    input.registration.registered_at = baselineIso(T - 30 * 86400000 - 1000);
+    expect(decideBaseline(input).state).toBe("disabled");
+    const period = record(
+      "successor-evidence",
+      {
+        version: "btc.baseline-period.v1" as const,
+        operation_id: "successor",
+        registration_hash: baselineHash(input.registration),
+        code_sha: "c".repeat(40),
+        previous_evidence_id: "original-registration",
+        registered_by: "operator",
+        reason: "future evaluation",
+        registered_at: baselineIso(T - 1000),
+        start_at: baselineIso(T),
+        end_at: baselineIso(T + 30 * 86400000),
+        purpose: "economic_evaluation" as const,
+      },
+      T - 1000,
+    );
+    input.period = period;
+    const successor = decideBaseline(input);
+    expect(successor.state).toBe("candidate_long");
+    expect(successor.candidate?.quantity_btc_raw).toBe(
+      original.candidate?.quantity_btc_raw,
+    );
+    expect(successor.registration).toEqual(input.registration);
+    expect(successor.input_refs).toContainEqual({
+      object_id: period.object_id,
+      payload_hash: period.payload_hash,
+      recorded_at: period.recorded_at,
+    });
+    expect(
+      revalidateBaseline(successor, input, baselineIso(AT), "admit").state,
+    ).toBe("ready");
+    expect(
+      revalidateBaseline(
+        successor,
+        { ...input, period: undefined },
+        baselineIso(AT),
+        "admit",
+      ).reasons,
+    ).toContain("period_expired");
+    expect(
+      revalidateBaseline(successor, input, period.payload.end_at, "execute")
+        .reasons,
+    ).toContain("period_expired");
+    input.bar_end_at = baselineIso(T - 900000);
+    expect(decideBaseline(input).state).toBe("disabled");
+    input.bar_end_at = period.payload.end_at;
+    expect(decideBaseline(input).state).toBe("disabled");
+    input.bar_end_at = baselineIso(T);
+    period.payload.reason = "altered evidence";
+    expect(() => decideBaseline(input)).toThrow("PERIOD_EVIDENCE");
+  });
+});
