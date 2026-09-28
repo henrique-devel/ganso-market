@@ -1,5 +1,7 @@
 # Protocolo Ganso 2.0 — contexto mínimo e entrega completa
 
+**Escopo vigente:** [decisão de 28/09](../../docs/SCOPE.md). Polymarket aposentada, retirada local e produtiva autorizada; JEV futuro. Referências à preservação abrangem BTC e dependências utilizadas. Não reabrir backlog Polymarket nem pedir novamente autorização para sua retirada delimitada.
+
 Vigente para `prompts/ganso-2/*`. O pedido atual do proprietário prevalece. Fonte: [autorização, emenda 2.0](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-ganso-20--entrega-com-registro-minimo-22092026).
 
 ## Entrada

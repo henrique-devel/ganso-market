@@ -1,5 +1,7 @@
 # RFC-053 — Ganso 2.0: estabilização e prontidão operacional
 
+**Emenda de 28/09/2026:** [escopo vigente](../SCOPE.md). JEV/S5 adiado; G2-14/16/17 entregam avaliação e aceite BTC sem depender de IA. Polymarket aposentada, com retirada local/produtiva autorizada. Preservação obrigatória refere-se aos dados BTC e suas dependências.
+
 **Status:** roteiro solicitado em 27/09/2026; aceito para execução somente nas sessões selecionadas. **Escopo:** continuação G2-11–17, 22 prompts. Criar esta RFC não implementa nem ativa suas entregas.
 
 [Roadmap](../roadmap/GANSO_2_OPERATIONAL_ROADMAP.md) · [Prompts](../../prompts/ganso-2-operacao/README.md) · [Protocolo](../../prompts/ganso-2-operacao/00-protocolo.md) · [Estado único](../roadmap/GANSO_2_EXECUTION_STATE.md).
@@ -65,7 +67,7 @@ Equity usa informação conhecida no corte, com marca e qualidade temporal; draw
 
 **G2-15 — Jev real.**
 
-Jev só filtra a proposta exógena; direção/tamanho/risco/saídas pertencem ao código. Preparação de acesso pode começar cedo; ativação exige qualidade operacional e comparador prontos, não lucro ou trinta dias. Cobertura/teto de cobrança são reais e verificáveis, segredo só no backend. Uma chamada diagnóstico é rotulada e seu custo preservado; não é decisão econômica. Virada mensal não compra crédito nem limpa circuito automaticamente.
+Jev só filtra a proposta exógena; direção/tamanho/risco/saídas pertencem ao código. Preparação de acesso fica adiada até seleção futura explícita; ativação exige qualidade operacional e comparador prontos, não lucro ou trinta dias. Cobertura/teto de cobrança são reais e verificáveis, segredo só no backend. Uma chamada diagnóstico é rotulada e seu custo preservado; não é decisão econômica. Virada mensal não compra crédito nem limpa circuito automaticamente.
 
 - [G2-15.1](../../prompts/ganso-2-operacao/g2-15-1-preparar-acesso-jev.md) — Checklist concreto de configuração com acesso/custo verificados ou lacuna específica identificada.
 - [G2-15.2](../../prompts/ganso-2-operacao/g2-15-2-configuracao-e-orcamento-jev.md) — Provisionamento, rotação e reconciliação do orçamento são seguros, explícitos e testados.

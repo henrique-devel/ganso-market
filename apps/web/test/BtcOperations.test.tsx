@@ -11,7 +11,7 @@ import {
   OperationDetail,
   reasonLabel,
 } from "../src/BtcOperations.tsx";
-import { BTC_TELAS, TELAS } from "../src/App.tsx";
+import { BTC_TELAS } from "../src/App.tsx";
 import fixture from "./fixtures/btc-operation.json";
 const detail = fixture as unknown as DeskOperation;
 describe("BTC history uses recorded facts from an explicit disposable fixture", () => {
@@ -105,16 +105,8 @@ describe("BTC history uses recorded facts from an explicit disposable fixture", 
     expect(html).not.toContain("liquidado");
     expect(html).toContain("não prova falta de sinal");
   });
-  it("keeps BTC navigation separate while preserving every legacy reader", () => {
+  it("keeps BTC navigation separate without the retired archive", () => {
     expect(BTC_TELAS).toEqual(["Mesa", "Operações", "Experimentos", "Sistema"]);
-    expect(TELAS.map((a) => a.chave)).toEqual([
-      "mesa",
-      "carteira",
-      "decisoes",
-      "sombra",
-      "resolucao",
-      "sistema",
-    ]);
   });
 });
 

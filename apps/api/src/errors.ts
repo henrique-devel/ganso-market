@@ -3,7 +3,7 @@
  * fields a log line needs to be diagnosable.
  *
  * The reason this module exists: between 2026-09-01 and 2026-09-04 every
- * authenticated call to `GET /polymarket/overview` returned 500, and the log
+ * authenticated call to `GET /trading/accounts` returned 500, and the log
  * said
  *
  *   {"reason_code":"OVERVIEW_API_FAILED","error_name":"error"}

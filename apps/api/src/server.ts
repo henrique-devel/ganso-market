@@ -7,19 +7,10 @@ import { randomUUID } from "node:crypto";
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 
 import { registerAuthRoutes } from "./auth/http.js";
-import { registerFundamentalRoutes } from "./polymarket/fundamental/api.js";
-import { registerPaperRoutes } from "./polymarket/paper/api.js";
-import { registerPortfolioRoutes } from "./polymarket/portfolio/api.js";
-import { registerResolutionRoutes } from "./polymarket/resolution/api.js";
-import { registerOverviewRoutes } from "./polymarket/overview.js";
-import { registerPolymarketReadRoutes } from "./polymarket/readapi.js";
 import { budgetedPool, budgetForRoute, runWithBudget } from "./budgets.js";
 import type { AuthService } from "./auth/service.js";
 import type { ApiConfig, StatementBudgets } from "./config.js";
-import {
-  API_SHADOW_REPLAY_DIR_ENV,
-  requireStatementBudgets,
-} from "./config.js";
+import { requireStatementBudgets } from "./config.js";
 import type { DatabasePool, ReadinessProbe } from "./database.js";
 import {
   POSTGRES_UNAVAILABLE,
@@ -263,51 +254,6 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
       ...(options.challengerConfig
         ? { challengerConfig: options.challengerConfig }
         : {}),
-      pool: readPool,
-      authService: options.authService,
-      clock,
-    });
-    registerPolymarketReadRoutes(app, {
-      pool: readPool,
-      authService: options.authService,
-    });
-    // RFC-010 read + lifecycle surface. Read-only over the estimate tables,
-    // plus the operator's manual promote/demote of a model. No route here
-    // creates an order, a signal or touches a wallet.
-    registerFundamentalRoutes(app, {
-      pool: readPool,
-      authService: options.authService,
-    });
-    // RFC-011 read surface: microstructure feature snapshots. Simulation
-    // scope only; stamped with the mandatory banner.
-    registerPaperRoutes(app, {
-      pool: readPool,
-      authService: options.authService,
-    });
-    // RFC-012 read surface: resolution-risk scores, the logical graph, its
-    // violations, sanity vetoes and layer divergences, plus the curated-edge
-    // POST. Analytics only — no route here creates an order or a signal.
-    registerResolutionRoutes(app, {
-      pool: readPool,
-      authService: options.authService,
-    });
-    // RFC-013 read surface: the opportunity panel, exposures, limits, the
-    // portfolio state machine, the RFC-009 gates and the decision log. The two
-    // manual state controls (halt/resume) live here too and are deliberately
-    // NOT published by the Nginx perimeter.
-    registerPortfolioRoutes(app, {
-      pool: readPool,
-      authService: options.authService,
-      // RFC-029 D3. Read here, at the composition root, because this is a
-      // deployment fact (a bind mount that may or may not be there) rather
-      // than a tuning knob: unset, the two shadow-replay routes answer 404 and
-      // nothing else about the API changes.
-      shadowReplayDir: process.env[API_SHADOW_REPLAY_DIR_ENV] ?? null,
-    });
-    // RFC-015 operator dashboard: the overview aggregate and the event feed.
-    // Read-only over the tables the surfaces above already expose; it exists so
-    // the panel makes one call per cycle instead of eleven.
-    registerOverviewRoutes(app, {
       pool: readPool,
       authService: options.authService,
       clock,

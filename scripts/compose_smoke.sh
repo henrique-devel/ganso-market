@@ -100,7 +100,8 @@ retire_stubs(sys.argv[1])  # idempotent; keeps the stopped containers
 PY_RETIRE
 wait_for_code 200 "$gateway/api/health/ready"
 wait_for_code 401 "$gateway/api/auth/session"
-wait_for_code 401 "$gateway/api/polymarket/overview"
+wait_for_code 404 "$gateway/api/polymarket/overview"
+wait_for_code 401 "$gateway/api/trading/accounts"
 # G2-06.1: exact desk reads reach authentication; commands remain closed.
 for path in accounts account positions orders experiment-datasets experiments experiment-system; do
   wait_for_code 401 "$gateway/api/trading/$path"

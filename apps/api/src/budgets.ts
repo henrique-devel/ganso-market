@@ -36,7 +36,7 @@ export function currentBudgetMs(): number | undefined {
 /**
  * The budget a route runs on: its own entry in `statement_timeout_ms.routes`,
  * or `default`. Fastify's route url is the declared pattern
- * (`/polymarket/decisions/:decisionId`), not the request path, so the map is
+ * (`/trading/account`), not the request path, so the map is
  * keyed by pattern and one entry covers every id.
  */
 export function budgetForRoute(
@@ -55,7 +55,7 @@ export function budgetForRoute(
  *
  * Per query, not per request, and that is the deliberate part. The `/overview`
  * handler fires its eight subqueries through `Promise.all`
- * (`polymarket/overview.ts`); one shared transaction would pin them to a single
+ * (trading account views); one shared transaction would pin them to a single
  * client, serialise them, and make them share one budget — turning eight
  * independent 50-300 ms reads into one 800 ms read that fails as a unit. Each
  * gets its own transaction and the same per-route budget.

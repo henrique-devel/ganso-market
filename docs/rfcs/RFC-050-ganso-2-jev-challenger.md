@@ -1,5 +1,7 @@
 # RFC-050 — Jev como filtro opcional e medido
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](../SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 **Status:** accepted para execução de seus prompts quando selecionados. **Data:** 22/09/2026. **Marco:** G2-08. Criar esta RFC não implementa nem ativa o resultado.
 
 **Fonte:** [PRD 2.0](../PRD-GANSO-2.0.md), seções 8.2 e 8.3. **Requisitos:** RF-12, RF-01, RF-15. **Roteiro:** [prompts](../../prompts/ganso-2/README.md). **Acompanhamento:** [estado 2.0](../roadmap/GANSO_2_EXECUTION_STATE.md).

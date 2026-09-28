@@ -45,7 +45,7 @@ const VALID = {
   statement_timeout_ms: {
     ceiling: 4_000,
     default: 2_000,
-    routes: { "/polymarket/overview": 1_500 },
+    routes: { "/trading/accounts": 1_500 },
   },
 };
 
@@ -55,7 +55,7 @@ describe("RFC-023 D1 — services.api.statement_timeout_ms", () => {
     const budgets = requireStatementBudgets(config);
     expect(budgets.ceilingMs).toBe(4_000);
     expect(budgets.defaultMs).toBe(2_000);
-    expect(budgets.routes["/polymarket/overview"]).toBe(1_500);
+    expect(budgets.routes["/trading/accounts"]).toBe(1_500);
   });
 
   it("refuses a ceiling above the edge's own timeout", async () => {
@@ -79,10 +79,10 @@ describe("RFC-023 D1 — services.api.statement_timeout_ms", () => {
         statement_timeout_ms: {
           ceiling: 2_000,
           default: 1_000,
-          routes: { "/polymarket/overview": 2_001 },
+          routes: { "/trading/accounts": 2_001 },
         },
       }),
-    ).rejects.toThrow(/routes\.\/polymarket\/overview/);
+    ).rejects.toThrow(/routes\.\/trading\/accounts/);
   });
 
   it("refuses a default above the ceiling", async () => {
@@ -119,7 +119,7 @@ describe("RFC-023 D1 — services.api.statement_timeout_ms", () => {
         statement_timeout_ms: {
           ceiling: 4_000,
           default: 2_000,
-          routes: { "polymarket/overview": 500 },
+          routes: { "trading/accounts": 500 },
         },
       }),
     ).rejects.toThrow(/starting with/);
@@ -167,15 +167,15 @@ describe("RFC-023 D1 — budgetForRoute", () => {
   const budgets: StatementBudgets = {
     ceilingMs: 4_000,
     defaultMs: 2_000,
-    routes: { "/polymarket/overview": 1_500 },
+    routes: { "/trading/accounts": 1_500 },
   };
 
   it("uses the route's own budget when it has one", () => {
-    expect(budgetForRoute(budgets, "/polymarket/overview")).toBe(1_500);
+    expect(budgetForRoute(budgets, "/trading/accounts")).toBe(1_500);
   });
 
   it("falls back to default for a route with no entry", () => {
-    expect(budgetForRoute(budgets, "/polymarket/markets")).toBe(2_000);
+    expect(budgetForRoute(budgets, "/trading/account")).toBe(2_000);
     expect(budgetForRoute(budgets, undefined)).toBe(2_000);
   });
 });

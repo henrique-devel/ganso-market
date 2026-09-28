@@ -11,25 +11,9 @@ import {
   type AuthenticatedSession,
 } from "./auth.js";
 import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
-// The explicit .tsx extension keeps module resolution unambiguous on
-// case-insensitive filesystems, where "./Resolution.js" (and Vite's
-// extension substitution) would match src/resolution.ts instead.
-import { Decisoes } from "./Decisoes.tsx";
-import { SistemaFase1 } from "./Sistema.tsx";
-import { Mesa } from "./Mesa.tsx";
-import { PortfolioPanel, type Section } from "./Portfolio.tsx";
-import { ResolutionPanel } from "./Resolution.tsx";
-import { Sombra } from "./Sombra.tsx";
-import {
-  BuildFooter,
-  OverviewPanel,
-  PnlBand,
-  useOverview,
-} from "./Overview.tsx";
-import { ModoEngenheiroProvider, useModoEngenheiroState } from "./modo.tsx";
+import { BuildFooter } from "./BuildFooter.tsx";
 
 const REFRESH_INTERVAL_MS = 15_000;
-const REQUEST_TIMEOUT_MS = 5_000;
 
 type AuthState =
   | { readonly kind: "checking" }
@@ -207,37 +191,6 @@ export function LoginPanel({
   );
 }
 
-type Tela =
-  "mesa" | "carteira" | "decisoes" | "sombra" | "resolucao" | "sistema";
-
-export interface Aba {
-  readonly chave: Tela;
-  readonly tecla: string;
-  readonly rotulo: string;
-  readonly disponivel: boolean;
-  readonly nota?: string;
-}
-
-export const TELAS: readonly Aba[] = [
-  { chave: "mesa", tecla: "1", rotulo: "Mesa", disponivel: true },
-  { chave: "carteira", tecla: "2", rotulo: "Carteira", disponivel: true },
-  { chave: "decisoes", tecla: "3", rotulo: "Decisões", disponivel: true },
-  // RFC-029 D4: a tecla que a RFC-026 reservou, agora com tela atrás dela.
-  { chave: "sombra", tecla: "4", rotulo: "Sombra", disponivel: true },
-  { chave: "resolucao", tecla: "5", rotulo: "Resolução", disponivel: true },
-  { chave: "sistema", tecla: "6", rotulo: "Sistema", disponivel: true },
-];
-
-// Constantes de módulo, não literais na renderização: o painel de portfólio
-// busca em função das seções que recebe, e um array novo a cada renderização
-// reiniciaria o poll a cada renderização.
-// RFC-026 D8/PR 2: Posições e Ordens entram na frente, e "Exposição" sai — o
-// uso dos caps agora aparece como barra dentro de Posições, que é onde se
-// olha para saber quanto ainda cabe. A tabela de exposição por dimensão
-// continua existindo, na tela de Sistema, para quem quer a linha a linha.
-const SECOES_CARTEIRA: readonly Section[] = ["posicoes", "ordens", "estado"];
-const SECOES_SISTEMA: readonly Section[] = ["gates", "exposicao"];
-
 export const BTC_TELAS = [
   "Mesa",
   "Operações",
@@ -253,9 +206,7 @@ function Dashboard({
   onLogout: () => void;
   onUnauthorized: () => void;
 }>) {
-  const [tab, setTab] = useState<(typeof BTC_TELAS)[number] | "Acervo legado">(
-    "Mesa",
-  );
+  const [tab, setTab] = useState<(typeof BTC_TELAS)[number]>("Mesa");
   const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
   useEffect(() => {
     if (tab !== "Sistema") return;
@@ -288,7 +239,7 @@ function Dashboard({
         </p>
       </header>
       <nav className="tabs" aria-label="Navegação principal">
-        {[...BTC_TELAS, "Acervo legado" as const].map((t) => (
+        {BTC_TELAS.map((t) => (
           <button
             type="button"
             key={t}
@@ -319,254 +270,8 @@ function Dashboard({
           </p>
         </section>
       )}
-      {tab === "Acervo legado" && (
-        <LegacyDashboard session={session} onUnauthorized={onUnauthorized} />
-      )}
       <BuildFooter releaseSha={null} />
     </main>
-  );
-}
-
-function LegacyDashboard({
-  session,
-  onUnauthorized,
-}: Readonly<{
-  session: AuthenticatedSession;
-  onUnauthorized: () => void;
-}>) {
-  const [status, setStatus] = useState<DashboardStatus>({ kind: "loading" });
-  // A Mesa é o padrão (RFC-026 D5): a primeira coisa na tela é o mercado com
-  // nome, escada e livro — não uma lista de hashes para rolar.
-  const [tela, setTela] = useState<Tela>("mesa");
-  const { ligado: engenheiro, alternar: alternarEngenheiro } =
-    useModoEngenheiroState();
-  const mounted = useRef(true);
-
-  // Mounted here, not inside the tab, so the band and the footer keep their
-  // data when the operator switches tabs — and so the band is on screen on
-  // every one of them.
-  //
-  // O feed de eventos (5 s = 12 req/min) só roda no Sistema, que é a única tela
-  // que o mostra: é o que mantém faixa + Mesa dentro das 20 req/min da D5.
-  const { overview, performance, events, degraded, feedDegraded } = useOverview(
-    session.accessToken,
-    onUnauthorized,
-    { feed: tela === "sistema" },
-  );
-
-  // Teclas 1–6 trocam de tela; `?` liga o modo engenheiro (D4).
-  //
-  // Nada disso dispara enquanto o foco está num campo: o filtro da Mesa aceita
-  // texto livre, e "1" digitado numa busca não pode trocar a tela debaixo de
-  // quem está escrevendo.
-  useEffect(() => {
-    const digitando = (alvo: EventTarget | null): boolean => {
-      if (!(alvo instanceof HTMLElement)) {
-        return false;
-      }
-      const etiqueta = alvo.tagName;
-      return (
-        etiqueta === "INPUT" ||
-        etiqueta === "TEXTAREA" ||
-        etiqueta === "SELECT" ||
-        alvo.isContentEditable
-      );
-    };
-    const aoTeclar = (evento: KeyboardEvent): void => {
-      if (
-        evento.ctrlKey ||
-        evento.metaKey ||
-        evento.altKey ||
-        digitando(evento.target)
-      ) {
-        return;
-      }
-      if (evento.key === "?") {
-        alternarEngenheiro();
-        return;
-      }
-      const aba = TELAS.find((candidata) => candidata.tecla === evento.key);
-      if (aba !== undefined && aba.disponivel) {
-        setTela(aba.chave);
-      }
-    };
-    window.addEventListener("keydown", aoTeclar);
-    return () => {
-      window.removeEventListener("keydown", aoTeclar);
-    };
-  }, [alternarEngenheiro]);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(
-      () => controller.abort(),
-      REQUEST_TIMEOUT_MS,
-    );
-    const nextStatus = await fetchDashboardStatus(fetch, controller.signal);
-    window.clearTimeout(timeout);
-    if (mounted.current) {
-      setStatus(nextStatus);
-    }
-  }, []);
-
-  // O status do App (`/health/live` + `/health/ready`) só roda no Sistema, que
-  // é a única tela que o mostra.
-  //
-  // Premissa da D5 que CAIU, medida em 2026-09-08: o orçamento da RFC conta
-  // "status do App 4" por minuto, mas `fetchDashboardStatus` faz DUAS
-  // requisições por tique (`health.ts:35-36`), logo são 8 — e a soma da D5,
-  // dada como 18, era 22 com a Mesa aberta. Pagar 8 req/min por um cartão que
-  // está em outra tela era o caminho mais bobo de estourar o teto de 20; com
-  // este recorte a Mesa fecha em 14 (8 da faixa + 6 dela), e ainda sobra folga
-  // para as 2 do `/series` do PR 3.
-  useEffect(() => {
-    mounted.current = true;
-    if (tela !== "sistema") {
-      return () => {
-        mounted.current = false;
-      };
-    }
-    void refresh();
-    const interval = window.setInterval(() => {
-      void refresh();
-    }, REFRESH_INTERVAL_MS);
-    return () => {
-      mounted.current = false;
-      window.clearInterval(interval);
-    };
-  }, [refresh, tela]);
-
-  return (
-    <ModoEngenheiroProvider ligado={engenheiro}>
-      <section aria-label="Acervo Polymarket">
-        <header className="header">
-          <p className="btc-badge">ACERVO · POLYMARKET</p>
-          <h2>Laboratório legado</h2>
-          <p>
-            Histórico preservado. Estes resultados pertencem ao legado
-            Polymarket e não representam as contas BTC.
-          </p>
-        </header>
-        <PnlBand
-          overview={overview}
-          performance={performance}
-          degraded={degraded}
-        />
-        <nav className="tabs" aria-label="Telas do painel">
-          {TELAS.map((aba) => (
-            <button
-              key={aba.chave}
-              type="button"
-              className={tela === aba.chave ? "tab tab--active" : "tab"}
-              disabled={!aba.disponivel}
-              title={aba.nota ?? `tecla ${aba.tecla}`}
-              onClick={() => {
-                if (aba.disponivel) {
-                  setTela(aba.chave);
-                }
-              }}
-            >
-              <kbd>{aba.tecla}</kbd> {aba.rotulo}
-            </button>
-          ))}
-          <button
-            type="button"
-            className={engenheiro ? "tab tab--active" : "tab"}
-            aria-pressed={engenheiro}
-            title="Modo engenheiro: reimprime o código bruto, os identificadores e o JSON (tecla ?)"
-            onClick={alternarEngenheiro}
-          >
-            <kbd>?</kbd> Engenheiro
-          </button>
-        </nav>
-        {tela === "mesa" ? (
-          <Mesa
-            archive
-            accessToken={session.accessToken}
-            onUnauthorized={onUnauthorized}
-            overview={overview}
-          />
-        ) : tela === "carteira" ? (
-          <PortfolioPanel
-            accessToken={session.accessToken}
-            onUnauthorized={onUnauthorized}
-            sections={SECOES_CARTEIRA}
-            rotulo="Carteira"
-          />
-        ) : tela === "decisoes" ? (
-          // RFC-027 D1–D4: a tela abre em funil + último ciclo + Quase +
-          // Congeladas, e as 500 cruas ficam atrás do filtro. O `/overview`
-          // que esta tela já busca é a fonte dos três primeiros blocos, então
-          // o funil não custa requisição nova.
-          <Decisoes
-            accessToken={session.accessToken}
-            onUnauthorized={onUnauthorized}
-            overview={overview}
-          />
-        ) : tela === "sombra" ? (
-          // RFC-029 D4: leitura do shadow replay gravado em disco pelo job
-          // diário. Sem botão nenhum — não promove modelo, não cunha config e
-          // não dispara a rodada.
-          <Sombra
-            accessToken={session.accessToken}
-            onUnauthorized={onUnauthorized}
-          />
-        ) : tela === "resolucao" ? (
-          // Duas colunas sem tocar em Resolution.tsx: o painel inteiro fica na
-          // coluna larga e a nota de limite na estreita. A aba não sabe quantos
-          // mercados existem além do teto da rota — e o teto é constante do
-          // código (`LIST_LIMIT`), não uma contagem de produção que envelhece
-          // dentro de um texto.
-          <div className="tela-duas-colunas">
-            <ResolutionPanel
-              accessToken={session.accessToken}
-              onUnauthorized={onUnauthorized}
-            />
-            <aside className="tela-nota">
-              <h3>Leia com isto em mente</h3>
-              <p className="scope">
-                A consulta de mercados desta tela devolve no máximo{" "}
-                <strong>200</strong> linhas por chamada (o teto da rota). Se a
-                lista vier cheia, existem mercados fora dela — a tela não mostra
-                &quot;todos&quot;, mostra a página.
-              </p>
-            </aside>
-          </div>
-        ) : (
-          <>
-            <StatusPanel status={status} />
-            <button
-              className="refresh"
-              type="button"
-              onClick={() => void refresh()}
-            >
-              Verificar novamente
-            </button>
-            <OverviewPanel
-              overview={overview}
-              events={events}
-              feedDegraded={feedDegraded}
-            />
-            {/* RFC-027 D6: os dois consumidores que faltavam. `/data-quality`
-                não tinha nenhum; de `/portfolio/limits` a RFC-026 lia só o
-                bloco `config`. Os semáforos derivam das idades que o
-                `/overview` já publica — nenhuma requisição a mais por eles. */}
-            <SistemaFase1
-              accessToken={session.accessToken}
-              onUnauthorized={onUnauthorized}
-              overview={overview}
-            />
-            <PortfolioPanel
-              accessToken={session.accessToken}
-              onUnauthorized={onUnauthorized}
-              sections={SECOES_SISTEMA}
-              rotulo="Sistema"
-            />
-          </>
-        )}
-        <BuildFooter releaseSha={overview?.release_sha ?? null} />
-      </section>
-    </ModoEngenheiroProvider>
   );
 }
 

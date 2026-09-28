@@ -1,5 +1,7 @@
 # Handoff do projeto Ganso Market
 
+**Referência histórica — escopo revisto em 28/09/2026.** O [escopo vigente](SCOPE.md) aposenta Polymarket e adia JEV. Exigências anteriores de manter módulo/acervo e executar backlog Polymarket estão superadas. Resultados datados permanecem registros; contratos BTC reutilizados continuam válidos. Consultar somente quando necessário, sem reexecutar o roteiro histórico.
+
 > **Entrada atual — 10/09/2026:** o próximo ciclo está dividido em blocos pequenos
 > no [roadmap BTC](../prompts/roadmap/btc/README.md). Consulte o
 > [estado curto](roadmap/BTC_EXECUTION_STATE.md), a RFC e o recibo do bloco escolhido;

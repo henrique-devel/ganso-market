@@ -1,5 +1,12 @@
 # Instruções para agentes — Ganso Market
 
+**Escopo vigente (28/09/2026):** ler [docs/SCOPE.md](docs/SCOPE.md).
+BTC/Hyperliquid é o único foco atual; JEV fica para o futuro. Polymarket está
+aposentada, com retirada local e produtiva autorizada. Não manter módulo/acervo
+nem reabrir backlog legado por instrução histórica. Preservar componentes e dados
+utilizados pelo BTC. A entrega de escopo não equivale à remoção física do legado.
+
+
 Leia a [autorização contínua de desenvolvimento e entrega](docs/ops/DEVELOPMENT_AUTHORIZATION.md)
 e o [prompt mestre](prompts/AI_DEVELOPER_SYSTEM_PROMPT.md) antes de executar uma tarefa.
 Para blocos do roadmap, siga a rota de contexto mínimo indicada no prompt mestre.

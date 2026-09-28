@@ -8,14 +8,18 @@ O deploy não instala nem altera firewall, domínio, certificado, proxy externo
 ou ferramenta de observabilidade. O único bind no host é o gateway Nginx em
 `0.0.0.0:80`; PostgreSQL, API e workers não publicam portas próprias.
 
-## Estado funcional atual
+## Escopo operacional
 
-O núcleo ativo contém frontend, PostgreSQL, API/autenticação e Nginx.
-Os cinco workers Polymarket estão aposentados operacionalmente; suas leituras,
-replay e histórico permanecem. O estado medido e a decisão de hospedagem estão em G2-10.1 abaixo. O perímetro do painel
-é responsabilidade do operador — ver o runbook de perímetro. Somente paper.
+BTC/Hyperliquid paper é o foco atual; JEV permanece futuro. Consulte o
+[escopo vigente](../SCOPE.md) e o [estado](../roadmap/GANSO_2_EXECUTION_STATE.md)
+para disponibilidade e bloqueios. A retirada Polymarket está autorizada;
+não iniciar seus serviços ou perfis para operar BTC.
 
-## G2-10.1 — Permanecer no host provisionado (27/09/2026 UTC)
+## Medição histórica G2-10.1 — 27/09/2026 UTC
+
+A preservação obrigatória do acervo Polymarket citada nesta medição foi
+substituída pela decisão de retirada de 28/09. Recalcular capacidade após
+as remoções efetivamente realizadas; os números abaixo são históricos.
 
 Atualização: o [plano G2-12.1 de 28/09](ganso-2-capacity-plan.md) revalida
 capacidade/custo e substitui as projeções abaixo para nova admissão. As medições
@@ -236,24 +240,9 @@ comando root novo nem cria rotina de backup. Cópia ausente ou SHA divergente
 aciona o fallback conservador. O lock do comando remoto impede duas publicações
 simultâneas de disputarem a seleção dessa cópia.
 
-**Cuidado com configs versionadas que nomeiam conteúdo da imagem.** O diretório
-`config/` é montado por bind e chega junto com o CD; o conteúdo que ele nomeia
-(o léxico de resolução, por exemplo) vive **dentro da imagem** e só muda no
-rebuild. Entre uma coisa e outra existe uma janela em que o binário ANTIGO lê a
-config NOVA.
-
-Aconteceu em 2026-08-26: `config/resolution.json` passou a declarar
-`score_version: 1.1.0`, o `polymarket-resolution` antigo leu esse nome e gravou
-uma linha em `resolution_score_versions` fixando 1.1.0 ao hash do léxico
-**anterior**. Quando a imagem nova subiu, o hash calculado divergiu do gravado e
-o serviço passou a falhar fechado com `SCORE_VERSION_CONTENT_MISMATCH` — o
-comportamento correto, mas o nome de versão ficou queimado, porque a linha é
-imutável por trigger (e deve ser). A saída foi cunhar 1.1.1.
-
-Para evitar: quando um PR mudar **ao mesmo tempo** um arquivo de `config/` e o
-conteúdo que ele nomeia, faça o rebuild dos containers de profile na mesma
-janela do merge, antes de o serviço afetado reiniciar por qualquer outro
-motivo.
+Configuração e conteúdo versionados precisam chegar juntos aos consumidores
+BTC afetados. Usar o deploy seletivo; não iniciar perfis aposentados para
+atualizar imagens. Publicação somente documental não recria serviços.
 
 ## CI/CD do GitHub
 

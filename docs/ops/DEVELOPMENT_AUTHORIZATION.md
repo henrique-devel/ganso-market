@@ -1,5 +1,34 @@
 # Autorização contínua de desenvolvimento e entrega
 
+<a id="aposentadoria-polymarket-28092026"></a>
+
+## Emenda vigente — aposentadoria Polymarket (28/09/2026)
+
+O proprietário determinou: “vamos começar então com o Escopo pode remover e
+alterar tudo que envolva o legado de Polymarket”, autorizando expressamente
+“desde do ambiente local até no servidor de produção” e fixando o foco em
+“BTC/Hyperliquid com JEV no futuro”.
+
+Aplicar [escopo vigente](../SCOPE.md): substituir a preservação obrigatória do
+módulo/acervo por aposentadoria definitiva; JEV adiado. Estão autorizadas as
+entregas de escopo, retirada de código/operação e descarte dos conjuntos
+exclusivos do legado, com inventário técnico e preservação das dependências BTC.
+Não pedir novamente permissão para PR, merge, sincronização documental no host,
+remoção específica ou descarte coberto por essa decisão. A primeira entrega é
+documental; código/dados exigem suas verificações antes da execução.
+
+A emenda substitui restrições históricas que exigiam manter o acervo Polymarket,
+mas não autoriza apagar dados BTC, remover volume compartilhado, alterar
+migrations aplicadas, desligar proteções globais, mudar perímetro/caps, contratar
+serviços ou ativar live. Não exige backup como condição adicional.
+
+**Confirmação posterior em 28/09:** “Autorizado a remoção de todo e qualquer codigo/dados do projeto Polymarket”. A entrega agora executa retirada física do código, serviços e conjuntos exclusivos inventariados, mantendo BTC/Hyperliquid e auth.
+
+## Registro das autorizações anteriores
+
+As seções abaixo preservam decisões datadas; em conflito, prevalece a emenda acima.
+
+
 **Vigente.** Registrada em 11/09/2026, America/Sao_Paulo (12/09/2026 UTC).
 Aplica-se ao projeto Ganso Market, repositório `henrique-devel/ganso-market`, e à
 produção existente identificada em [SERVER_ACCESS.md](SERVER_ACCESS.md).

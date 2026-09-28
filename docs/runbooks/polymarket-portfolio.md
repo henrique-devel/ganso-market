@@ -1,5 +1,7 @@
 # Runbook — motor de portfólio e gates (RFC-013)
 
+**Runbook aposentado em 28/09/2026.** Polymarket está fora do produto conforme o [escopo vigente](../SCOPE.md). Comandos abaixo são referência histórica; não iniciar serviços, coleta ou execução. Para retirada, usar inventário específico e preservar dependências BTC.
+
 **SIMULAÇÃO — SEM EXECUÇÃO REAL.** O serviço `polymarket-portfolio` decide
 quanto apostar e quando sair, sobre dados gravados. Ele não assina, não
 autentica e não cria ordem real; o guard automatizado é

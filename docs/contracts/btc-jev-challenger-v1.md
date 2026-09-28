@@ -149,3 +149,6 @@ This delivery adds no producer, migration or admission. Existing 4096-row,
 G2-14.4 must cover longer windows with bounded cuts. Window drawdown/coverage are
 not inferred from the inception report or two endpoints. G2-17 must assess gaps
 and full coverage separately; a pilot is never promoted to a 30-day evaluation.
+
+O escopo vigente de28/09 adia JEV: a publicação deste contrato não seleciona
+G2-15 nem torna comparação com IA requisito de aceite BTC.

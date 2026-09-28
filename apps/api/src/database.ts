@@ -24,7 +24,7 @@ export interface DatabasePool extends SqlExecutor {
    * ONLY` and `SET LOCAL statement_timeout` before anything else runs.
    *
    * Per-statement rather than per-session, for the reason spelled out in
-   * `polymarket/portfolio/sweepstore.ts:15`: `pool.query` checks out whichever
+   * transaction consumers: `pool.query` checks out whichever
    * client is free, so a session-level `SET` would guard one connection of the
    * pool and silently not the next. A transaction is bound to one client for
    * its whole life, so the budget travels with the statement it guards.

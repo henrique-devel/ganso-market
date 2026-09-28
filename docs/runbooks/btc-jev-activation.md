@@ -99,9 +99,13 @@ fixtures marcadas MOCK não são evidência de ativação, fills ou mercado prod
 
 ### Compatibilidade de implantação G2-14.3
 
-API apenas, sem migration ou ativação nesta entrega. Continuam schema48 e leitores
+API apenas, sem migration ou ativação nesta entrega. Schema49 herdado da retirada
+Polymarket e leitores
 replay v1/v2. Antes de rollback para binário anterior, conter novas entradas;
 registros prospectivos v2 exigem leitores desta versão e não podem ser apagados ou
 convertidos para v1. Preservar o gestor de posições/obrigações existentes. Não
 registrar janela produtiva enquanto faltarem admissão G2-12.3, fontes, jornada e
 cobertura total do teto de US$80/mês. Datas de fixture não são escolha operacional.
+
+O escopo de28/09 adia JEV. Este procedimento documenta capacidade futura; não
+preparar acesso/ativação nem exigir challenger para o marco BTC atual.
