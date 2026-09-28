@@ -1,20 +1,15 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import * as fixed from "../../src/trading/fixed.js";
-import * as legacyFixed from "../../src/polymarket/fundamental/fixed.js";
 import { compositeKey } from "../../src/trading/identity.js";
 import {
   canonicalFingerprint,
   compareReplayOrder,
   utcBucketStart,
 } from "../../src/trading/replay.js";
-import { financialOwnerKey } from "../../src/polymarket/paper/financial.js";
 
 describe("shared financial primitives", () => {
-  it("keeps one exact arithmetic implementation behind the legacy imports", () => {
-    for (const name of Object.keys(fixed) as (keyof typeof fixed)[]) {
-      expect(legacyFixed[name]).toBe(fixed[name]);
-    }
+  it("keeps exact arithmetic beyond floating point precision", () => {
     expect(fixed).not.toHaveProperty("formatProbabilityScaled");
     expect(fixed).not.toHaveProperty("probabilityToScaled");
     expect(fixed).not.toHaveProperty("scaledToNumber");
@@ -34,7 +29,7 @@ describe("shared financial primitives", () => {
     expect(fixed.div(1n, 0n)).toBe(0n);
   });
 
-  it("encodes identity dimensions without separator collisions or changing legacy keys", () => {
+  it("encodes identity dimensions without separator collisions", () => {
     expect(compositeKey(["a:b", "c"])).not.toBe(compositeKey(["a", "b:c"]));
     expect(compositeKey(['a"', "\\b"])).toBe('["a\\\"","\\\\b"]');
     const scope = ["account", "experiment", "instrument"];
@@ -43,10 +38,6 @@ describe("shared financial primitives", () => {
       other[dimension] += "-other";
       expect(compositeKey(other)).not.toBe(compositeKey(scope));
     }
-    expect(financialOwnerKey("fixture", "A")).toBe('["fixture","A"]');
-    expect(financialOwnerKey("fixture", "A")).toBe(
-      compositeKey(["fixture", "A"]),
-    );
   });
 
   it("preserves fingerprint bytes, nested key sorting, arrays and conflict detection", () => {

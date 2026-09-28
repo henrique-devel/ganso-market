@@ -11,8 +11,8 @@ bugs nem remoção física. Dados BTC e dependências continuam protegidos.
 | Entrega | Estado | Resultado / próxima ação |
 | --- | --- | --- |
 | Retirada de escopo Polymarket | code-verified | [PR #302](https://github.com/henrique-devel/ganso-market/pull/302); documentos, índices, autorização e roadmap alinhados. 705 alvos de links locais, diff/scan e classificador só texto verificados; CI, merge e sincronização documental no servidor acompanhados no PR. Código/dados ainda pendentes nas linhas seguintes. |
-| Retirada de código/operação Polymarket | pending | Autorizada; inventariar consumidores BTC e remover componentes exclusivos em entrega própria. |
-| Descarte de dados Polymarket | pending | Autorizado; delimitar conjunto exclusivo e dependências BTC, executar e medir recuperação de espaço em entrega própria. |
+| Retirada de código/operação Polymarket | in-progress | Removidos localmente workers, domínio/API, CLI, acervo UI, configs, timers e ferramentas exclusivas; build/lint/testes e make verify aprovados. PR/deploy e limpeza operacional em andamento. |
+| Descarte de dados Polymarket | in-progress | Migration 0049: 72 tabelas, 36 funções e uma view explícitas, sem CASCADE; sem FKs BTC para o conjunto e sem pins legados na inspeção produtiva. Instalação limpa e 374 testes PostgreSQL aprovados; upgrade populado, CI e aplicação produtiva em andamento. |
 
 Resultados datados abaixo são históricos; não restabelecem preservação do
 acervo aposentado nem preparação JEV imediata.

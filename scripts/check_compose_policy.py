@@ -7,17 +7,12 @@ import json
 import subprocess
 
 FOUR_GIB = 4 * 1024**3
-# Existing pool maxima (database.ts and the five legacy entrypoints), plus
+# Existing pool maxima (database.ts and BTC worker), plus
 # an allowance for migration. Eight slots stay unallocated.
 CONNECTIONS = {
     "api": 4,
     "migrate": 1,
     "btc-worker": 2,
-    "polymarket-recorder": 10,
-    "polymarket-estimator": 4,
-    "polymarket-resolution": 4,
-    "polymarket-paper": 2,
-    "polymarket-portfolio": 4,
 }
 
 

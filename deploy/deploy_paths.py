@@ -73,10 +73,7 @@ def classify(paths: list[str]) -> tuple[bool, str]:
 
 # Candidate services are intersected with running containers on the host.
 # A profile name or an explicit Compose service must never activate a worker.
-LEGACY = {
-    f"polymarket-{name}" for name in ("recorder", "estimator", "resolution", "paper", "portfolio")
-}
-NODE_SERVICES = {"api", "btc-worker", *LEGACY}
+NODE_SERVICES = {"api", "btc-worker"}
 CODE_SERVICES = {*NODE_SERVICES, "web", "nginx"}
 
 
@@ -103,10 +100,6 @@ def affected_services(paths: list[str]) -> set[str]:
             "apps/api/test/venues/hyperliquid-context.test.ts",
         }:
             selected.add("btc-worker")
-        elif any(path == f"apps/api/src/{name}.ts" for name in LEGACY):
-            selected.add(Path(path).stem)
-        elif path.startswith("apps/api/src/polymarket/"):
-            selected.update({"api", *LEGACY})
         elif path in {
             "packages/contracts/src/trading/desk.ts",
             "packages/contracts/src/trading/history.ts",

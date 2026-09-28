@@ -15,7 +15,6 @@ import type {
   SqlExecutor,
 } from "../src/database.js";
 import { buildApi } from "../src/server.js";
-import { DISK_ONLY_ROUTES } from "./fixtures/disk-only-routes.js";
 
 const REPO = new URL("../../../", import.meta.url).pathname;
 
@@ -116,14 +115,16 @@ afterEach(async () => {
   app = null;
 });
 
-async function build(): Promise<{
+async function build(
+  statementBudgets: StatementBudgets = shippedBudgets(),
+): Promise<{
   instance: FastifyInstance;
   statements: string[];
 }> {
   const { pool, statements } = recordingPool();
   const instance = buildApi({
     config: testConfig(),
-    statementBudgets: shippedBudgets(),
+    statementBudgets,
     readinessProbe: { check: () => Promise.resolve() },
     authService: authService as never,
     pool,
@@ -161,10 +162,6 @@ const SAMPLE_QUERY: Readonly<Record<string, () => string>> = {
   "/trading/operation": () => "?account_id=manual&order_id=fixture:order",
   // `from` is relative to the real clock because the window ceiling is, and a
   // fixed date here would age into a 400 the day after it was written.
-  "/polymarket/series": () =>
-    `?tokens=12345&metric=ohlc&from=${new Date(Date.now() - 60_000).toISOString()}`,
-  "/polymarket/series/:tokenId": () =>
-    `?metric=ohlc&from=${new Date(Date.now() - 60_000).toISOString()}`,
 };
 
 function concretePath(pattern: string): string {
@@ -224,33 +221,6 @@ describe("RFC-023 A4 — the declared budget is the one that runs", () => {
     }
   });
 
-  it("runs no statement at all on the routes that read a file", async () => {
-    // RFC-029 D3, and the other half of their exemption in
-    // route-budgets.test.ts. They are excused from declaring a statement budget
-    // because they run no statements; this is where that claim is checked
-    // rather than asserted. A query added to either one shows up here as a
-    // non-empty list, which is a louder failure than a budget that quietly
-    // never applied.
-    const { instance, statements } = await build();
-
-    for (const route of DISK_ONLY_ROUTES) {
-      statements.length = 0;
-      const response = await instance.inject({
-        method: "GET",
-        // A mode the allowlist accepts, so the handler gets as far as it can:
-        // it reaches for a file, finds no directory configured, and answers
-        // 404 without ever touching the pool.
-        url: `${route}?mode=B`,
-        headers: AUTH,
-      });
-      expect(
-        (response.json() as { reason_code?: string }).reason_code,
-        `${route} is not a registered route`,
-      ).not.toBe("ROUTE_NOT_FOUND");
-      expect(statements, route).toEqual([]);
-    }
-  });
-
   it("leaves the published POST outside READ ONLY", async () => {
     const { instance, statements } = await build();
     statements.length = 0;
@@ -259,7 +229,7 @@ describe("RFC-023 A4 — the declared budget is the one that runs", () => {
     // reach the database as a plain transaction, or it could not write.
     await instance.inject({
       method: "POST",
-      url: "/polymarket/paper/kill-switch/rearm",
+      url: "/trading/pause",
       headers: AUTH,
       payload: {},
     });
@@ -273,13 +243,16 @@ describe("RFC-023 A4 — the declared budget is the one that runs", () => {
   });
 
   it("falls back to default on a GET the map does not name", async () => {
-    const { instance, statements } = await build();
+    const { instance, statements } = await build({
+      ...shippedBudgets(),
+      routes: {},
+    });
     statements.length = 0;
 
-    // /polymarket/markets is registered but not published, so it has no entry.
+    // /trading/accounts is registered but not published, so it has no entry.
     const response = await instance.inject({
       method: "GET",
-      url: "/polymarket/markets",
+      url: "/trading/accounts",
       headers: AUTH,
     });
     expect(response.statusCode).not.toBe(404);

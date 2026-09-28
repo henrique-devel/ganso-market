@@ -373,7 +373,7 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     ).rejects.toThrow("MISSING_EVIDENCE");
     expect(await ids()).toEqual(["btc"]);
   });
-  it("rejects unknown scope/version/oversized batches and preserves legacy HOLD triggers", async () => {
+  it("rejects unknown scope/version/oversized batches and preserves shared foundation HOLD triggers", async () => {
     for (const change of [
       { datasetId: "polymarket" },
       { policyVersion: "next" },
@@ -385,7 +385,7 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
       ).rejects.toThrow("SCOPE_REFUSED");
     }
     await expect(
-      fixture.pool.query("DELETE FROM polymarket_trades"),
+      fixture.pool.query("DELETE FROM app_settings"),
     ).rejects.toThrow();
     await expect(
       fixture.pool.query("TRUNCATE btc_retention_objects CASCADE"),
