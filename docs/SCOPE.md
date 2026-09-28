@@ -57,10 +57,10 @@ preservada antes do descarte. Código removido é recuperável pelo Git; dados
 apagados não têm recuperação prometida. Backup continua fora do pré-requisito
 atual, conforme decisão anterior.
 
-A revisão de escopo do PR #302 foi documental. A retirada física agora está
-em execução por autorização explícita posterior; conferir o resultado no PR
-e no acompanhamento, sem inferir conclusão a partir deste texto. O registro
-único de entrega continua em [estado de execução](roadmap/GANSO_2_EXECUTION_STATE.md).
+A revisão de escopo do PR #302 foi documental. A PR #303 retirou o runtime
+ativo e os dados produtivos Polymarket; a migration 0049 foi aplicada e os
+componentes BTC/auth foram verificados. O registro único de entrega e da
+limpeza restante de imagens antigas está no [estado de execução](roadmap/GANSO_2_EXECUTION_STATE.md).
 Mudanças locais alheias à tarefa são preservadas, sem reset ou sobrescrita.
 
 ## Limites mantidos

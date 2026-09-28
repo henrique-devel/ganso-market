@@ -20,7 +20,7 @@ legado. Proteções genéricas da fundação sobrevivem; pins BTC são independe
    efetiva e quiescência sem executar up. Isso evita referências a serviços retirados.
 3. PR/merge/deploy seletivo de API/web/Nginx e migration. Não recriar PostgreSQL
    nem iniciar coleta BTC. Recriar o container BTC parado com a imagem nova,
-   usando create sem start, para retirar o código antigo também dessa imagem.
+   usando `up --no-start --no-deps --no-build --force-recreate`, para retirar o código antigo também dessa imagem.
 4. Remover os cinco containers Polymarket por labels/IDs verificados; unidades
    e overrides de recorder-watchdog/shadow-replay; overlay legado, replay em
    `/var/lib/ganso/shadow-replay`, estado do watchdog e diagnósticos exclusivos
