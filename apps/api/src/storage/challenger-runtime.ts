@@ -102,7 +102,7 @@ export function createChallengerConsumer(
           ).rows[0];
           const d = (
             await tx.query<{ decision: BaselineDecision }>(
-              "SELECT decision FROM btc_baseline_decisions WHERE decision_id=$1",
+              "SELECT decision FROM btc_baseline_decisions_full WHERE decision_id=$1",
               [job.decision_id],
             )
           ).rows[0]!.decision;
@@ -339,11 +339,11 @@ export async function readChallengerReplay(
         await tx.query(
           `SELECT d.decision,j.request,j.origin,j.model,j.state,j.outcome,
       c.result AS adapter_receipt,c.finished_at,source.decision AS source_decision
-     FROM btc_baseline_decisions d
+     FROM btc_baseline_decisions_full d
      JOIN btc_ledger_accounts a ON a.account_id=d.account_id
      LEFT JOIN btc_jev_challenger_requests j ON j.decision_id=d.decision_id
      LEFT JOIN btc_jev_calls c ON c.origin=j.origin AND c.request_id=j.request_id
-     LEFT JOIN btc_baseline_decisions source ON source.decision_id=d.decision->>'source_decision_id'
+     LEFT JOIN btc_baseline_decisions_full source ON source.decision_id=d.decision->>'source_decision_id'
      WHERE d.account_id=$1 AND d.bar_end_at=$2 AND a.identity->'account'->>'purpose'='challenger'`,
           [account, bar],
         )

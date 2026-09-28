@@ -75,3 +75,43 @@ Não reverter migration, remover pins ou reiniciar workers Polymarket. O guard
 SQL também recusa DELETE sem a versão da política, TTL, ausência de HOLD e
 referências; UPDATE/TRUNCATE dos objetos e remoção de pins/arestas são bloqueados.
 A validação destrutiva usa exclusivamente PostgreSQL descartável de testes.
+
+
+## G2-12.2 — Projeção compartilhada de decisões futuras
+
+Migration aditiva 0046 e escritor `btc.decision-projection.v1`: a decisão
+completa permanece imutável/pinada em `btc_retention_objects`, com os mesmos
+hashes, origens, timestamps, referências e arestas transitivas. A segunda cópia
+em `btc_baseline_decisions.decision` passa a ser projeção sem `input_refs` e
+`signal.input_refs`. O trigger compara a decisão recebida integralmente com a
+evidência protegida, conta, ID, corte e pin antes de projetar; divergência aborta
+a mesma transação. Escritores antigos continuam gravando o formato antigo.
+Nenhum registro anterior, contador, pin, HOLD ou quota é reescrito.
+
+Consumidores que precisam da decisão econômica completa usam
+`btc_baseline_decisions_full`; consultas da tela permanecem na projeção.
+Não entregar `decision` da tabela de projeções a um replay como se fosse o
+contrato completo. Leitura mista devolve exatamente o payload original; versões
+de captura, cálculo financeiro e hash da decisão não mudam. A projeção contém
+apenas uma versão de armazenamento, que não entra no hash econômico.
+
+Implantação em duas etapas: primeiro migration e leitores, com escritor antigo;
+verificar essa release em produção e só então publicar o escritor que solicita
+a projeção. Assim o rollback automático da segunda release encontra leitores
+compatíveis. O coletor continua parado. **Rollback após
+primeira projeção:** preservar schema 46 e estes leitores compatíveis, revertendo
+somente a emissão de `storage_version` no escritor (hotfix reconstruído/testado).
+Não retornar à imagem anterior sem o patch de leitura, pois ela interpreta a
+tabela como decisões completas. Não apagar/reexpandir projeções ou desabilitar
+triggers para rollback. Antes da primeira projeção, a imagem anterior pode
+continuar operando com o schema aditivo.
+
+A economia é exclusivamente da segunda cópia futura. A evidência integral e sua
+cobrança lógica continuam iguais; a captura já coalesce snapshots ainda não
+expostos e preserva todos os trades. Não reduzir mais a captura para perseguir
+uma meta sem prova de replay/fill. Esta mudança **não comprova** 16 KiB totais
+por decisão, 250 kB/h raw, 3 MB/h de filesystem ou 90 dias sustentáveis; não
+recupera folga física nem os contadores históricos. Admissão permanece bloqueada
+conforme o plano G2-12.1. Sem descarte delimitado autorizado, sem contratação,
+sem consumo Jev ou mudança de teto. Custo novo desta implementação: zero;
+fatura total existente continua não demonstrada.

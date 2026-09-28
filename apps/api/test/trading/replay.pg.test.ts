@@ -17,6 +17,7 @@ import {
 import { replayDataset } from "../../src/storage/replay-dataset.js";
 import {
   storeRetentionObject,
+  pinRetentionObject,
   withBtcRetentionTransaction,
 } from "../../src/storage/btc-retention.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
@@ -92,9 +93,19 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
         payload: d,
         dependencies: [],
       });
+      await pinRetentionObject(pool, id, id, "replay fixture");
       await f.pool.query(
         "INSERT INTO btc_baseline_decisions(account_id,bar_end_at,decision_id,decision,evidence_id) VALUES('baseline',$1,$2,$3,$4)",
-        [d.bar_end_at, d.decision_id, JSON.stringify(d), id],
+        [
+          d.bar_end_at,
+          d.decision_id,
+          JSON.stringify(
+            d === decisions[0]
+              ? { ...d, storage_version: "btc.decision-projection.v1" }
+              : d,
+          ),
+          id,
+        ],
       );
     }
     await storeRetentionObject(pool, {

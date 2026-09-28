@@ -253,7 +253,7 @@ const step = async (ms = 1100, depth = "10000000", bid?: number) => {
 const decisions = async () =>
   (
     await f.pool.query(
-      "SELECT decision FROM btc_baseline_decisions ORDER BY bar_end_at",
+      "SELECT decision FROM btc_baseline_decisions_full ORDER BY bar_end_at",
     )
   ).rows.map((x) => x.decision);
 const ledger = () => readLedgerAccount(pool, r.scope);
@@ -803,7 +803,7 @@ describe.skipIf(!url)(
         SELECT evidence_id FROM btc_baseline_decisions WHERE account_id='baseline'
         UNION SELECT d.dependency_id FROM btc_retention_dependencies d JOIN protected p USING(object_id)
       ) SELECT count(*)::int n FROM (
-        SELECT ref->>'object_id' AS object_id FROM btc_baseline_decisions b CROSS JOIN LATERAL jsonb_array_elements(b.decision->'input_refs') ref WHERE account_id='baseline'
+        SELECT ref->>'object_id' AS object_id FROM btc_baseline_decisions_full b CROSS JOIN LATERAL jsonb_array_elements(b.decision->'input_refs') ref WHERE account_id='baseline'
         EXCEPT SELECT object_id FROM protected) missing`)
       ).rows[0].n;
       expect(missing).toBe(0);

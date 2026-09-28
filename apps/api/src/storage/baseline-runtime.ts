@@ -111,7 +111,7 @@ async function executeActive(tx: SqlExecutor, r: RegistrationRow) {
     if (reservation.order.intent === "open") {
       const row = (
         await tx.query<{ decision: BaselineDecision; evidence_id: string }>(
-          "SELECT decision,evidence_id FROM btc_baseline_decisions WHERE account_id=$1 AND decision->'command'->'order'->>'order_id'=$2",
+          "SELECT decision,evidence_id FROM btc_baseline_decisions_full WHERE account_id=$1 AND projection->'command'->'order'->>'order_id'=$2",
           [account, id],
         )
       ).rows[0];
@@ -186,10 +186,10 @@ async function managePositions(
     s = await baselineEnvironmentTx(tx, r);
   const records = (
     await tx.query<{ decision: BaselineDecision; evidence_id: string }>(
-      `SELECT decision,evidence_id FROM btc_baseline_decisions WHERE account_id=$1
-    AND decision->'command' IS NOT NULL AND decision->'command' <> 'null'::jsonb
+      `SELECT decision,evidence_id FROM btc_baseline_decisions_full WHERE account_id=$1
+    AND projection->'command' IS NOT NULL AND projection->'command' <> 'null'::jsonb
     AND EXISTS(SELECT 1 FROM btc_ledger_events e WHERE e.account_id=$1 AND e.event_type='fill'
-      AND e.event->'payload'->>'order_id'=decision->'command'->'order'->>'order_id')`,
+      AND e.event->'payload'->>'order_id'=projection->'command'->'order'->>'order_id')`,
       [account],
     )
   ).rows;
@@ -402,7 +402,7 @@ export async function consumeBaselineAccount(
     const source = challenger
       ? ((
           await tx.query<{ decision: BaselineDecision; evidence_id: string }>(
-            `SELECT d.decision,d.evidence_id FROM btc_baseline_decisions d
+            `SELECT d.decision,d.evidence_id FROM btc_baseline_decisions_full d
        JOIN btc_ledger_accounts a ON a.account_id=d.account_id
        WHERE d.account_id=$1 AND a.identity->'account'->>'purpose'='baseline'
        AND d.bar_end_at >= $3 AND d.bar_end_at <= $4

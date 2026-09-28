@@ -110,7 +110,7 @@ export async function captureReplayDataset(
     const extra = decisionIds ? [decisionIds] : [];
     const decisions = await boundedRows<ReplayDataset["decisions"][number]>(
       tx,
-      `SELECT decision,evidence_id FROM btc_baseline_decisions WHERE account_id=$1${selection} ORDER BY bar_end_at`,
+      `SELECT decision,evidence_id FROM btc_baseline_decisions_full WHERE account_id=$1${selection} ORDER BY bar_end_at`,
       account,
       REPLAY_LIMITS.decisions,
       budget,
