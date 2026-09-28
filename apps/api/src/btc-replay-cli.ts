@@ -8,7 +8,8 @@ import {
   loadReplayEvidence,
 } from "./storage/replaystore.js";
 import {
-  REPLAY_CONTRACTS,
+  REPLAY_EQUITY_CONTRACTS,
+  REPLAY_EQUITY_VERSION,
   REPLAY_LIMITS,
   REPLAY_VERSION,
   replayDataset,
@@ -34,8 +35,9 @@ async function main() {
   if (action === "version") {
     console.log(
       JSON.stringify({
-        schema_version: REPLAY_VERSION,
-        contracts: REPLAY_CONTRACTS,
+        schema_version: REPLAY_EQUITY_VERSION,
+        supported_versions: [REPLAY_VERSION, REPLAY_EQUITY_VERSION],
+        contracts: REPLAY_EQUITY_CONTRACTS,
         limits: REPLAY_LIMITS,
       }),
     );

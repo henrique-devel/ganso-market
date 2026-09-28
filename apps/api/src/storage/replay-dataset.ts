@@ -1,3 +1,4 @@
+import { replayEquityHistory } from "./equity-replay.js";
 import { createHash } from "node:crypto";
 import { baselineTime } from "./baseline-inputs.js";
 import { canonicalFingerprint } from "../trading/replay.js";
@@ -28,6 +29,7 @@ import { projectFinancials, VALUATION_VERSION } from "../trading/valuation.js";
 import type { StorageIdentity } from "../trading/retention.js";
 
 export const REPLAY_VERSION = "btc.replay.captured.v1";
+export const REPLAY_EQUITY_VERSION = "btc.replay.captured.v2";
 export const REPLAY_LIMITS = Object.freeze({
   rows: 4096,
   decisions: 256,
@@ -40,6 +42,11 @@ export const REPLAY_CONTRACTS = Object.freeze({
   reservations: RESERVATION_VERSION,
   valuation: VALUATION_VERSION,
   replay: REPLAY_VERSION,
+});
+export const REPLAY_EQUITY_CONTRACTS = Object.freeze({
+  ...REPLAY_CONTRACTS,
+  replay: REPLAY_EQUITY_VERSION,
+  equity: "btc.equity-observation.v1",
 });
 export interface ReplayEvidence {
   object_id: string;
@@ -63,12 +70,16 @@ export interface RetainedReplayRef {
   payload_hash: string | null;
 }
 export interface ReplayDataset {
+  equity_history?: {
+    schema_version: "btc.replay-equity.v1";
+    observation_ids: string[];
+  };
   evidence_mode?: "embedded" | "references";
   retained_refs?: RetainedReplayRef[];
-  schema_version: typeof REPLAY_VERSION;
+  schema_version: typeof REPLAY_VERSION | typeof REPLAY_EQUITY_VERSION;
   /** Export implementation; experiment code SHA remains in its captured registration. */
   code_sha: string;
-  contracts: typeof REPLAY_CONTRACTS;
+  contracts: typeof REPLAY_CONTRACTS | typeof REPLAY_EQUITY_CONTRACTS;
   cut: {
     captured_at: string;
     ledger_sequence: string;
@@ -127,7 +138,12 @@ export function replayDataset(artifact: ReplayArtifact) {
     "HASH",
   );
   requireReplay(
-    d.schema_version === REPLAY_VERSION && same(d.contracts, REPLAY_CONTRACTS),
+    (d.schema_version === REPLAY_VERSION &&
+      !d.equity_history &&
+      same(d.contracts, REPLAY_CONTRACTS)) ||
+      (d.schema_version === REPLAY_EQUITY_VERSION &&
+        !!d.equity_history &&
+        same(d.contracts, REPLAY_EQUITY_CONTRACTS)),
     "CONTRACT_VERSION",
   );
   requireReplay(
@@ -405,7 +421,8 @@ export function replayDataset(artifact: ReplayArtifact) {
   );
   return {
     dataset_id: artifact.dataset_id,
-    schema_version: REPLAY_VERSION,
+    schema_version: d.schema_version,
+    equity_history: replayEquityHistory(d),
     cut: d.cut,
     decision_selection: selection,
     evidence_mode: referenceMode ? "references" : "embedded",

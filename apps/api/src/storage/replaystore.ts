@@ -5,9 +5,9 @@ import {
   storeRetentionObjectTx,
 } from "./btc-retention.js";
 import {
-  REPLAY_CONTRACTS,
+  REPLAY_EQUITY_CONTRACTS,
+  REPLAY_EQUITY_VERSION,
   REPLAY_LIMITS,
-  REPLAY_VERSION,
   replayDataset,
   replayHash,
   requireReplay,
@@ -134,6 +134,28 @@ export async function captureReplayDataset(
     );
     const roots = new Set<string>();
     const embedded = new Set(decisions.map((d) => d.evidence_id));
+    const equity = await boundedRows<{
+      evidence_id: string;
+      mark_id: string | null;
+      capture_id: string | null;
+    }>(
+      tx,
+      `SELECT e.evidence_id,o.payload->'mark'->>'evidence' AS mark_id,
+      o.payload->>'capture_evidence_id' AS capture_id
+      FROM btc_equity_observations e JOIN btc_retention_objects o ON o.object_id=e.evidence_id
+      WHERE e.account_id=$1 AND e.observed_at<=$4 ORDER BY e.slot`,
+      account,
+      REPLAY_LIMITS.rows,
+      budget,
+      [at],
+    );
+    for (const row of equity)
+      for (const id of [row.evidence_id, row.mark_id, row.capture_id])
+        if (id) {
+          roots.add(id);
+          embedded.add(id);
+        }
+
     // Indexed by account. Do not scan the marketstore or historical raw feed.
     for (const table of [
       "btc_baseline_registrations",
@@ -257,9 +279,13 @@ export async function captureReplayDataset(
       frontier = [...next].filter((id) => !evidence.has(id)).sort();
     }
     const artifact = sealReplayDataset({
-      schema_version: REPLAY_VERSION,
+      schema_version: REPLAY_EQUITY_VERSION,
+      equity_history: {
+        schema_version: "btc.replay-equity.v1",
+        observation_ids: equity.map((e) => e.evidence_id),
+      },
       code_sha: codeSha,
-      contracts: REPLAY_CONTRACTS,
+      contracts: REPLAY_EQUITY_CONTRACTS,
       cut: {
         captured_at: at,
         ledger_sequence: ledger.at(-1)?.sequence ?? "0",
@@ -311,7 +337,7 @@ export async function captureReplayDataset(
       tx,
       artifact.dataset_id,
       artifact.dataset_id,
-      REPLAY_VERSION,
+      REPLAY_EQUITY_VERSION,
     );
     return artifact;
   });

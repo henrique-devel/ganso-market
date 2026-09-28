@@ -96,7 +96,10 @@ export function accountMetrics(
     BigInt(f.realized_pnl_usd_raw) +
     BigInt(f.fees_usd_raw) +
     BigInt(f.funding_usd_raw);
-  const net = exposed() ? null : realizedNet;
+  const history = replay.equity_history;
+  const unrealized =
+    history?.terminal.unrealized_pnl_usd_raw ?? (exposed() ? null : "0");
+  const net = unrealized === null ? null : realizedNet + BigInt(unrealized);
   const costs = allocatedCosts(
     allocation,
     d.identity.account.account_id,
@@ -137,7 +140,7 @@ export function accountMetrics(
   for (const { decision: decision } of d.decisions)
     groups.add(decision.bar_end_at); // Same market bar across scenarios is correlated.
   return {
-    schema_version: METRICS_VERSION,
+    schema_version: history ? "btc.metrics.v2" : METRICS_VERSION,
     dataset_id: artifact.dataset_id,
     scope: {
       ...f.ledger.scope,
@@ -160,24 +163,44 @@ export function accountMetrics(
       fees_usd_raw: f.fees_usd_raw,
       funding_usd_raw: f.funding_usd_raw,
       realized_net_usd_raw: realizedNet.toString(),
-      equity_usd_raw: exposed() ? null : f.balance_usd_raw,
+      equity_usd_raw: history
+        ? history.terminal.equity_usd_raw
+        : exposed()
+          ? null
+          : f.balance_usd_raw,
+      ...(history
+        ? {
+            unrealized_pnl_usd_raw: unrealized,
+            mark_quality: history.terminal.mark_quality,
+          }
+        : {}),
       net_pnl_usd_raw: net?.toString() ?? null,
       net_return_ppm:
         net === null || capitalFlowsPresent ? null : ratio(net, capital),
-      status: exposed()
-        ? "missing_as_of_mark"
-        : capitalFlowsPresent
-          ? "return_unavailable_capital_flows"
-          : "available",
+      status:
+        unrealized === null
+          ? "missing_as_of_mark"
+          : capitalFlowsPresent
+            ? "return_unavailable_capital_flows"
+            : "available",
     },
-    equity_curve: {
-      basis: "committed_ledger_boundaries_no_interpolation",
-      points: equityPoints,
-      status: everExposed
-        ? "missing_equity_history"
-        : "ledger_observations_only",
-    },
-    drawdown: drawdown(everExposed ? [...curve, null] : curve),
+    equity_curve: history
+      ? {
+          basis: history.basis,
+          points: history.points,
+          status: history.status,
+          coverage: history.coverage,
+        }
+      : {
+          basis: "committed_ledger_boundaries_no_interpolation",
+          points: equityPoints,
+          status: everExposed
+            ? "missing_equity_history"
+            : "ledger_observations_only",
+        },
+    drawdown: history
+      ? history.drawdown
+      : drawdown(everExposed ? [...curve, null] : curve),
     exposure: {
       exposed_ms: exposureOrder ? exposedMs : null,
       window_ms: to - from,
@@ -242,7 +265,12 @@ export function accountMetrics(
     input_audit: replay.input_audit,
     limitations: [
       ...replay.limits,
-      "drawdown_unavailable_if_any_unmarked_exposure",
+      ...(history
+        ? [
+            "drawdown_observed_at_five_minute_cadence_not_intrabar_extreme",
+            "missing_slots_invalidate_full_window_drawdown_observed_values_are_lower_bounds",
+          ]
+        : ["drawdown_unavailable_if_any_unmarked_exposure"]),
       "late_funding_known_only_at_capture_cut",
       "selected_vetoes_are_not_avoided_losses",
       "bar_clusters_not_independent_samples",

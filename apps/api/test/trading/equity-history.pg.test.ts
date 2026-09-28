@@ -1,3 +1,5 @@
+import { captureReplayDataset } from "../../src/storage/replaystore.js";
+import { accountMetrics } from "../../src/storage/metrics.js";
 import { riskOrder } from "./risk-fixture.js";
 import { reservationHold } from "../../src/trading/reservations.js";
 import { seedPaperOracle } from "./funding-fixture.js";
@@ -131,6 +133,30 @@ describe.skipIf(!url)(
         process.stdout.write(
           `equity measured root ${p.charged_bytes} closure ${footprint.closure_charge} row_bytes ${footprint.row_bytes} WAL ${wal}\n`,
         );
+      });
+    for (const mode of ["embedded", "references"] as const)
+      it(`captures and replays persisted equity offline in ${mode} mode`, async () => {
+        await setup();
+        await sampleEquityAccount(pool, "manual");
+        const artifact = await captureReplayDataset(
+          pool,
+          "manual",
+          "a".repeat(40),
+          undefined,
+          mode,
+        );
+        expect(artifact.dataset.schema_version).toBe("btc.replay.captured.v2");
+        expect(artifact.dataset.equity_history?.observation_ids).toHaveLength(
+          1,
+        );
+        const report = accountMetrics(artifact);
+        expect(report).toEqual(accountMetrics(artifact));
+        expect(report.trading).toMatchObject({
+          equity_usd_raw: "1010000000",
+          unrealized_pnl_usd_raw: "10000000",
+        });
+        expect(report.equity_curve.points).toHaveLength(1);
+        expect(report.drawdown.max_usd_raw).toBeNull();
       });
     it("missing mark is unavailable, no invented current or future price", async () => {
       await setup("buy", false);

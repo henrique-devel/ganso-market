@@ -20,6 +20,7 @@ async function main() {
     console.log(
       JSON.stringify({
         schema_version: METRICS_VERSION,
+        supported_versions: [METRICS_VERSION, "btc.metrics.v2"],
         mode: "read_only",
         source: "captured_event_replay",
         window: "inception_to_cut",
