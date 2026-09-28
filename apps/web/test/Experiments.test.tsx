@@ -161,3 +161,74 @@ describe("experiment operator information", () => {
       expect(html).toContain(text);
   });
 });
+
+it("shows authenticated snapshot reasons, API-only resources and historical gaps without a green fallback", () => {
+  const value: ExperimentSystem = {
+    ...system,
+    operational: {
+      schema_version: "btc.operational-readiness.v1",
+      status: "not_ready",
+      account_scope: "current_page",
+      accounts_ready: false,
+      channels: [
+        {
+          channel: "book",
+          status: "not_ready",
+          reasons: ["source_stale"],
+          freshness_at: system.feed.last_capture_at,
+          received_at: system.feed.last_capture_at,
+          limit_ms: 2000,
+          timestamp_basis: "venue_event",
+        },
+      ],
+      collector: {
+        status: "unavailable",
+        observed_at: system.feed.last_capture_at,
+        capture_status: "stale",
+        restarted_at_last_capture: true,
+        history_truncated_at_last_capture: false,
+      },
+      resources: {
+        scope: "api_process_only",
+        observed_at: system.as_of,
+        rss_bytes: 104857600,
+        cpu_user_us: 1000000,
+        cpu_system_us: 1000000,
+        uptime_seconds: 10,
+      },
+      history: {
+        start_at: "2026-09-20T03:30:00Z",
+        end_at: "2026-09-27T03:30:00Z",
+        observed: 0,
+        incomplete: 1,
+        unavailable: 671,
+        intervals: [{ start_at: "2026-09-20T03:30:00Z", status: "incomplete" }],
+      },
+    },
+    recovery: [
+      {
+        ...system.recovery[0]!,
+        consumer_at: system.as_of,
+        consumer_reason: "BTC_DESK_CYCLE_FAILED",
+        readiness: {
+          status: "not_ready",
+          reasons: ["consumer_not_ready", "lease_expired_or_absent"],
+        },
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(<ExperimentSystemView value={value} />);
+  for (const text of [
+    "Operação não pronta",
+    "fonte desatualizada",
+    "consumidor em falha",
+    "lease expirado ou ausente",
+    "Última captura registrou reinício de sessão",
+    "Somente processo da API",
+    "CPU acumulada não é percentual",
+    "indisponíveis, de 672",
+    "borda sem captura recente",
+  ])
+    expect(html).toContain(text);
+  expect(html).not.toContain("Fontes recentes e consumidores prontos");
+});

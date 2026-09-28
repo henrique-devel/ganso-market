@@ -60,6 +60,44 @@ type Catalog = {
 };
 export type ExperimentSystem = {
   as_of: string;
+  operational?: {
+    schema_version: string;
+    status: string;
+    account_scope: string;
+    accounts_ready: boolean;
+    channels: {
+      channel: string;
+      status: string;
+      reasons: string[];
+      freshness_at: string | null;
+      received_at: string | null;
+      limit_ms: number;
+      timestamp_basis: string;
+    }[];
+    collector: {
+      status: string;
+      observed_at: string | null;
+      capture_status: string;
+      restarted_at_last_capture: boolean | null;
+      history_truncated_at_last_capture: boolean | null;
+    };
+    resources: {
+      scope: string;
+      observed_at: string;
+      rss_bytes: number;
+      cpu_user_us: number;
+      cpu_system_us: number;
+      uptime_seconds: number;
+    };
+    history: {
+      start_at: string;
+      end_at: string;
+      observed: number;
+      incomplete: number;
+      unavailable: number;
+      intervals: { start_at: string; status: string }[];
+    };
+  };
   capacity: {
     hold: boolean;
     raw_bytes: string;
@@ -79,7 +117,10 @@ export type ExperimentSystem = {
   host_disk: null;
   recovery: {
     account_id: string;
-    generation: string;
+    generation: string | null;
+    consumer_at?: string | null;
+    consumer_reason?: string | null;
+    readiness?: { status: string; reasons: string[] };
     status: string;
     reason: string | null;
     lease_alive: boolean;
@@ -604,13 +645,130 @@ export function Experiments(props: Access & { accountId: string }) {
     </section>
   );
 }
+export function readinessReason(reason: string) {
+  const labels: Record<string, string> = {
+    consumer_not_enabled: "consumidor não habilitado",
+    consumer_stale: "ciclo do consumidor desatualizado",
+    consumer_unavailable: "ciclo do consumidor indisponível",
+    consumer_future: "relógio do consumidor no futuro",
+    consumer_not_ready: "consumidor em falha ou não pronto",
+    reconciliation_not_ready: "reconciliação não pronta",
+    lease_expired_or_absent: "lease expirado ou ausente",
+    feed_gap_or_unavailable: "feed com gap ou indisponível",
+    capture_precedes_event: "captura anterior ao evento",
+    source_quality_unproven: "qualidade temporal não comprovada",
+  };
+  for (const [key, label] of [
+    ["source", "fonte"],
+    ["received", "recebimento"],
+    ["capture", "captura"],
+  ]) {
+    labels[`${key}_stale`] = `${label} desatualizada`;
+    labels[`${key}_unavailable`] = `${label} indisponível`;
+    labels[`${key}_future`] = `${label} no futuro`;
+  }
+  return labels[reason] ?? reason;
+}
 export function ExperimentSystemView({ value }: { value: ExperimentSystem }) {
   const gb = (v: string) =>
     `${(Number((BigInt(v) * 100n) / 1073741824n) / 100).toLocaleString("pt-BR")} GiB`;
   const capacity = value.capacity;
   return (
     <>
-      <p>Observado em {value.as_of} (UTC).</p>
+      <p>
+        Instantâneo observado em {value.as_of} (UTC). Atualize para uma nova
+        leitura; o estado pode ter mudado desde esse corte.
+      </p>
+      <h3>Prontidão operacional</h3>
+      <p>
+        API acessível não significa dados ou contas prontos. Esta leitura não
+        autoriza risco, não rearma contas e não executa reconciliação.
+      </p>
+      {value.operational ? (
+        <>
+          <p>
+            {value.operational.status === "sources_recent" &&
+            value.operational.accounts_ready
+              ? "Fontes recentes e consumidores prontos nesta página; gates de risco e capacidade continuam independentes."
+              : "Operação não pronta: consulte os motivos por fonte e conta abaixo."}
+          </p>
+          {value.operational.channels.map((c) => (
+            <p key={c.channel}>
+              <strong>
+                {c.channel === "book" ? "Livro" : "Marca / contexto"}
+              </strong>
+              : {c.status === "fresh" ? "recente" : "não pronto"}. Limite:{" "}
+              {c.limit_ms} ms. Referência temporal ({c.timestamp_basis}):{" "}
+              {c.freshness_at ?? "indisponível"}. Recebido em:{" "}
+              {c.received_at ?? "indisponível"}. Motivos:{" "}
+              {c.reasons.map(readinessReason).join("; ") ||
+                "nenhum nesta medição"}
+              .
+            </p>
+          ))}
+          <p>
+            Processo do coletor: indisponível nesta fonte. Última captura
+            registrou reinício de sessão:{" "}
+            {value.operational.collector.restarted_at_last_capture === null
+              ? "indisponível"
+              : value.operational.collector.restarted_at_last_capture
+                ? "sim"
+                : "não"}
+            . Isso não é contagem de reinícios do container nem prova de
+            processo ativo.
+          </p>
+          <h3>Recursos medidos</h3>
+          <p>
+            Somente processo da API em {value.operational.resources.observed_at}
+            : RAM RSS{" "}
+            {(value.operational.resources.rss_bytes / 1048576).toFixed(1)} MiB;
+            CPU acumulada desde o início{" "}
+            {(
+              (value.operational.resources.cpu_user_us +
+                value.operational.resources.cpu_system_us) /
+              1000000
+            ).toFixed(1)}{" "}
+            s; processo iniciado há{" "}
+            {Math.floor(value.operational.resources.uptime_seconds)} s. CPU
+            acumulada não é percentual de carga. CPU e RAM do host:
+            indisponíveis.
+          </p>
+          <h3>Cobertura de dados — sete dias</h3>
+          <p>
+            {value.operational.history.start_at} até{" "}
+            {value.operational.history.end_at}.{" "}
+            {value.operational.history.observed} intervalos de captura sem
+            lacuna conhecida maior que 60 s;{" "}
+            {value.operational.history.incomplete} incompletos;{" "}
+            {value.operational.history.unavailable} indisponíveis, de 672
+            intervalos de 15 minutos. Ausência de registro não comprova parada.
+            Esta história mede cadência de capturas, não continuidade de cada
+            canal ou uptime, e não certifica sete dias estáveis.
+          </p>
+          <p>
+            Evidência já retida e contabilizada em G2-12, sem nova cópia ou
+            reset de histórico. Retenção futura continua sujeita à admissão de
+            capacidade.
+          </p>
+          <details>
+            <summary>Ver interrupções e intervalos indisponíveis</summary>
+            <ul>
+              {value.operational.history.intervals
+                .filter((i) => i.status !== "observed_edges")
+                .map((i) => (
+                  <li key={i.start_at}>
+                    {i.start_at}:{" "}
+                    {i.status === "incomplete"
+                      ? "borda sem captura recente"
+                      : "evidência indisponível"}
+                  </li>
+                ))}
+            </ul>
+          </details>
+        </>
+      ) : (
+        <p>Prontidão detalhada indisponível nesta versão da API.</p>
+      )}
       <h3>Coleta e continuidade</h3>
       <p>
         {value.feed.status === "stale"
@@ -679,7 +837,18 @@ export function ExperimentSystemView({ value }: { value: ExperimentSystem }) {
       )}
       {value.recovery.map((r) => (
         <p key={r.account_id}>
-          <strong>{r.account_id}</strong> · geração {r.generation} ·{" "}
+          <strong>{r.account_id}</strong> · geração{" "}
+          {r.generation ?? "indisponível"} ·{" "}
+          {r.readiness && (
+            <>
+              Consumidor{" "}
+              {r.readiness.status === "ready" ? "pronto" : "não pronto"}:{" "}
+              {r.readiness.reasons.map(readinessReason).join("; ") ||
+                "heartbeat, reconciliação e lease atuais"}
+              . Último ciclo: {r.consumer_at ?? "indisponível"}. Motivo do
+              ciclo: {r.consumer_reason ?? "indisponível"}.{" "}
+            </>
+          )}
           {r.status === "ready" && r.lease_alive
             ? "reconciliação pronta e lease vigente"
             : r.status === "blocked"

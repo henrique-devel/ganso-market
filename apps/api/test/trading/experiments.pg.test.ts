@@ -108,7 +108,11 @@ describe.skipIf(!url)("experiment reads on disposable PostgreSQL", () => {
       expect(r.statusCode).toBe(200);
       expect(r.json().feed.status).toBe("stale");
       expect(r.json().container_status).toBe("unavailable");
-      expect(r.json().recovery).toEqual([]);
+      expect(r.json().recovery[0].readiness.reasons).toContain(
+        "consumer_not_enabled",
+      );
+      expect(r.json().operational.status).toBe("not_ready");
+      expect(r.json().operational.history.unavailable).toBe(672);
     } finally {
       await app.close();
     }

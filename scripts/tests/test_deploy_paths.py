@@ -48,6 +48,8 @@ class WorkflowWiringTests(unittest.TestCase):
             deploy_paths.affected_services(
                 [
                     "apps/api/src/experiments-api.ts",
+                    "apps/api/src/storage/operational-readiness.ts",
+                    "apps/api/test/trading/operational-readiness.test.ts",
                     "apps/api/test/trading/experiments.test.ts",
                     "apps/api/test/trading/experiments.pg.test.ts",
                     "apps/api/src/btc-metrics-cli.ts",
