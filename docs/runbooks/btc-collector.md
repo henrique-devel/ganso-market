@@ -6,9 +6,11 @@ padrão desabilitada e escala zero; ativação exige configuração paper explí
 
 ## Admissão no host existente
 
-**Revalidação de 28/09:** o [plano G2-12.1](ganso-2-capacity-plan.md) mediu o
-contador lógico acima do teto de 6 GiB. A folga histórica abaixo não autoriza
-retomada; admissão atual bloqueada, sem mudança dos limites/HOLD.
+**Revalidação de 28/09 21:14 BRT:** o [plano revisado](ganso-2-capacity-plan.md)
+confirma espaço do host após retirada da Polymarket, mas contadores lógico e
+físico acima dos tetos de 6/4 GiB. Perfil temporário 4/11/8 GiB e piloto de até
+6h são propostas pendentes de decisão, implementação e preflight. Os comandos
+abaixo não recebem autorização de start por esta revisão; limites/HOLD intactos.
 
 Antes de ativar, conferir identidade SSH em `docs/ops/SERVER_ACCESS.md`, versão
 instalada, migrations 0027/0028, health da API, HOLD/pins e quiescência legada.
