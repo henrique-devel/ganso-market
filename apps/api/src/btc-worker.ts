@@ -26,26 +26,14 @@ import {
   COLLECTOR_LIMITS,
   createCollector,
 } from "./btc/collector.js";
+import {
+  assertPilotActive,
+  inspectBtcWorkerConfig,
+  PILOT_LIMITS,
+} from "./btc/collector-policy.js";
+export { inspectBtcWorkerConfig } from "./btc/collector-policy.js";
 
 export const BTC_HEALTH_PATH = "/tmp/ganso-btc-health.json";
-export function inspectBtcWorkerConfig(value: unknown): { enabled: boolean } {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("schema_version" in value) ||
-    value.schema_version !== 1 ||
-    !("execution_mode" in value) ||
-    value.execution_mode !== "paper" ||
-    !("enabled" in value) ||
-    typeof value.enabled !== "boolean" ||
-    Object.keys(value).some(
-      (key) => !["schema_version", "execution_mode", "enabled"].includes(key),
-    )
-  ) {
-    throw new Error("BTC_WORKER_INVALID_CONFIG");
-  }
-  return { enabled: value.enabled };
-}
 async function publish(value: unknown) {
   const text = JSON.stringify({
     service: "btc-worker",
@@ -60,6 +48,7 @@ async function publish(value: unknown) {
 export async function runBtcWorker() {
   if (process.argv.includes("--health")) {
     const state = JSON.parse(await readFile(BTC_HEALTH_PATH, "utf8"));
+    assertPilotActive(state.pilot, Date.now());
     if (
       state.status !== "collecting" ||
       !state.last_capture_at ||
@@ -89,6 +78,21 @@ export async function runBtcWorker() {
     );
     return;
   }
+  const limits = config.pilot ? PILOT_LIMITS : COLLECTOR_LIMITS;
+  // Refuse an expired/replayed window before opening a pool or a public feed.
+  try {
+    assertPilotActive(config.pilot, Date.now());
+  } catch (error) {
+    await publish({
+      status: "stopped",
+      gap_open: true,
+      last_capture_at: null,
+      reason: (error as Error).message,
+      pilot: config.pilot,
+      limits,
+    });
+    throw error;
+  }
   const runtime = await loadConfig();
   if (runtime.executionMode !== "paper")
     throw new Error("BTC_WORKER_PAPER_REQUIRED");
@@ -114,16 +118,36 @@ export async function runBtcWorker() {
         context_http: contextPoll?.status(),
         book_http: bookPoll?.status(),
         metadata_http: metadataPoll?.status(),
+        limits,
+        pilot: config.pilot ?? null,
       }),
     );
   let collector: ReturnType<typeof createCollector> | undefined;
   let stopRequested = false;
+  let stopReason = "BTC_COLLECTOR_OPERATOR_STOP";
   let feed: ReturnType<typeof startHyperliquidBtcFeed> | undefined;
   const shutdown = () => {
     stopRequested = true;
     stopSignal.abort();
     feed?.stop();
   };
+  const assertActive = () => {
+    if (stopRequested) throw new Error(stopReason);
+    assertPilotActive(config.pilot, Date.now());
+  };
+  // Absolute UTC window survives a restart. The timer also bounds this process
+  // if the wall clock moves backwards. In-flight SQL keeps its existing budget;
+  // confirmed commits are preserved, never retried or fabricated as rolled back.
+  const pilotTimer = config.pilot
+    ? setTimeout(
+        () => {
+          stopReason = "BTC_COLLECTOR_PILOT_EXPIRED";
+          shutdown();
+          collector?.stop(stopReason);
+        },
+        Math.max(0, Date.parse(config.pilot.stops_at) - Date.now()),
+      )
+    : undefined;
   const reconnect = () => feed?.reconnect();
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
@@ -145,6 +169,9 @@ export async function runBtcWorker() {
         rawBytes: retention.raw_bytes,
         totalBytes: retention.total_bytes,
         physicalBytes: retention.allocated_bytes,
+        rawQuotaBytes: retention.raw_quota_bytes,
+        totalQuotaBytes: retention.total_quota_bytes,
+        physicalQuotaBytes: String(14 * 1024 ** 3),
         databaseBytes: row.database_bytes as string,
         walLsn: row.wal_lsn as string,
         connections: row.used as number,
@@ -154,7 +181,9 @@ export async function runBtcWorker() {
       };
     }
     await observe("capacity", async () => {
-      assertCollectorCapacity(await capacity());
+      assertActive();
+      assertCollectorCapacity(await capacity(), limits);
+      assertActive();
     });
     const adapter = createHyperliquidPublicAdapter();
     let metadata = await observe("metadata", () => adapter.getBtcMetadata());
@@ -166,7 +195,7 @@ export async function runBtcWorker() {
       signal: stopSignal.signal,
       fetch: () => fetchBtcBookSnapshot(metadata, stopSignal.signal),
       unavailable: () => feed!.contextUnavailable("book"),
-      intervalMs: COLLECTOR_LIMITS.intervalMs,
+      intervalMs: limits.intervalMs,
       startToStart: true,
       stage: "book_snapshot",
       cooldown,
@@ -179,6 +208,8 @@ export async function runBtcWorker() {
       cooldown,
     });
     collector = createCollector({
+      limits,
+      assertActive,
       feed,
       sessionId: randomUUID(),
       metadata: () => metadata,
@@ -214,6 +245,7 @@ export async function runBtcWorker() {
       },
     });
     while (!stopRequested) {
+      assertActive();
       const cycleStarted = Date.now();
       if (Date.now() - refreshed >= 60_000) {
         const next = await observe("metadata", () => metadataPoll!.poll());
@@ -264,18 +296,28 @@ export async function runBtcWorker() {
       }
       // Start-to-start cadence: IO time must not add another full interval
       // to the age of a persisted book. Never catch up with a burst.
-      await delay(
-        Math.max(0, COLLECTOR_LIMITS.intervalMs - (Date.now() - cycleStarted)),
-      );
+      await delay(Math.max(0, limits.intervalMs - (Date.now() - cycleStarted)));
     }
-    collector.stop("BTC_COLLECTOR_OPERATOR_STOP");
+    collector.stop(stopReason);
   } catch (error) {
     const reason =
       error instanceof Error && /^BTC_[A-Z_]+$/.test(error.message)
         ? error.message
         : "BTC_COLLECTOR_RUNTIME_FAILED";
-    if (!collector?.status().gap_open) collector?.stop(reason);
-    process.exitCode = 1;
+    // Expiry is an expected terminal stop. A concurrent real failure keeps its
+    // own reason and nonzero exit instead of being hidden by the deadline.
+    if (
+      !collector?.status().gap_open ||
+      stopReason === "BTC_COLLECTOR_PILOT_EXPIRED"
+    )
+      collector?.stop(reason);
+    if (stopRequested) stopReason = reason;
+    process.exitCode = [
+      "BTC_COLLECTOR_PILOT_EXPIRED",
+      "BTC_COLLECTOR_OPERATOR_STOP",
+    ].includes(reason)
+      ? 0
+      : 1;
     console.error(
       JSON.stringify({
         ...(collector?.status() ?? { status: "stopped", reason }),
@@ -289,10 +331,18 @@ export async function runBtcWorker() {
       collector?.status() ?? { status: "stopped", gap_open: true, reason },
     );
   } finally {
+    if (pilotTimer) clearTimeout(pilotTimer);
     stopSignal.abort();
     feed?.stop();
     try {
       if (collector) await publishStatus(collector.status());
+      else if (stopRequested)
+        await publishStatus({
+          status: "stopped",
+          gap_open: true,
+          last_capture_at: null,
+          reason: stopReason,
+        });
     } finally {
       await pool.end();
       process.off("SIGTERM", shutdown);

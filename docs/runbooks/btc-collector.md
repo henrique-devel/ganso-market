@@ -6,11 +6,57 @@ padrão desabilitada e escala zero; ativação exige configuração paper explí
 
 ## Admissão no host existente
 
-**Revalidação de 28/09 21:14 BRT:** o [plano revisado](ganso-2-capacity-plan.md)
-confirma espaço do host após retirada da Polymarket, mas contadores lógico e
-físico acima dos tetos de 6/4 GiB. Perfil temporário 4/11/8 GiB e piloto de até
-6h são propostas pendentes de decisão, implementação e preflight. Os comandos
-abaixo não recebem autorização de start por esta revisão; limites/HOLD intactos.
+**Piloto aprovado em 28/09:** perfil temporário raw/lógico/físico 4/16/12 GiB,
+até seis horas com prazo absoluto. Ver [autorização](../ops/DEVELOPMENT_AUTHORIZATION.md)
+e [preflight](ganso-2-capacity-plan.md). Quotas SQL preservadas limitam o lógico
+efetivo a 12 GiB; `limits` no health mostra o perfil e `effective_limits` mostra
+a interseção com SQL. A admissão de 90 dias continua pendente fora deste piloto.
+
+### Configuração v2 e expiração
+
+Após checks/merge/publicação contida, recalcular a janela antes de substituir
+`/etc/ganso/btc-worker.json`. Exemplo de formato (datas meramente ilustrativas;
+não copiar como autorização de extensão):
+
+```json
+{
+  "schema_version": 2,
+  "execution_mode": "paper",
+  "enabled": true,
+  "capacity_profile": "btc-pilot-4-16-12.v1",
+  "starts_at": "2026-09-29T01:00:00.000Z",
+  "stops_at": "2026-09-29T07:00:00.000Z"
+}
+```
+
+Somente esse perfil nomeado é aceito; sem caps arbitrários no arquivo. Datas UTC
+canônicas são obrigatórias, fim maior que início, duração <=6h; início futuro ou
+prazo vencido recusam bootstrap. Configuração v1 continua válida com limites
+4/6/4 GiB. Reiniciar com o mesmo arquivo conserva o fim; não renovar o prazo.
+
+O piloto exige `restart: no`, mesmo mount de capacidade e orçamento Compose
+validado. Usar os overlays BTC existentes; não recriar overlays/timers Polymarket
+aposentados. Atualizar somente o coletor com `up --no-deps --no-build
+--force-recreate --wait --wait-timeout 180 btc-worker` após build, para que o bind
+leia o arquivo v2 novo. Nunca executar `server-up` genérico para essa ativação.
+
+Expiração fecha transporte, recusa novas capturas/barras e termina o processo
+com motivo `BTC_COLLECTOR_PILOT_EXPIRED`, também refletido no health. O timer
+continua válido se o relógio recuar; restart não cria seis horas novas. Uma
+transação já iniciada termina sob seu timeout existente, preservando commit ou
+falha real; não é repetida. PG e consumidores da API continuam com seus contratos.
+
+Conferir antes/depois versões, IDs/inícios dos serviços preservados, quotas/HOLD,
+perfil versus limite efetivo, dados recém-confirmados e canais. Amostrar taxas,
+CPU/RAM/temp/WAL e horizonte real; se a margem ficar insuficiente, parar o
+coletor seletivamente e registrar o motivo, sem ampliar a janela ou tetos.
+Aprovação do piloto não é autorização de ordens, rearme da baseline ou aceite
+operacional de sete dias. Ao expirar, preservar todo o corpus e avaliar o retorno.
+
+### Admissão padrão e histórico
+
+As instruções de ativação genérica e números datados abaixo descrevem o perfil
+v1; para o piloto, prevalecem a configuração v2 e a autorização acima.
 
 Antes de ativar, conferir identidade SSH em `docs/ops/SERVER_ACCESS.md`, versão
 instalada, migrations 0027/0028, health da API, HOLD/pins e quiescência legada.

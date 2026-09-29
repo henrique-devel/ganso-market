@@ -1,6 +1,39 @@
 # G2-12 — Plano de capacidade e custo
 
-## Revisão de G2-12.3 após retirada da Polymarket — decisão pendente
+## Piloto aprovado — 28/09/2026
+
+O proprietário aprovou o item 2 e ampliou os tetos do worker propostos no item 1
+para **raw 4 / lógico 16 / físico 12 GiB**. A [decisão registrada](../ops/DEVELOPMENT_AUTHORIZATION.md)
+substitui os 4/11/8 GiB da proposta histórica abaixo. O perfil é
+`btc-pilot-4-16-12.v1`, somente com configuração v2 e início/fim UTC explícitos,
+duração máxima de seis horas. Configuração v1 conserva 4/6/4 GiB.
+
+**SQL inalterado:** raw 10/lógico 12/recusa física 14 GiB. O worker aplica o menor
+teto por classe e publica `limits` versus `effective_limits`, além das quotas
+observadas. Assim os limites efetivos são **4/12/12 GiB**, enquanto as quotas
+SQL observadas forem estas. A aprovação não aumenta a quota SQL para 16 GiB.
+Nenhuma migration, descarte, mudança de HOLD, banca ou risco integra a alteração.
+
+Recalcular preflight com a ocupação atual, mínimo entre worker e SQL, margem de
+20% do horizonte de pico e reserva de 4 GiB do filesystem. Usando apenas o corte
+histórico da proposta: horizonte lógico 10,43h, físico 31,11h e raw 14,36h; 6h de
+pico continuam cabendo, com totais projetados de 2,84/10,23/6,21 GiB. São contas
+de referência, não a admissão real, que deve ser refeita depois do deploy.
+
+Prazo absoluto persiste após restart; o timer do processo evita extensão por
+recuo do relógio. Expiração recusa bootstrap e novas capturas/barras, fecha feed e
+pool e publica `BTC_COLLECTOR_PILOT_EXPIRED`. SQL já iniciado conserva budgets
+existentes de 5/6s e pode terminar depois do instante de corte: commit confirmado
+é preservado, nunca reenviado nem descrito como rollback. Nenhuma nova transação
+de captura/barras começa após detectar expiração. Falha real em voo continua
+falha, não é mascarada como parada normal. Sem restart automático ou rearmar risco.
+
+O [runbook do coletor](btc-collector.md) descreve configuração e validação. A
+retomada e seus horários efetivos são registrados somente depois da observação
+produtiva na linha G2-12.3. Aprovação não comprova execução nem sustentabilidade.
+
+
+## Proposta histórica pós-Polymarket — decisão substituída pela aprovação acima
 
 Preparada em **28/09/2026, 21:14–21:15 America/Sao_Paulo** (29/09 00:14–00:15 UTC),
 a pedido do proprietário para iniciar G2-12.3 e apresentar as autorizações necessárias.

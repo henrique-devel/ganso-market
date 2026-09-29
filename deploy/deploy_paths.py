@@ -89,6 +89,7 @@ def affected_services(paths: list[str]) -> set[str]:
         ) or path in {
             "apps/api/test/btc-worker.test.ts",
             "apps/api/test/btc-worker-runtime.test.ts",
+            "apps/api/test/btc-collector-policy.test.ts",
             "apps/api/test/btc-runtime-diagnostics.test.ts",
             "apps/api/test/btc-context-poll.test.ts",
             "apps/api/src/venues/hyperliquid/feed.ts",
