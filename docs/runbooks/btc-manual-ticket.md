@@ -152,8 +152,8 @@ descartável; a implantação não cria trades para fabricar aceite produtivo.
 A recuperação preserva o checkpoint `btc.recovery.v1` e confere todas as linhas
 históricas em cada fronteira. A serialização canônica pode ser reutilizada apenas
 quando o SHA-256 do conteúdo completo, recalculado pelo PostgreSQL nessa leitura,
-é idêntico. Cache limitado a 8 MiB/2.048 entradas, descartável; não guarda prontidão,
-saldos nem decisões. Mudança histórica, remoção ou inserção altera o digest mesmo
+é idêntico. Cache limitado a 8 MiB/2.048 entradas de texto UTF-8, descartável; nenhuma
+prontidão, saldo ou decisão é admitida a partir de memória sem a leitura atual. Mudança histórica, remoção ou inserção altera o digest mesmo
 com contagem inalterada. Locks, fencing, replay de boot e grafo de evidências seguem
 obrigatórios. Não há migration nem conversão de checkpoints; rollback compatível.
 
