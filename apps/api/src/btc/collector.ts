@@ -104,6 +104,12 @@ export function createCollector(deps: {
   let baseline: CapacitySample | null = null;
   let sample: CapacitySample | null = null;
   let lastCaptureAt: string | null = null;
+  let persistence: {
+    completed_at: string;
+    capture_to_commit_ms: number;
+    book_received_to_commit_ms: number | null;
+    book_source_to_commit_ms: number | null;
+  } | null = null;
   let baselineAt: number | null = null;
   let latestBook: BtcMarketBatch["events"][number] | undefined;
   let latestMark: BtcMarketBatch["events"][number] | undefined;
@@ -163,6 +169,16 @@ export function createCollector(deps: {
             book: "latest_full_top_20_per_capture",
           },
         });
+        const completedAt = deps.now();
+        const capturedBook = events.findLast((e) => e.channel === "book");
+        const age = (stamp: string | null | undefined) =>
+          stamp ? Date.parse(completedAt) - Date.parse(stamp) : null;
+        persistence = {
+          completed_at: completedAt,
+          capture_to_commit_ms: Date.parse(completedAt) - Date.parse(at),
+          book_received_to_commit_ms: age(capturedBook?.received_at),
+          book_source_to_commit_ms: age(capturedBook?.source_timestamp),
+        };
         pendingEvents = 0;
         lastCaptureAt = at;
         latestBook = events.findLast((e) => e.channel === "book") ?? latestBook;
@@ -240,6 +256,7 @@ export function createCollector(deps: {
         gap_open: stopped,
         pending_events: pendingEvents,
         last_capture_at: lastCaptureAt,
+        persistence,
         counters: { ...counters },
         capacity: sample,
         effective_limits: effective,

@@ -12,7 +12,9 @@ O extrato resumido mostra saldo, taxas, funding e posição; não é avaliação
 
 O consumidor roda na API existente, no mesmo pool de até quatro conexões, sem
 serviço, volume, compra, signer ou estratégia novos. Uma conta manual vinculada
-é processada sequencialmente a cada segundo, sem sobrepor ciclos. Duas contas
+é processada sequencialmente em cadência início a início de um segundo, sem
+sobrepor ciclos nem recuperar atrasos em rajadas. O tempo de trabalho não adiciona
+outro segundo inteiro de espera. Duas contas
 manuais vinculadas são recusadas pelo limite operacional desta implantação.
 Contas desabilitadas continuam tendo reservas, risco e saídas geridas. Heartbeat
 com mais de cinco segundos, erro, recovery bloqueado ou lease ausente recusam
@@ -144,3 +146,20 @@ voltar a binário anterior a v2 após um evento RATE18 tornaria recovery incompa
 Preservar ledger/schema/pins e gestão das posições; preferir correção adiante.
 Os testes de posição elegível usam fixtures HTTP e de taxa declaradas em PostgreSQL
 descartável; a implantação não cria trades para fabricar aceite produtivo.
+
+## Latência entre persistência e consumo
+
+A recuperação preserva o checkpoint `btc.recovery.v1` e confere todas as linhas
+históricas em cada fronteira. A serialização canônica pode ser reutilizada apenas
+quando o SHA-256 do conteúdo completo, recalculado pelo PostgreSQL nessa leitura,
+é idêntico. Cache limitado a 8 MiB/2.048 entradas, descartável; não guarda prontidão,
+saldos nem decisões. Mudança histórica, remoção ou inserção altera o digest mesmo
+com contagem inalterada. Locks, fencing, replay de boot e grafo de evidências seguem
+obrigatórios. Não há migration nem conversão de checkpoints; rollback compatível.
+
+O health do coletor expõe `persistence.completed_at`, `capture_to_commit_ms`,
+`book_received_to_commit_ms` e `book_source_to_commit_ms` após COMMIT confirmado.
+São medidas do último lote confirmado, não prova do instante exato de commit no
+servidor. Erro de escrita continua terminal, sem retry ou frescor artificial.
+Na execução, o gate do livro permanece 2.000 ms e o de contexto 5.000 ms; uma
+amostra rápida isolada não comprova a jornada nem autoriza rearme automático.
