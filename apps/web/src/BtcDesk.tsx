@@ -8,6 +8,7 @@ import type {
   DeskPage,
 } from "@ganso-market/contracts/trading";
 import {
+  createTicketKey,
   decimalRaw,
   displayRaw,
   inputRaw,
@@ -166,7 +167,7 @@ export function BtcDesk({
     setMessage("");
     try {
       const next = command
-        ? { key: crypto.randomUUID(), command, attempted: false }
+        ? { key: createTicketKey(), command, attempted: false }
         : pending;
       if (!next) throw new Error("Prepare uma intenção primeiro.");
       setPending(next);

@@ -43,6 +43,16 @@ Duplo clique/retry usa a mesma chave; intenção tentada é preservada em sessio
 antes do envio. Se a resposta for incerta, repetir a mesma intenção, inclusive
 após login; não abrir outra ordem para tentar compensar uma resposta perdida.
 
+### Chave de intenção no acesso HTTP
+
+O ticket usa 16 bytes de `crypto.getRandomValues` em uma chave hexadecimal de
+128 bits. `crypto.randomUUID` exige contexto seguro e falhava antes da prévia no
+HTTP/IP desta implantação; `getRandomValues` funciona nesse contexto, conforme a
+[documentação da API](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues).
+Não há fallback para aleatoriedade fraca. A chave é gerada apenas para intenção
+nova; retry/relogin preservam a mesma chave, inclusive UUIDs antigos já pendentes.
+A correção não muda autenticação, transporte, caps ou revalidação de execução.
+
 ## Ativação explícita no servidor existente
 
 Após CI, merge, migration e deploy seletivo de API/web, conferir coletor, espaço,
