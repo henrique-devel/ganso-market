@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { fingerprintRecoveryTable } from "./recovery-fingerprint.js";
 import type { SqlExecutor } from "../database.js";
 import { canonicalFingerprint } from "../trading/replay.js";
 import { ledgerScope, replayLedger } from "../trading/ledger.js";
@@ -60,12 +61,7 @@ export async function recoverySnapshotTx(tx: SqlExecutor, id: string) {
   const hash = createHash("sha256"),
     cursors: Record<string, number> = {};
   for (const table of tables) {
-    const { rows } = await tx.query<{ value: unknown }>(
-      `SELECT to_jsonb(t) AS value FROM ${table} t WHERE account_id=$1 ORDER BY to_jsonb(t)::text`,
-      [id],
-    );
-    cursors[table] = rows.length;
-    hash.update(canonicalFingerprint([table, rows]));
+    cursors[table] = await fingerprintRecoveryTable(tx, table, id, hash);
   }
   const rootIds = new Set<string>();
   const owner = (

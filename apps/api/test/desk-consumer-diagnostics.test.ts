@@ -174,3 +174,36 @@ it("equity runs once per five minutes without delaying trading and shutdown join
   complete();
   await stopped;
 });
+
+it.each([400, 1400])(
+  "uses start-to-start cadence for %dms cycles without overlap or catch-up",
+  async (duration) => {
+    const { pool } = fixture();
+    const starts: number[] = [];
+    let active = 0;
+    vi.mocked(consumeBaselineAccount).mockImplementation(async () => {
+      expect(active++).toBe(0);
+      starts.push(Date.now());
+      await new Promise((resolve) => setTimeout(resolve, duration));
+      active--;
+    });
+    const stop = startDeskConsumer(pool, vi.fn());
+    await vi.advanceTimersByTimeAsync(3200);
+    expect(starts.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(
+        Math.max(duration, 1000),
+      );
+      expect(starts[i]! - starts[i - 1]!).toBeLessThanOrEqual(
+        Math.max(duration, 1000) + 1,
+      );
+    }
+    const stopping = stop();
+    await vi.advanceTimersByTimeAsync(duration);
+    await stopping;
+    const count = starts.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(starts).toHaveLength(count);
+    expect(active).toBe(0);
+  },
+);

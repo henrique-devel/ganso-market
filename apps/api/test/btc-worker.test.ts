@@ -136,6 +136,54 @@ describe("BTC collector admission and terminal refusal", () => {
     );
     expect(collector.status().counters.snapshots_coalesced).toBe(1);
   });
+  it("reports committed book latency without changing source/receipt timestamps", async () => {
+    const { deps } = fixture();
+    let clock = start + 500;
+    const book = normalizeHyperliquidFeed(
+      "book",
+      {
+        coin: "BTC",
+        time: start,
+        levels: [
+          [{ px: "64000", sz: "1", n: 1 }],
+          [{ px: "64001", sz: "1", n: 1 }],
+        ],
+      },
+      iso(start + 250),
+      metadata.instrument.instrument_version,
+      "latency-book",
+    )[0]!;
+    const collector = createCollector({
+      ...deps,
+      now: () => iso(clock),
+      feed: {
+        ...deps.feed,
+        drain: () => [
+          {
+            ...book,
+            quality: "fresh",
+            gap_epoch: 0,
+            revalidation: "none",
+            continuity: "unproven",
+          },
+        ],
+      },
+      capture: async (batch) => {
+        expect(batch.events[0]!.source_timestamp).toBe(iso(start));
+        expect(batch.events[0]!.received_at).toBe(iso(start + 250));
+        clock += 600;
+        return { stored: 1, duplicates: 0 };
+      },
+    });
+    expect(collector.status().persistence).toBeNull();
+    await collector.tick();
+    expect(collector.status().persistence).toEqual({
+      completed_at: iso(start + 1100),
+      capture_to_commit_ms: 600,
+      book_received_to_commit_ms: 850,
+      book_source_to_commit_ms: 1100,
+    });
+  });
   it.each([false, true])("accepts explicit paper enabled=%s", (enabled) => {
     expect(
       inspectBtcWorkerConfig({

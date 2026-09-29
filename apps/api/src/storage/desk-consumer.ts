@@ -343,6 +343,7 @@ export function startDeskConsumer(
   let equity: Promise<void> | null = null;
   let running: Promise<void> = Promise.resolve();
   const tick = async () => {
+    const started = Date.now();
     const selection = diagnostics.start("select_accounts");
     if (!equity && Date.now() - lastEquity >= 300000) {
       lastEquity = Date.now();
@@ -435,9 +436,12 @@ export function startDeskConsumer(
       selection.fail(error, "BTC_DESK_CONSUMER_UNAVAILABLE");
     } finally {
       if (!stopped)
-        timer = setTimeout(() => {
-          running = tick();
-        }, 1000);
+        timer = setTimeout(
+          () => {
+            running = tick();
+          },
+          Math.max(0, 1000 - (Date.now() - started)),
+        );
     }
   };
   running = tick();
