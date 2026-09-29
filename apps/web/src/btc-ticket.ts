@@ -4,6 +4,19 @@ import type {
   DeskCommandReceipt,
 } from "@ganso-market/contracts/trading";
 import { readCsrfCookie } from "./auth.js";
+/** Opaque 128-bit intent key; getRandomValues also works on our HTTP origin.
+ * Generate only for a new intent. Persisted keys (including old UUIDs) survive retries. */
+export function createTicketKey(): string {
+  const crypto = globalThis.crypto;
+  if (typeof crypto?.getRandomValues !== "function")
+    throw new Error(
+      "Este navegador não oferece geração segura para a operação.",
+    );
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
 export function decimalRaw(value: string, decimals: number): string {
   if (!/^\d+(?:[.,]\d+)?$/.test(value.trim()))
     throw new Error("Informe um número positivo, sem separador de milhar.");
