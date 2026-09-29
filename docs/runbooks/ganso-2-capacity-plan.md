@@ -1,4 +1,137 @@
-# G2-12.1 — Plano de capacidade e custo
+# G2-12 — Plano de capacidade e custo
+
+## Revisão de G2-12.3 após retirada da Polymarket — decisão pendente
+
+Preparada em **28/09/2026, 21:14–21:15 America/Sao_Paulo** (29/09 00:14–00:15 UTC),
+a pedido do proprietário para iniciar G2-12.3 e apresentar as autorizações necessárias.
+Base `97927d8`; release produtiva `09f7fdd`, schema 49. **Diagnóstico e proposta;
+nenhum novo teto, perfil piloto ou início do coletor foi aplicado.** O plano v1
+abaixo permanece histórico: falta de disco e compra de volume já não são a
+premissa desta proposta. As medições detalhadas permanecem no diagnóstico local;
+este registro contém somente agregados de capacidade e a decisão revisável.
+
+### Medição e impedimento atual
+
+Consultas SSH em READ ONLY, statement 1,5 s/lock 250 ms, catálogo e três últimas
+decisões por índice. Sem dump, varredura do corpus, escrita, restart ou teste
+financeiro produtivo. PostgreSQL preserva o início de 07/09; coletor está `created`,
+sem start, `restart=no`. HOLD BTC ativo, zero triggers de usuário desabilitados.
+Mount de capacidade e volume PG têm o mesmo dispositivo. Timers exclusivos do
+legado foram retirados e estão inativos; não reconstruí-los para o piloto.
+
+| Medida | Observado | Critério atual |
+| --- | ---: | --- |
+| Filesystem disponível / total | 291.040.284.672 / 322.302.373.888 B (90,30%) | Passa alvo de 40% e piso de 25% + reserva |
+| Banco completo | 7.385.454.271 B | Não equivale ao contador lógico nem ao corpus físico do guard |
+| Raw BTC | 2.147.899.519 B (2,00 GiB) | Abaixo do worker de 4 GiB |
+| Lógico BTC | 8.417.131.678 B (7,84 GiB) | Acima do worker de 6 GiB |
+| Físico das seis tabelas do guard | 5.186.740.224 B (4,83 GiB) | Acima do worker de 4 GiB |
+| Quotas SQL / recusa física | 10 GiB raw / 12 GiB lógicos / 14 GiB físicos | Preservadas; independentes do worker |
+
+Cada uma das três decisões recentes ainda cobra aproximadamente **19,99 MB
+lógicos**; a evidência principal ocupa aproximadamente **12,93 MB**, embora a
+projeção adicional já tenha caído para aproximadamente **1,25 kB**. Logo a redução
+G2-12.2 não resolveu o crescimento total. A baseline continua produzindo evidência
+mesmo em REDUCE_ONLY e com coleta parada. Aumento de teto dá uma janela finita;
+não demonstra operação contínua. Última captura permanece em 26/09 22:07 UTC.
+
+Recursos atuais: host 8 CPUs/15,24 GiB; limites PG 1 CPU/1 GiB, API 0,75/384 MiB,
+web e gateway 0,25/128 MiB cada, worker 0,5/256 MiB. Com migration, orçamento de
+3 CPUs/2 GiB; pools 7 + 8 conexões de reserva diante de max_connections=40.
+Foram vistas 3 conexões e zero idle-in-transaction. Uma amostra encontrou API
+47,17% CPU/248,3 MiB e PG 37,51%/299,2 MiB; não é p95 nem prova sob coleta.
+**Não há justificativa atual para aumentar cgroups/pools/timeouts.**
+
+### Duas decisões específicas solicitadas
+
+1. **Perfil temporário do coletor com raw 4 / lógico 11 / físico 8 GiB**, válido
+   somente na janela piloto aprovada. Altera os tetos de armazenamento do worker,
+   sem alterar banca, risco ou quotas SQL. Preserva 1 GiB de diferença para a
+   quota lógica SQL. Os limites padrão 4/6/4 permanecem para execução sem esse
+   perfil; não criar aumento irrestrito por variável de ambiente.
+2. **Piloto de até seis horas**, com prazo UTC absoluto e parada automática,
+   antes do aceite de sustentabilidade de 90 dias e da comprovação da fatura
+   total. É uma exceção somente para medição operacional no host existente,
+   sem contratação/novo consumo pago autorizado. Não aprova lançamento contínuo,
+   estabilidade de sete dias, avaliação econômica, ordens de teste ou rearme da
+   baseline. Custo existente informado no PRD é US$80/mês; fatura discriminada
+   continua necessária para o aceite do total, não presumida como zero.
+
+A seleção de G2-12.3 já cobre implementação, testes, PR/merge, deploy aplicável,
+configuração e start seletivo após os gates. Não pedir essas permissões novamente.
+A [RFC-053/S2](../rfcs/RFC-053-ganso-2-prontidao-operacional.md#s2) exige decisão
+explícita para dispensar o critério de 90 dias; o [escopo vigente](../SCOPE.md)
+não autoriza aumentar caps. **As duas decisões acima continuam pendentes.**
+Não é necessário autorizar compra de volume, migração, remoção de dados BTC,
+liberação de HOLD, Jev, dinheiro real ou backup para este piloto.
+
+### Dimensionamento reproduzível da janela proposta
+
+Taxas de captura são referências históricas, não medições com o worker atual.
+Uma baseline, Jev zero, sem export/replay volumoso e sem novas ordens provocadas.
+Reserva lógica de 491.520 B/h para equity e 1 MiB/h para demais eventos/controle;
+reservas são envelopes de planejamento, não redução autorizada dos contratos.
+A projeção física usa uma cópia grande por decisão e 2x dos envelopes auxiliares.
+O pico é **2x a referência**, uma sensibilidade, não máximo garantido de mercado.
+Os guards independentes e o prazo encerram o piloto antes se houver excesso.
+
+| Classe | Referência B/h | Pico B/h | Total projetado após 6h de pico | Teto piloto |
+| --- | ---: | ---: | ---: | ---: |
+| Raw | 74.769.000 | 149.538.000 | 3.045.127.519 B / 2,84 GiB | 4 GiB |
+| Lógico | 214.241.488 | 428.482.976 | 10.988.029.534 B / 10,23 GiB | 11 GiB |
+| Físico do guard | 123.725.888 | 247.451.776 | 6.671.450.880 B / 6,21 GiB | 8 GiB |
+
+Lógico/h = 132.754.000 + 4x19.986.848 + 491.520 + 1.048.576.
+Físico/h = 68.914.000 + 4x12.932.924 + 2x(491.520 + 1.048.576).
+Filesystem/h = 90.143.759,186 + 4x12.932.924 + 2x(491.520 + 1.048.576).
+Depois de 6h a 2x e reserva adicional de **4 GiB** para WAL/temp/operação,
+restariam aproximadamente **285,01 GB disponíveis**, acima do piso e do alvo.
+Reserva não é espaço bloqueado nem afirma máximo de WAL/temporários. Sua ocupação
+real e a de todo o banco precisam ser amostradas junto do corpus do guard.
+
+Horizonte linear de pico: raw 14,36h, lógico **7,92h**, físico 13,75h no corte.
+Antes do start, recalcular tudo; escolher duração <= min(6h, 80% do menor horizonte
+positivo), arredondada para baixo em minutos. Se não couber sequer 1h, não iniciar
+nem aumentar novamente o teto. Contadores continuam crescendo enquanto se aguarda.
+Assim a aprovação de até 6h não promete seis horas a partir de uma medição vencida.
+
+O mesmo cenário de filesystem em 30 dias deixaria 78,01 GB após a reserva,
+abaixo do piso; em 90 dias não cabe. As quotas internas acabariam muito antes.
+**A meta de 90 dias permanece não demonstrada.** Prioridade posterior: reduzir a
+evidência total por decisão e comprovar cadência/tamanho da captura, preservando
+ledger, pins, referências e compatibilidade. Comprar espaço não resolve sozinho
+as quotas, a amplificação de escrita ou o custo das consultas.
+
+### Sequência de execução após a decisão
+
+- Implementar e testar o perfil piloto com prazo absoluto, compatibilidade da
+  configuração anterior e recusa de prazo ausente/vencido, perfil desconhecido
+  ou duração excessiva. Expiração precisa interromper coleta e persistência,
+  ser visível no health e continuar válida após restart; nunca renovar por boot.
+  Testar fronteiras raw/lógico/físico, quota SQL, disco e encerramento sem retry.
+  Esse mecanismo ainda não foi implementado por esta revisão documental.
+- Revalidar preflight, versão/identidade, transações/CPU/RAM/temporários, HOLD,
+  quotas e hashes/contagens de controle; anotar IDs/inícios dos serviços. Sem
+  elevar pools/cgroups/timeouts ou reiniciar PG. Preservar REDUCE_ONLY da baseline.
+- Publicar pelo fluxo autorizado com coletor ainda parado. Só então configurar
+  a janela concreta, validar o Compose efetivo e iniciar somente `btc-worker`.
+- Checagem inicial por amostras independentes: commits/canais reais, livro <=2s,
+  contexto <=5s quando a fonte disponível, gaps registrados, taxas de crescimento,
+  CPU/RAM/locks/temp/WAL e serviços não afetados preservados. Falha terminal,
+  inconsistência ou projeção sem margem encerram a tentativa; sem loops de restart.
+- Janela expira mesmo sem chat aberto. No retorno, conferir parada, resultado,
+  crescimento e próxima ação; nada de extensão automática ou relógio de sete dias
+  iniciado por antecipação. A parada do coletor não promete parar evidências
+  financeiras/decisões independentes produzidas pela API.
+
+**Validação desta revisão:** cálculos determinísticos e margens conferidos,
+leituras produtivas limitadas e confirmação dos limites no código instalado.
+Sem teste de carga/fill produtivo. G2-12.3 continua `blocked` para start até a
+aprovação específica, implementação dos controles e preflight final.
+
+---
+
+# Plano v1 de G2-12.1 — histórico anterior à retirada da Polymarket
 
 Contrato documental `g2-capacity-plan.v1`, 28/09/2026 UTC; base `7876aed`.
 Escopo: [RFC-053/S2](../rfcs/RFC-053-ganso-2-prontidao-operacional.md#s2).
