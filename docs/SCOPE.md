@@ -75,3 +75,12 @@ comprova sustentabilidade.
 Referências ativas: [PRD](PRD-GANSO-2.0.md),
 [roadmap operacional](roadmap/GANSO_2_OPERATIONAL_ROADMAP.md),
 [autorização](ops/DEVELOPMENT_AUTHORIZATION.md#aposentadoria-polymarket-28092026).
+
+### Exceção posterior — piloto G2-12.3
+
+Em 28/09, o proprietário aprovou o [piloto delimitado](ops/DEVELOPMENT_AUTHORIZATION.md):
+perfil do coletor 4/16/12 GiB raw/lógico/físico, até seis horas com expiração
+absoluta e parada automática, antes dos aceites de 90 dias/fatura. Quotas SQL,
+risco, dados e demais limites permanecem; lógico efetivo ainda é 12 GiB. Esta
+exceção específica substitui somente a proibição de ajustar esses tetos do
+worker durante o piloto; não aprova operação contínua nem rearme da baseline.

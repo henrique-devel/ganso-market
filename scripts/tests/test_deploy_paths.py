@@ -342,6 +342,8 @@ class LedgerDeploymentTests(unittest.TestCase):
                 [
                     "apps/api/src/btc-worker.ts",
                     "apps/api/src/btc/runtime-diagnostics.ts",
+                    "apps/api/src/btc/collector-policy.ts",
+                    "apps/api/test/btc-collector-policy.test.ts",
                     "apps/api/test/btc-worker.test.ts",
                     "apps/api/test/btc-worker-runtime.test.ts",
                     "apps/api/test/btc-runtime-diagnostics.test.ts",

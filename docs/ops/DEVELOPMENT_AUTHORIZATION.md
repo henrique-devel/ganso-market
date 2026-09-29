@@ -1,5 +1,25 @@
 # Autorização contínua de desenvolvimento e entrega
 
+## Piloto G2-12.3 — autorização de 28/09/2026
+
+Após a proposta do PR #312, o proprietário respondeu:
+
+> 1 podemos ir com mais no lugar de 11gib pode ir com 16 e no lugar de 8 podemos ir com 12  sobre o item 2 autorizado
+
+Autoriza o perfil temporário do **coletor** raw/lógico/físico **4/16/12 GiB** e
+piloto de até seis horas com prazo absoluto/parada automática, como exceção
+limitada ao aceite prévio de 90 dias e da fatura discriminada. Abrange o fluxo de
+implementação, testes, PR, merge, publicação e partida seletiva já concedido.
+Não pedir novamente essas aprovações. O prazo concreto depende do preflight.
+
+A proposta preservava as quotas SQL: raw 10, lógico 12 e recusa física 14 GiB.
+Continuam preservadas; o limite lógico efetivo da coleta é, portanto, **12 GiB**,
+menor que o teto de 16 GiB do perfil. Diagnóstico/horizonte devem mostrar o menor
+limite. Não tratar a autorização como alteração implícita de SQL, risco, banca,
+HOLD, dados, pools, infraestrutura, live ou ativação da baseline. Janela piloto
+não é lançamento contínuo, sete dias observados nem extensão automática.
+
+
 <a id="aposentadoria-polymarket-28092026"></a>
 
 ## Emenda vigente — aposentadoria Polymarket (28/09/2026)

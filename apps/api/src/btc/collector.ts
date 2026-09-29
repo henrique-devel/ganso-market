@@ -2,24 +2,18 @@ import type { TradingInstrumentMetadata } from "@ganso-market/contracts/trading"
 import type { BtcMarketBatch } from "../storage/btc-marketstore.js";
 import type { startHyperliquidBtcFeed } from "../venues/hyperliquid/feed.js";
 import { contextSnapshotTime } from "../trading/valuation.js";
+import { COLLECTOR_LIMITS, type CollectorLimits } from "./collector-policy.js";
+export { COLLECTOR_LIMITS } from "./collector-policy.js";
 
-// Bounded operational capture on existing capacity, below the unchanged SQL quotas.
-// Capacity/rate rationale and limited horizon: docs/runbooks/btc-collector.md.
-// Reaching any ceiling stops collection; it never deletes evidence or restarts.
-export const COLLECTOR_LIMITS = Object.freeze({
-  intervalMs: 1000,
-  diskReserveBytes: 1024 ** 3,
-  rawBytes: 4 * 1024 ** 3,
-  totalBytes: 6 * 1024 ** 3,
-  physicalBytes: 4 * 1024 ** 3,
-  connectionReserve: 8,
-});
 export interface CapacitySample {
   diskTotalBytes: string;
   diskAvailableBytes: string;
   rawBytes: string;
   totalBytes: string;
   physicalBytes: string;
+  rawQuotaBytes: string;
+  totalQuotaBytes: string;
+  physicalQuotaBytes: string;
   databaseBytes: string;
   walLsn: string;
   connections: number;
@@ -27,7 +21,27 @@ export interface CapacitySample {
   retentionBlocked: boolean;
   hold: boolean;
 }
-export function assertCollectorCapacity(sample: CapacitySample): void {
+export function effectiveCollectorLimits(
+  sample: CapacitySample,
+  limits: CollectorLimits = COLLECTOR_LIMITS,
+): CollectorLimits {
+  const quota = (value: string, ceiling: number) => {
+    if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)))
+      throw new Error("BTC_COLLECTOR_CAPACITY_UNKNOWN");
+    return Math.min(Number(value), ceiling);
+  };
+  return {
+    ...limits,
+    rawBytes: quota(sample.rawQuotaBytes, limits.rawBytes),
+    totalBytes: quota(sample.totalQuotaBytes, limits.totalBytes),
+    physicalBytes: quota(sample.physicalQuotaBytes, limits.physicalBytes),
+  };
+}
+export function assertCollectorCapacity(
+  sample: CapacitySample,
+  policy: CollectorLimits = COLLECTOR_LIMITS,
+): void {
+  const limits = effectiveCollectorLimits(sample, policy);
   const total = BigInt(sample.diskTotalBytes);
   const available = BigInt(sample.diskAvailableBytes);
   if (total <= 0n || available < 0n || available > total)
@@ -38,20 +52,20 @@ export function assertCollectorCapacity(sample: CapacitySample): void {
     )
   )
     throw new Error("BTC_COLLECTOR_CAPACITY_UNKNOWN");
-  if (available * 4n <= total + 4n * BigInt(COLLECTOR_LIMITS.diskReserveBytes))
+  if (available * 4n <= total + 4n * BigInt(limits.diskReserveBytes))
     throw new Error("BTC_COLLECTOR_DISK_RESERVE");
   if (
     sample.retentionBlocked ||
-    BigInt(sample.rawBytes) >= BigInt(COLLECTOR_LIMITS.rawBytes) ||
-    BigInt(sample.totalBytes) >= BigInt(COLLECTOR_LIMITS.totalBytes) ||
-    BigInt(sample.physicalBytes) >= BigInt(COLLECTOR_LIMITS.physicalBytes)
+    BigInt(sample.rawBytes) >= BigInt(limits.rawBytes) ||
+    BigInt(sample.totalBytes) >= BigInt(limits.totalBytes) ||
+    BigInt(sample.physicalBytes) >= BigInt(limits.physicalBytes)
   )
     throw new Error("BTC_COLLECTOR_STORAGE_LIMIT");
   if (
     !Number.isInteger(sample.connections) ||
     !Number.isInteger(sample.maxConnections) ||
     sample.connections < 0 ||
-    Math.max(sample.connections, 7) + COLLECTOR_LIMITS.connectionReserve >
+    Math.max(sample.connections, 7) + limits.connectionReserve >
       sample.maxConnections
   )
     throw new Error("BTC_COLLECTOR_CONNECTION_RESERVE");
@@ -80,7 +94,10 @@ export function createCollector(deps: {
     batch: BtcMarketBatch,
   ) => Promise<{ stored: number; duplicates: number }>;
   closeBars: (at: string) => Promise<{ closed: number }>;
+  limits?: CollectorLimits;
+  assertActive?: () => void;
 }) {
+  const limits = deps.limits ?? COLLECTOR_LIMITS;
   let stopped = false;
   let reason: string | null = null;
   let pendingEvents = 0;
@@ -107,10 +124,12 @@ export function createCollector(deps: {
     async tick() {
       if (stopped) throw new Error("BTC_COLLECTOR_STOPPED");
       try {
+        deps.assertActive?.();
         sample = await deps.capacity();
         baseline ??= sample;
         baselineAt ??= Date.parse(deps.now());
-        assertCollectorCapacity(sample);
+        deps.assertActive?.();
+        assertCollectorCapacity(sample, limits);
         const before = deps.feed.status();
         if (before.stopped) throw new Error("BTC_COLLECTOR_FEED_TERMINAL");
         if (before.counters.dropped > 0)
@@ -130,6 +149,7 @@ export function createCollector(deps: {
         // newly detected gaps never appear to come from its future.
         const health = deps.feed.status();
         const at = deps.now();
+        deps.assertActive?.();
         const result = await deps.capture({
           sessionId: deps.sessionId,
           capturedAt: at,
@@ -154,7 +174,8 @@ export function createCollector(deps: {
         counters.snapshots_coalesced += drained.length - events.length;
         // Recheck real disk allocation before the separate bar transaction.
         sample = await deps.capacity();
-        assertCollectorCapacity(sample);
+        deps.assertActive?.();
+        assertCollectorCapacity(sample, limits);
         counters.bars += (await deps.closeBars(at)).closed;
       } catch (error) {
         stop(
@@ -168,6 +189,12 @@ export function createCollector(deps: {
     status() {
       const feed = deps.feed.status(),
         now = Date.parse(deps.now());
+      let effective: CollectorLimits | null = null;
+      try {
+        if (sample) effective = effectiveCollectorLimits(sample, limits);
+      } catch {
+        // A refused/unknown capacity sample must still have a readable health.
+      }
       const readiness = (
         event: typeof latestBook,
         channel: "book" | "context",
@@ -215,12 +242,13 @@ export function createCollector(deps: {
         last_capture_at: lastCaptureAt,
         counters: { ...counters },
         capacity: sample,
+        effective_limits: effective,
         consumer_freshness: {
           book: readiness(latestBook, "book", 2000),
           mark: readiness(latestMark, "context", 5000),
         },
         growth:
-          baseline && sample
+          baseline && sample && effective
             ? {
                 logical_bytes: (
                   BigInt(sample.totalBytes) - BigInt(baseline.totalBytes)
@@ -233,6 +261,7 @@ export function createCollector(deps: {
                   baseline,
                   sample,
                   Date.parse(deps.now()) - baselineAt!,
+                  limits,
                 ),
                 physical_bytes: (
                   BigInt(sample.physicalBytes) - BigInt(baseline.physicalBytes)
@@ -259,26 +288,28 @@ export function collectorHorizon(
   before: CapacitySample,
   after: CapacitySample,
   elapsedMs: number,
+  policy: CollectorLimits = COLLECTOR_LIMITS,
 ) {
   if (elapsedMs < 60_000) return null;
+  const limits = effectiveCollectorLimits(after, policy);
   const axes = [
     [
       "raw",
       BigInt(before.rawBytes),
       BigInt(after.rawBytes),
-      BigInt(COLLECTOR_LIMITS.rawBytes),
+      BigInt(limits.rawBytes),
     ],
     [
       "logical",
       BigInt(before.totalBytes),
       BigInt(after.totalBytes),
-      BigInt(COLLECTOR_LIMITS.totalBytes),
+      BigInt(limits.totalBytes),
     ],
     [
       "physical",
       BigInt(before.physicalBytes),
       BigInt(after.physicalBytes),
-      BigInt(COLLECTOR_LIMITS.physicalBytes),
+      BigInt(limits.physicalBytes),
     ],
     [
       "filesystem",
@@ -286,7 +317,7 @@ export function collectorHorizon(
       BigInt(before.diskAvailableBytes) - BigInt(after.diskAvailableBytes),
       BigInt(before.diskAvailableBytes) -
         (BigInt(after.diskTotalBytes) + 3n) / 4n -
-        BigInt(COLLECTOR_LIMITS.diskReserveBytes),
+        BigInt(limits.diskReserveBytes),
     ],
   ] as const;
   return Object.fromEntries(

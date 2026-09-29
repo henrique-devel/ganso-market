@@ -11,17 +11,16 @@ const mocks = vi.hoisted(() => ({
   unavailable: vi.fn(),
   reconnect: vi.fn(),
   metadata: vi.fn(),
+  config: vi.fn(),
+  capacity: vi.fn(),
+  closeBars: vi.fn(),
+  bootstrapMetadata: vi.fn(),
 }));
 vi.mock("node:timers/promises", () => ({
   setTimeout: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
 }));
 vi.mock("node:fs/promises", () => ({
-  readFile: async () =>
-    JSON.stringify({
-      schema_version: 1,
-      execution_mode: "paper",
-      enabled: true,
-    }),
+  readFile: async () => JSON.stringify(mocks.config()),
   rename: async () => {},
   writeFile: mocks.write,
   statfs: async () => ({
@@ -42,17 +41,11 @@ vi.mock("../src/database.js", () => ({
   }),
 }));
 vi.mock("../src/storage/btc-retention.js", () => ({
-  retentionCapacity: async () => ({
-    raw_bytes: "0",
-    total_bytes: "0",
-    allocated_bytes: "0",
-    nonessentialBlocked: false,
-    hold: true,
-  }),
+  retentionCapacity: mocks.capacity,
 }));
 vi.mock("../src/venues/hyperliquid/public.js", () => ({
   createHyperliquidPublicAdapter: () => ({
-    getBtcMetadata: async () => metadata,
+    getBtcMetadata: mocks.bootstrapMetadata,
   }),
 }));
 vi.mock("../src/venues/hyperliquid/context-snapshot.js", async (original) => ({
@@ -63,7 +56,7 @@ vi.mock("../src/venues/hyperliquid/context-snapshot.js", async (original) => ({
 }));
 vi.mock("../src/storage/btc-marketstore.js", () => ({
   captureBtcMarketBatch: mocks.capture,
-  closeBtcMarketBars: vi.fn(async () => ({ closed: 0 })),
+  closeBtcMarketBars: mocks.closeBars,
 }));
 vi.mock("../src/venues/hyperliquid/feed.js", async () => {
   const { FeedQualityMachine } = await import("../src/trading/feed.js");
@@ -106,6 +99,7 @@ import { normalizeBtcContextSnapshot } from "../src/venues/hyperliquid/context-s
 import { normalizeHyperliquidFeed } from "../src/venues/hyperliquid/feed-normalizer.js";
 import { runBtcWorker } from "../src/btc-worker.js";
 import { SnapshotTransportError } from "../src/venues/hyperliquid/recovery.js";
+import { PILOT_PROFILE } from "../src/btc/collector-policy.js";
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(start);
@@ -113,6 +107,22 @@ beforeEach(() => {
   vi.stubEnv("GANSO_BTC_WORKER_CONFIG_FILE", "/fixture.json");
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
+  mocks.config.mockReturnValue({
+    schema_version: 1,
+    execution_mode: "paper",
+    enabled: true,
+  });
+  mocks.capacity.mockResolvedValue({
+    raw_bytes: "0",
+    total_bytes: "0",
+    allocated_bytes: "0",
+    raw_quota_bytes: String(10 * 1024 ** 3),
+    total_quota_bytes: String(12 * 1024 ** 3),
+    nonessentialBlocked: false,
+    hold: true,
+  });
+  mocks.closeBars.mockResolvedValue({ closed: 0 });
+  mocks.bootstrapMetadata.mockResolvedValue(metadata);
   mocks.capture.mockResolvedValue({ stored: 1, duplicates: 0 });
   mocks.metadata.mockResolvedValue(metadata);
   mocks.book.mockImplementation(async () => ({
@@ -204,6 +214,146 @@ function publications() {
     JSON.parse(call[1]),
   );
 }
+function pilot(stopsAt = start + 3000, startsAt = start) {
+  mocks.config.mockReturnValue({
+    schema_version: 2,
+    execution_mode: "paper",
+    enabled: true,
+    capacity_profile: PILOT_PROFILE,
+    starts_at: iso(startsAt),
+    stops_at: iso(stopsAt),
+  });
+}
+it("expires the pilot autonomously and preserves the last committed capture", async () => {
+  pilot();
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(4000);
+  await worker;
+  expect(mocks.capture).toHaveBeenCalledTimes(3);
+  expect(publications().at(-1)).toMatchObject({
+    status: "stopped",
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+    last_capture_at: iso(start + 2000),
+    limits: { totalBytes: 16 * 1024 ** 3, physicalBytes: 12 * 1024 ** 3 },
+    effective_limits: { totalBytes: 12 * 1024 ** 3 },
+    pilot: { stops_at: iso(start + 3000) },
+  });
+  expect(process.exitCode ?? 0).toBe(0);
+  expect(mocks.end).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+it("rejects an expired restart before any database or public read and publishes the refusal", async () => {
+  pilot();
+  vi.setSystemTime(start + 3000);
+  await expect(runBtcWorker()).rejects.toThrow("PILOT_EXPIRED");
+  expect(mocks.capacity).not.toHaveBeenCalled();
+  expect(mocks.bootstrapMetadata).not.toHaveBeenCalled();
+  expect(publications().at(-1)).toMatchObject({
+    status: "stopped",
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+  });
+});
+it("keeps the original end on a restart inside the window", async () => {
+  pilot();
+  vi.setSystemTime(start + 2500);
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(2000);
+  await worker;
+  expect(mocks.capture).toHaveBeenCalledOnce();
+  expect(publications().at(-1)).toMatchObject({
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+    pilot: { stops_at: iso(start + 3000) },
+  });
+});
+it("does not extend the in-process deadline when the wall clock moves backwards", async () => {
+  pilot(start + 3000, start - 3600_000);
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(1000);
+  vi.setSystemTime(start + 500);
+  await vi.advanceTimersByTimeAsync(3000);
+  await worker;
+  expect(publications().at(-1)).toMatchObject({
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+  });
+  expect(mocks.end).toHaveBeenCalledOnce();
+});
+it("does not start the feed if the deadline passes during capacity preflight", async () => {
+  pilot();
+  const capacity = await mocks.capacity();
+  mocks.capacity.mockClear();
+  mocks.capacity.mockImplementationOnce(async () => {
+    await new Promise((r) => setTimeout(r, 4000));
+    return capacity;
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(4000);
+  await worker;
+  expect(mocks.bootstrapMetadata).not.toHaveBeenCalled();
+  expect(mocks.capture).not.toHaveBeenCalled();
+  expect(publications().at(-1)).toMatchObject({
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+    last_capture_at: null,
+  });
+  expect(mocks.end).toHaveBeenCalledOnce();
+});
+it("publishes expiry even during metadata bootstrap before a collector exists", async () => {
+  pilot();
+  mocks.bootstrapMetadata.mockImplementationOnce(async () => {
+    await new Promise((r) => setTimeout(r, 4000));
+    return metadata;
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(4000);
+  await worker;
+  expect(mocks.capture).not.toHaveBeenCalled();
+  expect(publications().at(-1)).toMatchObject({
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+    last_capture_at: null,
+  });
+  expect(mocks.end).toHaveBeenCalledOnce();
+});
+it("discards a late HTTP result after pilot expiry", async () => {
+  pilot();
+  const normal = mocks.book.getMockImplementation()!;
+  mocks.book.mockImplementationOnce(async (...args) => {
+    const event = await normal(...args);
+    await new Promise((r) => setTimeout(r, 4000));
+    return event;
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(4000);
+  await worker;
+  expect(mocks.capture).not.toHaveBeenCalled();
+  expect(publications().at(-1)).toMatchObject({
+    reason: "BTC_COLLECTOR_PILOT_EXPIRED",
+  });
+});
+it.each([false, true])(
+  "drains an in-flight transaction without a new bar write or retry; failure=%s",
+  async (fail) => {
+    pilot();
+    mocks.capture.mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 4000));
+      if (fail) throw new Error("BTC_RETENTION_CAPACITY_REFUSED");
+      return { stored: 1, duplicates: 0 };
+    });
+    const worker = runBtcWorker();
+    await vi.advanceTimersByTimeAsync(4000);
+    await worker;
+    expect(mocks.capture).toHaveBeenCalledOnce();
+    expect(mocks.closeBars).not.toHaveBeenCalled();
+    expect(publications().at(-1)).toMatchObject({
+      reason: fail
+        ? "BTC_RETENTION_CAPACITY_REFUSED"
+        : "BTC_COLLECTOR_PILOT_EXPIRED",
+      counters: { captures: fail ? 0 : 1 },
+      last_capture_at: fail ? null : iso(start),
+    });
+    expect(process.exitCode ?? 0).toBe(fail ? 1 : 0);
+    expect(mocks.end).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 it("persists a book gap through a transient failure while context and trades continue", async () => {
   mocks.book.mockRejectedValueOnce(new SnapshotTransportError("network"));
   const worker = runBtcWorker();
