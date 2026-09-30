@@ -20,6 +20,43 @@ export type RefreshOutcome =
     }
   | { readonly kind: "none" };
 
+// One renewal per rejected access token in this tab. Stale 401 responses and
+// completions from an older login/logout must not rotate or replace a new session.
+export function createSessionRenewal(fetcher: AuthFetcher = fetch) {
+  let accessToken: string | null = null;
+  let generation = 0;
+  type Outcome = RefreshOutcome | { readonly kind: "superseded" };
+  let pending: { generation: number; promise: Promise<Outcome> } | null = null;
+  return {
+    replace(token: string | null) {
+      accessToken = token;
+      generation++;
+      pending = null;
+    },
+    renew(
+      rejectedToken: string | null,
+      csrfToken: string | null,
+    ): Promise<Outcome> {
+      if (rejectedToken !== accessToken)
+        return Promise.resolve({ kind: "superseded" });
+      if (pending?.generation === generation) return pending.promise;
+      const started = generation;
+      const promise: Promise<Outcome> = refreshSession(csrfToken, fetcher)
+        .then((result): Outcome => {
+          if (generation !== started) return { kind: "superseded" };
+          accessToken = result.kind === "ok" ? result.accessToken : null;
+          generation++;
+          return result;
+        })
+        .finally(() => {
+          if (pending?.promise === promise) pending = null;
+        });
+      pending = { generation: started, promise };
+      return promise;
+    },
+  };
+}
+
 type AuthResponse = Pick<Response, "ok" | "status" | "json">;
 export type AuthFetcher = (
   input: string,
