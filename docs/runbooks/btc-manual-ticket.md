@@ -45,6 +45,36 @@ Duplo clique/retry usa a mesma chave; intenção tentada é preservada em sessio
 antes do envio. Se a resposta for incerta, repetir a mesma intenção, inclusive
 após login; não abrir outra ordem para tentar compensar uma resposta perdida.
 
+### Retomada da API antes de uma janela curta
+
+Após a quiescência autorizada para um CLI protegido, restaurar a mesma API mesmo
+se o comando falhar. Aguardar a expiração natural do lease do CLI e conferir
+recovery, lease e heartbeat do consumidor. Antes de voltar ao ticket, validar
+também o caminho HTTP pelo gateway: API saudável por dentro não comprova que o
+painel consegue acessá-la. Em 30/09, o consumidor ficou pronto, mas o Nginx
+retornou 502 por conexão recusada ao upstream durante o teste de cinco minutos.
+
+Após o retorno da API, validar e recarregar a configuração existente do gateway,
+como no deploy seletivo, sem mudar rotas, portas ou autenticação:
+
+```sh
+docker compose --env-file deploy/server.env exec -T nginx nginx -t &&
+docker compose --env-file deploy/server.env exec -T nginx nginx -s reload
+curl --fail --silent --show-error --max-time 5 http://127.0.0.1/api/health/live
+curl --fail --silent --show-error --max-time 5 http://127.0.0.1/api/health/ready
+```
+
+Esses endereços usam a porta 80 da implantação existente. Depois de HTTP 200,
+recarregar a aba e conferir sessão do owner, conta manual, funding, frescor e
+risco antes da prévia. Falha de transporte ou tela temporária de verificação
+não comprova revogação da sessão; conferir o gateway antes de solicitar login.
+Não repetir automaticamente um envio cuja resposta ficou incerta.
+
+A janela de coleta conserva o início/fim absolutos autorizados, inclusive o
+tempo usado pela recuperação. Se não houver tempo para executar e encerrar,
+não abrir posição nem estender a janela. Concluir flat, sem reservas, com
+REDUCE_ONLY e reconciliação, registrando a jornada como pendente.
+
 ### Chave de intenção no acesso HTTP
 
 O ticket usa 16 bytes de `crypto.getRandomValues` em uma chave hexadecimal de
