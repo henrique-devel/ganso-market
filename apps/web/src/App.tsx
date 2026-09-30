@@ -7,7 +7,7 @@ import {
   login,
   logout,
   readCsrfCookie,
-  refreshSession,
+  createSessionRenewal,
   type AuthenticatedSession,
 } from "./auth.js";
 import { fetchDashboardStatus, type DashboardStatus } from "./health.js";
@@ -24,14 +24,16 @@ export function App() {
   const [auth, setAuth] = useState<AuthState>({ kind: "checking" });
   const [pending, setPending] = useState(false);
   const mounted = useRef(true);
+  const renewal = useRef(createSessionRenewal()).current;
 
   useEffect(() => {
     mounted.current = true;
     void (async () => {
-      const refreshed = await refreshSession(readCsrfCookie());
+      const refreshed = await renewal.renew(null, readCsrfCookie());
       if (!mounted.current) {
         return;
       }
+      if (refreshed.kind === "superseded") return;
       if (refreshed.kind === "ok") {
         const session = await getSession(refreshed.accessToken);
         if (mounted.current && session !== null) {
@@ -49,7 +51,7 @@ export function App() {
     return () => {
       mounted.current = false;
     };
-  }, []);
+  }, [renewal]);
 
   const handleLogin = useCallback(
     async (username: string, password: string): Promise<void> => {
@@ -60,6 +62,7 @@ export function App() {
       }
       setPending(false);
       if (outcome.kind === "ok") {
+        renewal.replace(outcome.session.accessToken);
         setAuth({ kind: "authenticated", session: outcome.session });
         return;
       }
@@ -71,27 +74,32 @@ export function App() {
             : "Falha ao contatar o servidor.";
       setAuth({ kind: "anonymous", error });
     },
-    [],
+    [renewal],
   );
 
   const handleLogout = useCallback(async (): Promise<void> => {
     if (auth.kind !== "authenticated") {
       return;
     }
+    renewal.replace(null);
     await logout(auth.session.accessToken, readCsrfCookie());
     if (mounted.current) {
       setAuth({ kind: "anonymous", error: null });
     }
-  }, [auth]);
+  }, [auth, renewal]);
 
   const handleUnauthorized = useCallback(async (): Promise<void> => {
-    const refreshed = await refreshSession(readCsrfCookie());
+    if (auth.kind !== "authenticated") return;
+    const rejectedToken = auth.session.accessToken;
+    const refreshed = await renewal.renew(rejectedToken, readCsrfCookie());
+    if (refreshed.kind === "superseded") return;
     if (!mounted.current) {
       return;
     }
     if (refreshed.kind === "ok") {
       setAuth((previous) =>
-        previous.kind === "authenticated"
+        previous.kind === "authenticated" &&
+        previous.session.accessToken === rejectedToken
           ? {
               kind: "authenticated",
               session: {
@@ -104,8 +112,13 @@ export function App() {
       );
       return;
     }
-    setAuth({ kind: "anonymous", error: null });
-  }, []);
+    setAuth((previous) =>
+      previous.kind === "authenticated" &&
+      previous.session.accessToken === rejectedToken
+        ? { kind: "anonymous", error: null }
+        : previous,
+    );
+  }, [auth, renewal]);
 
   if (auth.kind === "checking") {
     return (
