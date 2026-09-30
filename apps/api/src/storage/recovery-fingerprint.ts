@@ -25,11 +25,14 @@ export async function fingerprintRecoveryTable(
   const known = new Map(
     [...cache].filter(([, entry]) => entry.table === table),
   );
+  // OFFSET 0 keeps the planner from inlining and repeating JSON serialization
+  // and hashing in SELECT/CASE/ORDER BY. These are per-statement barriers, not
+  // stored fingerprints: every authoritative row is still read and hashed.
   const { rows } = await tx.query<{ fingerprint: string; value: unknown }>(
-    `SELECT fingerprint, CASE WHEN fingerprint=ANY($2::text[]) THEN NULL ELSE value END AS value
-     FROM (SELECT value, encode(sha256(convert_to(value::text,'UTF8')),'hex') AS fingerprint
-       FROM (SELECT to_jsonb(t) AS value FROM ${table} t WHERE account_id=$1) source) hashed
-     ORDER BY hashed.value::text`,
+    `SELECT fingerprint, CASE WHEN fingerprint=ANY($2::text[]) THEN NULL ELSE value::jsonb END AS value
+     FROM (SELECT value, encode(sha256(convert_to(value,'UTF8')),'hex') AS fingerprint
+       FROM (SELECT to_jsonb(t)::text AS value FROM ${table} t WHERE account_id=$1 OFFSET 0) source OFFSET 0) hashed
+     ORDER BY hashed.value`,
     [account, [...known.keys()]],
   );
   hash.update(`[${JSON.stringify(table)},[`);
