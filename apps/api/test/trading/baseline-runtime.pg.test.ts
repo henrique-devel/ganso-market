@@ -357,6 +357,68 @@ describe.skipIf(!url)(
       purpose: "economic_evaluation" as const,
       start_at: iso(T + BASELINE_PERIOD_MS),
     });
+    it.each(["before_preparation", "under_account_lock"])(
+      "audits idle without the collector lock and retains it when work becomes due %s",
+      async (boundary) => {
+        await consumeBaselineAccount(pool, "baseline");
+        const before = await decisions();
+        expect((await ledger()).projection.positions).toEqual([]);
+        expect((await orders()).some((r) => r.status === "active")).toBe(false);
+        const collector = await f.pool.connect();
+        const transaction = pool.transaction.bind(pool);
+        try {
+          await collector.query("BEGIN");
+          await collector.query("SELECT pg_advisory_xact_lock(741044,4)");
+          await consumeBaselineAccount(pool, "baseline");
+          expect(await decisions()).toEqual(before);
+          expect(
+            (
+              await f.pool.query(
+                "SELECT ready FROM btc_desk_runtime WHERE account_id='baseline'",
+              )
+            ).rows[0].ready,
+          ).toBe(true);
+          const advance = () => {
+            now += 900000;
+            vi.setSystemTime(now);
+          };
+          if (boundary === "before_preparation") advance();
+          else {
+            let advanced = false;
+            pool.transaction = (run) =>
+              transaction((tx) =>
+                run({
+                  query: async <R extends QueryResultRow>(
+                    sql: string,
+                    params?: readonly unknown[],
+                  ) => {
+                    const result = await tx.query<R>(sql, params);
+                    if (
+                      !advanced &&
+                      sql.includes("btc_ledger_accounts") &&
+                      sql.includes("FOR UPDATE")
+                    ) {
+                      advanced = true;
+                      advance();
+                    }
+                    return result;
+                  },
+                }),
+              );
+          }
+          await expect(
+            consumeBaselineAccount(pool, "baseline"),
+          ).rejects.toMatchObject({ code: "55P03" });
+        } finally {
+          pool.transaction = transaction;
+          await collector.query("ROLLBACK");
+          collector.release();
+        }
+        await consumeBaselineAccount(pool, "baseline");
+        expect((await decisions()).length).toBeGreaterThan(before.length);
+      },
+    );
+
     it("protects operator rearm by owner, retained feed/funding and preserves anchors across concurrent retries and a later pause", async () => {
       await expect(operate(rearm, "wrong-owner")).rejects.toThrow(
         "BTC_BASELINE_OWNER_REQUIRED",

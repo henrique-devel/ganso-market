@@ -1,6 +1,6 @@
 import { baselinePeriodTx } from "./baseline-periods.js";
 import type { DeskStage } from "../btc/runtime-diagnostics.js";
-import { createLedgerAccount } from "./ledgerstore.js";
+import { createLedgerAccount, readLedgerAccountTx } from "./ledgerstore.js";
 import type { LedgerIdentity } from "./ledger-contract.js";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import { riskTransaction, observeRiskTx } from "./riskstore.js";
@@ -367,6 +367,32 @@ export interface ChallengerStage {
     sourceEvidenceId: string,
   ): Promise<void>;
 }
+async function baselineHasHoldingsTx(tx: SqlExecutor, account: string) {
+  if (
+    (await readReservationsTx(tx, account)).some((r) => r.status === "active")
+  )
+    return true;
+  return (
+    (
+      await tx.query(
+        `SELECT 1 FROM btc_ledger_projections WHERE account_id=$1 AND EXISTS
+      (SELECT 1 FROM jsonb_array_elements(projection->'positions') p WHERE p->>'quantity_btc_raw'<>'0')
+      UNION ALL SELECT 1 FROM (SELECT DISTINCT ON(position_id) payload FROM btc_baseline_events
+      WHERE account_id=$1 AND kind='position' ORDER BY position_id,sequence DESC) p
+      WHERE p.payload->>'state'<>'closed' LIMIT 1`,
+        [account],
+      )
+    ).rowCount > 0
+  );
+}
+async function baselineHeartbeatTx(tx: SqlExecutor, account: string) {
+  await tx.query(
+    `INSERT INTO btc_desk_runtime(account_id,ready,reason) VALUES($1,true,'baseline_operational') ON CONFLICT(account_id)
+     DO UPDATE SET observed_at=clock_timestamp(),ready=true,reason='baseline_operational'`,
+    [account],
+  );
+}
+
 export async function consumeBaselineAccount(
   pool: Pool,
   account: string,
@@ -428,6 +454,7 @@ export async function consumeBaselineAccount(
         : { records: [], dependencies: [], first_complete_start_at: null };
     return {
       bar: bar ?? null,
+      idle: !challenger && !bar && !(await baselineHasHoldingsTx(tx, account)),
       source,
       latest: decisionBoundary(at),
       hours,
@@ -439,6 +466,30 @@ export async function consumeBaselineAccount(
   });
   return withDeskWorker(pool, account, async (worker) => {
     onStage("baseline_risk_transaction");
+    if (prepared.idle) {
+      const workPending = new Error("baseline work became due");
+      try {
+        // An idle heartbeat writes no retained evidence. Keep the complete
+        // recovery audit, account lock and final fence, without excluding the
+        // collector. Eligibility is rechecked under that account lock. If work
+        // appeared, roll back and enter the unchanged retention-first path.
+        await riskTransaction(worker, r.registration.scope, async (tx) => {
+          const current = await baselineRegistrationTx(tx, account, "baseline");
+          const at = await baselineClock(tx);
+          const ledger = await readLedgerAccountTx(tx, r.registration.scope);
+          if (
+            (await nextBaselineBarTx(tx, current, at)) ||
+            (await baselineHasHoldingsTx(tx, account)) ||
+            ledger.projection.positions.some((p) => p.quantity_btc_raw !== "0")
+          )
+            throw workPending;
+          await baselineHeartbeatTx(tx, account);
+        });
+        return;
+      } catch (error) {
+        if (error !== workPending) throw error;
+      }
+    }
     const liquidate = await riskTransaction(
       worker,
       r.registration.scope,
@@ -566,11 +617,7 @@ export async function consumeBaselineAccount(
             );
           }
         }
-        await tx.query(
-          `INSERT INTO btc_desk_runtime(account_id,ready,reason) VALUES($1,true,'baseline_operational') ON CONFLICT(account_id)
-        DO UPDATE SET observed_at=clock_timestamp(),ready=true,reason='baseline_operational'`,
-          [account],
-        );
+        await baselineHeartbeatTx(tx, account);
         return liquids;
       },
       true,
