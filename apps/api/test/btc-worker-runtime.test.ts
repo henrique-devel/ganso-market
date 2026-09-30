@@ -578,3 +578,26 @@ it("aborts an in-flight context on operator stop without capture or late revival
   expect(process.listenerCount("SIGTERM")).toBe(listeners);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it("aligns capture and book deadlines after small pre-poll jitter without skipping or bursting", async () => {
+  pilot(start + 65000);
+  const times: number[] = [];
+  const normal = mocks.book.getMockImplementation()!;
+  mocks.book.mockImplementation(async (...args) => {
+    times.push(Date.now());
+    return normal(...args);
+  });
+  mocks.metadata.mockImplementation(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return metadata;
+  });
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(66000);
+  await worker;
+  expect(mocks.metadata).toHaveBeenCalledOnce();
+  expect(times).toHaveLength(65);
+  const gaps = times.slice(1).map((at, i) => at - times[i]!);
+  expect(gaps.every((gap) => gap >= 1000 && gap <= 1005)).toBe(true);
+  expect(publications().at(-1).reason).toBe("BTC_COLLECTOR_PILOT_EXPIRED");
+  expect(vi.getTimerCount()).toBe(0);
+});

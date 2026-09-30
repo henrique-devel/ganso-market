@@ -296,7 +296,22 @@ export async function runBtcWorker() {
       }
       // Start-to-start cadence: IO time must not add another full interval
       // to the age of a persisted book. Never catch up with a burst.
-      await delay(Math.max(0, limits.intervalMs - (Date.now() - cycleStarted)));
+      // The book poll has its own start-to-start deadline. A few milliseconds
+      // spent before that poll (for example refreshing metadata) must not make
+      // the next cycle arrive early and skip an entire book request. Preserve
+      // both minimum intervals; cap this alignment wait during HTTP backoff so
+      // capacity, context, status and the absolute pilot deadline keep running.
+      const completed = Date.now();
+      await delay(
+        Math.max(
+          0,
+          cycleStarted + limits.intervalMs - completed,
+          Math.min(
+            limits.intervalMs,
+            Date.parse(bookPoll.status().next_attempt_at) - completed,
+          ),
+        ),
+      );
     }
     collector.stop(stopReason);
   } catch (error) {
