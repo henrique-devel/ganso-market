@@ -1,5 +1,16 @@
 # Autorização contínua de desenvolvimento e entrega
 
+## Piloto G2-12.3 — autorização de 02/10/2026
+
+O proprietário autorizou expressamente: “Autorizado o Piloto de 30minutos cuidado para
+não perder a sessão”. A proposta aceita é uma nova janela BTC de até 30 minutos, com
+parada automática e os tetos existentes, para medir frescor, crescimento e estabilidade.
+Preservar sessão/auth e não recriar API, web, gateway ou PostgreSQL para essa partida.
+Não renovar automaticamente, alterar quotas/HOLD/risco, rearmar baseline ou executar
+ordens por consequência desta autorização. O resultado observado fica na linha G2-12.3
+do acompanhamento existente.
+
+
 ## Piloto G2-12.3 — autorização de 28/09/2026
 
 Após a proposta do PR #312, o proprietário respondeu:
