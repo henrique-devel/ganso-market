@@ -265,8 +265,10 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     expect(await retentionCapacity(pool)).toMatchObject({
       policy_version: policy.version,
       hold: true,
-      raw_quota_bytes: "10737418240",
-      total_quota_bytes: "12884901888",
+      raw_quota_bytes: "200000000000",
+      total_quota_bytes: "200000000000",
+      storage_limit_bytes: "200000000000",
+      storage_stop_bytes: "160000000000",
     });
     await storeRetentionObject(pool, object("held"));
     expect((await retainBtcBatch(pool, options)).objects).toHaveLength(0);
