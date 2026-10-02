@@ -14,6 +14,7 @@ export interface CapacitySample {
   rawQuotaBytes: string;
   totalQuotaBytes: string;
   physicalQuotaBytes: string;
+  storageStopBytes?: string;
   databaseBytes: string;
   walLsn: string;
   connections: number;
@@ -32,9 +33,24 @@ export function effectiveCollectorLimits(
   };
   return {
     ...limits,
-    rawBytes: quota(sample.rawQuotaBytes, limits.rawBytes),
-    totalBytes: quota(sample.totalQuotaBytes, limits.totalBytes),
-    physicalBytes: quota(sample.physicalQuotaBytes, limits.physicalBytes),
+    rawBytes: quota(
+      sample.rawQuotaBytes,
+      sample.storageStopBytes === undefined
+        ? limits.rawBytes
+        : quota(sample.storageStopBytes, limits.rawBytes),
+    ),
+    totalBytes: quota(
+      sample.totalQuotaBytes,
+      sample.storageStopBytes === undefined
+        ? limits.totalBytes
+        : quota(sample.storageStopBytes, limits.totalBytes),
+    ),
+    physicalBytes: quota(
+      sample.physicalQuotaBytes,
+      sample.storageStopBytes === undefined
+        ? limits.physicalBytes
+        : quota(sample.storageStopBytes, limits.physicalBytes),
+    ),
   };
 }
 export function assertCollectorCapacity(

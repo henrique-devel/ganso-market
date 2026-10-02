@@ -99,7 +99,7 @@ import { normalizeBtcContextSnapshot } from "../src/venues/hyperliquid/context-s
 import { normalizeHyperliquidFeed } from "../src/venues/hyperliquid/feed-normalizer.js";
 import { runBtcWorker } from "../src/btc-worker.js";
 import { SnapshotTransportError } from "../src/venues/hyperliquid/recovery.js";
-import { PILOT_PROFILE } from "../src/btc/collector-policy.js";
+import { PILOT_PROFILE, STORAGE_PROFILE } from "../src/btc/collector-policy.js";
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(start);
@@ -118,6 +118,8 @@ beforeEach(() => {
     allocated_bytes: "0",
     raw_quota_bytes: String(10 * 1024 ** 3),
     total_quota_bytes: String(12 * 1024 ** 3),
+    storage_limit_bytes: "200000000000",
+    storage_stop_bytes: "160000000000",
     nonessentialBlocked: false,
     hold: true,
   });
@@ -224,6 +226,54 @@ function pilot(stopsAt = start + 3000, startsAt = start) {
     stops_at: iso(stopsAt),
   });
 }
+it("collects past the old caps, stops at 160 GB and refuses a saturated restart", async () => {
+  mocks.config.mockReturnValue({
+    schema_version: 3,
+    execution_mode: "paper",
+    enabled: true,
+    capacity_profile: STORAGE_PROFILE,
+  });
+  const capacity = {
+    ...(await mocks.capacity()),
+    raw_bytes: "20000000000",
+    total_bytes: "30000000000",
+    allocated_bytes: "18000000000",
+    raw_quota_bytes: "200000000000",
+    total_quota_bytes: "200000000000",
+  };
+  mocks.capacity.mockResolvedValue(capacity);
+  const worker = runBtcWorker();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(mocks.capture.mock.calls.length).toBeGreaterThan(0);
+  const committed = mocks.capture.mock.calls.length;
+  mocks.capacity.mockResolvedValue({
+    ...capacity,
+    total_bytes: "160000000000",
+  });
+  await vi.advanceTimersByTimeAsync(2000);
+  await worker;
+  expect(mocks.capture).toHaveBeenCalledTimes(committed);
+  expect(publications().at(-1)).toMatchObject({
+    status: "stopped",
+    reason: "BTC_COLLECTOR_STORAGE_LIMIT",
+    pilot: null,
+    storage_budget: {
+      limitBytes: "200000000000",
+      stopBytes: "160000000000",
+      stopPercent: 80,
+    },
+    effective_limits: {
+      rawBytes: 160000000000,
+      totalBytes: 160000000000,
+      physicalBytes: 160000000000,
+    },
+  });
+  mocks.bootstrapMetadata.mockClear();
+  await runBtcWorker();
+  expect(mocks.bootstrapMetadata).not.toHaveBeenCalled();
+  expect(mocks.capture).toHaveBeenCalledTimes(committed);
+  expect(vi.getTimerCount()).toBe(0);
+});
 it("expires the pilot autonomously and preserves the last committed capture", async () => {
   pilot();
   const worker = runBtcWorker();

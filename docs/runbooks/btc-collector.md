@@ -4,9 +4,42 @@ O processo `btc-worker` coleta somente metadados, livro, trades e contexto públ
 Hyperliquid BTC. Não importa estratégia, executor, signer ou carteira. Configuração
 padrão desabilitada e escala zero; ativação exige configuração paper explícita.
 
-## Admissão no host existente
+## Orçamento vigente — 02/10/2026
 
-**Piloto aprovado em 28/09:** perfil temporário raw/lógico/físico 4/16/12 GiB,
+Migration 0050 estabelece **200 GB decimais** (200.000.000.000 B), com coleta
+travada aos **160 GB (80%)**. O perfil v3 substitui os tetos anteriores menores;
+`storage_budget` no health mostra o orçamento e a trava, enquanto `effective_limits`
+mostra o menor valor entre o perfil, SQL e o ponto de parada. Horizonte usa 160 GB.
+Recusa lógica projetada é atômica no banco; ocupação física das seis relações BTC,
+com índices/TOAST, é medida antes das escritas. Uma transação limitada pode exceder
+ligeiramente a marca física por páginas alocadas, sem nova captura após a recusa.
+O piso de 25% livre + 1 GiB continua independente e pode interromper antes.
+
+Configuração aprovada do orçamento (ativar somente após decisão de retomada):
+
+```json
+{
+  "schema_version": 3,
+  "execution_mode": "paper",
+  "enabled": true,
+  "capacity_profile": "btc-storage-200gb-80pct.v1"
+}
+```
+
+Não há caps arbitrários, prazo de piloto ou expansão automática nesse perfil.
+Ao atingir a trava: coletor para, fecha transporte e preserva corpus/HOLD/pins;
+`restart: no` impede reinício automático e preflight recusa restart saturado.
+Investigar redução ou novo procedimento somente depois, por decisão específica.
+Decisões/contabilidade essenciais mantêm a reserva entre 160 e 200 GB, sem
+transformar capturas recusadas em dados financeiros. Sem rearme da baseline,
+ordens provocadas ou redefinição de sessões. Atualizar API/migration seletivamente;
+para partida do worker, validar mount, recursos e preservar PG/web/gateway/auth.
+Rollback de binário conserva migration 0050/dados e contém o coletor antes de
+retornar a v1/v2, cujos tetos/prazos continuam mais restritos.
+
+## Histórico de admissão no host existente
+
+**Piloto histórico aprovado em 28/09:** perfil temporário raw/lógico/físico 4/16/12 GiB,
 até seis horas com prazo absoluto. Ver [autorização](../ops/DEVELOPMENT_AUTHORIZATION.md)
 e [preflight](ganso-2-capacity-plan.md). Quotas SQL preservadas limitam o lógico
 efetivo a 12 GiB; `limits` no health mostra o perfil e `effective_limits` mostra

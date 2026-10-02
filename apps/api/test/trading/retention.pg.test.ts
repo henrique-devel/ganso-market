@@ -82,6 +82,64 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     await fixture?.dispose();
   });
 
+  it("atomically refuses a capture crossing 160 GB while preserving HOLD and evidence", async () => {
+    await storeRetentionObject(pool, object("budget-evidence"));
+    await pinRetentionObject(pool, "budget-pin", "budget-evidence", "preserve");
+    await fixture.pool.query(
+      "UPDATE btc_retention_policy SET total_bytes=159999999999",
+    );
+    const before = await retentionCapacity(pool);
+    expect(before).toMatchObject({
+      raw_quota_bytes: "200000000000",
+      total_quota_bytes: "200000000000",
+      storage_limit_bytes: "200000000000",
+      storage_stop_bytes: "160000000000",
+      hold: true,
+      nonessentialBlocked: false,
+    });
+    await expect(
+      storeRetentionObject(pool, object("crossing-stop")),
+    ).rejects.toThrow("CAPACITY_REFUSED");
+    expect(await retentionCapacity(pool)).toEqual(before);
+    expect(await ids()).toEqual(["budget-evidence"]);
+    expect(
+      (await fixture.pool.query("SELECT object_id FROM btc_retention_pins"))
+        .rows,
+    ).toEqual([{ object_id: "budget-evidence" }]);
+    await fixture.pool.query(
+      "UPDATE btc_retention_policy SET total_bytes=160000000000",
+    );
+    expect((await retentionCapacity(pool)).nonessentialBlocked).toBe(true);
+    await expect(
+      storeRetentionObject(pool, object("at-stop", "bar")),
+    ).rejects.toThrow("CAPACITY_REFUSED");
+    // Essential closure can use the 20% reserve, but cannot cross 200 GB.
+    await storeRetentionObject(
+      pool,
+      object("closure", "financial", ["budget-evidence"]),
+    );
+    await fixture.pool.query(
+      "UPDATE btc_retention_policy SET total_bytes=199999999999",
+    );
+    await expect(
+      storeRetentionObject(pool, object("over-hard-budget", "financial")),
+    ).rejects.toThrow("CAPACITY_REFUSED");
+    expect((await retentionCapacity(pool)).total_bytes).toBe("199999999999");
+  });
+
+  it("also stops on allocated storage at 160 GB with a small logical corpus", async () => {
+    // Disposable fixture only: emulate relation allocation without allocating 160 GB.
+    await fixture.pool.query(
+      "CREATE OR REPLACE FUNCTION btc_storage_allocated_bytes() RETURNS BIGINT LANGUAGE SQL STABLE AS 'SELECT 160000000000::bigint'",
+    );
+    expect((await retentionCapacity(pool)).nonessentialBlocked).toBe(true);
+    await expect(
+      storeRetentionObject(pool, object("physical-stop")),
+    ).rejects.toThrow("CAPACITY_REFUSED");
+    expect(await ids()).toEqual([]);
+    expect((await retentionCapacity(pool)).total_bytes).toBe("0");
+  });
+
   it("reads committed capacity while a decision owns the writer fence, without bypassing capture quota", async () => {
     const before = await retentionCapacity(pool);
     const decision = await fixture.pool.connect();

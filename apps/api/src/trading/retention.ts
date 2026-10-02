@@ -1,12 +1,15 @@
 /** G2-02.4. New BTC paper storage only; no legacy table names or live path. */
+export const BTC_STORAGE_LIMIT_BYTES = 200_000_000_000n;
+export const BTC_STORAGE_STOP_BYTES = 160_000_000_000n;
 export const BTC_RETENTION_POLICY = Object.freeze({
   version: "btc-retention-v1",
   datasetId: "btc-paper-v1",
   rawDays: 7,
-  rawQuotaBytes: 10n * 1024n ** 3n,
+  rawQuotaBytes: BTC_STORAGE_LIMIT_BYTES,
   barMonths: 12,
   logDays: 14,
-  totalQuotaBytes: 12n * 1024n ** 3n,
+  totalQuotaBytes: BTC_STORAGE_LIMIT_BYTES,
+  storageStopBytes: BTC_STORAGE_STOP_BYTES,
   maxBatch: 500,
 });
 export type RetentionClass =

@@ -4,6 +4,8 @@ import {
   inspectBtcWorkerConfig,
   PILOT_LIMITS,
   PILOT_PROFILE,
+  STORAGE_PROFILE,
+  STORAGE_LIMITS,
 } from "../src/btc/collector-policy.js";
 import {
   assertCollectorCapacity,
@@ -130,5 +132,84 @@ describe("explicit bounded BTC collector pilot", () => {
     ).toMatchObject({
       logical: { remaining_seconds: 7200, bytes_per_hour: GiB },
     });
+  });
+});
+
+describe("200 GB budget with collection stop at 80%", () => {
+  const budgetConfig = {
+    schema_version: 3,
+    execution_mode: "paper",
+    enabled: true,
+    capacity_profile: STORAGE_PROFILE,
+  };
+  const budgetSample: CapacitySample = {
+    ...sample,
+    rawBytes: "20000000000",
+    totalBytes: "30000000000",
+    physicalBytes: "18000000000",
+    rawQuotaBytes: "200000000000",
+    totalQuotaBytes: "200000000000",
+    physicalQuotaBytes: "200000000000",
+    storageStopBytes: "160000000000",
+  };
+  it("requires the approved profile and refuses a custom budget or hidden pilot deadline", () => {
+    expect(inspectBtcWorkerConfig(budgetConfig)).toEqual({
+      enabled: true,
+      storageProfile: STORAGE_PROFILE,
+    });
+    for (const delta of [
+      { capacity_profile: "unbounded" },
+      { limitBytes: 300000000000 },
+      { starts_at: config.starts_at },
+      { execution_mode: "live" },
+    ]) {
+      expect(() =>
+        inspectBtcWorkerConfig({ ...budgetConfig, ...delta }),
+      ).toThrow("INVALID_CONFIG");
+    }
+  });
+  it.each(["rawBytes", "totalBytes", "physicalBytes"] as const)(
+    "accepts capacity beyond the old caps and stops at exactly 160 GB in %s",
+    (key) => {
+      expect(() =>
+        assertCollectorCapacity(
+          { ...budgetSample, [key]: "159999999999" },
+          STORAGE_LIMITS,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        assertCollectorCapacity(
+          { ...budgetSample, [key]: "160000000000" },
+          STORAGE_LIMITS,
+        ),
+      ).toThrow("STORAGE_LIMIT");
+    },
+  );
+  it("uses 160 GB for the horizon and honors a lower SQL quota", () => {
+    const before = { ...budgetSample, totalBytes: "150000000000" };
+    const after = { ...budgetSample, totalBytes: "151000000000" };
+    expect(
+      collectorHorizon(before, after, 3600_000, STORAGE_LIMITS),
+    ).toMatchObject({
+      logical: { remaining_seconds: 32400, bytes_per_hour: 1000000000 },
+    });
+    expect(() =>
+      assertCollectorCapacity(
+        { ...after, totalQuotaBytes: "150000000000" },
+        STORAGE_LIMITS,
+      ),
+    ).toThrow("STORAGE_LIMIT");
+    expect(() =>
+      assertCollectorCapacity(
+        { ...after, storageStopBytes: "0" },
+        STORAGE_LIMITS,
+      ),
+    ).toThrow("CAPACITY_UNKNOWN");
+    expect(() =>
+      assertCollectorCapacity(
+        { ...after, diskAvailableBytes: "80000000000" },
+        STORAGE_LIMITS,
+      ),
+    ).toThrow("DISK_RESERVE");
   });
 });

@@ -1,3 +1,8 @@
+import {
+  BTC_STORAGE_LIMIT_BYTES,
+  BTC_STORAGE_STOP_BYTES,
+} from "../trading/retention.js";
+
 export type CollectorLimits = Readonly<{
   intervalMs: number;
   diskReserveBytes: number;
@@ -28,7 +33,24 @@ export type CollectorPilot = {
   starts_at: string;
   stops_at: string;
 };
-export type BtcWorkerConfig = { enabled: boolean; pilot?: CollectorPilot };
+export const STORAGE_PROFILE = "btc-storage-200gb-80pct.v1";
+export const STORAGE_BUDGET = Object.freeze({
+  profile: STORAGE_PROFILE,
+  limitBytes: BTC_STORAGE_LIMIT_BYTES.toString(),
+  stopBytes: BTC_STORAGE_STOP_BYTES.toString(),
+  stopPercent: 80,
+});
+export const STORAGE_LIMITS: CollectorLimits = Object.freeze({
+  ...COLLECTOR_LIMITS,
+  rawBytes: Number(BTC_STORAGE_STOP_BYTES),
+  totalBytes: Number(BTC_STORAGE_STOP_BYTES),
+  physicalBytes: Number(BTC_STORAGE_STOP_BYTES),
+});
+export type BtcWorkerConfig = {
+  enabled: boolean;
+  pilot?: CollectorPilot;
+  storageProfile?: typeof STORAGE_PROFILE;
+};
 
 export function inspectBtcWorkerConfig(value: unknown): BtcWorkerConfig {
   const fail = (): never => {
@@ -41,6 +63,15 @@ export function inspectBtcWorkerConfig(value: unknown): BtcWorkerConfig {
   if (v.schema_version === 1) {
     if (Object.keys(v).some((key) => !fields.includes(key))) fail();
     return { enabled: v.enabled as boolean };
+  }
+  if (v.schema_version === 3) {
+    fields.push("capacity_profile");
+    if (
+      v.capacity_profile !== STORAGE_PROFILE ||
+      Object.keys(v).some((key) => !fields.includes(key))
+    )
+      fail();
+    return { enabled: v.enabled as boolean, storageProfile: STORAGE_PROFILE };
   }
   if (v.schema_version !== 2 || v.capacity_profile !== PILOT_PROFILE) fail();
   fields.push("capacity_profile", "starts_at", "stops_at");

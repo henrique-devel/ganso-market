@@ -1,6 +1,6 @@
 # Retenção do corpus BTC novo — G2-02.4
 
-Contrato `btc-retention-v1`, conjunto fechado `btc-paper-v1`, migration 0027.
+Contrato `btc-retention-v1`, conjunto fechado `btc-paper-v1`, migrations 0027/0050.
 As quatro tabelas `btc_retention_{policy,objects,dependencies,pins}` começam
 vazias, exceto a política com `hold=true`. Nenhuma tabela legada é consultada
 ou alterada pelo executor. Não importar o corpus legado para esse conjunto.
@@ -22,7 +22,7 @@ o consumidor deve manter o envelope original nas retransmissões.
 
 | Classe | TTL UTC / proteção |
 | --- | --- |
-| `raw` | 7 dias desde `recordedAt`; quota de 10 GiB, incluindo raw protegido |
+| `raw` | 7 dias desde `recordedAt`; orçamento 200 GB/trava 160 GB, incluindo raw protegido |
 | `bar` | 12 meses de calendário desde `recordedAt` |
 | `log` | 14 dias desde `recordedAt` |
 | `decision`, `financial` | Permanentes, com todas as dependências transitivas |
@@ -35,14 +35,17 @@ essas referências. `pinRetentionObject` é idempotente pelo ID e conteúdo do p
 Não há unpin, redução de evidência nem mudança de classe/TTL em uma linha existente.
 
 O PostgreSQL calcula o custo conservador do JSON/envelope, mais 1 KiB por objeto
-e 1 KiB por referência; o cliente não informa bytes confiáveis. O orçamento total
-de 12 GiB também limita barras/logs. A ocupação física das três tabelas de dados
-(incluindo índices/TOAST) bloqueia admissão aos 14 GiB, mesmo após poda sem reclaim.
-São tetos sobre o armazenamento já provisionado, não reserva de disco ou expansão.
-`retentionCapacity` expõe quota, ocupação, HOLD e `nonessentialBlocked`.
-Somente reduzir quotas é permitido nessa versão; acompanhar a margem real do host
-antes de ativar o feed. Evidência financeira/decisões continua gravável acima do
-teto lógico e sua resposta sinaliza `nonessentialBlocked=true`.
+e 1 KiB por referência; o cliente não informa bytes confiáveis. A autorização de
+02/10 e migration 0050 substituem os tetos antigos por **200 GB decimais**, com
+recusa de captura aos **160 GB (80%)**, tanto lógicos quanto físicos. O físico
+inclui seis relações BTC e índices/TOAST, mesmo após poda sem reclaim. Raw usa
+esse mesmo orçamento. São tetos sobre o armazenamento provisionado, sem expansão.
+`retentionCapacity` expõe quotas, orçamento/trava, ocupação, HOLD e
+`nonessentialBlocked`. Quotas SQL menores continuam possíveis como contenção.
+Evidência financeira/decisões pode usar a reserva de 20% acima da trava para
+fechamento/contabilidade, mas não ultrapassar o orçamento de 200 GB. Não podar
+nem desligar HOLD pela mudança; avaliar redução ou novo procedimento no futuro.
+
 
 Escritas usam a mesma trava transacional que pins e poda. `BTC_RETENTION_CAPACITY_REFUSED`
 recusa a captura inteira, sem remoção de pins, redução de payload ou escrita parcial.
