@@ -28,15 +28,14 @@ async function capacity(tx: SqlExecutor) {
     total_bytes: string;
     raw_quota_bytes: string;
     total_quota_bytes: string;
+    storage_limit_bytes: string;
+    storage_stop_bytes: string;
     allocated_bytes: string;
   }>(
     `SELECT policy_version, hold, raw_bytes::text, total_bytes::text,
       raw_quota_bytes::text, total_quota_bytes::text,
-      (pg_total_relation_size('btc_retention_objects') + pg_total_relation_size('btc_retention_dependencies')
-        + pg_total_relation_size('btc_retention_pins')
-        + COALESCE(pg_total_relation_size(to_regclass('btc_market_records')),0)
-        + COALESCE(pg_total_relation_size(to_regclass('btc_market_bars')),0)
-        + COALESCE(pg_total_relation_size(to_regclass('btc_market_head')),0))::text AS allocated_bytes
+      storage_limit_bytes::text, storage_stop_bytes::text,
+      btc_storage_allocated_bytes()::text AS allocated_bytes
       FROM btc_retention_policy WHERE dataset_id = $1`,
     [policy.datasetId],
   );
@@ -48,7 +47,9 @@ async function capacity(tx: SqlExecutor) {
     nonessentialBlocked:
       BigInt(row.raw_bytes) >= BigInt(row.raw_quota_bytes) ||
       BigInt(row.total_bytes) >= BigInt(row.total_quota_bytes) ||
-      BigInt(row.allocated_bytes) >= 14n * 1024n ** 3n,
+      BigInt(row.total_bytes) >= BigInt(row.storage_stop_bytes) ||
+      BigInt(row.raw_bytes) >= BigInt(row.storage_stop_bytes) ||
+      BigInt(row.allocated_bytes) >= BigInt(row.storage_stop_bytes),
   };
 }
 export async function retentionCapacity(pool: StorePool) {

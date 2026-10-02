@@ -30,6 +30,8 @@ import {
   assertPilotActive,
   inspectBtcWorkerConfig,
   PILOT_LIMITS,
+  STORAGE_LIMITS,
+  STORAGE_BUDGET,
 } from "./btc/collector-policy.js";
 export { inspectBtcWorkerConfig } from "./btc/collector-policy.js";
 
@@ -78,7 +80,11 @@ export async function runBtcWorker() {
     );
     return;
   }
-  const limits = config.pilot ? PILOT_LIMITS : COLLECTOR_LIMITS;
+  const limits = config.storageProfile
+    ? STORAGE_LIMITS
+    : config.pilot
+      ? PILOT_LIMITS
+      : COLLECTOR_LIMITS;
   // Refuse an expired/replayed window before opening a pool or a public feed.
   try {
     assertPilotActive(config.pilot, Date.now());
@@ -120,6 +126,7 @@ export async function runBtcWorker() {
         metadata_http: metadataPoll?.status(),
         limits,
         pilot: config.pilot ?? null,
+        storage_budget: config.storageProfile ? STORAGE_BUDGET : null,
       }),
     );
   let collector: ReturnType<typeof createCollector> | undefined;
@@ -171,7 +178,8 @@ export async function runBtcWorker() {
         physicalBytes: retention.allocated_bytes,
         rawQuotaBytes: retention.raw_quota_bytes,
         totalQuotaBytes: retention.total_quota_bytes,
-        physicalQuotaBytes: String(14 * 1024 ** 3),
+        physicalQuotaBytes: retention.storage_limit_bytes,
+        storageStopBytes: retention.storage_stop_bytes,
         databaseBytes: row.database_bytes as string,
         walLsn: row.wal_lsn as string,
         connections: row.used as number,

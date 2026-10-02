@@ -1,5 +1,21 @@
 # Autorização contínua de desenvolvimento e entrega
 
+## Armazenamento BTC — autorização de 02/10/2026
+
+O proprietário determinou: “então esquece esse quota logica vamos fazer o seguinte
+traz o limite para 200gb quando chegar em 80% desse limite a gente trava e analisa
+no futuro como reduzir ou o que fazer”. Substitui os tetos antigos de armazenamento
+pelo orçamento de **200 GB decimais (200.000.000.000 B)**, com parada de coleta e
+recusa de novas capturas aos **160 GB (80%)**, tanto lógicos quanto físicos.
+Raw usa o mesmo orçamento, sem manter o teto anterior menor. A margem de 20%
+permite registros essenciais de fechamento/contabilidade, sujeitos ao teto total.
+Manter HOLD, pins, corpus, auth/sessões, risco, orçamento CPU/RAM/conexões e piso
+de disco livre; não podar, rearmar ou contratar recursos por esta decisão.
+Redução/otimização será analisada depois da trava, conforme pedido. A retomada
+contínua é decisão separada da configuração do orçamento; a autorização anterior
+cobria somente o piloto concluído. Fluxo de código/testes/PR/merge/deploy autorizado.
+As seções de pilotos abaixo são históricas quanto aos tetos, sem renovar seus prazos.
+
 ## Piloto G2-12.3 — autorização de 02/10/2026
 
 O proprietário autorizou expressamente: “Autorizado o Piloto de 30minutos cuidado para
