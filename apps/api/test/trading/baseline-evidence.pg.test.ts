@@ -59,7 +59,10 @@ describe.skipIf(!url)(
       await f.pool.query("ANALYZE btc_retention_objects");
       await f.pool.query("ANALYZE btc_market_records");
       await f.pool.query("ANALYZE btc_market_bars");
-    }, 30000);
+      // Bulk fixture preparation exercises all six physical-storage guards.
+      // Shared CI runners can need >30 s for 65k inserts; this is not the read
+      // performance gate below (statement_timeout remains 1500 ms).
+    }, 60000);
     afterAll(async () => {
       await f?.dispose();
     });
