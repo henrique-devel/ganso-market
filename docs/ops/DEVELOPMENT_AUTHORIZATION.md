@@ -1,5 +1,22 @@
 # Autorização contínua de desenvolvimento e entrega
 
+## Coleta contínua BTC — autorização de 02/10/2026
+
+O proprietário autorizou expressamente: “Autorizado a coleta continua”. Autoriza
+retomar e manter o coletor público BTC/Hyperliquid em paper, no perfil v3
+`btc-storage-200gb-80pct.v1`, sem prazo de piloto. Aplicam-se o orçamento de
+200 GB decimais e a parada aos 160 GB (80%) já aprovados abaixo. Esta decisão
+substitui a pendência de autorização de retomada e os prazos dos pilotos históricos;
+não exige comprovação prévia de 90 dias para esta partida autorizada. O aceite de
+estabilidade/econômico continua separado e não é presumido pela ativação.
+
+Partida seletiva do coletor e observação inicial autorizadas, preservando os
+processos de API/web/gateway/PG e as sessões. Manter HOLD, pins, corpus, guards,
+CPU/RAM/pools, piso de disco e `restart=no`; uma parada terminal não renova
+automaticamente a coleta. Ao atingir a trava, parar e analisar redução ou novo
+procedimento conforme a decisão anterior. Sem poda, rearme de baseline, ordens,
+capital/live, contratação ou nova automação por consequência desta autorização.
+
 ## Armazenamento BTC — autorização de 02/10/2026
 
 O proprietário determinou: “então esquece esse quota logica vamos fazer o seguinte
@@ -12,8 +29,8 @@ permite registros essenciais de fechamento/contabilidade, sujeitos ao teto total
 Manter HOLD, pins, corpus, auth/sessões, risco, orçamento CPU/RAM/conexões e piso
 de disco livre; não podar, rearmar ou contratar recursos por esta decisão.
 Redução/otimização será analisada depois da trava, conforme pedido. A retomada
-contínua é decisão separada da configuração do orçamento; a autorização anterior
-cobria somente o piloto concluído. Fluxo de código/testes/PR/merge/deploy autorizado.
+contínua foi autorizada posteriormente na seção acima; a decisão de orçamento
+por si só não retomou o piloto concluído. Fluxo de código/testes/PR/merge/deploy autorizado.
 As seções de pilotos abaixo são históricas quanto aos tetos, sem renovar seus prazos.
 
 ## Piloto G2-12.3 — autorização de 02/10/2026
