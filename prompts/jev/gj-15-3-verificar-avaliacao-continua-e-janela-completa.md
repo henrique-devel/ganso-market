@@ -7,7 +7,7 @@ operational_gates: []
 mode: observacao
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+context: etapa-operacional-separada
 ---
 
 # Verificar avaliação contínua e janela completa
@@ -38,7 +38,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Consultar resultados contínuos de paper/stress/live e o avaliador rolling. Fechar avaliação completa só com 90d/99%/60 episódios por conta, custos JEV completos e margin 5pp sobre melhor benchmark. Se faltar tempo/dado, registrar observing/inconclusivo e condição para próxima leitura; sem esperar 90d nesta sessão, tuning ou agendamento automático.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 

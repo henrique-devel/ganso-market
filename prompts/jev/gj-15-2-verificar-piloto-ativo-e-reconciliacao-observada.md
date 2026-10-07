@@ -7,7 +7,7 @@ operational_gates: ["Piloto efetivamente ativado pelo operador e admitido"]
 mode: observacao
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+context: etapa-operacional-separada
 ---
 
 # Verificar piloto ativo e reconciliação observada
@@ -38,7 +38,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Quando o piloto já estiver ativado e admitido, verificar um recorte breve das operações reais, fills/fees/funding, proteção, saldo e HWM. Comparar real/paper/stress sem misturar evidências. Corrigir defeito delimitado com pausa/reconciliação/rollout seguro; não abrir trade só para produzir prova, ampliar banca ou rearmar DD pelo agente.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 

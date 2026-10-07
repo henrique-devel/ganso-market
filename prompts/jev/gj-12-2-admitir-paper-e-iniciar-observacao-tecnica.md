@@ -7,7 +7,7 @@ operational_gates: ["Readiness real GJ12.1 cumprida","Cobertura/tarifa JEV exist
 mode: ativacao-paper
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+context: etapa-operacional-separada
 ---
 
 # Admitir paper e iniciar observação técnica
@@ -38,7 +38,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Revalidar gates efetivos e cobertura JEV antes de iniciar o motor paper com três pares e geração por demanda. Ativação paper, restart seletivo e configuração estão autorizados neste escopo quando os gates forem cumpridos. Registrar início imutável da observação de sete dias; executar checagem breve de ciclo/proteção. Se faltar recurso/cobertura, publicar o que estiver validado e deixar ativação pendente.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 

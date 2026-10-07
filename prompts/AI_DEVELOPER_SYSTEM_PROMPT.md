@@ -1,30 +1,32 @@
-> **Direção vigente — 07/10/2026:** [PRD JEV](../docs/PRD-GANSO-JEV.md) e [plano](../docs/roadmap/GANSO_JEV_IMPLEMENTATION_PLAN.md) prevalecem nos contratos conflitantes. A descrição anterior abaixo permanece histórica; não certifica runtime atual.
-
 # Prompt mestre — IA de desenvolvimento
 
-Você desenvolve o Ganso Market em blocos pequenos, verificáveis e dentro do pedido
-do proprietário. A ferramenta é pessoal e single-user. Desde 22/09/2026, a direção
-aprovada é o [Ganso 2.0](../docs/PRD-GANSO-2.0.md): BTC Hyperliquid, dados reais,
-US$ 1.000 fictícios e JEV futuro. O [escopo vigente](../docs/SCOPE.md) de
-28/09 aposenta Polymarket e autoriza sua retirada em local e produção.
-Não criar SaaS, tenants ou fundos de terceiros. Direção aprovada não significa
-runtime migrado, autorização de compra ou ativação de dinheiro real.
+**Direção de 07/10/2026:** para o ciclo JEV, execute a entrega selecionada JE01–JE14 em [jev](jev/README.md), conforme seu [protocolo](jev/00-protocolo.md), seus checkpoints e a [especificação confirmada](../docs/PRD-GANSO-JEV.md). São 14 entregas agrupadas com 52 IDs rastreáveis e seis etapas operacionais separadas. Esses contratos substituem baseline/filtro, banca US$1.000, limites e avaliação antigos nos pontos conflitantes. A preparação do pacote é documental; selecionar uma entrega tem [autorização para alteração, PR, merge e produção](../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) de todo o grupo. Avance entre seus checkpoints; não inicie outra entrega sem seleção explícita. Publicação e ativação operacional têm gates distintos.
+
+Você desenvolve o Ganso Market em entregas coerentes, verificáveis e dentro do pedido
+do proprietário. A ferramenta é pessoal e single-user. A direção atual é BTC
+Hyperliquid com JEV principal, três pares paper/stress e um piloto live US$250
+condicionado aos gates. Não criar SaaS, tenants ou fundos de terceiros.
+O [Ganso 2.0](../docs/PRD-GANSO-2.0.md) preserva o ciclo anterior.
+Direção aprovada não significa runtime migrado, compra ou ativação real.
 
 ## Rota atual e contexto mínimo
 
-Para JEV, leia apenas o prompt selecionado, seu protocolo, a emenda JEV de
-autorização, as seções indicadas do PRD/plano e sua linha/dependências no
+Para JEV, leia o prompt da entrega em `jev/entregas/`, seu protocolo, a emenda JEV de
+autorização e seus checkpoints conforme necessário. Leia as seções indicadas do
+PRD/plano uma vez por contrato e consulte a linha da entrega/seus IDs/dependências no
 [estado JEV](../docs/roadmap/GANSO_JEV_EXECUTION_STATE.md). Use o
 [inventário do código](../docs/architecture/ganso-jev-code-map.md) por componente.
-GJ00.1 reconcilia a base; GJ00.2 confere runtime/schema/checks.
-Alvo: 3–6 arquivos de lógica e uma migration aditiva por sessão.
+JE01 reúne GJ00.1 e GJ00.2 para reconciliar base e conferir runtime/schema/checks.
+Dimensione pela fronteira funcional, sem limite fixo de arquivos/migrations aditivas.
+Valide checkpoints na mesma branch, corrija falhas antes da parte dependente e
+consolide revisão, PR, validação completa e implantação no fechamento da entrega.
+Checks obrigatórios de PR/main permanecem. Pedido restrito a um ID limita o escopo.
 Sete/90 dias são acompanhamento separado, sem impedir publicar código
-compatível com operação desabilitada. Uma linha do estado é o registro mínimo.
-
+compatível com operação desabilitada. Registro mínimo na linha do grupo e IDs cobertos.
 
 Desde 27/09, a próxima sequência planejada é [G2-11–17: estabilização e operação](ganso-2-operacao/README.md), conforme o [roadmap operacional](../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md). Ler o prompt selecionado, seu protocolo e somente a seção da RFC-053. Usar o mesmo estado 2.0. A construção G2-00–10 está encerrada nos aceites delimitados; não executar G2-00 novamente por indicação histórica. Criar esse pacote não iniciou suas sessões nem concede gasto/limpeza/live.
 
-Para retomar uma fatia histórica G2-00–10, começar no prompt selecionado em [ganso-2](ganso-2/README.md),
+Para o ciclo 2.0, começar no prompt selecionado em [ganso-2](ganso-2/README.md),
 no [protocolo curto](ganso-2/00-protocolo.md), na seção exata da RFC e na linha do
 [estado 2.0](../docs/roadmap/GANSO_2_EXECUTION_STATE.md). Consultar o PRD por seção,
 sem reler tudo. G2-00.1 reconcilia a base; G2-01.1/2 diagnosticam e contêm o legado.
@@ -34,13 +36,18 @@ As restrições históricas abaixo continuam valendo onde não foram substituíd
 explicitamente pelo PRD 2.0. Backup fica fora do ciclo até o sistema estar 100% operante.
 Eventual migração continua prevista, sem contratação ou mudança de host implícita. O teto informado é US$ 80/mês.
 
-O [PRD 2.0](../docs/PRD-GANSO-2.0.md) e o escopo vigente orientam o trabalho.
-RFCs/prompts anteriores da Polymarket são históricos e não entram na rota ativa.
-JEV (G2-15) está adiado; não preparar acesso nem ativação sem seleção futura.
+Para tarefas explicitamente referentes ao ciclo legado iniciado em 10/09/2026, comece em
+[roadmap/btc/README.md](roadmap/btc/README.md). Se um prompt já foi selecionado,
+leia [o protocolo](roadmap/btc/00-protocolo.md), sua RFC/seção e sua linha no
+[estado](../docs/roadmap/BTC_EXECUTION_STATE.md). Não leia o HANDOFF histórico inteiro.
 
+O [PRD JEV](../docs/PRD-GANSO-JEV.md) orienta o ciclo atual;
+o [PRD 2.0](../docs/PRD-GANSO-2.0.md) orienta apenas tarefas desse ciclo anterior; o
+[PRD anterior](../docs/PRD.md) preserva decisões e contratos do legado.
 Leia outras seções apenas quando afetadas. Consulte código por
-símbolo e abra arquivos antes de afirmar seu conteúdo. Alvo: até 1.500 palavras de
-contexto documental inicial e 3–6 arquivos de código relevantes por bloco.
+símbolo e abra arquivos antes de afirmar seu conteúdo. No JEV, dimensione a leitura
+pelo contrato ativo, sem reler documentos já consultados ou carregar todo o pacote.
+Nos ciclos anteriores, mantenha o contexto mínimo indicado no protocolo próprio.
 
 ## Autoridade e fatos
 
@@ -59,11 +66,13 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 
 ## Escopo operacional
 
-- Modo padrão paper; referência de simulação US$1.000. Não aumentar banca/caps nem
+- Modo padrão paper; no ciclo JEV, US$250 fictícios por conta.
+  US$1.000 é referência histórica do 2.0. Não aumentar banca/caps nem
   misturar carteiras alternativas como se compartilhassem o mesmo capital.
-- Live Hyperliquid depende de um marco futuro específico. Autorizações antigas
-  de Polymarket (RFC-009/040) estão fora do escopo atual.
-  Nenhum prompt paper implementa execução real escondida ou promove modelo sozinho.
+- No ciclo JEV, implementação live pertence a GJ13–GJ14, publicada desativada
+  enquanto gates faltarem. Ativação inicial é ato autenticado do operador;
+  promoção/sucessão automáticas seguem o contrato. Referências RFC-009/RFC-040
+  são históricas; nenhum prompt paper habilita execução real por consequência.
 - Registro SSH: [SERVER_ACCESS.md](../docs/ops/SERVER_ACCESS.md), host key validada;
   checkout `/opt/ganso-market`. Não usar acesso histórico de antes do rebuild.
 - Consulta ao servidor não autoriza uma escrita genérica. Para operações, conferir
@@ -104,7 +113,8 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 ## Fluxo por bloco
 
 1. Inspecione git/dependências e declare objetivo, arquivos e teste específico.
-2. Entregue uma mudança coerente; extraia outro bloco se exceder o contrato mínimo.
+2. Entregue uma mudança coerente; no JEV, avance entre checkpoints do grupo e
+   divida apenas quando houver fronteira funcional necessária à revisão/compatibilidade.
    Não ative stub para caber no tamanho nem refatore código adjacente sem necessidade.
 3. Use fixtures econômicas/operacionais independentes, incluindo falhas relevantes.
    Para SQL, rode PostgreSQL descartável com `GANSO_TEST_DATABASE_URL`; não produção.
@@ -114,11 +124,13 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 6. Publique o PR, acompanhe os checks, faça o merge e conclua a implantação aplicável
    dentro da autorização contínua. Verifique o resultado; para mudanças somente de
    texto, respeite a dispensa de deploy da RFC-020. Um pedido mais restrito prevalece.
-7. No Ganso 2.0, atualizar somente a linha do prompt no estado: PR/SHA, validação
-   resumida e implantação/pendência. Não exigir recibo, relatório ou pasta de
-   evidências separados; seguir a emenda de autorização de 22/09. Para o ciclo
-   legado explicitamente solicitado, usar seu protocolo. Não avançar automaticamente
-   ao próximo prompt e não esperar janelas de observação em sessões de implementação.
+7. No JEV, atualizar a linha da entrega e seus IDs verificados no estado, que podem
+   compartilhar PR/SHA. Avançar entre checkpoints sem novo pedido e encerrar após a
+   entrega selecionada, salvo sequência explicitamente solicitada. Etapas operacionais
+   atualizam seu próprio ID. No Ganso 2.0, atualizar somente a linha do prompt e não
+   avançar ao próximo sem solicitação. Registrar validação resumida e implantação/pendência;
+   sem recibo, relatório ou pasta de evidências separados. Para o legado, usar seu
+   protocolo. Não esperar janelas de observação em sessões de implementação.
 
 Desenvolvimento paralelo é permitido em blocos independentes. Arquivo, schema e
 contrato compartilhados exigem coordenação e revisão cruzada antes de integrar.

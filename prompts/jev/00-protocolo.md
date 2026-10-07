@@ -1,20 +1,21 @@
-# Protocolo das sessões JEV
+# Protocolo de execução das entregas JEV
 
-Execute somente o prompt selecionado em [índice](README.md). O pacote divide GJ00–GJ15 em 52 sessões; criar o pacote não executa suas entregas. A [especificação vigente](../../docs/PRD-GANSO-JEV.md) prevalece sobre baseline/filtro e banca US$1.000 do ciclo antigo.
+O [índice](README.md) organiza 14 entregas JE01–JE14 com 46 checkpoints de código/diagnóstico e seis etapas operacionais próprias; os 52 IDs GJ e seus aceites permanecem. Execute a entrega ou etapa selecionada, avançando internamente sem novo pedido. A preparação documental não inicia implementação. A [especificação vigente](../../docs/PRD-GANSO-JEV.md) prevalece sobre baseline/filtro e banca US$1.000 do ciclo antigo.
 
 ## Autonomia e contexto
 
-A [autorização do proprietário](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) cobre alteração e implementação, branch `codex/`, commit/push, criação/correção do PR, merge após revisão/checks/proteções e publicação em produção do escopo selecionado, sem reconfirmação por etapa. Inclui migrations aditivas, configuração, quiescência reversível e restart seletivo previstos. Publicar código e ativar operação são resultados distintos.
+A [autorização JEV](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) cobre alteração, branch `codex/`, commit/push, criação/correção/revisão do PR, merge após checks/proteções e implantação seletiva de todo o grupo. Inclui migrations aditivas, configuração, quiescência reversível e restart previstos. Selecionar um grupo autoriza continuar seus checkpoints, sem novo pedido por ID. Pedido restrito a um ID limita o escopo. Outra entrega exige seleção, salvo sequência expressamente solicitada. Não criar chats/agentes/agendamentos automaticamente.
 
-Leia este protocolo, a emenda de autorização, a linha do prompt e dependências no [estado](../../docs/roadmap/GANSO_JEV_EXECUTION_STATE.md), uma seção do plano e somente as seções do PRD indicadas. Consulte o [inventário](../../docs/architecture/ganso-jev-code-map.md) por componente se precisar localizar símbolos. Alvo de leitura documental inicial: 1.500 palavras, expandindo somente o contrato necessário. Não carregar todos os prompts, RFCs ou histórico da conversa. O prompt é o roteiro; código e runtime verificados são os fatos.
+Leia uma vez o prompt da entrega, este protocolo e a emenda de autorização; consulte sua linha/IDs/dependências no [estado](../../docs/roadmap/GANSO_JEV_EXECUTION_STATE.md). Abra checkpoints e seções PRD/plano à medida que precisar de seus contratos/aceites. Consulte o [inventário](../../docs/architecture/ganso-jev-code-map.md) por componente e código por símbolo. Sem teto documental arbitrário nem leitura de todo o pacote: reutilize contexto pertinente já disponível. Código e runtime verificados são os fatos.
 
-Comece conferindo raiz, branch, base e delta. A árvore inicial tinha trabalho BTC não rastreado; SHA isolado não comprova seu conteúdo. Preserve alterações alheias. Reutilize trabalho integrado e use checkout isolado quando necessário. Não fazer reset/stash destrutivo nem incluir o delta alheio no PR.
+Comece conferindo raiz, branch, base e delta. A árvore inicial tinha trabalho BTC não rastreado; SHA isolado não comprova seu conteúdo. Preserve alterações alheias, reutilize trabalho integrado e use checkout isolado quando necessário. Não fazer reset/stash destrutivo nem incluir delta alheio no PR.
 
-`depends_on` indica contratos/código disponíveis, verificáveis no commit ou PR integrado. Uma linha planejada não invalida código já existente comprovado. Gates operacionais só condicionam ativação/qualificação; não impedem desenvolver/publicar código desabilitado. Sete e 90 dias são observação do produto, sem manter uma sessão aberta aguardando.
+`depends_on` continua obrigatório por checkpoint. Dependências externas devem estar integradas ou comprovadas na base; dependências internas podem ser validadas na mesma branch antes da parte seguinte, sem PR/merge intermediário. Uma linha planejada não invalida código já existente comprovado. Gates operacionais condicionam ativação/qualificação, sem impedir código desativado. Sete/90 dias e 60 episódios são observação real do produto; não manter sessão de código aguardando.
 
-Alvo por sessão: 3–6 arquivos de lógica e até uma migration aditiva; testes, contratos e registro podem complementar. Se uma fronteira for maior, conclua a menor unidade funcional segura e deixe a continuação delimitada na mesma linha, sem stub operacional nem falso aceite. Não iniciar outro prompt, chat ou agente automaticamente.
+O tamanho segue a fronteira funcional, sem limite fixo de arquivos/migrations aditivas. Use checkpoints pequenos dentro da entrega, teste os comportamentos críticos e corrija falhas antes da parte dependente. Divida uma entrega apenas quando necessário à revisão/compatibilidade; registre continuação e mantenha o grupo aberto até todos os aceites. Sem stub operacional ou falso aceite. Código, ledger, respostas JEV e métricas continuam requisitos do produto.
 
 ## Contratos comuns
+
 
 - BTC Hyperliquid perps, operador único; três perfis paper com stress independente e US$250 fictícios por conta. Primeiro ciclo com horizontes 1/3/5 minutos; horizonte não é cadência nem permanência obrigatória.
 - No máximo um piloto live de US$250 reais totais, isolated 1x, patrimônio/HWM persistentes entre sucessores. Sem aporte, reset, pirâmide, aumento, reversão automática ou expansão para moedas.
@@ -32,14 +33,16 @@ Alvo por sessão: 3–6 arquivos de lógica e até uma migration aditiva; testes
 
 ## Verificar e entregar
 
-Inspecione antes de alterar; escolha detalhes rotineiros dentro dos contratos, registre/versione antes do experimento e prossiga. Para APIs externas, confira documentação oficial atual. Em conflito material de capital, orçamento ou produto não decidido, conclua o trabalho independente e peça somente a decisão faltante.
+Inspecione antes de alterar; escolha detalhes rotineiros dentro dos contratos e versione antes do experimento. Confira documentação oficial atual para APIs externas. Se houver conflito material de capital, orçamento ou produto não decidido, conclua o trabalho independente e peça somente a decisão faltante.
 
-Teste comportamentos do aceite e falhas relevantes, sem testes espelho ou suíte repetida sem motivo. SQL em PostgreSQL descartável com o harness existente; nunca produção. Confira comandos e CI da base; `make verify` e checks obrigatórios devem passar antes do merge. Teste pulado não é aprovado.
+Durante a implementação, execute testes específicos do delta e falhas relevantes, com resultados financeiros calculados independentemente. SQL exige PostgreSQL descartável com o harness existente; nunca produção. Preserve testes de isolamento, reserva/ledger, cancel/fill, restart, proteção parcial e singleton. Não repetir a suíte completa entre checkpoints sem nova alteração/falha que justifique.
 
-Revise diff/segredos/compatibilidade; crie PR, acompanhe checks, corrija, faça merge e publique o componente afetado. Anexe qualquer PR criado à tarefa. Verifique versão/saúde/persistência/proteções. Só texto segue dispensa de deploy; leitura sem delta não exige PR vazio.
+No fechamento da entrega, execute `make verify`, `make test-postgres` e verificações exigidas na base reconciliada; checks obrigatórios de PR/main e integração Compose permanecem antes da publicação aplicável. Teste pulado não é aprovado. Resultado de revisão ou ambiente diferente não comprova o delta atual. JE01 registra a baseline; leitura sem delta não exige PR vazio e só texto segue dispensa de deploy.
 
-Migration aplicada/eventos são imutáveis. Reversão usa versão compatível, pausa entradas, preserva proteção e reconcilia; nunca desfaz schema apagando dados. Preserve auth/perímetro/identidade SSH e segredos. Não force gates ou bypass.
+Prefira um PR coerente por entrega; revise contratos/diff/segredos/compatibilidade, acompanhe checks, corrija, faça merge e publique os componentes afetados. Anexe todo PR criado à tarefa. Verifique versão/saúde/persistência/proteções do que foi publicado. A redução de repetições vem do agrupamento, sem bypass de checks/proteções.
 
-Ativação paper só no prompt próprio com capacidade/cobertura efetivas. Testnet delimitada segue GJ13.5. Operação real exige gates e ativação inicial autenticada do operador; não clicar pelo humano, depositar, armar signer ou aumentar limites por publicar código. Sucessão posterior automatizada respeita o contrato. Não criar agendamento ou enviar mensagens externas sem pedido.
+Migration aplicada/eventos são imutáveis. Reversão usa versão compatível, pausa entradas, preserva proteção e reconcilia; nunca desfaz schema apagando dados. Preserve auth/perímetro/identidade SSH/segredos. Não ampliar quota, descartar protegido ou criar backup fora do escopo vigente.
 
-Atualize apenas a linha selecionada do estado e encerre: mudança, PR/SHA, validação observada, publicação ou pendência concreta. Sem recibo, relatório ou screenshots obrigatórios. Dados financeiros e respostas JEV continuam requisitos do produto.
+Ativação paper é selecionada separadamente em GJ12.2 com capacidade/cobertura/custo efetivos. Qualificação técnica observada é GJ12.3. Testnet delimitada é GJ13.5. Operação real exige gates e ato inicial autenticado do operador; não clicar pelo humano, depositar, armar signer ou aumentar limites por publicar código. Sucessão posterior automatizada respeita o contrato. Não criar agendamento ou enviar mensagens externas sem pedido.
+
+Atualize apenas a linha da entrega e seus IDs verificados no estado; eles podem compartilhar PR/SHA. Em etapa operacional, atualize só seu ID. Registre validação, publicação/gate pendente e, na interrupção, base/branch, delta e próximo checkpoint. Marque o grupo concluído somente com todos os aceites cobertos e fechamento observado. Sem recibo, relatório ou screenshots obrigatórios. Encerre após o escopo selecionado.

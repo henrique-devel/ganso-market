@@ -7,7 +7,7 @@ operational_gates: ["GJ12.3 operational-qualified","GJ13.5 venue-verified","Eleg
 mode: observacao
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+context: etapa-operacional-separada
 ---
 
 # Conferir readiness do piloto e ativação pelo operador
@@ -38,7 +38,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Conferir estados efetivos: motor e venue qualificados, perfil 60+60/99%/positivo após JEV, custos/risco/posição reconciliados e capital admitido. Preparar resultado pronto para o operador ou motivos pendentes. Reconhecer ativação somente se registrada por ação autenticada do operador; não efetuar clique, depósito ou habilitação em seu lugar.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 

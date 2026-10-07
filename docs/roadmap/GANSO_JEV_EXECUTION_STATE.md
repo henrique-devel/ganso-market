@@ -1,68 +1,91 @@
-# Estado de execução das sessões JEV
+# Estado de execução das entregas JEV
 
-Pacote preparado em 07/10/2026. **Todas as sessões estão planejadas**; a tabela não certifica código, deploy, qualificação ou operação. O [índice](../../prompts/jev/README.md) contém os prompts, dependências e ordem. Não alterar estados do ciclo Ganso 2.0 por consequência deste pacote.
+Formato aprovado em **07/10/2026**: 14 entregas agrupadas, 52 IDs rastreáveis e seis etapas operacionais próprias. A preparação do formato não executou os checkpoints; as linhas abaixo registram somente os aceites e publicações efetivamente observados, sem certificar qualificação ou operação por consequência. O [índice](../../prompts/jev/README.md) contém os prompts/dependências. Não alterar estados do ciclo Ganso 2.0 por consequência deste pacote.
 
 ## Como atualizar
 
-Atualizar somente a linha da sessão executada: estado de entrega, PR/SHA se houver, uma frase de validação/contrato e implantação ou gate pendente. Sem recibo ou relatório separado. Registrar reaproveitamento quando o aceite já estiver comprovado.
+Atualize apenas a linha da entrega selecionada e seus checkpoints efetivamente verificados: estado, PR/SHA quando houver, validação resumida e publicação/gate pendente. Um PR/SHA pode cobrir vários IDs. Na etapa operacional, atualize só seu ID. Registre reaproveitamento quando o aceite já estiver comprovado; sem recibo ou relatório separado.
 
-Entrega: `planned`, `in-progress`, `code-verified`, `merged`, `deployed`, `blocked` ou `not-applicable`. Observação: `not-started`, `observing`, `operational-qualified`, `venue-verified`, `ready-for-operator`, `active`, `inconclusive` ou `failed`. São dimensões distintas: código publicado pode continuar com operação não admitida.
+Entrega: `planned`, `in-progress`, `code-verified`, `merged`, `deployed`, `blocked` ou `not-applicable`. Observação: `not-started`, `observing`, `operational-qualified`, `venue-verified`, `ready-for-operator`, `active`, `inconclusive` ou `failed`. Código publicado pode continuar com operação não admitida.
 
-Dependência de código é confirmada por contrato/commit/PR integrado, não por qualificação econômica. Um gate pendente não impede desenvolver os componentes seguintes compatíveis. Sete/90 dias e elegibilidade têm comprovação própria; nunca marcar por fixture. Se houver bloqueio real, indicar condição mínima para retomada.
+O grupo só alcança seu estado de fechamento quando todos os IDs tiverem aceite comprovado ou reaproveitamento/não aplicação justificados e a revisão/integração/publicação correspondente tiver sido observada. Não propagar aprovação a IDs pendentes. PR, checks completos e implantação são consolidados por entrega; testes específicos continuam entre checkpoints.
 
-## Sessões
+Dependências externas são confirmadas por contratos/commits/PRs integrados ou código já comprovado na base. Dependências internas podem ser validadas na mesma branch. Gate pendente não impede código compatível desativado. Sete dias/60 episódios/90 dias exigem comprovação própria, sem fixtures como observação real.
 
-| ID | Entrega | PR ou SHA | Validação e contrato | Publicação ou pendência operacional |
-| --- | --- | --- | --- | --- |
-| [GJ00.1](../../prompts/jev/gj-00-1-reconciliar-a-base-de-trabalho.md) | merged | [PR 333](https://github.com/henrique-devel/ganso-market/pull/333), `e79910c60a7687735f98bab7e06b5a5380b43d79` | Em 07/10/2026: raiz interna/HEAD `d04875a`, main/base `01d0e6d`; checkout isolado, status/hashes das 484 entradas locais preservados. Pacote JEV importado seletivamente; BTC/contratos/migrations até 0050 já integrados, sem reexecutar baseline/Polymarket. 798 links/âncoras sem ausências, 41 testes do classificador, scan/diff OK; [CI 37664353356](https://github.com/henrique-devel/ganso-market/actions/runs/37664353356) aprovou make verify, PostgreSQL descartável e Compose. | Publicação documental integrada na main; classificador `deploy=false` (62 arquivos de texto), deploy de serviços dispensado. Nenhuma alteração de runtime/config/schema nem medição atual de saúde/capacidade/qualificação; registros de setembro/02-10 históricos. GJ00.2 e gates operacionais permanecem não avaliados nesta sessão. |
-| [GJ00.2](../../prompts/jev/gj-00-2-conferir-runtime-schema-e-checks-da-base.md) | planned | — | Não executada | not-started |
-| [GJ01.1](../../prompts/jev/gj-01-1-versionar-contratos-de-perfis-e-contas.md) | planned | — | Não executada | not-started |
-| [GJ01.2](../../prompts/jev/gj-01-2-adaptar-genese-e-replay-ao-capital-explicito.md) | planned | — | Não executada | not-started |
-| [GJ01.3](../../prompts/jev/gj-01-3-persistir-registro-de-perfis-e-pares-de-contas.md) | planned | — | Não executada | not-started |
-| [GJ02.1](../../prompts/jev/gj-02-1-computar-contexto-e-manifestos-iniciais.md) | planned | — | Não executada | not-started |
-| [GJ02.2](../../prompts/jev/gj-02-2-fixar-gatilhos-cadencia-e-contrato-de-saidas.md) | planned | — | Não executada | not-started |
-| [GJ02.3](../../prompts/jev/gj-02-3-definir-evidencia-minima-e-retencao-protegida.md) | planned | — | Não executada | not-started |
-| [GJ02.4](../../prompts/jev/gj-02-4-admitir-viabilidade-inicial-de-capacidade-e-jev.md) | planned | — | Não executada | not-started |
-| [GJ03.1](../../prompts/jev/gj-03-1-definir-escolhas-jev-e-vinculo-por-conta.md) | planned | — | Não executada | not-started |
-| [GJ03.2](../../prompts/jev/gj-03-2-persistir-pools-e-reserva-de-custo-jev.md) | planned | — | Não executada | not-started |
-| [GJ03.3](../../prompts/jev/gj-03-3-integrar-transporte-de-lotes-por-perfil.md) | planned | — | Não executada | not-started |
-| [GJ03.4](../../prompts/jev/gj-03-4-registrar-decisoes-e-replay-das-respostas-originais.md) | planned | — | Não executada | not-started |
-| [GJ04.1](../../prompts/jev/gj-04-1-aplicar-limites-persistentes-por-conta.md) | planned | — | Não executada | not-started |
-| [GJ04.2](../../prompts/jev/gj-04-2-dimensionar-entradas-com-stop-e-tolerancia-nativa.md) | planned | — | Não executada | not-started |
-| [GJ04.3](../../prompts/jev/gj-04-3-persistir-supervisor-global-do-piloto.md) | planned | — | Não executada | not-started |
-| [GJ05.1](../../prompts/jev/gj-05-1-unificar-contratos-de-liquidez-maker-e-ioc.md) | planned | — | Não executada | not-started |
-| [GJ05.2](../../prompts/jev/gj-05-2-implementar-cotacao-chegada-e-fila-maker.md) | planned | — | Não executada | not-started |
-| [GJ05.3](../../prompts/jev/gj-05-3-integrar-cancelamento-parcial-e-saida-ioc.md) | planned | — | Não executada | not-started |
-| [GJ06.1](../../prompts/jev/gj-06-1-extrair-supervisor-de-protecao-dos-perfis.md) | planned | — | Não executada | not-started |
-| [GJ06.2](../../prompts/jev/gj-06-2-separar-worker-de-execucao-da-api.md) | planned | — | Não executada | not-started |
-| [GJ06.3](../../prompts/jev/gj-06-3-integrar-cadencias-e-descartar-decisoes-obsoletas.md) | planned | — | Não executada | not-started |
-| [GJ07.1](../../prompts/jev/gj-07-1-separar-despesa-real-e-custo-de-avaliacao.md) | planned | — | Não executada | not-started |
-| [GJ07.2](../../prompts/jev/gj-07-2-publicar-pnl-e-resultado-conservador.md) | planned | — | Não executada | not-started |
-| [GJ07.3](../../prompts/jev/gj-07-3-construir-referencias-caixa-e-btc-protegido.md) | planned | — | Não executada | not-started |
-| [GJ08.1](../../prompts/jev/gj-08-1-contar-episodios-e-medir-cobertura-real.md) | planned | — | Não executada | not-started |
-| [GJ08.2](../../prompts/jev/gj-08-2-avaliar-elegibilidade-inicial-e-estados-do-perfil.md) | planned | — | Não executada | not-started |
-| [GJ08.3](../../prompts/jev/gj-08-3-implementar-avaliacao-rolling-de-90-dias.md) | planned | — | Não executada | not-started |
-| [GJ09.1](../../prompts/jev/gj-09-1-generalizar-registro-e-dispatch-de-tres-perfis.md) | planned | — | Não executada | not-started |
-| [GJ09.2](../../prompts/jev/gj-09-2-integrar-stress-prospectivo-independente.md) | planned | — | Não executada | not-started |
-| [GJ09.3](../../prompts/jev/gj-09-3-validar-carga-e-ciclo-integrado-dos-pares.md) | planned | — | Não executada | not-started |
-| [GJ10.1](../../prompts/jev/gj-10-1-exibir-perfis-pnl-e-limites.md) | planned | — | Não executada | not-started |
-| [GJ10.2](../../prompts/jev/gj-10-2-exibir-decisoes-protecao-e-custos-separados.md) | planned | — | Não executada | not-started |
-| [GJ10.3](../../prompts/jev/gj-10-3-implementar-controles-de-pausa-e-emergencia.md) | planned | — | Não executada | not-started |
-| [GJ11.1](../../prompts/jev/gj-11-1-persistir-propostas-fingerprints-e-uma-mudanca.md) | planned | — | Não executada | not-started |
-| [GJ11.2](../../prompts/jev/gj-11-2-gerar-por-vaga-e-validar-coerencia-com-jev.md) | planned | — | Não executada | not-started |
-| [GJ11.3](../../prompts/jev/gj-11-3-criar-fila-curta-editavel-pelo-operador.md) | planned | — | Não executada | not-started |
-| [GJ11.4](../../prompts/jev/gj-11-4-admitir-sucessoras-paper-apos-encerramento.md) | planned | — | Não executada | not-started |
-| [GJ12.1](../../prompts/jev/gj-12-1-implementar-readiness-e-evidencia-de-qualificacao.md) | planned | — | Não executada | not-started |
-| [GJ12.2](../../prompts/jev/gj-12-2-admitir-paper-e-iniciar-observacao-tecnica.md) | planned | — | Não executada | not-started |
-| [GJ12.3](../../prompts/jev/gj-12-3-verificar-qualificacao-observada-do-motor.md) | planned | — | Não executada | not-started |
-| [GJ13.1](../../prompts/jev/gj-13-1-preparar-fronteira-autenticada-do-adaptador-live.md) | planned | — | Não executada | not-started |
-| [GJ13.2](../../prompts/jev/gj-13-2-reconciliar-posicoes-ordens-fills-e-funding-da-venue.md) | planned | — | Não executada | not-started |
-| [GJ13.3](../../prompts/jev/gj-13-3-submeter-alo-e-ioc-com-recibos-idempotentes.md) | planned | — | Não executada | not-started |
-| [GJ13.4](../../prompts/jev/gj-13-4-instalar-protecao-nativa-desde-o-primeiro-parcial.md) | planned | — | Não executada | not-started |
-| [GJ13.5](../../prompts/jev/gj-13-5-validar-o-adaptador-em-ambiente-controlado-da-venue.md) | planned | — | Não executada | not-started |
-| [GJ14.1](../../prompts/jev/gj-14-1-implementar-promocao-condicionada-e-singleton-live.md) | planned | — | Não executada | not-started |
-| [GJ14.2](../../prompts/jev/gj-14-2-criar-ativacao-explicita-do-piloto-no-painel.md) | planned | — | Não executada | not-started |
-| [GJ14.3](../../prompts/jev/gj-14-3-implementar-sucessao-live-somente-por-reprovacao.md) | planned | — | Não executada | not-started |
-| [GJ15.1](../../prompts/jev/gj-15-1-conferir-readiness-do-piloto-e-ativacao-pelo-operador.md) | planned | — | Não executada | not-started |
-| [GJ15.2](../../prompts/jev/gj-15-2-verificar-piloto-ativo-e-reconciliacao-observada.md) | planned | — | Não executada | not-started |
-| [GJ15.3](../../prompts/jev/gj-15-3-verificar-avaliacao-continua-e-janela-completa.md) | planned | — | Não executada | not-started |
+Na interrupção, mantenha o grupo aberto e registre base/branch, IDs validados, delta, falhas, próximo checkpoint e condição mínima para retomada na linha existente. Diagnóstico sem delta dispensa PR vazio; `not-applicable` não dispensa aceite nem inventa publicação.
+
+## Entregas agrupadas
+
+| Entrega | IDs cobertos | Estado | PR ou SHA | Validação e retomada | Publicação ou pendência operacional |
+| --- | --- | --- | --- | --- | --- |
+| [JE01](../../prompts/jev/entregas/je-01-base-reconciliada.md) | GJ00.1, GJ00.2 | code-verified | Base `f037d57e33712d58c3f0c7561147c502b614948a`; branch `codex/je01-base-reconciliada`; PR pendente | Em 07/10/2026: GJ00.1 reaproveitado dos PRs 333/334; formato agrupado reconciliado sem copiar código local. GJ00.2: ambiente macOS arm64, Node 26.4.0/npm 11.17.0/Python 3.9.6, make verify e Compose isolado aprovados; PostgreSQL descartável 18.4: 28 arquivos/389 testes aprovados, zero falhas/omissões. 1.028 links/âncoras válidos, 14 grupos/52 IDs; 484 entradas locais/731 hashes preservados. | Somente texto; classificador dispensa deploy de serviços. Produção observada às 18:47 UTC: API paper ready, migrations 1–50 idênticas à base, flat/sem reservas, JEV off. Coletor parado desde 02/10; causa atual BTC_COLLECTOR_WRITE_OR_CAPACITY_FAILED exige diagnóstico antes de admissão GJ12.2. Sem ativação/qualificação. |
+| [JE02](../../prompts/jev/entregas/je-02-contratos-e-manifestos.md) | GJ01.1, GJ01.2, GJ01.3, GJ02.1, GJ02.2 | planned | — | Não executada | not-started |
+| [JE03](../../prompts/jev/entregas/je-03-retencao-e-viabilidade.md) | GJ02.3, GJ02.4 | planned | — | Não executada | not-started |
+| [JE04](../../prompts/jev/entregas/je-04-decisao-jev-integrada.md) | GJ03.1, GJ03.2, GJ03.3, GJ03.4 | planned | — | Não executada | not-started |
+| [JE05](../../prompts/jev/entregas/je-05-risco-e-dimensionamento.md) | GJ04.1, GJ04.2, GJ04.3 | planned | — | Não executada | not-started |
+| [JE06](../../prompts/jev/entregas/je-06-execucao-e-protecao.md) | GJ05.1, GJ05.2, GJ05.3, GJ06.1 | planned | — | Não executada | not-started |
+| [JE07](../../prompts/jev/entregas/je-07-worker-e-cadencias.md) | GJ06.2, GJ06.3 | planned | — | Não executada | not-started |
+| [JE08](../../prompts/jev/entregas/je-08-contabilidade-e-referencias.md) | GJ07.1, GJ07.2, GJ07.3 | planned | — | Não executada | not-started |
+| [JE09](../../prompts/jev/entregas/je-09-avaliacao-continua.md) | GJ08.1, GJ08.2, GJ08.3 | planned | — | Não executada | not-started |
+| [JE10](../../prompts/jev/entregas/je-10-perfis-simultaneos.md) | GJ09.1, GJ09.2, GJ09.3 | planned | — | Não executada | not-started |
+| [JE11](../../prompts/jev/entregas/je-11-painel-e-prontidao.md) | GJ10.1, GJ10.2, GJ10.3, GJ12.1 | planned | — | Não executada | not-started |
+| [JE12](../../prompts/jev/entregas/je-12-gerador-e-fila.md) | GJ11.1, GJ11.2, GJ11.3, GJ11.4 | planned | — | Não executada | not-started |
+| [JE13](../../prompts/jev/entregas/je-13-adaptador-live-e-protecao-nativa.md) | GJ13.1, GJ13.2, GJ13.3, GJ13.4 | planned | — | Não executada | not-started |
+| [JE14](../../prompts/jev/entregas/je-14-promocao-e-sucessao.md) | GJ14.1, GJ14.2, GJ14.3 | planned | — | Não executada | not-started |
+
+## Checkpoints e etapas operacionais
+
+| ID | Grupo | Entrega | PR ou SHA | Validação e contrato | Publicação ou pendência operacional |
+| --- | --- | --- | --- | --- | --- |
+| [GJ00.1](../../prompts/jev/gj-00-1-reconciliar-a-base-de-trabalho.md) | JE01 | code-verified | [PR 333](https://github.com/henrique-devel/ganso-market/pull/333), `e79910c60a7687735f98bab7e06b5a5380b43d79`; [PR 334](https://github.com/henrique-devel/ganso-market/pull/334), `f037d57e33712d58c3f0c7561147c502b614948a` | Reaproveitada reconciliação integrada em 07/10/2026: raiz interna/HEAD original d04875a; base de implementação f037d57 em checkout isolado. Preservadas 484 entradas locais/731 hashes; runtime BTC, contratos, migrations até 0050 e correções documentais já entregues. Delta próprio: formato agrupado aprovado, sem reexecutar BTC/Polymarket nem substituir fatos atuais por texto local antigo. 1.028 links/âncoras válidos; 14 grupos e 52 IDs; demais estados preservados. | PR do delta agrupado pendente; publicação só documental, sem reconstruir serviços. Registros de setembro/02-10 mantidos históricos; medições atuais somente em GJ00.2. |
+| [GJ00.2](../../prompts/jev/gj-00-2-conferir-runtime-schema-e-checks-da-base.md) | JE01 | code-verified | Base `f037d57e33712d58c3f0c7561147c502b614948a`; branch `codex/je01-base-reconciliada`; PR pendente | Leitura SSH com identidade fixada em 07/10/2026, 18:47–18:49 UTC: API/release 23c11573, web 84a92af5; diffs de componentes confirmam compatibilidade com main. PostgreSQL 18.4, 50 checksums idênticos à base; 2 contas paper, 6 eventos ledger, 0 posições abertas/0 reservas ativas/0 recovery bloqueado, 2 controles paper previamente habilitados, 4.227 pins e triggers append-only presentes. Disco disponível 286,23 GB/322,30 GB (88,8%); MemAvailable 14,82 GB, swap 0; banco 11,77 GB, retenção lógica 15,17 GB/raw 2,86 GB; orçamento 200 GB/parada 160 GB mantidos. make verify: 791 testes TS e 89 Python aprovados; 388 PG separados do gate rápido; Compose isolado aprovado, PG descartável: 28 arquivos/389 testes, zero falhas/omissões. | API/web/PG saudáveis; somente gateway IPv4:80 publicado. JEV sem configuração/credencial, off; coletor v3 configurado enabled mas exited(1) desde 02/10, motivo BTC_COLLECTOR_WRITE_OR_CAPACITY_FAILED; engine parado/migrate exit 0. Capacidade pontual não admite três perfis nem comprova cobertura/economia. PR documental pendente; nenhuma alteração de runtime/schema/quota/HOLD/pins/perímetro ou ativação. |
+| [GJ01.1](../../prompts/jev/gj-01-1-versionar-contratos-de-perfis-e-contas.md) | JE02 | planned | — | Não executada | not-started |
+| [GJ01.2](../../prompts/jev/gj-01-2-adaptar-genese-e-replay-ao-capital-explicito.md) | JE02 | planned | — | Não executada | not-started |
+| [GJ01.3](../../prompts/jev/gj-01-3-persistir-registro-de-perfis-e-pares-de-contas.md) | JE02 | planned | — | Não executada | not-started |
+| [GJ02.1](../../prompts/jev/gj-02-1-computar-contexto-e-manifestos-iniciais.md) | JE02 | planned | — | Não executada | not-started |
+| [GJ02.2](../../prompts/jev/gj-02-2-fixar-gatilhos-cadencia-e-contrato-de-saidas.md) | JE02 | planned | — | Não executada | not-started |
+| [GJ02.3](../../prompts/jev/gj-02-3-definir-evidencia-minima-e-retencao-protegida.md) | JE03 | planned | — | Não executada | not-started |
+| [GJ02.4](../../prompts/jev/gj-02-4-admitir-viabilidade-inicial-de-capacidade-e-jev.md) | JE03 | planned | — | Não executada | not-started |
+| [GJ03.1](../../prompts/jev/gj-03-1-definir-escolhas-jev-e-vinculo-por-conta.md) | JE04 | planned | — | Não executada | not-started |
+| [GJ03.2](../../prompts/jev/gj-03-2-persistir-pools-e-reserva-de-custo-jev.md) | JE04 | planned | — | Não executada | not-started |
+| [GJ03.3](../../prompts/jev/gj-03-3-integrar-transporte-de-lotes-por-perfil.md) | JE04 | planned | — | Não executada | not-started |
+| [GJ03.4](../../prompts/jev/gj-03-4-registrar-decisoes-e-replay-das-respostas-originais.md) | JE04 | planned | — | Não executada | not-started |
+| [GJ04.1](../../prompts/jev/gj-04-1-aplicar-limites-persistentes-por-conta.md) | JE05 | planned | — | Não executada | not-started |
+| [GJ04.2](../../prompts/jev/gj-04-2-dimensionar-entradas-com-stop-e-tolerancia-nativa.md) | JE05 | planned | — | Não executada | not-started |
+| [GJ04.3](../../prompts/jev/gj-04-3-persistir-supervisor-global-do-piloto.md) | JE05 | planned | — | Não executada | not-started |
+| [GJ05.1](../../prompts/jev/gj-05-1-unificar-contratos-de-liquidez-maker-e-ioc.md) | JE06 | planned | — | Não executada | not-started |
+| [GJ05.2](../../prompts/jev/gj-05-2-implementar-cotacao-chegada-e-fila-maker.md) | JE06 | planned | — | Não executada | not-started |
+| [GJ05.3](../../prompts/jev/gj-05-3-integrar-cancelamento-parcial-e-saida-ioc.md) | JE06 | planned | — | Não executada | not-started |
+| [GJ06.1](../../prompts/jev/gj-06-1-extrair-supervisor-de-protecao-dos-perfis.md) | JE06 | planned | — | Não executada | not-started |
+| [GJ06.2](../../prompts/jev/gj-06-2-separar-worker-de-execucao-da-api.md) | JE07 | planned | — | Não executada | not-started |
+| [GJ06.3](../../prompts/jev/gj-06-3-integrar-cadencias-e-descartar-decisoes-obsoletas.md) | JE07 | planned | — | Não executada | not-started |
+| [GJ07.1](../../prompts/jev/gj-07-1-separar-despesa-real-e-custo-de-avaliacao.md) | JE08 | planned | — | Não executada | not-started |
+| [GJ07.2](../../prompts/jev/gj-07-2-publicar-pnl-e-resultado-conservador.md) | JE08 | planned | — | Não executada | not-started |
+| [GJ07.3](../../prompts/jev/gj-07-3-construir-referencias-caixa-e-btc-protegido.md) | JE08 | planned | — | Não executada | not-started |
+| [GJ08.1](../../prompts/jev/gj-08-1-contar-episodios-e-medir-cobertura-real.md) | JE09 | planned | — | Não executada | not-started |
+| [GJ08.2](../../prompts/jev/gj-08-2-avaliar-elegibilidade-inicial-e-estados-do-perfil.md) | JE09 | planned | — | Não executada | not-started |
+| [GJ08.3](../../prompts/jev/gj-08-3-implementar-avaliacao-rolling-de-90-dias.md) | JE09 | planned | — | Não executada | not-started |
+| [GJ09.1](../../prompts/jev/gj-09-1-generalizar-registro-e-dispatch-de-tres-perfis.md) | JE10 | planned | — | Não executada | not-started |
+| [GJ09.2](../../prompts/jev/gj-09-2-integrar-stress-prospectivo-independente.md) | JE10 | planned | — | Não executada | not-started |
+| [GJ09.3](../../prompts/jev/gj-09-3-validar-carga-e-ciclo-integrado-dos-pares.md) | JE10 | planned | — | Não executada | not-started |
+| [GJ10.1](../../prompts/jev/gj-10-1-exibir-perfis-pnl-e-limites.md) | JE11 | planned | — | Não executada | not-started |
+| [GJ10.2](../../prompts/jev/gj-10-2-exibir-decisoes-protecao-e-custos-separados.md) | JE11 | planned | — | Não executada | not-started |
+| [GJ10.3](../../prompts/jev/gj-10-3-implementar-controles-de-pausa-e-emergencia.md) | JE11 | planned | — | Não executada | not-started |
+| [GJ11.1](../../prompts/jev/gj-11-1-persistir-propostas-fingerprints-e-uma-mudanca.md) | JE12 | planned | — | Não executada | not-started |
+| [GJ11.2](../../prompts/jev/gj-11-2-gerar-por-vaga-e-validar-coerencia-com-jev.md) | JE12 | planned | — | Não executada | not-started |
+| [GJ11.3](../../prompts/jev/gj-11-3-criar-fila-curta-editavel-pelo-operador.md) | JE12 | planned | — | Não executada | not-started |
+| [GJ11.4](../../prompts/jev/gj-11-4-admitir-sucessoras-paper-apos-encerramento.md) | JE12 | planned | — | Não executada | not-started |
+| [GJ12.1](../../prompts/jev/gj-12-1-implementar-readiness-e-evidencia-de-qualificacao.md) | JE11 | planned | — | Não executada | not-started |
+| [GJ12.2](../../prompts/jev/gj-12-2-admitir-paper-e-iniciar-observacao-tecnica.md) | Operacional | planned | — | Não executada | not-started |
+| [GJ12.3](../../prompts/jev/gj-12-3-verificar-qualificacao-observada-do-motor.md) | Operacional | planned | — | Não executada | not-started |
+| [GJ13.1](../../prompts/jev/gj-13-1-preparar-fronteira-autenticada-do-adaptador-live.md) | JE13 | planned | — | Não executada | not-started |
+| [GJ13.2](../../prompts/jev/gj-13-2-reconciliar-posicoes-ordens-fills-e-funding-da-venue.md) | JE13 | planned | — | Não executada | not-started |
+| [GJ13.3](../../prompts/jev/gj-13-3-submeter-alo-e-ioc-com-recibos-idempotentes.md) | JE13 | planned | — | Não executada | not-started |
+| [GJ13.4](../../prompts/jev/gj-13-4-instalar-protecao-nativa-desde-o-primeiro-parcial.md) | JE13 | planned | — | Não executada | not-started |
+| [GJ13.5](../../prompts/jev/gj-13-5-validar-o-adaptador-em-ambiente-controlado-da-venue.md) | Operacional | planned | — | Não executada | not-started |
+| [GJ14.1](../../prompts/jev/gj-14-1-implementar-promocao-condicionada-e-singleton-live.md) | JE14 | planned | — | Não executada | not-started |
+| [GJ14.2](../../prompts/jev/gj-14-2-criar-ativacao-explicita-do-piloto-no-painel.md) | JE14 | planned | — | Não executada | not-started |
+| [GJ14.3](../../prompts/jev/gj-14-3-implementar-sucessao-live-somente-por-reprovacao.md) | JE14 | planned | — | Não executada | not-started |
+| [GJ15.1](../../prompts/jev/gj-15-1-conferir-readiness-do-piloto-e-ativacao-pelo-operador.md) | Operacional | planned | — | Não executada | not-started |
+| [GJ15.2](../../prompts/jev/gj-15-2-verificar-piloto-ativo-e-reconciliacao-observada.md) | Operacional | planned | — | Não executada | not-started |
+| [GJ15.3](../../prompts/jev/gj-15-3-verificar-avaliacao-continua-e-janela-completa.md) | Operacional | planned | — | Não executada | not-started |

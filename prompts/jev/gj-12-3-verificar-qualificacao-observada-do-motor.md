@@ -7,7 +7,7 @@ operational_gates: []
 mode: observacao
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+context: etapa-operacional-separada
 ---
 
 # Verificar qualificação observada do motor
@@ -37,7 +37,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Consultar a janela real e fechar qualificação somente com sete dias válidos, riscos/recuperação exercitados, capacidade/custos conhecidos e reconciliação. Recuperação permitida sem lacuna não apaga histórico. Se prazo/amostra faltar, registrar observing e data/condição mínima de nova avaliação; não manter sessão aguardando nem criar agendamento sem pedido. Correção material recebe subfatia e novo período conforme contrato.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 
