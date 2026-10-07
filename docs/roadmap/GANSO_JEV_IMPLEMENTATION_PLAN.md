@@ -1,8 +1,8 @@
 # Plano de implementação e implantação do Ganso Market com JEV
 
-Planejamento de **07/10/2026**, baseado na [especificação confirmada](../PRD-GANSO-JEV.md) e na [comparação com a base reconciliada](../architecture/ganso-jev-code-map.md). O objetivo é entregar primeiro um ciclo BTC completo em paper/stress, depois três perfis com operação visual e geração controlada, e então um único piloto live de US$250.
+Planejamento de **07/10/2026**, baseado na [especificação confirmada](../PRD-GANSO-JEV.md) e na [comparação com a árvore local](../architecture/ganso-jev-code-map.md). O objetivo é entregar primeiro um ciclo BTC completo em paper/stress, depois três perfis com operação visual e geração controlada, e então um único piloto live de US$250.
 
-**Estado do plano: preparação documental de 07/10/2026.** O estado de cada sessão é registrado na [tabela de execução](GANSO_JEV_EXECUTION_STATE.md); a publicação deste plano não executa suas fatias. Não há qualificação concluída, gasto contratado, promoção, implantação ou ordem real decorrente deste plano. O [pacote de 52 sessões](../../prompts/jev/README.md) refina os 16 blocos para execução delimitada. Cada prompt selecionado tem [autorização para alteração, PR, merge e produção](../ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco); criar o pacote não manda executá-lo.
+**Estado desta revisão: somente documentação local.** Os 16 blocos GJ00–GJ15 abaixo continuam planejados. O [pacote de execução](../../prompts/jev/README.md) passa a usar **14 entregas agrupadas (JE01–JE14), 52 IDs rastreáveis e seis etapas operacionais separadas**. São 43 checkpoints de código e três diagnósticos nos grupos, além das seis etapas. Selecionar uma entrega tem [autorização para alteração, PR, merge e produção](../ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) de todo seu escopo; preparar o formato não executa implementação, qualificação, compra, promoção ou ordens.
 
 ## Sequência e dependências
 
@@ -31,7 +31,37 @@ flowchart TD
     H --> I
 ```
 
-Cada sessão deve caber em uma entrega coerente, preferencialmente 3–6 arquivos de lógica e uma migration aditiva. O [índice de prompts](../../prompts/jev/README.md) divide os blocos abaixo em contratos menores e separa dependências de código dos gates operacionais. Se um contrato exigir mais, dividir por fronteira funcional antes de ampliar. O plano não exige recibo, pasta de evidência ou suíte completa repetida por sessão: manter apenas sua linha no [estado JEV](GANSO_JEV_EXECUTION_STATE.md), com estado, PR/SHA quando houver, validação resumida e implantação/pendência. Respostas JEV, ledger, fills e métricas são dados do produto, não burocracia de entrega.
+## Execução em 14 entregas
+
+O proprietário aprovou agrupar a execução em **07/10/2026**. Este formato substitui uma sessão/PR por ID e o alvo de 3–6 arquivos/uma migration. Os IDs originais preservam resultado, aceite, verificação e gates; tornam-se checkpoints internos. O tamanho segue a fronteira funcional e a capacidade de revisar/testar a integração. Dependências externas devem estar integradas ou comprovadas na base; dependências internas podem ser verificadas na mesma branch, sem PR intermediário.
+
+| Entrega executável | Checkpoints | Depende de entregas |
+| --- | --- | --- |
+| [JE01 — Base reconciliada](../../prompts/jev/entregas/je-01-base-reconciliada.md) | GJ00.1, GJ00.2 | Nenhuma |
+| [JE02 — Contratos e manifestos](../../prompts/jev/entregas/je-02-contratos-e-manifestos.md) | GJ01.1, GJ01.2, GJ01.3, GJ02.1, GJ02.2 | JE01 |
+| [JE03 — Retenção e viabilidade](../../prompts/jev/entregas/je-03-retencao-e-viabilidade.md) | GJ02.3, GJ02.4 | JE02 |
+| [JE04 — Decisão JEV integrada](../../prompts/jev/entregas/je-04-decisao-jev-integrada.md) | GJ03.1, GJ03.2, GJ03.3, GJ03.4 | JE02 |
+| [JE05 — Risco e dimensionamento](../../prompts/jev/entregas/je-05-risco-e-dimensionamento.md) | GJ04.1, GJ04.2, GJ04.3 | JE02 |
+| [JE06 — Execução e proteção](../../prompts/jev/entregas/je-06-execucao-e-protecao.md) | GJ05.1, GJ05.2, GJ05.3, GJ06.1 | JE05 |
+| [JE07 — Worker e cadências](../../prompts/jev/entregas/je-07-worker-e-cadencias.md) | GJ06.2, GJ06.3 | JE04, JE06 |
+| [JE08 — Contabilidade e referências](../../prompts/jev/entregas/je-08-contabilidade-e-referencias.md) | GJ07.1, GJ07.2, GJ07.3 | JE03, JE07 |
+| [JE09 — Avaliação contínua](../../prompts/jev/entregas/je-09-avaliacao-continua.md) | GJ08.1, GJ08.2, GJ08.3 | JE08 |
+| [JE10 — Perfis simultâneos](../../prompts/jev/entregas/je-10-perfis-simultaneos.md) | GJ09.1, GJ09.2, GJ09.3 | JE09 |
+| [JE11 — Painel e prontidão](../../prompts/jev/entregas/je-11-painel-e-prontidao.md) | GJ10.1, GJ10.2, GJ10.3, GJ12.1 | JE10 |
+| [JE12 — Gerador e fila](../../prompts/jev/entregas/je-12-gerador-e-fila.md) | GJ11.1, GJ11.2, GJ11.3, GJ11.4 | JE11 |
+| [JE13 — Adaptador live e proteção nativa](../../prompts/jev/entregas/je-13-adaptador-live-e-protecao-nativa.md) | GJ13.1, GJ13.2, GJ13.3, GJ13.4 | JE10 |
+| [JE14 — Promoção e sucessão](../../prompts/jev/entregas/je-14-promocao-e-sucessao.md) | GJ14.1, GJ14.2, GJ14.3 | JE12, JE13 |
+
+Dependências do quadro são resumidas transitivamente; `depends_on` de cada checkpoint permanece obrigatório. Uma entrega selecionada executa todos os seus IDs sem novo pedido por parte. Faça testes específicos ao implementar, corrija falhas antes da parte dependente e consolide revisão, PR, validação completa, merge e implantação seletiva no fechamento. Checks obrigatórios de PR/main, PostgreSQL real e integração Compose permanecem; não repetir suíte completa entre checkpoints sem motivo. Prefira um PR coerente; divida somente por fronteira funcional/compatibilidade, mantendo o grupo aberto até todos os aceites.
+
+Leia contratos/seções uma vez e código por símbolo conforme necessário. Registre somente a linha da entrega e seus IDs verificados no [estado JEV](GANSO_JEV_EXECUTION_STATE.md), que podem compartilhar PR/SHA. Se interrompido, mantenha o grupo aberto e registre base/branch, delta, falhas e próximo checkpoint. Sem recibo, pasta de evidência ou relatório extra. Respostas JEV, ledger, fills e métricas são dados do produto.
+
+As etapas **GJ12.2, GJ12.3, GJ13.5 e GJ15.1–3** continuam selecionadas separadamente. Não pertencem ao escopo de código dos grupos. Admissão paper exige prontidão/capacidade/cobertura/custo efetivos; testnet exige conta dedicada existente; qualificação/elegibilidade/ativação autenticada condicionam live. Código desativado pode ser entregue antes desses gates. Sete dias, 60 episódios e 90 dias exigem evidência real.
+
+Após JE02, JE03/JE04/JE05 têm dependências de código independentes. JE07 integra as frentes de JEV e execução. Após JE10, JE11 e JE13 podem avançar separadamente. Partes do gerador podem avançar após JE09, mas JE12 só fecha depois de JE11; respeitar os checkpoints. Se o proprietário solicitar trabalho paralelo, iniciar com até duas frentes coordenadas, arquivos/contratos com dono e migrations sem colisão; integração dos deltas continua serial. Não criar agentes/chats automaticamente.
+
+Após JE11/JE12 e gates reais, selecionar GJ12.2 para iniciar a observação. Desenvolver JE13/JE14 desativados durante essa janela e selecionar GJ13.5 quando admissível. A avaliação completa de 90 dias não acrescenta espera obrigatória ao piloto inicial elegível. Medir duração/checks/retrabalho nas primeiras entregas antes de otimizar o executor PostgreSQL; esta revisão não altera CI nem promete ganho de tempo percentual.
+
 
 ## Base e viabilidade
 
@@ -236,7 +266,7 @@ Infraestrutura fica fora do PnL e da aprovação das estratégias. Seu controle 
 
 ## Implantação por componente
 
-Implantar somente quando um prompt de implementação for selecionado e estiver validado. A autorização JEV cobre alteração, PR, merge e publicação em produção cabíveis. A preparação do pacote permanece documental. Ativar trading, contratar consumo ou ampliar capital é diferente de publicar código.
+Implantar somente quando uma entrega de implementação for selecionada e estiver validada. A autorização JEV cobre alteração, PR, merge e publicação em produção cabíveis. A preparação do pacote permanece documental. Ativar trading, contratar consumo ou ampliar capital é diferente de publicar código.
 
 | Componente | Implantação prevista | Verificação e reversão |
 | --- | --- | --- |
@@ -251,10 +281,10 @@ Não fazer deploy indiscriminado para uniformizar SHAs de serviços compatíveis
 
 ## Verificação e acompanhamento
 
-Cada fatia exige testes proporcionais às mudanças, checks obrigatórios e aceite específico. SQL em banco descartável; não usar produção como suíte de testes. Uma checagem breve confirma o componente publicado; ensaio de sete dias e janela econômica são estados de acompanhamento separados.
+Cada checkpoint exige testes proporcionais às mudanças e aceite específico; revisão, checks completos e publicação são consolidados por entrega. SQL em banco descartável; não usar produção como suíte de testes. Uma checagem breve confirma o componente publicado; ensaio de sete dias e janela econômica são estados de acompanhamento separados.
 
 Os testes existentes estão mapeados no [inventário](../architecture/ganso-jev-code-map.md#testes-existentes-para-reaproveitar). Antes da primeira implementação, levantar a baseline dos checks na base reconciliada. Não converter números históricos de testes de setembro em validação atual.
 
-Quando uma sessão for iniciada, atualizar somente sua linha no [estado JEV](GANSO_JEV_EXECUTION_STATE.md). Estado inicial de todas: **planned**. Entrega de código e observação operacional são dimensões distintas: code-verified/deployed não equivalem a operational-qualified/venue-verified. Preencher somente após verificação efetiva. Esta entrega não muda estados do roadmap antigo nem certifica prontidão.
+Quando uma entrega for iniciada, atualizar sua linha e somente os IDs cobertos no [estado JEV](GANSO_JEV_EXECUTION_STATE.md). Todos continuam **planned** após esta revisão. PR/SHA pode ser compartilhado; registrar apenas aceites e publicações observados. Código validado/publicado não equivale a operational-qualified/venue-verified/active. Etapas operacionais atualizam seus próprios IDs. Não alterar o roadmap antigo.
 
-Primeira sessão recomendada: **somente [GJ00.1](../../prompts/jev/gj-00-1-reconciliar-a-base-de-trabalho.md)**, reconciliando a base. Depois, GJ00.2 confere runtime/schema/checks. Avançar uma sessão por vez conforme dependências verificadas; não executar todo o plano automaticamente.
+Primeira entrega: **[JE01 — Base reconciliada](../../prompts/jev/entregas/je-01-base-reconciliada.md)**, reunindo GJ00.1 e GJ00.2. Depois, selecionar a próxima entrega com dependências verificadas. Avançar entre checkpoints do grupo; outra entrega ou sequência exige seleção explícita. Esta atualização documental não inicia a execução do plano.

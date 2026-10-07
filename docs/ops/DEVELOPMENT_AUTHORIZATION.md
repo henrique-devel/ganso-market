@@ -3,17 +3,26 @@
 ## Ciclo JEV com autonomia por bloco
 
 Em **07/10/2026**, após consolidar o grilling e o plano, o proprietário solicitou
-prompts por bloco, divididos em sessões independentes, com autorização expressa
-para **alteração, merge, PR e publicação em produção**. A preparação deste pacote
-é documental e não manda executar suas sessões.
+prompts com autorização expressa para **alteração, merge, PR e publicação em produção**.
+Na revisão da execução, aprovou **14 entregas agrupadas**, preservando os 52 IDs como
+critérios de aceite e seis etapas operacionais próprias. Essa revisão substitui a
+obrigação de uma sessão/PR por ID e o alvo de 3–6 arquivos. A preparação do formato
+é documental e não inicia suas entregas.
 
-Ao selecionar um prompt em [prompts/jev](../../prompts/jev/README.md), ficam
+Ao selecionar uma entrega JE01–JE14 em [prompts/jev](../../prompts/jev/README.md), ficam
 autorizados inspeção, implementação e correções do escopo, branch `codex/`,
 commit/push, criação/atualização/revisão do PR, acompanhamento dos checks,
 merge após checks/proteções e publicação em produção dos componentes afetados.
 Inclui migrations aditivas, configuração, quiescência reversível e restart
-seletivo previstos no prompt. Concluir essas etapas sem reconfirmação por fase.
-Limitações posteriores do pedido prevalecem; não executar outro bloco automaticamente.
+seletivo previstos nos checkpoints do grupo. Concluir essas etapas sem reconfirmação
+por fase ou checkpoint. Avançar entre os IDs da entrega, respeitando dependências e
+testes específicos; consolidar revisão, PR, checks completos, merge e publicação no
+fechamento do grupo. Dependências internas podem ser verificadas na mesma branch,
+sem PR intermediário. Dependências externas precisam estar integradas ou comprovadas
+na base. Um pedido restrito a um ID ou etapa operacional mantém esse escopo.
+Limitações posteriores prevalecem; não iniciar outra entrega automaticamente,
+salvo pedido explícito que selecione uma sequência. Não criar chats ou agentes por
+consequência desta emenda.
 
 A [especificação JEV](../PRD-GANSO-JEV.md) substitui os contratos antigos
 conflitantes: três pares paper/stress com US$250 fictícios por conta, um piloto
@@ -31,9 +40,11 @@ segredos, ledger, pins e migrations aplicadas. Sem bypass, limpeza genérica ou
 perda de trabalho alheio. A emenda de não exigir backup até o sistema estar
 100% operante permanece; não criar essa frente como pré-requisito.
 
-Registro mínimo: atualizar somente a linha do prompt no
+Registro mínimo: atualizar somente a linha da entrega selecionada e seus IDs cobertos no
 [estado JEV](../roadmap/GANSO_JEV_EXECUTION_STATE.md), com estado, PR/SHA quando
-houver, validação resumida e publicação/gate pendente. Sem recibo, relatório,
+houver, validação resumida e publicação/gate pendente. Um PR/SHA pode cobrir vários
+IDs; marcar cada aceite somente após verificação. Nas etapas operacionais, atualizar
+apenas seu ID. Sem recibo, relatório,
 pasta de evidência ou screenshots obrigatórios. Evidência financeira e respostas
 JEV são dados funcionais do produto. Sete/90 dias são observação própria e não
 impedem desenvolver/publicar os demais componentes compatíveis desativados.

@@ -7,7 +7,7 @@ operational_gates: ["Conta testnet dedicada, identidade validada e fundos de tes
 mode: validacao-venue
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+context: etapa-operacional-separada
 ---
 
 # Validar o adaptador em ambiente controlado da venue
@@ -38,7 +38,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Exercitar adaptador/proteção/reconciliação com fixtures e ensaio testnet delimitado, autorizado por este prompt quando houver conta dedicada, identidade validada e fundos de teste existentes. Conferir ambiente antes de enviar; testnet não é retorno real ou aprovação econômica. Se faltar conta/credencial/fundos de teste, concluir gates locais e registrar validação venue pendente; sem depósito/compra ou uso de mainnet como teste.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 

@@ -7,16 +7,17 @@ operational_gates: []
 mode: codigo
 authorization: alteracoes-pr-merge-producao
 tracking: docs/roadmap/GANSO_JEV_EXECUTION_STATE.md
-context: uma-sessao-escopo-delimitado
+delivery: JE13
+context: checkpoint-da-entrega
 ---
 
 # Preparar fronteira autenticada do adaptador live
 
-Execute somente **GJ13.1**, parte 1 do bloco GJ13. Conclua o resultado abaixo e sua publicação aplicável; encerre sem iniciar outra sessão.
+Checkpoint **GJ13.1** da entrega [JE13 — Adaptador live e proteção nativa](entregas/je-13-adaptador-live-e-protecao-nativa.md). Ao executar a entrega, realize este contrato, valide seu aceite e avance aos próximos checkpoints do grupo. PR, checks completos, merge e publicação são consolidados no fechamento da entrega. Se o proprietário solicitar somente GJ13.1, limite o escopo a este ID.
 
 ## Autorização explícita
 
-Você está expressamente autorizado pelo proprietário a **alterar e implementar** o escopo desta sessão, criar branch `codex/`, commit/push, **criar e corrigir PR**, revisar o diff, acompanhar os checks obrigatórios, fazer **merge** após aprovação dos checks e proteções, e **publicar em produção** os componentes afetados. Inclui migrations aditivas, configuração e restart seletivo necessários. Prossiga sem pedir nova confirmação por etapa; respeite a [autorização registrada](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco).
+Você está expressamente autorizado pelo proprietário a **alterar e implementar** o escopo selecionado deste checkpoint ou de sua entrega, criar branch `codex/`, commit/push, **criar e corrigir PR**, revisar o diff, acompanhar os checks obrigatórios, fazer **merge** após aprovação dos checks e proteções, e **publicar em produção** os componentes afetados. Inclui migrations aditivas, configuração e restart seletivo necessários. Prossiga sem pedir nova confirmação por etapa; respeite a [autorização registrada](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco).
 
 Esta autorização não compra API/infra nem aporta capital. Operação real segue os gates e a ativação autenticada inicial do operador; não a execute em nome dele. Publicar código desabilitado está autorizado enquanto os gates estiverem pendentes.
 
@@ -39,7 +40,7 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 
 Criar adaptador autenticado separado do público/paper, com contratos live versionados, identidades de ambiente/conta, signing protegido, IDs e nonce ownership. Revalidar SDK/API oficiais. Novos módulos são propostos, não código já existente. Credencial nunca entra no frontend/log/fixture; nenhuma submissão é liberada por encontrar chave.
 
-Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Alvo: 3–6 arquivos de lógica e uma migration aditiva; divida uma fronteira maior conforme o protocolo, sem declarar aceite parcial como concluído.
+Escolha detalhes técnicos rotineiros dentro do contrato e versione antes do experimento. Preserve trabalho alheio e contratos históricos. Dimensione pela fronteira funcional, sem limite fixo de arquivos ou migrations aditivas. Valide o comportamento afetado antes de avançar à parte dependente; não declare aceite parcial como concluído.
 
 ## Aceite
 
@@ -53,10 +54,10 @@ Fixtures do transporte/signing boundary, ambiente incorreto, configuração ause
 
 ## Publicação e gates
 
-Publicar adaptador e contratos desativados para operação. Revise o delta, publique PR, faça merge após checks e conclua o deploy aplicável. Verifique versão/saúde/persistência; para reversão, pause entradas, preserve proteção e use código compatível com o schema, sem apagar eventos.
+Publicar adaptador e contratos desativados para operação. Na execução agrupada, consolide revisão, PR, checks completos, merge e deploy aplicável no fechamento da entrega; não publique cada checkpoint separadamente. Verifique versão/saúde/persistência dos componentes publicados; para reversão, pause entradas, preserve proteção e use código compatível com o schema, sem apagar eventos.
 
-Não há gate operacional adicional a cumprir para desenvolver esta sessão; permanecem os controles do protocolo. Observação pendente deve ser registrada, sem manter a sessão esperando.
+Não há gate operacional adicional a cumprir para desenvolver este checkpoint; permanecem os controles do protocolo. Observação pendente deve ser registrada, sem manter a sessão esperando.
 
 ## Fechamento
 
-Atualize somente a linha GJ13.1 no estado: entrega, PR/SHA, validação observada e implantação/gate pendente. Se não houver delta, não crie PR vazio. Relate mudança, verificação e publicação ou bloqueio concreto; não invente teste/deploy/qualificação. Não execute o próximo prompt.
+Registre GJ13.1 no estado somente após verificar seu aceite. Na execução de JE13, continue no grupo e atualize a linha da entrega e seus IDs cobertos no fechamento; o mesmo PR/SHA pode cobrir vários IDs. Se houver continuação, registre o delta e o próximo checkpoint sem marcar o grupo concluído. Sem delta, não crie PR vazio. Relate validação/publicação ou bloqueio observado; não execute outra entrega fora do pedido.
