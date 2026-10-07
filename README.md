@@ -1,3 +1,7 @@
+> **07/10/2026 — direção atual:** [operação contínua com JEV](docs/PRD-GANSO-JEV.md), três perfis paper/stress e um piloto live de US$250, condicionado aos gates. [Plano de implementação e implantação](docs/roadmap/GANSO_JEV_IMPLEMENTATION_PLAN.md) · [comparação com o código atual](docs/architecture/ganso-jev-code-map.md) · [52 prompts por sessão](prompts/jev/README.md) · [estado de execução](docs/roadmap/GANSO_JEV_EXECUTION_STATE.md). O pacote é documental; nenhuma funcionalidade ou operação foi ativada. Cada prompt selecionado autoriza alteração, PR, merge e produção dentro de seu escopo.
+
+> As descrições de implementação, transição e decisões do ciclo anterior abaixo são históricas e não comprovam o estado atual de produção. Polymarket permanece aposentada. A direção acima e o [escopo](docs/SCOPE.md) prevalecem sobre menções antigas a JEV futuro/filtro opcional, banca US$1.000 e preservação de Polymarket.
+
 # Ganso Market
 
 Ferramenta pessoal para pesquisa e operações simuladas de **BTC perpétuo na
