@@ -1,5 +1,47 @@
 # Autorização contínua de desenvolvimento e entrega
 
+## Ciclo JEV com autonomia por bloco
+
+Em **07/10/2026**, após consolidar o grilling e o plano, o proprietário solicitou
+prompts por bloco, divididos em sessões independentes, com autorização expressa
+para **alteração, merge, PR e publicação em produção**. A preparação deste pacote
+é documental e não manda executar suas sessões.
+
+Ao selecionar um prompt em [prompts/jev](../../prompts/jev/README.md), ficam
+autorizados inspeção, implementação e correções do escopo, branch `codex/`,
+commit/push, criação/atualização/revisão do PR, acompanhamento dos checks,
+merge após checks/proteções e publicação em produção dos componentes afetados.
+Inclui migrations aditivas, configuração, quiescência reversível e restart
+seletivo previstos no prompt. Concluir essas etapas sem reconfirmação por fase.
+Limitações posteriores do pedido prevalecem; não executar outro bloco automaticamente.
+
+A [especificação JEV](../PRD-GANSO-JEV.md) substitui os contratos antigos
+conflitantes: três pares paper/stress com US$250 fictícios por conta, um piloto
+live de US$250 reais totais e infraestrutura fora do PnL/aprovação da estratégia.
+Os pools JEV agregados são US$8 operação e US$2 geração/validação por mês.
+Publicar código não contrata API/infra, deposita, aumenta capital ou arma live.
+Ativação paper em GJ12.2 depende de cobertura, capacidade e orçamento existentes.
+GJ13.5 autoriza ensaio testnet delimitado com conta dedicada, identidade válida e
+fundos de teste existentes; não compra ou deposita capital real.
+Live depende dos gates e do ato inicial autenticado do operador; o agente não
+clica em seu lugar. Sucessão automatizada posterior segue o contrato aprovado.
+
+Manter checks/proteções, testes proporcionais, identidade SSH, auth/perímetro,
+segredos, ledger, pins e migrations aplicadas. Sem bypass, limpeza genérica ou
+perda de trabalho alheio. A emenda de não exigir backup até o sistema estar
+100% operante permanece; não criar essa frente como pré-requisito.
+
+Registro mínimo: atualizar somente a linha do prompt no
+[estado JEV](../roadmap/GANSO_JEV_EXECUTION_STATE.md), com estado, PR/SHA quando
+houver, validação resumida e publicação/gate pendente. Sem recibo, relatório,
+pasta de evidência ou screenshots obrigatórios. Evidência financeira e respostas
+JEV são dados funcionais do produto. Sete/90 dias são observação própria e não
+impedem desenvolver/publicar os demais componentes compatíveis desativados.
+
+As permissões efetivas das ferramentas continuam necessárias. Diante de bloqueio
+real, concluir trabalho independente e informar a ação, causa e condição mínima;
+pedir somente informação ou decisão ainda ausente, sem reabrir autorização do fluxo.
+
 ## Coleta contínua BTC — autorização de 02/10/2026
 
 O proprietário autorizou expressamente: “Autorizado a coleta continua”. Autoriza

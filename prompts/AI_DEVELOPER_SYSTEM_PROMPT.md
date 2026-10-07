@@ -1,3 +1,5 @@
+> **Direção vigente — 07/10/2026:** [PRD JEV](../docs/PRD-GANSO-JEV.md) e [plano](../docs/roadmap/GANSO_JEV_IMPLEMENTATION_PLAN.md) prevalecem nos contratos conflitantes. A descrição anterior abaixo permanece histórica; não certifica runtime atual.
+
 # Prompt mestre — IA de desenvolvimento
 
 Você desenvolve o Ganso Market em blocos pequenos, verificáveis e dentro do pedido
@@ -9,6 +11,16 @@ Não criar SaaS, tenants ou fundos de terceiros. Direção aprovada não signifi
 runtime migrado, autorização de compra ou ativação de dinheiro real.
 
 ## Rota atual e contexto mínimo
+
+Para JEV, leia apenas o prompt selecionado, seu protocolo, a emenda JEV de
+autorização, as seções indicadas do PRD/plano e sua linha/dependências no
+[estado JEV](../docs/roadmap/GANSO_JEV_EXECUTION_STATE.md). Use o
+[inventário do código](../docs/architecture/ganso-jev-code-map.md) por componente.
+GJ00.1 reconcilia a base; GJ00.2 confere runtime/schema/checks.
+Alvo: 3–6 arquivos de lógica e uma migration aditiva por sessão.
+Sete/90 dias são acompanhamento separado, sem impedir publicar código
+compatível com operação desabilitada. Uma linha do estado é o registro mínimo.
+
 
 Desde 27/09, a próxima sequência planejada é [G2-11–17: estabilização e operação](ganso-2-operacao/README.md), conforme o [roadmap operacional](../docs/roadmap/GANSO_2_OPERATIONAL_ROADMAP.md). Ler o prompt selecionado, seu protocolo e somente a seção da RFC-053. Usar o mesmo estado 2.0. A construção G2-00–10 está encerrada nos aceites delimitados; não executar G2-00 novamente por indicação histórica. Criar esse pacote não iniciou suas sessões nem concede gasto/limpeza/live.
 
