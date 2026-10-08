@@ -402,8 +402,8 @@ export type BenchmarkObservation = ReturnType<
 >["observation"];
 /** Exact persisted endpoints only. Never initialize or buy at a window edge. */
 export function jevBenchmarkWindow(
-  opening: BenchmarkObservation,
-  closing: BenchmarkObservation,
+  opening: Pick<BenchmarkObservation, "trajectory" | "at" | "equity_usd6">,
+  closing: Pick<BenchmarkObservation, "trajectory" | "at" | "equity_usd6">,
 ) {
   requireMetric(
     utc(opening.at) < utc(closing.at) &&
@@ -424,5 +424,60 @@ export function jevBenchmarkWindow(
     },
     convention: JEV_BENCHMARK_POLICY,
     real_capital_reserved_usd6: "0",
+  };
+}
+
+/** Read-only event-time valuation of the original reference trajectory. No
+ * advance, buy, reduction, risk reset, interpolation or command is performed.
+ * Settlements known at the knowledge cut can reconcile an earlier window. */
+export function jevBenchmarkValuationAt(
+  original: JevBenchmark,
+  market: ValuationMarket,
+  knowledge_at: string,
+) {
+  requireMetric(
+    utc(original.started_at) <= utc(market.as_of) &&
+      utc(market.as_of) <= utc(original.observed_at) &&
+      utc(original.observed_at) <= utc(knowledge_at) &&
+      utc(market.as_of) <= utc(knowledge_at),
+    "BENCHMARK_KNOWLEDGE_CUT",
+  );
+  const state = structuredClone(original);
+  state.events = state.events
+    .filter((e) => e.occurred_at <= market.as_of)
+    .map((e, n) => ({ ...e, sequence: String(n + 1) }));
+  const v = valuation(state, market);
+  const quantity =
+    v.positions.find((p) => p.position_id === "benchmark")?.quantity_btc_raw ??
+    "0";
+  state.phase =
+    quantity !== "0"
+      ? "holding"
+      : state.events.some(
+            (e) => e.payload.event_type === "fill" && e.payload.side === "sell",
+          )
+        ? "cash"
+        : "entry_pending";
+  const covered = coverage(state, market.as_of);
+  return {
+    trajectory: {
+      reference_id: state.reference_id,
+      mode: state.mode,
+      instrument_id: state.instrument_id,
+      instrument_version: state.instrument_version,
+      started_at: state.started_at,
+    },
+    at: market.as_of,
+    knowledge_at,
+    equity_usd6:
+      covered.usable_for_risk &&
+      !state.funding_conflict &&
+      v.maintenance.unrealized_pnl_usd_raw !== null
+        ? v.maintenance.equity_usd_raw
+        : null,
+    quantity_btc8: quantity,
+    funding_complete: covered.usable_for_risk && !state.funding_conflict,
+    convention:
+      "reconciled_original_reference_event_time_no_trade_at_window_edge",
   };
 }

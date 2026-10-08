@@ -32,6 +32,7 @@ class NginxPerimeterTests(unittest.TestCase):
                 "jev/metrics",
                 "jev/benchmarks",
                 "jev/results",
+                "jev/evaluations",
                 "experiment-datasets",
                 "experiments",
                 "experiment-system",

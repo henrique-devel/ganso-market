@@ -5,6 +5,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { DatabasePool } from "./database.js";
 import { currentBudgetMs } from "./budgets.js";
+import { readJevEvaluation } from "./storage/jev-evaluationstore.js";
 import { readJevMetrics } from "./storage/jev-metrics.js";
 import {
   readJevBenchmark,
@@ -102,6 +103,26 @@ export function registerExperimentRoutes(
       }
     };
   }
+  app.get(
+    "/trading/jev/evaluations",
+    { preHandler: guard },
+    handler(async (request) => {
+      const q = params(request, ["profile_id", "profile_version"]);
+      if (
+        !q.profile_id ||
+        !q.profile_version ||
+        !accountId.test(q.profile_id) ||
+        !accountId.test(q.profile_version)
+      )
+        throw new Error("EXPERIMENT_INVALID_QUERY");
+      return readJevEvaluation(
+        reportPool,
+        jevOwners.get(request)!,
+        q.profile_id,
+        q.profile_version,
+      );
+    }),
+  );
   app.get(
     "/trading/jev/metrics",
     { preHandler: guard },

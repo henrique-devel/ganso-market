@@ -92,6 +92,15 @@ try {
       const testUrl = new URL(connection);
       testUrl.pathname = `/${db}`;
       const reportPath = join(scratch, `${index}.json`);
+      // This corpus already has four 60s preparation hooks plus a final
+      // 60s link/ANALYZE hook. Let them finish before the existing 30s read
+      // assertion; its 1500ms SQL gate and every production trigger remain.
+      // Keep the shorter file watchdog for all other tests.
+      const fileTimeoutMs =
+        file === "apps/api/test/trading/baseline-evidence.pg.test.ts"
+          ? 360_000
+          : 120_000;
+      const startedAt = Date.now();
       const run = spawnSync(
         process.execPath,
         [
@@ -108,7 +117,7 @@ try {
           cwd: join(root, "apps/api"),
           env: { ...process.env, GANSO_TEST_DATABASE_URL: testUrl.href },
           encoding: "utf8",
-          timeout: 120_000,
+          timeout: fileTimeoutMs,
           maxBuffer: 16 * 1024 * 1024,
         },
       );
@@ -144,12 +153,12 @@ try {
           redact(JSON.stringify(report, null, 2)),
         );
       console.log(
-        `${file}: passed=${passed}, failed=${failed}, unexecuted=${unexecuted}, gate=${ok ? "PASS" : "FAIL"}`,
+        `${file}: passed=${passed}, failed=${failed}, unexecuted=${unexecuted}, gate=${ok ? "PASS" : "FAIL"}, elapsed_ms=${Date.now() - startedAt}, watchdog_ms=${fileTimeoutMs}`,
       );
       if (!ok) {
         console.error(
           redact(
-            `${run.stdout ?? ""}\n${run.stderr ?? ""}\n${report ? "" : "Missing test report"}`,
+            `${run.stdout ?? ""}\n${run.stderr ?? ""}\n${run.error?.message ?? ""}\n${report ? "" : "Missing test report"}`,
           ),
         );
         process.exitCode = 1;

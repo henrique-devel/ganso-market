@@ -24,6 +24,7 @@
           "/trading/jev/metrics": 4000,
           "/trading/jev/benchmarks": 1500,
           "/trading/jev/results": 1500,
+          "/trading/jev/evaluations": 1500,
           "/trading/account": 1500,
           "/trading/positions": 1500,
           "/trading/orders": 1500,
