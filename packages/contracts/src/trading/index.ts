@@ -40,3 +40,5 @@ export type {
   DeskCommandReceipt,
 } from "./commands.js";
 export type { DeskOperation } from "./history.js";
+
+export * from "./jev.js";

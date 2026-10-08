@@ -105,7 +105,10 @@ export function replayLedger(
   return reducer.snapshot();
 }
 /** Ordered incremental reduction; identical validation across page boundaries. */
-export function createLedgerReducer(identity: LedgerIdentityInput) {
+export function createLedgerReducer(
+  identity: LedgerIdentityInput,
+  initialAllocationRaw = "1000000000",
+) {
   const scope = ledgerScope(identity);
   let cash = 0n,
     sequence = 0n;
@@ -146,7 +149,7 @@ export function createLedgerReducer(identity: LedgerIdentityInput) {
       sequence !== 0n ||
         (p.event_type === "cash" &&
           p.reason === "initial_allocation" &&
-          p.delta.raw === "1000000000" &&
+          p.delta.raw === initialAllocationRaw &&
           event.event_id === "genesis" &&
           event.transaction_id === "genesis" &&
           event.cause_id === identity.experiment.experiment_id &&
