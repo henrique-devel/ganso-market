@@ -54,7 +54,12 @@ function setup(ok = true) {
   const app = Fastify();
   registerExperimentRoutes(app, {
     pool: { readOnly } as Pick<DatabasePool, "readOnly">,
-    authService: { session: async () => ({ status: ok ? "ok" : "expired" }) },
+    authService: {
+      session: async () => ({
+        status: ok ? "ok" : "expired",
+        username: "operator",
+      }),
+    },
     clock: () => new Date(iso(start + 100000)),
   });
   return { app, query, readOnly };
@@ -75,6 +80,9 @@ describe("authenticated, bounded immutable experiment reads", () => {
       "experiments",
       "experiment-datasets",
       "experiment-system",
+      "jev/metrics",
+      "jev/benchmarks",
+      "jev/results",
     ]) {
       const r = await s.app.inject({ url: `/trading/${path}`, headers });
       expect(r.statusCode).toBe(401);
@@ -99,6 +107,10 @@ describe("authenticated, bounded immutable experiment reads", () => {
       "experiments?account_id=x&dataset_id=x",
       "experiment-datasets?after=a&after=b",
       "experiment-system?after=x&mode=live",
+      "jev/metrics?account_id=x&owner_id=other",
+      "jev/metrics?account_id=x&origin=live",
+      "jev/metrics?account_id=x&account_id=y",
+      "jev/results",
       "experiments?comparison=" + "a".repeat(2049),
     ]) {
       expect(

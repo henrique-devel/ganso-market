@@ -62,7 +62,13 @@ export async function loadJevAccountTx(
   owner: string,
   id: string,
   lock = false,
+  eventLimit?: number,
 ) {
+  requireJev(
+    eventLimit === undefined ||
+      (Number.isSafeInteger(eventLimit) && eventLimit > 0),
+    "METRICS_EVENT_LIMIT",
+  );
   const row = (
     await tx.query(
       "SELECT identity FROM jev_accounts WHERE account_id=$1 AND owner_id=$2" +
@@ -88,10 +94,15 @@ export async function loadJevAccountTx(
   validateJevLedgerIdentity(identity);
   const events = (
     await tx.query(
-      "SELECT event FROM jev_ledger_events WHERE account_id=$1 ORDER BY sequence",
+      "SELECT event FROM jev_ledger_events WHERE account_id=$1 ORDER BY sequence" +
+        (eventLimit === undefined ? "" : " LIMIT " + (eventLimit + 1)),
       [id],
     )
   ).rows.map((r) => r.event as JevLedgerEvent);
+  requireJev(
+    eventLimit === undefined || events.length <= eventLimit,
+    "METRICS_EVENT_LIMIT",
+  );
   return { identity, events, projection: replayJevLedger(identity, events) };
 }
 export async function appendJevLedgerTx(

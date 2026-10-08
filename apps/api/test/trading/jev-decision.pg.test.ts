@@ -30,6 +30,7 @@ import {
 } from "../../src/storage/jev-evidence.js";
 import { jevHash } from "../../src/storage/jev-hash.js";
 import { mockTariff } from "./jev-fixture.js";
+import { readJevCostsTx } from "../../src/storage/jev-metrics.js";
 import type { JevTariff } from "../../src/models/jev-contract.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
@@ -200,6 +201,62 @@ describe.skipIf(!url)(
     });
     afterEach(async () => {
       await fixture?.dispose();
+    });
+    it("JE08 conserves the platform journal while charging full operation and linked generation to both alternatives", async () => {
+      await provision();
+      await provision("generation_validation");
+      const store = createJevDecisionStore(pool);
+      for (const purpose of ["operation", "generation_validation"] as const) {
+        const r = await store.reserve(
+          batch(`economics:${purpose}`, purpose),
+          "mock",
+          tariff,
+        );
+        if (!("token" in r)) throw new Error(r.reason);
+        await store.finish(r, settle(r));
+      }
+      const end = new Date(Date.now() + 1).toISOString(),
+        s = template.participants[0]!.context.scope;
+      const a = await pool.transaction((tx) =>
+          readJevCostsTx(tx, s, "mock", end),
+        ),
+        b = await pool.transaction((tx) =>
+          readJevCostsTx(
+            tx,
+            { ...s, account_id: "stress:h1", mode: "stress" },
+            "mock",
+            end,
+          ),
+        );
+      expect(a.platform.unknown_requests).toBe(0);
+      expect(BigInt(a.platform.jev_usd6!)).toBeGreaterThan(0n);
+      expect(a.evaluation.jev_usd6).toBe(a.platform.jev_usd6);
+      expect(b.evaluation.jev_usd6).toBe(a.evaluation.jev_usd6);
+      expect(
+        (await pool.transaction((tx) => readJevCostsTx(tx, s, "real", end)))
+          .platform.jev_usd6,
+      ).toBe("0");
+      expect(a.platform.infrastructure_usd6).toBeNull();
+    });
+    it("JE08 unfinished billing stays unavailable rather than using a reservation as expense", async () => {
+      await provision();
+      const r = await createJevDecisionStore(pool).reserve(
+        batch("unknown:economics"),
+        "mock",
+        tariff,
+      );
+      expect("token" in r).toBe(true);
+      const c = await pool.transaction((tx) =>
+        readJevCostsTx(
+          tx,
+          template.participants[0]!.context.scope,
+          "mock",
+          new Date(Date.now() + 1).toISOString(),
+        ),
+      );
+      expect(c.platform.jev_usd6).toBeNull();
+      expect(c.evaluation.jev_usd6).toBeNull();
+      expect(c.platform.known_jev_usd6).toBe("0");
     });
     it("seeds no budgets, journals disabled absence, replays it and preserves financial ledger", async () => {
       expect(

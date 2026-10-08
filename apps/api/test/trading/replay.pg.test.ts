@@ -58,7 +58,15 @@ const pool: Pick<DatabasePool, "transaction" | "readOnly"> = {
 describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
   beforeEach(async () => {
     f = await createPgFixture(url);
-    await createLedgerAccount(pool, identity());
+    // Historical fixture genesis must precede the PostgreSQL capture cut.
+    // Host and Docker clocks can differ; do not create future evidence.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(start);
+    try {
+      await createLedgerAccount(pool, identity());
+    } finally {
+      vi.useRealTimers();
+    }
   });
   afterEach(async () => {
     await f.dispose();
@@ -445,14 +453,17 @@ describe.skipIf(!url)("replay dataset on disposable PostgreSQL", () => {
         )
       ).rows[0]!.object_id,
     ).toBe(a.dataset_id);
-    await withBtcRetentionTransaction(pool, (tx) =>
-      appendLedgerBatchTx(
+    await withBtcRetentionTransaction(pool, async (tx) => {
+      const at = (
+        await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
+      ).rows[0]!.now.toISOString();
+      return appendLedgerBatchTx(
         tx,
         identity(),
         { transaction_id: "later", events: [command("fill", fill())] },
-        new Date().toISOString(),
-      ),
-    );
+        at,
+      );
+    });
     expect(
       replayDataset(await loadReplayDataset(pool, a.dataset_id)).financials
         .ledger.last_sequence,

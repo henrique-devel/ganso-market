@@ -75,7 +75,14 @@ const take = (
 });
 const apply = (r: ReservationCommand) => applyReservation(pool, scope, r);
 async function capture(quality = "fresh") {
-  const at = Date.now() - (quality === "stale" ? 11_000 : 0),
+  // Retention guards use the database clock. Keep evidence on that clock,
+  // while deliberately preserving the stale/degraded cases below.
+  const at =
+      (
+        await fixture.pool.query<{ now: Date }>(
+          "SELECT clock_timestamp() AS now",
+        )
+      ).rows[0]!.now.getTime() - (quality === "stale" ? 11_000 : 0),
     m = market(at),
     h = health(at);
   Object.assign(h.channels, m.capture!.health.channels);
