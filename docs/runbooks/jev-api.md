@@ -49,6 +49,28 @@ HTTP de erro, modelo divergente, probabilidade inválida, corpo excessivo, exce�
 com texto sensível, permissão inadequada, symlink de arquivo e symlink de diretório.
 Esses cenários não fizeram chamadas ao fornecedor. O scanner de segredos passou.
 
+## Revalidação JE03
+
+Em **08/10/2026 às 00:18:57, America/Sao_Paulo**
+(`2026-10-08T03:18:57.738Z`), o mesmo comando foi reexecutado por solicitação
+expressa do proprietário: **uma chamada**, HTTP **200**, modelo **jev-1.13.0**,
+**373 ms**, resposta Noul **0,97** e usage de **289 tokens de entrada/23 de saída**.
+Os nove cenários offline foram reexecutados e passaram, sem rede. A chave continua
+em arquivo local protegido; scanner com esse segredo como referência aprovado.
+
+Esse teste de acesso é separado da estimativa offline de capacidade/orçamento.
+Seu usage não substitui os tokens dos lotes paper/stress dos três perfis.
+A resposta HTTP não informou preço, fatura, créditos nem saldo da conta; a tarifa
+pública não comprova cobrança efetiva dessa credencial.
+
+Na leitura de produção de **00:19–00:21 local**, API/PG estavam saudáveis,
+migrations 1–52 íntegras, HOLD ativo e 4.356 pins preservados. O backend ainda
+não possui `/run/secrets/jev_api_key` nem configuração de challenger; executor,
+contas e evidências JEV continuam ausentes. O PR documenta a credencial local;
+não entrega provisionamento produtivo nem ativa o motor.
+
+A revalidação e os limites restantes estão no [diagnóstico JE03](jev-evidence-feasibility.md).
+
 ## Repetir o teste
 
 Com Node.js 24–26 e a credencial local já provisionada:

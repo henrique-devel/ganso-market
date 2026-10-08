@@ -164,74 +164,91 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     }
   });
 
-  it("validates a full 36,865-input bar inside the existing SQL write budget", async () => {
-    // Worst permitted builder fan-in: 32,768 trades + 4,096 captures + metadata.
-    // Realistic incompressible event IDs expose repeated array detoasting/scanning.
+  describe("full builder fan-in", () => {
     const size = 36_865;
-    for (let start = 0; start < size; start += 1000) {
-      await fixture.pool.query(
-        `INSERT INTO btc_retention_objects
+    let dependencies: string[];
+    let before: Awaited<ReturnType<typeof retentionCapacity>>;
+
+    // Data construction has its own bounded hook: slow CI setup must not
+    // consume the behavior timeout or weaken the writer's unchanged 5s SQL limit.
+    beforeEach(async () => {
+      const seededAt = performance.now();
+      // Worst permitted builder fan-in: 32,768 trades + 4,096 captures + metadata.
+      // Realistic incompressible event IDs expose repeated array detoasting/scanning.
+      for (let start = 0; start < size; start += 1000) {
+        await fixture.pool.query(
+          `INSERT INTO btc_retention_objects
         (object_id,dataset_id,policy_version,class,identity,recorded_at,payload,charged_bytes)
         SELECT 'fixture:event:' || md5(i::text) || md5(('second:' || i)::text),
           'btc-paper-v1','btc-retention-v1','raw',$1,clock_timestamp(),'{}',1
         FROM generate_series($2::int,$3::int) i`,
-        [identity, start, Math.min(start + 999, size - 1)],
-      );
-    }
-    const dependencies = (
-      await fixture.pool.query(
-        "SELECT object_id FROM btc_retention_objects ORDER BY object_id",
-      )
-    ).rows.map((r) => r.object_id as string);
-    // Production statistics mostly see raw envelopes with 0/1 edges. Analyze
-    // that distribution: a missing-stats fixture hides the nested anti-join
-    // chosen for the rare large array (estimated as a single declared edge).
-    await fixture.pool.query("ANALYZE btc_retention_objects");
-    const before = await retentionCapacity(pool);
-    const started = performance.now();
-    // storeRetentionObject sets the unchanged server statement_timeout='5s'.
-    const result = await storeRetentionObject(pool, {
-      ...object("large-bar", "bar", dependencies),
-      payload: { input_ids: dependencies, source: "disposable-fan-in-fixture" },
-    });
-    console.info(
-      `retention large-bar: inputs=${size}, elapsed_ms=${Math.round(performance.now() - started)}`,
-    );
-    expect(result.status).toBe("stored");
-    expect(
-      (
+          [identity, start, Math.min(start + 999, size - 1)],
+        );
+      }
+      dependencies = (
         await fixture.pool.query(
-          "SELECT count(*)::int n FROM btc_retention_dependencies WHERE object_id='large-bar'",
+          "SELECT object_id FROM btc_retention_objects ORDER BY object_id",
         )
-      ).rows[0]!.n,
-    ).toBe(size);
-    expect(
-      BigInt((await retentionCapacity(pool)).total_bytes) -
-        BigInt(before.total_bytes),
-    ).toBe(BigInt(result.chargedBytes));
-    expect(
-      (
-        await storeRetentionObject(pool, {
-          ...object("large-bar", "bar", dependencies),
-          // The exact retry timestamp is taken from the immutable committed envelope.
-          recordedAt: (
-            await fixture.pool.query(
-              "SELECT recorded_at FROM btc_retention_objects WHERE object_id='large-bar'",
-            )
-          ).rows[0]!.recorded_at,
-          payload: {
-            input_ids: dependencies,
-            source: "disposable-fan-in-fixture",
-          },
-        })
-      ).status,
-    ).toBe("duplicate");
-    await expect(
-      fixture.pool.query(
-        "DELETE FROM btc_retention_dependencies WHERE object_id='large-bar'",
-      ),
-    ).rejects.toThrow("IMMUTABLE");
-  }, 30_000);
+      ).rows.map((r) => r.object_id as string);
+      // Production statistics mostly see raw envelopes with 0/1 edges. Analyze
+      // that distribution: a missing-stats fixture hides the nested anti-join
+      // chosen for the rare large array (estimated as a single declared edge).
+      await fixture.pool.query("ANALYZE btc_retention_objects");
+      before = await retentionCapacity(pool);
+      console.info(
+        `retention fan-in fixture: inputs=${size}, seed_ms=${Math.round(performance.now() - seededAt)}`,
+      );
+    }, 60_000);
+
+    it("validates a full 36,865-input bar inside the existing SQL write budget", async () => {
+      const started = performance.now();
+      // storeRetentionObject sets the unchanged server statement_timeout='5s'.
+      const result = await storeRetentionObject(pool, {
+        ...object("large-bar", "bar", dependencies),
+        payload: {
+          input_ids: dependencies,
+          source: "disposable-fan-in-fixture",
+        },
+      });
+      console.info(
+        `retention large-bar: inputs=${size}, elapsed_ms=${Math.round(performance.now() - started)}`,
+      );
+      expect(result.status).toBe("stored");
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT count(*)::int n FROM btc_retention_dependencies WHERE object_id='large-bar'",
+          )
+        ).rows[0]!.n,
+      ).toBe(size);
+      expect(
+        BigInt((await retentionCapacity(pool)).total_bytes) -
+          BigInt(before.total_bytes),
+      ).toBe(BigInt(result.chargedBytes));
+      expect(
+        (
+          await storeRetentionObject(pool, {
+            ...object("large-bar", "bar", dependencies),
+            // The exact retry timestamp is taken from the immutable committed envelope.
+            recordedAt: (
+              await fixture.pool.query(
+                "SELECT recorded_at FROM btc_retention_objects WHERE object_id='large-bar'",
+              )
+            ).rows[0]!.recorded_at,
+            payload: {
+              input_ids: dependencies,
+              source: "disposable-fan-in-fixture",
+            },
+          })
+        ).status,
+      ).toBe("duplicate");
+      await expect(
+        fixture.pool.query(
+          "DELETE FROM btc_retention_dependencies WHERE object_id='large-bar'",
+        ),
+      ).rejects.toThrow("IMMUTABLE");
+    }, 30_000);
+  });
   it("checks each owner's declared edges in multi-row inserts without allowing forged links", async () => {
     await storeRetentionObject(pool, object("a"));
     await storeRetentionObject(pool, object("b"));
