@@ -107,6 +107,56 @@ describe.skipIf(!url)("JEV evidence retention on disposable PostgreSQL", () => {
   afterEach(async () => {
     await fixture?.dispose();
   });
+  it("refuses a different registered manifest and incomplete input closure without losing the original bundle", async () => {
+    const record = {
+      object_id: "original",
+      recorded_at: stamp(300),
+      received_at: stamp(300),
+      payload: { book: "original" },
+      payload_hash: jevHash({ book: "original" }),
+    };
+    const inputs = makeJevEvidence({
+      ...evidence("inputs"),
+      kind: "inputs",
+      payload: { records: [record] },
+    });
+    await storeJevEvidence(pool, [inputs]);
+    const context = makeJevEvidence({
+      ...evidence("context"),
+      kind: "context",
+      dependencies: ["inputs"],
+      payload: {
+        input_bundle_id: "inputs",
+        context: {
+          schema_version: "btc.jev-context.v1",
+          manifest_hash: jevHash(initialJevManifest(3)),
+          scope: scope(),
+          cut_at: stamp(300),
+          input_refs: [record],
+        },
+      },
+    });
+    const before = (await retentionCapacity(pool)).total_bytes;
+    await expect(storeJevEvidence(pool, [context])).rejects.toThrow(
+      "CONTEXT_MANIFEST",
+    );
+    const incomplete = makeJevEvidence({
+      ...context,
+      payload: {
+        ...context.payload,
+        context: {
+          ...(context.payload.context as Record<string, unknown>),
+          manifest_hash: jevHash(initialJevManifest(1)),
+          input_refs: [{ ...record, object_id: "missing" }],
+        },
+      },
+    });
+    await expect(storeJevEvidence(pool, [incomplete])).rejects.toThrow(
+      "INCOMPLETE_INPUTS",
+    );
+    expect(await ids()).toEqual(["inputs"]);
+    expect((await retentionCapacity(pool)).total_bytes).toBe(before);
+  });
   it("retains holds and exact original response/inputs; pins protect transitive replay including required raw", async () => {
     const identity = {
       mode: "paper" as const,
@@ -146,6 +196,7 @@ describe.skipIf(!url)("JEV evidence retention on disposable PostgreSQL", () => {
         input_bundle_id: "inputs",
         context: {
           schema_version: "btc.jev-context.v1",
+          manifest_hash: jevHash(initialJevManifest(1)),
           scope: scope(),
           cut_at: stamp(300),
           input_refs: inputs.payload.records,

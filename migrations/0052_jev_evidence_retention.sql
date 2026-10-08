@@ -78,6 +78,12 @@ BEGIN
     OR NEW.object_id=ANY(NEW.dependencies) OR cardinality(NEW.dependencies)>65536 OR cardinality(NEW.sources)>65536 THEN
     RAISE EXCEPTION 'JEV_EVIDENCE_INVALID_ENVELOPE';
   END IF;
+  IF NEW.kind='context' AND (
+    (NEW.envelope->'payload'->'context'->>'manifest_hash') IS DISTINCT FROM
+      (SELECT manifest_hash FROM jev_profiles WHERE owner_id=b.owner_id AND profile_id=b.profile_id AND profile_version=b.profile_version)
+    OR ((NEW.envelope->'payload'->'context'->>'cut_at')::TIMESTAMPTZ<=NEW.recorded_at
+      AND (NEW.envelope->'payload'->'context'->>'cut_at')::TIMESTAMPTZ>=(b.binding->>'started_at')::TIMESTAMPTZ) IS DISTINCT FROM TRUE
+  ) THEN RAISE EXCEPTION 'JEV_EVIDENCE_CONTEXT_MANIFEST'; END IF;
   FOREACH dep IN ARRAY NEW.dependencies LOOP
     IF NOT EXISTS(SELECT 1 FROM jev_evidence_objects o WHERE o.object_id=dep
       AND o.envelope->'scope'->>'owner_id'=b.owner_id

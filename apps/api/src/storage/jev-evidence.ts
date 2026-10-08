@@ -104,7 +104,9 @@ export function validateJevEvidence(e: JevEvidence) {
     requireJev(
       object(p.context) &&
         p.context.schema_version === "btc.jev-context.v1" &&
-        jevHash(p.context.scope) === jevHash(e.scope),
+        jevHash(p.context.scope) === jevHash(e.scope) &&
+        /^[a-f0-9]{64}$/.test(String(p.context.manifest_hash)) &&
+        jevTime(String(p.context.cut_at)) <= jevTime(e.recorded_at),
       "EVIDENCE_CONTEXT",
     );
     dependency(p.input_bundle_id);
