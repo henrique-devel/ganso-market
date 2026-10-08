@@ -118,7 +118,9 @@ class LedgerDeploymentTests(unittest.TestCase):
             "apps/web/src/BtcOperations.tsx",
             "infra/nginx/nginx.conf",
         ]
-        self.assertEqual(deploy_paths.affected_services(paths), {"api", "web", "nginx"})
+        self.assertEqual(
+            deploy_paths.affected_services(paths), {"api", "execution-worker", "web", "nginx"}
+        )
 
     def test_disabled_challenger_preserves_the_running_collector(self) -> None:
         paths = [
@@ -130,7 +132,9 @@ class LedgerDeploymentTests(unittest.TestCase):
             "migrations/0045_btc_jev_challenger.sql",
             "deploy/deploy_paths.py",
         ]
-        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+        self.assertEqual(
+            deploy_paths.affected_services(paths), {"api", "execution-worker", "migrate"}
+        )
 
     def test_disabled_jev_adapter_only_deploys_api_and_additive_schema(self) -> None:
         paths = [
@@ -143,7 +147,9 @@ class LedgerDeploymentTests(unittest.TestCase):
             "apps/api/test/trading/jev.pg.test.ts",
             "migrations/0044_btc_jev_adapter.sql",
         ]
-        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+        self.assertEqual(
+            deploy_paths.affected_services(paths), {"api", "execution-worker", "migrate"}
+        )
 
     def test_context_timeout_only_affects_collector_and_does_not_start_it(self) -> None:
         paths = [
@@ -183,7 +189,7 @@ class LedgerDeploymentTests(unittest.TestCase):
             "scripts/tests/test_deploy_paths.py",
         ]
         self.assertTrue(deploy_paths.classify(paths)[0])
-        self.assertEqual(deploy_paths.affected_services(paths), {"api"})
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "execution-worker"})
 
     def test_manual_ticket_preserves_running_collector(self) -> None:
         self.assertEqual(
@@ -201,7 +207,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "migrations/0041_btc_desk_runtime.sql",
                 ]
             ),
-            {"api", "web", "migrate"},
+            {"api", "execution-worker", "web", "migrate"},
         )
 
     def test_financial_acceptance_only_selects_api(self) -> None:
@@ -211,7 +217,7 @@ class LedgerDeploymentTests(unittest.TestCase):
             "apps/api/test/trading/acceptance-fixture.ts",
             "docs/roadmap/GANSO_2_EXECUTION_STATE.md",
         ]
-        self.assertEqual(deploy_paths.affected_services(paths), {"api"})
+        self.assertEqual(deploy_paths.affected_services(paths), {"api", "execution-worker"})
 
     def test_recovery_preserves_collector_and_selects_api_migration(self) -> None:
         paths = [
@@ -223,7 +229,9 @@ class LedgerDeploymentTests(unittest.TestCase):
             "apps/api/test/trading/recovery.pg.test.ts",
             "migrations/0038_btc_recovery.sql",
         ]
-        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+        self.assertEqual(
+            deploy_paths.affected_services(paths), {"api", "execution-worker", "migrate"}
+        )
 
     def test_risk_selects_only_api_and_migration(self) -> None:
         self.assertEqual(
@@ -237,7 +245,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "migrations/0037_btc_risk.sql",
                 ]
             ),
-            {"api", "migrate"},
+            {"api", "execution-worker", "migrate"},
         )
 
     def test_isolated_margin_selects_only_api_and_migration(self) -> None:
@@ -252,7 +260,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "migrations/0036_btc_isolated_margin.sql",
                 ]
             ),
-            {"api", "migrate"},
+            {"api", "execution-worker", "migrate"},
         )
 
     def test_funding_preserves_collector_and_selects_api_migration(self) -> None:
@@ -270,7 +278,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "migrations/0035_btc_funding.sql",
                 ]
             ),
-            {"api", "migrate"},
+            {"api", "execution-worker", "migrate"},
         )
 
     def test_retention_sql_guard_only_runs_migration(self) -> None:
@@ -300,7 +308,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "deploy/deploy_paths.py",
                 ]
             ),
-            {"api", "migrate"},
+            {"api", "execution-worker", "migrate"},
         )
 
     def test_reservations_only_recreate_api_and_run_additive_migration(self) -> None:
@@ -320,7 +328,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "scripts/tests/test_deploy_paths.py",
                 ]
             ),
-            {"api", "migrate"},
+            {"api", "execution-worker", "migrate"},
         )
 
     def test_passive_library_only_deploys_api_and_additive_schema(self) -> None:
@@ -334,7 +342,9 @@ class LedgerDeploymentTests(unittest.TestCase):
             "apps/api/test/trading/passive.pg.test.ts",
             "migrations/0034_btc_passive_execution.sql",
         ]
-        self.assertEqual(deploy_paths.affected_services(paths), {"api", "migrate"})
+        self.assertEqual(
+            deploy_paths.affected_services(paths), {"api", "execution-worker", "migrate"}
+        )
 
     def test_collector_diagnostics_only_select_worker(self) -> None:
         self.assertEqual(
@@ -369,7 +379,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "scripts/tests/test_deploy_paths.py",
                 ]
             ),
-            {"api"},
+            {"api", "execution-worker"},
         )
 
     def test_inactive_account_ledger_keeps_collector_running(self) -> None:
@@ -385,7 +395,7 @@ class LedgerDeploymentTests(unittest.TestCase):
                     "migrations/0029_btc_account_ledger.sql",
                 ]
             ),
-            {"api", "migrate"},
+            {"api", "execution-worker", "migrate"},
         )
 
 

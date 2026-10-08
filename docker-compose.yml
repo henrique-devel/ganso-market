@@ -64,6 +64,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        GANSO_RELEASE_SHA: ${GANSO_RELEASE_SHA:-}
     environment:
       GANSO_CONFIG_FILE: /etc/ganso/runtime.json
       GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -98,6 +100,40 @@ services:
     pids_limit: 128
     logging: *default-logging
 
+  execution-worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        GANSO_RELEASE_SHA: ${GANSO_RELEASE_SHA:-}
+    command:
+      ["node", "--max-old-space-size=192", "apps/api/dist/execution-worker.js"]
+    environment:
+      GANSO_CONFIG_FILE: /etc/ganso/runtime.json
+      GANSO_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./config/runtime.json:/etc/ganso/runtime.json:ro
+    networks:
+      - backend
+      - edge
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "apps/api/dist/execution-worker.js", "--health"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 40s
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *default-logging
+
   web:
     build:
       context: .
@@ -126,6 +162,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        GANSO_RELEASE_SHA: ${GANSO_RELEASE_SHA:-}
     command: ["node", "--max-old-space-size=160", "apps/api/dist/btc-worker.js"]
     environment:
       GANSO_BTC_WORKER_CONFIG_FILE: /etc/ganso/btc-worker.json

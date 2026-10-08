@@ -6,6 +6,8 @@ VENV := .venv
 RUFF := $(VENV)/bin/ruff
 SERVER_ENV ?= deploy/server.env
 SERVER_COMPOSE := docker compose --env-file $(SERVER_ENV)
+# A source checkout stamps its build; release archives retain export-subst's SHA.
+export GANSO_RELEASE_SHA ?= $(shell if test "$$(wc -c < deploy/release-sha)" -eq 41; then cat deploy/release-sha; else git rev-parse HEAD 2>/dev/null; fi)
 
 .PHONY: help doctor install init-secrets format format-check lint test test-postgres build verify \
 	contracts-check compose-config licenses up migrate integration resource-check secret-scan down \

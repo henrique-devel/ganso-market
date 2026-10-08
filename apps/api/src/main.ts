@@ -1,6 +1,5 @@
 import { DESK_DIAGNOSTICS_VERSION } from "./btc/runtime-diagnostics.js";
 import { loadChallengerConfig } from "./models/jev-config.js";
-import { startDeskConsumer } from "./storage/desk-consumer.js";
 import { createAuthService } from "./auth/service.js";
 import { createPostgresAuthStore } from "./auth/store.js";
 import { loadConfig, requireStatementBudgets, ConfigError } from "./config.js";
@@ -34,13 +33,6 @@ async function run(): Promise<void> {
     authService,
     pool,
   });
-  const stopDesk = startDeskConsumer(
-    pool,
-    (reason_code, fields) =>
-      app.log.warn({ ...fields, reason_code }, "paper_desk_consumer"),
-    challengerConfig,
-  );
-  app.addHook("onClose", stopDesk);
   const gracefulShutdown = createGracefulShutdown(app, pool);
   gracefulShutdown.install();
 

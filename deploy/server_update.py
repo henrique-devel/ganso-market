@@ -171,7 +171,7 @@ def main() -> None:
         "services": {
             name: service
             for name, service in services.items()
-            if name in running or name == "migrate"
+            if name in running or name in {"migrate", "execution-worker"}
         },
     }
     bind = next(iter(services["nginx"]["ports"]))["host_ip"]
@@ -239,6 +239,47 @@ def main() -> None:
         print(f"classification unavailable ({error}); selecting running code services", flush=True)
         candidates = CODE_SERVICES | {"migrate"}
     selected = select_running(candidates, services, running)
+    # JE07 initial handoff is the one authorized new default service. Core
+    # services must already be healthy; API is replaced before the new owner.
+    # No profile/collector, account admission or signer is activated here.
+    handoff = "execution-worker" in candidates and "execution-worker" not in running
+    if handoff:
+        if "api" not in selected or "migrate" not in selected:
+            raise SystemExit("execution worker handoff requires API replacement and migration")
+        # Quiesce only legacy admission, retaining financial data. Initial
+        # separation is permitted only while the old API owns reconciled flat
+        # accounts; it must not introduce a protection gap for an open position.
+        gate = run(
+            [
+                *compose,
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                "ganso_market",
+                "-d",
+                "ganso_market",
+                "-At",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-c",
+                "UPDATE btc_desk_controls SET enabled=false WHERE enabled; "
+                "SELECT NOT EXISTS(SELECT 1 FROM btc_desk_orders "
+                "WHERE reservation->>'status'='active') "
+                "AND NOT EXISTS(SELECT 1 FROM btc_ledger_projections, "
+                "LATERAL jsonb_array_elements(projection->'positions') p "
+                "WHERE p->>'quantity_btc_raw'<>'0') "
+                "AND NOT EXISTS(SELECT 1 FROM btc_recovery_heads WHERE status='blocked') "
+                "AND NOT EXISTS(SELECT 1 FROM jev_ledger_events "
+                "WHERE event->'payload'->>'event_type'<>'cash');",
+            ]
+        ).splitlines()
+        if not gate or gate[-1] != "t":
+            raise SystemExit(
+                "execution handoff blocked: reconcile flat/reservations before replacing API"
+            )
+        selected.add("execution-worker")
     print(
         json.dumps(
             {
@@ -251,7 +292,12 @@ def main() -> None:
         ),
         flush=True,
     )
-    for command in commands(compose, selected, services):
+    release_commands = commands(
+        compose, selected - {"execution-worker"} if handoff else selected, services
+    )
+    if handoff:
+        release_commands += commands(compose, {"execution-worker"}, services)
+    for command in release_commands:
         print(" ".join(command), flush=True)
         subprocess.run(command, check=True)
         if command[-4:] == ["run", "--rm", "--no-deps", "migrate"]:

@@ -73,7 +73,7 @@ def classify(paths: list[str]) -> tuple[bool, str]:
 
 # Candidate services are intersected with running containers on the host.
 # A profile name or an explicit Compose service must never activate a worker.
-NODE_SERVICES = {"api", "btc-worker"}
+NODE_SERVICES = {"api", "btc-worker", "execution-worker"}
 CODE_SERVICES = {*NODE_SERVICES, "web", "nginx"}
 
 
@@ -82,6 +82,16 @@ def affected_services(paths: list[str]) -> set[str]:
         return CODE_SERVICES | {"migrate"}
     selected: set[str] = set()
     for path in paths:
+        if path.startswith(
+            (
+                "apps/api/src/execution-worker",
+                "apps/api/src/storage/jev-worker",
+                "apps/api/src/storage/jev-scheduler",
+                "apps/api/src/storage/execution-worker",
+            )
+        ):
+            selected.add("execution-worker")
+            continue
         if is_text_path(path):
             continue
         if path.startswith(
@@ -216,6 +226,17 @@ def affected_services(paths: list[str]) -> set[str]:
         }:
             # Account financial reads have no collector/legacy consumer. Preserve the feed.
             selected.add("api")
+            if path.startswith(
+                ("apps/api/src/storage/", "apps/api/src/trading/", "apps/api/src/models/")
+            ) and path not in {
+                "apps/api/src/storage/desk-history.ts",
+                "apps/api/src/storage/operational-readiness.ts",
+                "apps/api/src/storage/metrics.ts",
+                "apps/api/src/storage/replaystore.ts",
+                "apps/api/src/storage/replay-dataset.ts",
+                "apps/api/src/trading/metrics.ts",
+            }:
+                selected.add("execution-worker")
         elif path == "apps/api/test/trading/retention.pg.test.ts":
             # SQL guard coverage has no image/runtime consumer. Its additive
             # migration is selected independently; preserve stopped collectors.

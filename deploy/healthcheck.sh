@@ -33,4 +33,5 @@ check_url() {
 check_url "$gateway/"
 check_url "$gateway/api/health/live"
 check_url "$gateway/api/health/ready"
+docker compose --env-file "$server_env" exec -T execution-worker node apps/api/dist/execution-worker.js --health
 echo "Ganso Market disponível em $gateway"

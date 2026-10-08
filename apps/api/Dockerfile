@@ -26,6 +26,10 @@ COPY --from=build /workspace/apps/api/dist apps/api/dist
 # the IMAGE — rather than mounting it from the checkout — means the stamp on an
 # estimate can never drift from the code that produced it.
 COPY deploy/release-sha /etc/ganso/release-sha
+# Compose smoke uses the checked-out commit; production archives already carry
+# their export-substituted immutable revision. Never infer a revision from a key.
+ARG GANSO_RELEASE_SHA=""
+RUN node -e 'const s=process.env.GANSO_RELEASE_SHA; if(s){if(!/^[a-f0-9]{40}$/.test(s))process.exit(1);require("node:fs").writeFileSync("/etc/ganso/release-sha",s+"\n");}'
 USER node
 EXPOSE 3000
 CMD ["node", "apps/api/dist/main.js"]
