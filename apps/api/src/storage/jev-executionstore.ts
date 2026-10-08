@@ -369,6 +369,8 @@ export async function applyJevExecution(
             f.closing.quality !== "fresh" ||
             !c ||
             !book?.source_timestamp ||
+            book.source_timestamp > book.received_at ||
+            book.received_at > now ||
             book.source_timestamp < maker.arrival_at ||
             book.payload.kind !== "book"
           ) {
@@ -637,6 +639,8 @@ export async function applyJevExecution(
           value.closing.quality === "fresh" &&
           book?.payload.kind === "book" &&
           book.source_timestamp &&
+          book.source_timestamp <= book.received_at &&
+          book.received_at <= now &&
           book.source_timestamp >= state.close.arrival_at &&
           (!state.maker?.latest_trade_at ||
             book.source_timestamp > state.maker.latest_trade_at)
