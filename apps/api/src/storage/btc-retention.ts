@@ -178,6 +178,7 @@ const candidates = `WITH RECURSIVE protected(object_id) AS (
   WHERE o.dataset_id = $1 AND o.policy_version = $2 AND NOT p.hold
     AND o.expires_at <= clock_timestamp() AND NOT EXISTS (SELECT 1 FROM protected x WHERE x.object_id = o.object_id)
     AND NOT EXISTS (SELECT 1 FROM btc_retention_dependencies d WHERE d.dependency_id = o.object_id)
+    AND NOT EXISTS (SELECT 1 FROM jev_evidence_sources s WHERE s.source_id = o.object_id)
   ORDER BY o.expires_at, o.object_id LIMIT $3`;
 /** One leaf batch only. Incoming edges preserve transitive evidence, including
  * unexpired aggregates. Repeating the executor can remove newly unreferenced leaves. */

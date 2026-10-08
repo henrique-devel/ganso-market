@@ -13,6 +13,7 @@
     "lint": "npm run check",
     "start": "node dist/main.js",
     "account": "node dist/account-cli.js",
+    "jev-feasibility": "node dist/jev-feasibility-cli.js",
     "test": "vitest run",
     "precheck": "npm run build --workspace @ganso-market/contracts",
     "prebuild": "npm run build --workspace @ganso-market/contracts",
