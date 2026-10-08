@@ -43,6 +43,12 @@ const binding: JevBinding = {
   started_at: created_at,
 };
 describe("JEV financial identities v2", () => {
+  it("rejects unsupported and inherited validator names", () => {
+    for (const kind of ["constructor", "__proto__", "missing"])
+      expect(() => parseJevContract(kind as "account", account)).toThrow(
+        /UNKNOWN_CONTRACT/,
+      );
+  });
   it("represents independent paper/stress and unfunded live without an executor", () => {
     for (const mode of ["paper", "stress", "live"] as const) {
       const a = {

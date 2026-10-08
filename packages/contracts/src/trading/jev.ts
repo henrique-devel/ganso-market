@@ -118,6 +118,7 @@ export function parseJevContract<K extends keyof Contracts>(
   kind: K,
   value: unknown,
 ): Contracts[K] {
+  requireJev(Object.hasOwn(validators, kind), "UNKNOWN_CONTRACT");
   requireJev(validators[kind]?.(value), `INVALID_${kind.toUpperCase()}`);
   if (kind === "account") {
     const a = value as unknown as JevAccount;
