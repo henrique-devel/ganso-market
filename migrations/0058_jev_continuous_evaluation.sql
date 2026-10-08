@@ -41,7 +41,7 @@ BEGIN
       OR (SELECT COALESCE(SUM((v->>1)::bigint-(v->>0)::bigint),0) FROM jsonb_array_elements(p->'valid_intervals') v) IS DISTINCT FROM NEW.covered_ms
       OR EXISTS(SELECT 1 FROM (SELECT v,(LAG((v->>1)::bigint) OVER(ORDER BY n)) AS previous FROM jsonb_array_elements(p->'valid_intervals') WITH ORDINALITY AS x(v,n)) ranges
         WHERE (v->>0)::bigint<(EXTRACT(EPOCH FROM NEW.start_at)*1000)::bigint OR (v->>1)::bigint>(EXTRACT(EPOCH FROM NEW.end_at)*1000)::bigint OR (v->>0)::bigint>=(v->>1)::bigint OR previous>(v->>0)::bigint)
-      OR p->>'schema_version' IS DISTINCT FROM 'jev.duration-coverage.v1' 
+      OR p->>'schema_version' IS DISTINCT FROM 'jev.duration-coverage.v1'
       OR (previous_end IS NOT NULL AND NEW.start_at<previous_end)
       THEN RAISE EXCEPTION 'JEV_COVERAGE_CONTRACT'; END IF;
   ELSIF TG_TABLE_NAME='jev_engine_qualifications' THEN
@@ -67,7 +67,7 @@ BEGIN
         OR jsonb_array_length(p->'accounts')<>2
         OR EXISTS(SELECT 1 FROM jsonb_array_elements(p->'accounts') a WHERE a->>'criterion_passed' IS DISTINCT FROM 'true' OR jsonb_array_length(a->'reasons')<>0 OR (a->>'episodes')::int<60 OR (a->>'coverage_ppm')::int<990000)
         OR NOT EXISTS(SELECT 1 FROM jev_engine_qualifications q WHERE q.evidence_id=ANY(e.dependencies) AND q.owner_id=NEW.owner_id AND q.qualified AND q.end_at<=NEW.as_of)))
-      OR p->>'operational_admission' IS DISTINCT FROM 'false' 
+      OR p->>'operational_admission' IS DISTINCT FROM 'false'
       OR e.recorded_at<NEW.as_of
       OR EXISTS(SELECT 1 FROM jev_evaluation_cuts WHERE owner_id=NEW.owner_id AND profile_id=NEW.profile_id AND profile_version=NEW.profile_version AND as_of>NEW.as_of)
       OR (NEW.state<>'failed' AND NEW.phase<>'preview30' AND EXISTS(SELECT 1 FROM jev_evaluation_cuts WHERE owner_id=NEW.owner_id AND profile_id=NEW.profile_id AND profile_version=NEW.profile_version AND state='failed'))
