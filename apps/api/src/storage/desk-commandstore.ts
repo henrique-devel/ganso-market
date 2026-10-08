@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { withDeskWorker } from "./desk-worker.js";
 import { createHmac } from "node:crypto";
 import type { DatabasePool, SqlExecutor } from "../database.js";
@@ -115,13 +116,14 @@ async function accessTx(
   token: string,
   action: DeskCommand["action"],
   lock = false,
+  hashedToken = false,
 ): Promise<Access> {
   const session = (
     await tx.query<{ session_id: string; owner_account_id: string }>(
       `SELECT s.session_id,s.account_id::text AS owner_account_id FROM auth_access_tokens t
      JOIN auth_sessions s USING(session_id) WHERE t.token_hash=$1 AND t.revoked_at IS NULL
      AND s.revoked_at IS NULL AND t.expires_at > clock_timestamp()`,
-      [hashToken(token)],
+      [hashedToken ? token : hashToken(token)],
     )
   ).rows[0];
   if (!session) fail(401, "AUTH_UNAUTHENTICATED");
@@ -386,41 +388,16 @@ export async function acceptDeskCommand(
   action: DeskCommand["action"],
   intent: unknown,
   key: string,
+  hashedToken = false,
 ): Promise<DeskCommandReceipt> {
-  if (
-    typeof intent !== "string" ||
-    intent.length > 16384 ||
-    !/^[A-Za-z0-9_-]+\.[0-9a-f]{64}$/.test(intent)
-  )
-    fail(400, "TRADING_INVALID_INTENT");
-  const [body, signature] = intent.split(".") as [string, string];
-  let ticket: Ticket;
-  try {
-    ticket = JSON.parse(
-      Buffer.from(body, "base64url").toString("utf8"),
-    ) as Ticket;
-  } catch {
-    return fail(400, "TRADING_INVALID_INTENT");
-  }
-  validateDeskCommand(ticket?.command, key);
-  if (
-    ticket.version !== "trading.commands.v1" ||
-    ticket.key !== key ||
-    ticket.command.action !== action
-  )
-    fail(400, "TRADING_INTENT_MISMATCH");
-  const command = ticket.command;
-  const initial = await pool.readOnly(1500, (tx) =>
-    accessTx(tx, command.account_id, token, command.action),
+  const { ticket, command, initial, verify } = await validatedIntent(
+    pool,
+    token,
+    action,
+    intent,
+    key,
+    hashedToken,
   );
-  const verify = (a: Access) => {
-    if (
-      a.session_id !== ticket.session_id ||
-      !timingSafeEqualHex(signature, sign(body, a.signing_key))
-    )
-      fail(403, "TRADING_INTENT_SIGNATURE");
-  };
-  verify(initial);
   const scope = ledgerScope(initial.identity);
   const execute = (worker: Pick<DatabasePool, "transaction">) =>
     riskTransaction(
@@ -433,6 +410,7 @@ export async function acceptDeskCommand(
           token,
           command.action,
           true,
+          hashedToken,
         );
         verify(access);
         const prior = (
@@ -576,4 +554,200 @@ export async function acceptDeskCommand(
       true,
     );
   return withDeskWorker(pool, command.account_id, execute);
+}
+
+async function validatedIntent(
+  pool: Pool,
+  token: string,
+  action: DeskCommand["action"],
+  intent: unknown,
+  key: string,
+  hashedToken = false,
+) {
+  if (
+    typeof intent !== "string" ||
+    intent.length > 16384 ||
+    !/^[A-Za-z0-9_-]+\.[0-9a-f]{64}$/.test(intent)
+  )
+    fail(400, "TRADING_INVALID_INTENT");
+  const [body, signature] = intent.split(".") as [string, string];
+  let ticket: Ticket;
+  try {
+    ticket = JSON.parse(
+      Buffer.from(body, "base64url").toString("utf8"),
+    ) as Ticket;
+  } catch {
+    return fail(400, "TRADING_INVALID_INTENT");
+  }
+  validateDeskCommand(ticket?.command, key);
+  if (
+    ticket.version !== "trading.commands.v1" ||
+    ticket.key !== key ||
+    ticket.command.action !== action
+  )
+    fail(400, "TRADING_INTENT_MISMATCH");
+  const command = ticket.command;
+  const initial = await pool.readOnly(1500, (tx) =>
+    accessTx(tx, command.account_id, token, command.action, false, hashedToken),
+  );
+  const verify = (a: Access) => {
+    if (
+      a.session_id !== ticket.session_id ||
+      !timingSafeEqualHex(signature, sign(body, a.signing_key))
+    )
+      fail(403, "TRADING_INTENT_SIGNATURE");
+  };
+  verify(initial);
+  return { ticket, command, initial, verify };
+}
+
+/** API persists authenticated intent only. Financial acceptance runs in the worker.
+ * A timeout preserves the intent and key; retry observes the same immutable result. */
+export async function enqueueDeskCommand(
+  pool: Pool,
+  token: string,
+  action: DeskCommand["action"],
+  intent: unknown,
+  key: string,
+): Promise<DeskCommandReceipt> {
+  const { initial, command } = await validatedIntent(
+    pool,
+    token,
+    action,
+    intent,
+    key,
+  );
+  const prior = await pool.readOnly(
+    1500,
+    async (tx) =>
+      (
+        await tx.query<{ request: DeskCommand; result: DeskCommandReceipt }>(
+          "SELECT request,result FROM btc_desk_commands WHERE account_id=$1 AND idempotency_key=$2",
+          [command.account_id, key],
+        )
+      ).rows[0],
+  );
+  if (prior) {
+    if (canonicalFingerprint(prior.request) !== canonicalFingerprint(command))
+      fail(409, "TRADING_IDEMPOTENCY_CONFLICT");
+    return prior.result;
+  }
+  const attempt = await pool.transaction(async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `execution-command:${command.account_id}:${key}`,
+    ]);
+    const worker = (
+      await tx.query(
+        "SELECT 1 FROM execution_worker_head WHERE lease_until>clock_timestamp()",
+      )
+    ).rowCount;
+    if (!worker) fail(409, "TRADING_CONSUMER_UNAVAILABLE");
+    const old = (
+      await tx.query<{
+        attempt: number;
+        request: DeskCommand;
+        completed: boolean;
+      }>(
+        "SELECT q.attempt,q.request,r.account_id IS NOT NULL AS completed FROM execution_command_queue q LEFT JOIN execution_command_results r USING(account_id,idempotency_key,attempt) WHERE q.account_id=$1 AND q.idempotency_key=$2 ORDER BY q.attempt DESC LIMIT 1",
+        [command.account_id, key],
+      )
+    ).rows[0];
+    if (old && !old.completed) {
+      if (canonicalFingerprint(old.request) !== canonicalFingerprint(command))
+        fail(409, "TRADING_IDEMPOTENCY_CONFLICT");
+      return old.attempt;
+    }
+    const next = (old?.attempt ?? 0) + 1;
+    await tx.query(
+      "INSERT INTO execution_command_queue(account_id,idempotency_key,attempt,session_id,token_hash,action,intent,request) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+      [
+        command.account_id,
+        key,
+        next,
+        initial.session_id,
+        hashToken(token),
+        action,
+        intent,
+        JSON.stringify(command),
+      ],
+    );
+    return next;
+  });
+  const deadline = Date.now() + 2000;
+  do {
+    const r = await pool.readOnly(
+      1500,
+      async (tx) =>
+        (
+          await tx.query<{
+            result: DeskCommandReceipt | null;
+            error_status: number | null;
+            error_code: string | null;
+          }>(
+            "SELECT result,error_status,error_code FROM execution_command_results WHERE account_id=$1 AND idempotency_key=$2 AND attempt=$3",
+            [command.account_id, key, attempt],
+          )
+        ).rows[0],
+    );
+    if (r?.error_code) fail(r.error_status!, r.error_code);
+    if (r?.result) return r.result;
+    await delay(25);
+  } while (Date.now() < deadline);
+  fail(409, "TRADING_CONSUMER_UNAVAILABLE");
+}
+/** Bounded priority drain. Outbox and financial receipts survive a worker crash.
+ * Replay after lost ACK reuses acceptDeskCommand's existing atomic receipt. */
+export async function drainDeskCommands(pool: Pool) {
+  const pending = await pool.readOnly(
+    1500,
+    async (tx) =>
+      (
+        await tx.query<{
+          account_id: string;
+          idempotency_key: string;
+          attempt: number;
+          token_hash: string;
+          action: DeskCommand["action"];
+          intent: string;
+        }>(
+          `SELECT q.* FROM execution_command_queue q LEFT JOIN execution_command_results r USING(account_id,idempotency_key,attempt) WHERE r.account_id IS NULL ORDER BY CASE q.action WHEN 'pause' THEN 0 WHEN 'cancel' THEN 1 WHEN 'close' THEN 2 ELSE 3 END,q.queued_at LIMIT 4`,
+        )
+      ).rows,
+  );
+  for (const q of pending) {
+    let result: DeskCommandReceipt | null = null,
+      error: DeskCommandError | null = null;
+    try {
+      result = await acceptDeskCommand(
+        pool,
+        q.token_hash,
+        q.action,
+        q.intent,
+        q.idempotency_key,
+        true,
+      );
+    } catch (e) {
+      if (e instanceof Error && e.message === "EXECUTION_WORKER_FENCED")
+        throw e;
+      error =
+        e instanceof DeskCommandError
+          ? e
+          : e instanceof Error && /^BTC_[A-Z0-9_]+$/.test(e.message)
+            ? new DeskCommandError(409, e.message)
+            : new DeskCommandError(503, "TRADING_COMMAND_UNAVAILABLE");
+    }
+    await pool.transaction((tx) =>
+      tx.query(
+        "INSERT INTO execution_command_results(account_id,idempotency_key,attempt,result,error_status,error_code) VALUES($1,$2,$3,$4::jsonb,$5,$6) ON CONFLICT DO NOTHING",
+        [
+          q.account_id,
+          q.idempotency_key,
+          q.attempt,
+          result ? JSON.stringify(result) : null,
+          error?.status ?? null,
+          error?.code ?? null,
+        ],
+      ),
+    );
+  }
 }

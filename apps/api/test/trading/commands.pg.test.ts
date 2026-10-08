@@ -1,3 +1,5 @@
+import { drainDeskCommands } from "../../src/storage/desk-commandstore.js";
+import { claimExecutionWorker } from "../../src/storage/execution-worker-lease.js";
 import { consumeDeskAccount } from "../../src/storage/desk-consumer.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
@@ -23,6 +25,7 @@ import {
 } from "../../src/storage/btc-retention.js";
 import { seedMarginMetadata } from "./margin-fixture.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
+let stopCommandPump: (() => Promise<void>) | undefined;
 let f: Awaited<ReturnType<typeof riskFixture>>, app: FastifyInstance;
 const headers = {
   authorization: "Bearer token",
@@ -129,6 +132,26 @@ describe.skipIf(!url)(
           }),
       });
       await consumeDeskAccount(pool, "manual");
+      await claimExecutionWorker(pool, "a".repeat(40));
+      let stopped = false,
+        timer: ReturnType<typeof setTimeout> | undefined,
+        running = Promise.resolve();
+      const pump = async () => {
+        try {
+          await drainDeskCommands(pool);
+        } finally {
+          if (!stopped)
+            timer = setTimeout(() => {
+              running = pump();
+            }, 10);
+        }
+      };
+      running = pump();
+      stopCommandPump = async () => {
+        stopped = true;
+        clearTimeout(timer);
+        await running;
+      };
       app = Fastify();
       registerTradingCommandRoutes(app, {
         pool,
@@ -145,6 +168,7 @@ describe.skipIf(!url)(
       });
     });
     afterEach(async () => {
+      await stopCommandPump?.();
       await app?.close();
       await f?.dispose();
     });
@@ -409,7 +433,7 @@ describe.skipIf(!url)(
         ).toBe(1);
       },
     );
-    it("starts a new audited generation after an idle HTTP worker lease expires", async () => {
+    it("replays through the API without claiming a new worker generation", async () => {
       const p = await preview(),
         accepted = await send("submit", { intent: p.intent });
       expect(accepted.statusCode, accepted.body).toBe(200);
@@ -429,7 +453,7 @@ describe.skipIf(!url)(
           (await f.pool.query("SELECT generation FROM btc_recovery_heads"))
             .rows[0].generation,
         ),
-      ).toBe(BigInt(before) + 1n);
+      ).toBe(BigInt(before));
     });
     it("revalidates metadata and returns caller quantum errors as 400", async () => {
       expect(

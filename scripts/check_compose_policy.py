@@ -11,6 +11,7 @@ FOUR_GIB = 4 * 1024**3
 # an allowance for migration. Eight slots stay unallocated.
 CONNECTIONS = {
     "api": 4,
+    "execution-worker": 4,
     "migrate": 1,
     "btc-worker": 2,
 }

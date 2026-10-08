@@ -4,7 +4,7 @@ import type { AuthService } from "./auth/service.js";
 import type { DatabasePool } from "./database.js";
 import { csrfValid, sameOriginViolation } from "./auth/http.js";
 import {
-  acceptDeskCommand,
+  enqueueDeskCommand,
   previewDeskCommand,
   validateDeskCommand,
   DeskCommandError,
@@ -60,7 +60,7 @@ export function registerTradingCommandRoutes(
           typeof key !== "string"
         )
           throw new DeskCommandError(400, "TRADING_INVALID_COMMAND");
-        return await acceptDeskCommand(
+        return await enqueueDeskCommand(
           deps.pool,
           token,
           action,

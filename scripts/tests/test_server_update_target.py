@@ -196,7 +196,7 @@ class ServerUpdateTests(unittest.TestCase):
                     "migrations/0043_btc_baseline_runtime.sql",
                 ]
             ),
-            {"api", "web", "migrate"},
+            {"api", "web", "execution-worker", "migrate"},
         )
 
     def test_operation_reads_preserve_running_collector(self) -> None:

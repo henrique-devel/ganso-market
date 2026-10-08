@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+export GANSO_RELEASE_SHA="$(git rev-parse HEAD)"
 
 gateway_port="${GANSO_HTTP_PORT:-8080}"
 gateway="http://127.0.0.1:${gateway_port}"
@@ -30,6 +31,29 @@ docker compose --profile btc up --build --detach
 wait_for_code 200 "$gateway/api/health/live"
 wait_for_code 200 "$gateway/api/health/ready"
 curl --fail --silent --show-error "$gateway/" >/dev/null
+# The actual execution process survives API shutdown. Its identity/lease must
+# not transfer or restart; health reads its own process heartbeat, not the API.
+attempts=50
+until docker compose exec -T execution-worker node apps/api/dist/execution-worker.js --health; do
+  attempts=$((attempts - 1)); test "$attempts" -gt 0; sleep 1
+done
+execution_id="$(docker compose ps --quiet execution-worker)"
+execution_started="$(docker inspect --format '{{.State.StartedAt}}' "$execution_id")"
+risk_before="$(docker compose exec -T execution-worker node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")).metrics.risk_cycles)')"
+if docker compose run --rm --no-deps execution-worker; then
+  echo "compose smoke failed: a second execution process acquired ownership" >&2
+  exit 1
+fi
+docker compose stop api
+docker compose exec -T execution-worker node apps/api/dist/execution-worker.js --health
+sleep 2
+docker compose exec -T execution-worker node apps/api/dist/execution-worker.js --health
+test "$(docker compose ps --quiet execution-worker)" = "$execution_id"
+test "$(docker inspect --format '{{.State.StartedAt}}' "$execution_id")" = "$execution_started"
+risk_after="$(docker compose exec -T execution-worker node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")).metrics.risk_cycles)')"
+test "$risk_after" -gt "$risk_before"
+docker compose start api
+wait_for_code 200 "$gateway/api/health/ready"
 
 log_marker="synthetic-query-value-must-not-be-logged"
 curl --fail --silent --show-error "$gateway/api/health/live?token=$log_marker" >/dev/null
