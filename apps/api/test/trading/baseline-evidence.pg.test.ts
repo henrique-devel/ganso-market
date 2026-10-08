@@ -16,25 +16,32 @@ describe.skipIf(!url)(
     const ids = Array.from({ length: 4096 }, (_, i) => `corpus:${i * 16}`);
     beforeAll(async () => {
       f = await createPgFixture(url);
-      // 65,536 projected raw observations; a sparse 4,096-input bar. Retention
-      // guards, quotas, FKs and pins remain real. No production data is copied.
-      for (let start = 0; start < 65536; start += 1024) {
-        await f.pool.query(
-          `WITH inserted AS (
+    });
+    // Keep all 65,536 observations and every physical-storage guard. Bound each
+    // preparation phase to 16,384 rows: a shared CI runner can exceed one 60s
+    // hook for the entire corpus. Reader/test/SQL deadlines remain unchanged.
+    for (let chunk = 0; chunk < 65536; chunk += 16384) {
+      beforeAll(async () => {
+        for (let start = chunk; start < chunk + 16384; start += 1024) {
+          await f.pool.query(
+            `WITH inserted AS (
         INSERT INTO btc_retention_objects(object_id,dataset_id,policy_version,class,identity,recorded_at,payload,charged_bytes)
         SELECT 'corpus:'||i,'btc-paper-v1','btc-retention-v1','raw',$1::jsonb,$2::timestamptz,
           jsonb_build_object('synthetic',true,'sequence',i,'book',$3::jsonb),1
         FROM generate_series($4::int,$4::int+1023) i RETURNING object_id,recorded_at
       ) INSERT INTO btc_market_records(object_id,kind,received_at)
         SELECT object_id,'book',recorded_at FROM inserted`,
-          [
-            data.registration.scope,
-            bar.recorded_at,
-            data.market.book!.payload,
-            start,
-          ],
-        );
-      }
+            [
+              data.registration.scope,
+              bar.recorded_at,
+              data.market.book!.payload,
+              start,
+            ],
+          );
+        }
+      }, 60000);
+    }
+    beforeAll(async () => {
       bar.payload.input_ids = ids;
       const c = await f.pool.connect();
       try {
@@ -59,9 +66,6 @@ describe.skipIf(!url)(
       await f.pool.query("ANALYZE btc_retention_objects");
       await f.pool.query("ANALYZE btc_market_records");
       await f.pool.query("ANALYZE btc_market_bars");
-      // Bulk fixture preparation exercises all six physical-storage guards.
-      // Shared CI runners can need >30 s for 65k inserts; this is not the read
-      // performance gate below (statement_timeout remains 1500 ms).
     }, 60000);
     afterAll(async () => {
       await f?.dispose();
