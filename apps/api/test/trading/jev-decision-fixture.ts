@@ -16,7 +16,9 @@ export function decisionFixture(at?: number) {
   const delta =
     at === undefined
       ? 0
-      : Math.floor(at / 900000) * 900000 + (f.cut % 900000) - f.cut;
+      : Math.floor((at - (f.cut % 900000)) / 900000) * 900000 +
+        (f.cut % 900000) -
+        f.cut;
   const input = JSON.parse(
     JSON.stringify(f.input).replace(
       /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g,

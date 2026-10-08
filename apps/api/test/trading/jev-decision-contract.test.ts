@@ -6,6 +6,29 @@ import {
 } from "../../src/models/jev-decision-contract.js";
 import { decisionFixture, decisionResponse } from "./jev-decision-fixture.js";
 describe("principal JEV contract, synthetic only", () => {
+  it("keeps synthetic sources and own positions in the past across quarter-hour rollover", () => {
+    const boundary = Date.parse("2026-10-08T10:30:00.000Z");
+    for (const offset of [-1, 0, 1, 11999, 12000, 12001, 899999, 900000]) {
+      const at = boundary + offset;
+      const { batch } = decisionFixture(at);
+      expect(Date.parse(batch.cut_at)).toBeLessThanOrEqual(at);
+      for (const { context } of batch.participants) {
+        for (const ref of context.input_refs) {
+          expect(Date.parse(ref.recorded_at)).toBeLessThanOrEqual(at);
+          expect(Date.parse(ref.received_at)).toBeLessThanOrEqual(at);
+        }
+        if (context.account!.position)
+          expect(
+            Date.parse(context.account!.position.first_fill_at),
+          ).toBeLessThanOrEqual(at);
+      }
+      expect(
+        interpretJevBatch(batch, decisionResponse(batch), "42").map(
+          (d) => d.action,
+        ),
+      ).toEqual(["open", "close"]);
+    }
+  });
   it("binds complete question text to own account/position/cut/version and needs no candidate", () => {
     const { batch } = decisionFixture();
     expect(JSON.stringify(jevBatchPayload(batch))).not.toContain("candidate");
