@@ -18,6 +18,7 @@ import {
   type JevLedgerIdentity,
 } from "./jev-ledger.js";
 import type { JevLedgerEvent } from "@ganso-market/contracts/trading";
+import { observeJevRiskTx } from "./jev-riskstore.js";
 type Store = Pick<DatabasePool, "transaction">;
 const same = (a: unknown, b: unknown) =>
   requireJev(
@@ -56,7 +57,7 @@ async function registerProfileTx(
   same(row.profile, p);
   same(row.manifest, manifest);
 }
-async function loadTx(
+export async function loadJevAccountTx(
   tx: SqlExecutor,
   owner: string,
   id: string,
@@ -99,7 +100,9 @@ async function appendTx(
   history: JevLedgerEvent[],
   batch: JevLedgerBatch,
 ) {
-  const at = new Date().toISOString(),
+  const at = (
+      await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
+    ).rows[0]!.now.toISOString(),
     id = identity.account.account_id;
   materializeJevBatch(batch, "0", at);
   const old = (
@@ -270,13 +273,18 @@ export async function appendJevLedgerBatch(
   assertEvidenceJson(input);
   const batch = structuredClone(input);
   return pool.transaction(async (tx) => {
-    const current = await loadTx(tx, owner, id, true);
-    return appendTx(tx, current.identity, current.events, batch);
+    const current = await loadJevAccountTx(tx, owner, id, true);
+    // Sample before and after the financial boundary under the same account
+    // lock. Funding/fill/fee races cannot skip a loss or reset an observed peak.
+    await observeJevRiskTx(tx, owner, id);
+    const result = await appendTx(tx, current.identity, current.events, batch);
+    await observeJevRiskTx(tx, owner, id);
+    return result;
   });
 }
 export async function readJevAccount(pool: Store, owner: string, id: string) {
   return pool.transaction(async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    return loadTx(tx, owner, id);
+    return loadJevAccountTx(tx, owner, id);
   });
 }
