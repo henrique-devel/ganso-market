@@ -23,7 +23,9 @@ Funding/custo incompletos, valorização ausente ou gap financeiro impedem aprov
 PnL aberto positivo não ajuda o resultado conservador; negativo permanece debitado.
 Infraestrutura continua fora do resultado e dos limites.
 
-A avaliação ocorre no produto uma vez por dia UTC. Antes de 90 dias, exige pelo
+A avaliação ocorre no produto uma vez por dia UTC, após um minuto completo
+para permitir a reconciliação da virada; o `knowledge_at` permanece explícito.
+Esse atraso não presume funding/custo completo nem altera a borda UTC. Antes de 90 dias, exige pelo
 menos 60 episódios em cada conta, 99% sem arredondar a fronteira, custos completos,
 reconciliação e resultado conservador estritamente positivo em paper e stress.
 Caixa/BTC ficam visíveis sem hurdle inicial. Uma prévia dos últimos 30 dias é

@@ -189,6 +189,15 @@ describe.skipIf(!url)(
       ).rejects.toThrow(/NOT_FOUND/);
     });
     it("persists a daily versioned inconclusion without qualification, and GET is owned, immutable and read-only", async () => {
+      f.setClock(iso(end + 59999));
+      expect(
+        await captureJevEvaluation(f.poolAdapter, "operator", "h1", "v1"),
+      ).toBeNull();
+      expect(
+        (await f.pool.query("SELECT count(*)::int n FROM jev_evaluation_cuts"))
+          .rows[0].n,
+      ).toBe(0);
+      f.setClock(iso(end + 60000));
       const result = await captureJevEvaluation(
         f.poolAdapter,
         "operator",

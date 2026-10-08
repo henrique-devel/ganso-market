@@ -274,7 +274,10 @@ describe("JE09 initial and rolling state contracts", () => {
       ]),
     ).toThrow(/VERSION/);
     expect(evaluate(undefined, "preview30").state).toBe("validating");
-    const w = jevEvaluationWindow(iso(start), iso(start + 100 * day + 12345))!;
+    expect(
+      jevEvaluationWindow(iso(start), iso(start + 100 * day + 59999)),
+    ).toBeNull();
+    const w = jevEvaluationWindow(iso(start), iso(start + 100 * day + 72345))!;
     expect(w.phase).toBe("rolling90");
     expect(Date.parse(w.window.end_at) - Date.parse(w.window.start_at)).toBe(
       90 * day,
@@ -293,9 +296,9 @@ describe("JE09 initial and rolling state contracts", () => {
         ],
       }).state,
     ).toBe("validating");
-    expect(jevEvaluationWindow(iso(start), iso(start + 29 * day))!.phase).toBe(
-      "initial",
-    );
+    expect(
+      jevEvaluationWindow(iso(start), iso(start + 29 * day + 60000))!.phase,
+    ).toBe("initial");
   });
 });
 

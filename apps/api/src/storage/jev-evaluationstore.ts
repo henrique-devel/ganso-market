@@ -301,13 +301,12 @@ export async function captureJevEvaluation(
     const now = (
       await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
     ).rows[0]!.now.toISOString();
-    const selected =
-      selection ?? jevEvaluationWindow(bindings[0]!.binding.started_at, now);
-    if (!selected) return null;
-    const canonical = jevEvaluationWindow(
-      bindings[0]!.binding.started_at,
-      now,
-    )!;
+    const canonical = jevEvaluationWindow(bindings[0]!.binding.started_at, now);
+    if (!canonical) {
+      requireJev(!selection, "EVALUATION_SCHEDULE");
+      return null;
+    }
+    const selected = selection ?? canonical;
     requireJev(
       selected.window.end_at === canonical.window.end_at &&
         (selected.phase === "preview30"

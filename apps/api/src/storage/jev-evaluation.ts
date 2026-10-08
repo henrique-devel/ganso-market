@@ -14,6 +14,7 @@ export const JEV_EVALUATION_POLICY = Object.freeze({
   coverage_ppm: 990000,
   minimum_episodes: 60,
   day_ms: 86400000,
+  daily_settlement_delay_ms: 60000,
   rolling_days: 90,
   preview_days: 30,
   margin_usd6: "12500000",
@@ -439,9 +440,11 @@ export type JevEvaluation = ReturnType<typeof evaluateJevProfile>;
  * synthesize their evidence or reset a 90-day trajectory. */
 export function jevEvaluationWindow(started_at: string, now_at: string) {
   const started = jevTime(started_at),
-    end = Math.floor(jevTime(now_at) / 86400000) * 86400000,
+    now = jevTime(now_at),
+    end = Math.floor(now / 86400000) * 86400000,
     age = end - started;
-  if (age <= 0) return null;
+  if (age <= 0 || now - end < JEV_EVALUATION_POLICY.daily_settlement_delay_ms)
+    return null;
   const phase = age >= 90 * 86400000 ? "rolling90" : "initial";
   return {
     phase,
