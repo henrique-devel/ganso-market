@@ -124,3 +124,45 @@ npm run check --workspace @ganso-market/contracts
 npm test --workspace @ganso-market/contracts
 npm run build --workspace @ganso-market/contracts
 ```
+
+## JEV v2 (JE02)
+
+`trading.jev.v2` is exported through the existing `/trading` entrypoint. Profiles,
+financial accounts and immutable experiment bindings are separate identities.
+Every decision/order/fill boundary can use `assertJevOwnership`; ledger keys bind
+owner, account, mode, profile/version, experiment and instrument/version.
+`trading.v1` remains readable and paper-only, with its historical US$1,000 genesis.
+
+The dormant JEV registry uses additive migration 0051 and independent `jev_*`
+tables. Paper/stress each allocate US$250 once. Live reserves one durable,
+unfunded identity (zero ledger cash); only later venue reconciliation can admit
+real funding. No registration creates a signer, route, worker or active executor.
+The three pair slots and live singleton are SQL constraints. Profiles/manifests,
+bindings, transactions and events are append-only; a new material version starts
+unqualified and cannot reuse a previous manifest fingerprint.
+
+Initial manifests are `config/trading/jev/horizon-{1,3,5}.json`. Their only semantic
+difference is the economic horizon. A pinned provider/model must be selected
+before admission; this delivery makes no external model call. Context uses top-five
+book depth, a 60-second observed trade window, fifteen closed 15-minute bars,
+ceiling mean TR14, simple normalized RSI14 and 15/45/75-minute close returns.
+Money/prices use six decimals, BTC eight, ratios nine (toward zero); depth/mid/VWAP
+round down. Signed funding remains current context, never a settled payment.
+Original source/receipt/persistence times and dependency references are preserved;
+missing coverage/bars/dependencies remain incomplete, with public continuity unproven.
+
+Cadence is 60 seconds, or 2 seconds with an open position and half-ATR movement
+from the last decision or half-ATR stop proximity. Fast mode lasts at least 10 and
+at most 30 seconds, with 60 seconds cooldown. Response deadline is 1.5 seconds;
+decisions expire 2 seconds after the context cut. Book/account freshness is 2 seconds,
+mark/funding 10 seconds. Flow/liquidity alone never activates fast mode.
+
+Stop distance is fixed at 2 ATR14 captured before entry, anchored to the first
+fill price, rounded toward entry on the full venue price grid. Later partials
+only change protected quantity. The six-hour clock starts at the first fill;
+stop, elapsed time, risk and missing protection can request an IOC reduce-only
+close independently of JEV. These are pure contracts, without a scheduler.
+Risk, execution, exits, freshness and cadence are frozen generator components;
+one reviewed horizon/window/information-set change creates a new fingerprint.
+Reporting windows never reset financial lifetime. Operational admission remains
+in the separately selected checkpoints.
