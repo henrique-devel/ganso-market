@@ -78,6 +78,18 @@ async function counts() {
     );
   return rows;
 }
+async function waitForFundingHour(
+  pool: Awaited<ReturnType<typeof riskFixture>>["pool"],
+) {
+  // Keep fixture setup outside the last two seconds of a real SQL hour.
+  // The guard still reads clock_timestamp(); no funding check is bypassed.
+  await pool.query(`WITH clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS now
+  ) SELECT pg_sleep(CASE
+    WHEN date_trunc('hour',now)+interval '1 hour'-now <= interval '2 seconds'
+    THEN extract(epoch FROM date_trunc('hour',now)+interval '1 hour'-now)+0.001
+    ELSE 0 END) FROM clock`);
+}
 describe.skipIf(!url)(
   "authenticated desk commands on disposable PostgreSQL",
   () => {
@@ -85,15 +97,7 @@ describe.skipIf(!url)(
       f = await riskFixture(url);
       await createLedgerAccount(f.poolAdapter, identity());
       await seedMarginMetadata(f.poolAdapter);
-      // Commands recheck funding against the real SQL clock. Start outside
-      // the last two seconds of an hour so fixture setup cannot cross into
-      // a new funding period before these short, fresh-book requests finish.
-      await f.pool.query(`WITH clock AS MATERIALIZED (
-        SELECT clock_timestamp() AS now
-      ) SELECT pg_sleep(CASE
-        WHEN date_trunc('hour',now)+interval '1 hour'-now <= interval '2 seconds'
-        THEN extract(epoch FROM date_trunc('hour',now)+interval '1 hour'-now)+0.001
-        ELSE 0 END) FROM clock`);
+      await waitForFundingHour(f.pool);
       await seedRiskFunding(f.poolAdapter);
       await f.capture();
       const owner = (
@@ -465,6 +469,7 @@ describe.skipIf(!url)("funding fixture across the UTC hour boundary", () => {
       const fixture = await riskFixture(url);
       try {
         await createLedgerAccount(fixture.poolAdapter, identity());
+        await waitForFundingHour(fixture.pool);
         const now = Date.now(),
           hour = Math.floor(now / 3600000) * 3600000;
         await seedRiskFunding(
