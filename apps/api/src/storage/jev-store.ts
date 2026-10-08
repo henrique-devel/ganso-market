@@ -94,7 +94,7 @@ export async function loadJevAccountTx(
   ).rows.map((r) => r.event as JevLedgerEvent);
   return { identity, events, projection: replayJevLedger(identity, events) };
 }
-async function appendTx(
+export async function appendJevLedgerTx(
   tx: SqlExecutor,
   identity: JevLedgerIdentity,
   history: JevLedgerEvent[],
@@ -197,7 +197,7 @@ async function createAccountTx(tx: SqlExecutor, input: JevLedgerIdentity) {
   ).rows.map((r) => r.event as JevLedgerEvent);
   if (a.mode === "live") return { status: "unfunded" as const, events: [] };
   requireJev(b.started_at === a.started_at, "GENESIS_START");
-  return appendTx(tx, input, history, jevGenesis(input));
+  return appendJevLedgerTx(tx, input, history, jevGenesis(input));
 }
 /** Library seams only. No route, boot hook, worker or migration calls these. */
 export async function registerJevPair(
@@ -277,7 +277,12 @@ export async function appendJevLedgerBatch(
     // Sample before and after the financial boundary under the same account
     // lock. Funding/fill/fee races cannot skip a loss or reset an observed peak.
     await observeJevRiskTx(tx, owner, id);
-    const result = await appendTx(tx, current.identity, current.events, batch);
+    const result = await appendJevLedgerTx(
+      tx,
+      current.identity,
+      current.events,
+      batch,
+    );
     await observeJevRiskTx(tx, owner, id);
     return result;
   });

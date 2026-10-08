@@ -425,20 +425,30 @@ describe.skipIf(!url)("S5 passive atomic SQL", () => {
     await expect(apply(submit("p2"))).rejects.toThrow("REDUCE_ONLY");
   });
   it("expires without using already stored negotiations", async () => {
-    await apply(submit("p1", { valid_until: iso(Date.now() + 180) }));
+    // Leave room for real SQL acceptance on a busy host, then wait for the
+    // declared deadline rather than assuming how long submit/capture took.
+    const deadline = iso(Date.now() + 3000);
+    await apply(submit("p1", { valid_until: deadline }));
     await capture({ quantity: "0.002" });
-    await fixture.pool.query("SELECT pg_sleep(0.2)");
+    await fixture.pool.query(
+      "SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp())))",
+      [deadline],
+    );
     const r = await apply(advance());
     expect(r.fills).toEqual([]);
     expect(r.orders[0]!.reservation.status).toBe("expired");
   });
   it("expiry after tentative fill rolls back ledger, queue and trade claims", async () => {
-    await apply(submit("p1", { valid_until: iso(Date.now() + 300) }));
+    const deadline = iso(Date.now() + 1500);
+    await apply(submit("p1", { valid_until: deadline }));
     await capture({ quantity: "0.0007" });
     hook = async (sql, tx) => {
       if (sql.startsWith("INSERT INTO btc_reservation_events")) {
         hook = null;
-        await tx.query("SELECT pg_sleep(0.35)");
+        await tx.query(
+          "SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp())))",
+          [deadline],
+        );
       }
     };
     const r = await apply(advance());
