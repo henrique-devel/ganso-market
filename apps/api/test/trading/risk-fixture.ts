@@ -161,8 +161,12 @@ export async function riskFixture(url: string | undefined) {
 export async function seedRiskFunding(
   pool: Pick<import("../../src/database.js").DatabasePool, "transaction">,
   owner = scope,
+  observedAt = Date.now(),
 ) {
-  const at = Date.now() - 500,
+  // A finalized synthetic sample must remain in the observed UTC hour,
+  // including its first 500 ms, and its receipt must never be in the future.
+  const hour = Math.floor(observedAt / 3600000) * 3600000,
+    at = Math.max(observedAt - 500, hour),
     id = `risk-fixture:oracle:${owner.account_id}:${at}`;
   await withBtcRetentionTransaction(pool, async (tx) => {
     await storeRetentionObjectTx(tx, {
@@ -182,11 +186,11 @@ export async function seedRiskFunding(
     await import("../../src/storage/fundingstore.js");
   return reconcileFunding(pool, owner, {
     operation_id: "risk-fixture:funding",
-    period_hour: iso(Math.floor(at / 3600000) * 3600000),
+    period_hour: iso(hour),
     oracle_object_id: id,
     observation: {
       source: "hyperliquid:mainnet:fundingHistory",
-      received_at: iso(at + 100),
+      received_at: iso(observedAt),
       row: { coin: "BTC", time: at, fundingRate: "0", premium: "0" },
     },
   });
