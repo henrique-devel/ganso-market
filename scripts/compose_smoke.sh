@@ -152,6 +152,11 @@ wait_for_code 503 "$gateway/api/health/ready"
 wait_for_code 200 "$gateway/api/health/live"
 docker compose start postgres
 wait_for_code 200 "$gateway/api/health/ready"
+# Database recovery must restore execution readiness as well as HTTP readiness.
+attempts=30
+until docker compose exec -T execution-worker node apps/api/dist/execution-worker.js --health; do
+  attempts=$((attempts - 1)); test "$attempts" -gt 0; sleep 1
+done
 docker compose --profile btc down --remove-orphans
 remaining="$(docker compose --profile btc ps --quiet)"
 if [ -n "$remaining" ]; then
