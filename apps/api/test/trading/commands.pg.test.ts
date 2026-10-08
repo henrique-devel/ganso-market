@@ -78,6 +78,18 @@ async function counts() {
     );
   return rows;
 }
+async function waitForFundingHour(
+  pool: Awaited<ReturnType<typeof riskFixture>>["pool"],
+) {
+  // Keep fixture setup outside the last two seconds of a real SQL hour.
+  // The guard still reads clock_timestamp(); no funding check is bypassed.
+  await pool.query(`WITH clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS now
+  ) SELECT pg_sleep(CASE
+    WHEN date_trunc('hour',now)+interval '1 hour'-now <= interval '2 seconds'
+    THEN extract(epoch FROM date_trunc('hour',now)+interval '1 hour'-now)+0.001
+    ELSE 0 END) FROM clock`);
+}
 describe.skipIf(!url)(
   "authenticated desk commands on disposable PostgreSQL",
   () => {
@@ -85,6 +97,7 @@ describe.skipIf(!url)(
       f = await riskFixture(url);
       await createLedgerAccount(f.poolAdapter, identity());
       await seedMarginMetadata(f.poolAdapter);
+      await waitForFundingHour(f.pool);
       await seedRiskFunding(f.poolAdapter);
       await f.capture();
       const owner = (
@@ -448,3 +461,40 @@ describe.skipIf(!url)(
     });
   },
 );
+
+describe.skipIf(!url)("funding fixture across the UTC hour boundary", () => {
+  it.each([0, 1, 499, 500])(
+    "keeps a finalized sample from the first %i ms in the current SQL hour",
+    async (offset) => {
+      const fixture = await riskFixture(url);
+      try {
+        await createLedgerAccount(fixture.poolAdapter, identity());
+        await waitForFundingHour(fixture.pool);
+        const now = Date.now(),
+          hour = Math.floor(now / 3600000) * 3600000;
+        await seedRiskFunding(
+          fixture.poolAdapter,
+          scope,
+          Math.min(hour + offset, now),
+        );
+        const proof = (
+          await fixture.pool.query(`SELECT period_hour,cutoff,status,
+            period_hour=date_trunc('hour',clock_timestamp()) AS current_hour
+            FROM btc_funding_results WHERE account_id='manual'`)
+        ).rows[0];
+        expect(proof).toMatchObject({ status: "settled", current_hour: true });
+        expect(proof.period_hour.toISOString()).toBe(iso(hour));
+        expect(proof.cutoff.toISOString()).toBe(iso(hour));
+        expect(
+          (
+            await fixture.pool.query(
+              "SELECT count(*)::int n FROM btc_ledger_events WHERE event_type='funding'",
+            )
+          ).rows[0].n,
+        ).toBe(0);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+});
