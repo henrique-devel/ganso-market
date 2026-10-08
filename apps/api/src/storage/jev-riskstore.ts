@@ -55,7 +55,7 @@ export async function readJevEntriesTx(tx: SqlExecutor, id: string) {
     )
   ).rows;
 }
-async function entryEvent(
+export async function jevEntryEventTx(
   tx: SqlExecutor,
   plan: JevEntryPlan,
   status: string,
@@ -85,7 +85,7 @@ async function entryEvent(
 export async function cancelJevEntriesTx(tx: SqlExecutor, id: string) {
   for (const entry of await readJevEntriesTx(tx, id))
     if (entry.status === "reserved")
-      await entryEvent(
+      await jevEntryEventTx(
         tx,
         entry.plan,
         "cancel_requested",
@@ -374,7 +374,7 @@ export async function reserveJevEntry(
         reason: error instanceof Error ? error.message : "SIZING_REFUSED",
       };
     }
-    await entryEvent(tx, plan, "reserved", `reserve:${request.order_id}`);
+    await jevEntryEventTx(tx, plan, "reserved", `reserve:${request.order_id}`);
     return {
       status: "reserved" as const,
       plan,
