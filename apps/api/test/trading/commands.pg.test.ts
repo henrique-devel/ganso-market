@@ -1,5 +1,8 @@
 import { drainDeskCommands } from "../../src/storage/desk-commandstore.js";
-import { claimExecutionWorker } from "../../src/storage/execution-worker-lease.js";
+import {
+  claimExecutionWorker,
+  executionFencedPool,
+} from "../../src/storage/execution-worker-lease.js";
 import { consumeDeskAccount } from "../../src/storage/desk-consumer.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
@@ -132,7 +135,22 @@ describe.skipIf(!url)(
           }),
       });
       await consumeDeskAccount(pool, "manual");
-      await claimExecutionWorker(pool, "a".repeat(40));
+      const transaction = pool.transaction.bind(pool);
+      const apiPool = {
+        transaction,
+        readOnly: <T>(ms: number, run: (tx: SqlExecutor) => Promise<T>) =>
+          transaction(async (tx) => {
+            await tx.query("SET TRANSACTION READ ONLY");
+            await tx.query(`SET LOCAL statement_timeout=${ms}`);
+            return run(tx);
+          }),
+      };
+      const lease = await claimExecutionWorker(apiPool, "a".repeat(40));
+      // Keep the already reconciled per-account identity while exercising the
+      // real process fence for every financial acceptance in the command pump.
+      const fenced = executionFencedPool(apiPool, lease);
+      pool.transaction = fenced.transaction;
+      pool.readOnly = apiPool.readOnly;
       let stopped = false,
         timer: ReturnType<typeof setTimeout> | undefined,
         running = Promise.resolve();
@@ -154,7 +172,7 @@ describe.skipIf(!url)(
       };
       app = Fastify();
       registerTradingCommandRoutes(app, {
-        pool,
+        pool: apiPool,
         authService: {
           session: async (token) =>
             ["token", "rotated", "other-session"].includes(token)

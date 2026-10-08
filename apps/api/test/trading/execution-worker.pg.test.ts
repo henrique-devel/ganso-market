@@ -71,6 +71,17 @@ describe.skipIf(!url)("JE07 process ownership", () => {
     await expect(
       executionFencedPool(pool, a).transaction((tx) => tx.query("SELECT 1")),
     ).rejects.toThrow("FENCED");
+    await expect(
+      executionFencedPool(pool, a).transaction((tx) =>
+        tx.query(
+          "SET LOCAL statement_timeout='5s'; CREATE TABLE je07_unfenced(n int)",
+        ),
+      ),
+    ).rejects.toThrow("FENCED");
+    expect(
+      (await f.pool.query("SELECT to_regclass('je07_unfenced') AS x")).rows[0]
+        .x,
+    ).toBeNull();
   });
   it("rolls back the entire transaction when the lease expires before commit", async () => {
     const a = await claimExecutionWorker(pool, "a".repeat(40));
@@ -110,5 +121,55 @@ describe.skipIf(!url)("JE07 process ownership", () => {
     await expect(
       f.pool.query("DELETE FROM execution_worker_owners"),
     ).rejects.toThrow("IMMUTABLE");
+  });
+  it("does not make same-process writes consume each other's SQL lock budget", async () => {
+    const a = await claimExecutionWorker(pool, "a".repeat(40));
+    const budgeted: typeof pool = {
+      ...pool,
+      transaction: (run) =>
+        pool.transaction(async (tx) => {
+          await tx.query("SET LOCAL lock_timeout='50ms'");
+          return run(tx);
+        }),
+    };
+    const worker = executionFencedPool(budgeted, a);
+    await f.pool.query("CREATE TABLE je07_concurrent(n int)");
+    let started!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const first = worker.transaction(async (tx) => {
+      await tx.query("INSERT INTO je07_concurrent VALUES(1)");
+      started();
+      await delay(150);
+    });
+    await locked;
+    const second = worker.transaction((tx) =>
+      tx.query("INSERT INTO je07_concurrent VALUES(2)"),
+    );
+    const results = await Promise.allSettled([first, second]);
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    expect(
+      (await f.pool.query("SELECT count(*)::int n FROM je07_concurrent"))
+        .rows[0].n,
+    ).toBe(2);
+    await expect(
+      worker.transaction((tx) => tx.query("SELECT 1/0")),
+    ).rejects.toThrow();
+    await worker.transaction((tx) =>
+      tx.query("INSERT INTO je07_concurrent VALUES(3)"),
+    );
+    expect(
+      (await f.pool.query("SELECT count(*)::int n FROM je07_concurrent"))
+        .rows[0].n,
+    ).toBe(3);
+  });
+  it("allows snapshot/isolation preambles before the financial fence", async () => {
+    const a = await claimExecutionWorker(pool, "a".repeat(40));
+    await executionFencedPool(pool, a).transaction(async (tx) => {
+      await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+      await tx.query("SET LOCAL statement_timeout='1500ms'");
+      await tx.query("SELECT 1");
+    });
   });
 });
