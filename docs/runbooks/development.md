@@ -28,6 +28,9 @@ o arquivo para Git, logs, fixtures ou chat. O diretório fica em `0700`; o
 arquivo fica em `0644` para que os UIDs não-root dos containers consigam ler o
 bind mount. Fora desse diretório privado, o arquivo não é acessível no host.
 
+Para a credencial JEV e o teste real de conexão com dados sintéticos, consulte
+[JEV — credencial protegida e teste de conexão](jev-api.md).
+
 O perfil padrão contém PostgreSQL, migrador, API, web e Nginx. Os stubs
 engine/model-worker foram retirados em G2-03.4 (histórico Git em `a6e3816`).
 BTC e os cinco workers Polymarket permanecem com escala zero e `restart: no`;
