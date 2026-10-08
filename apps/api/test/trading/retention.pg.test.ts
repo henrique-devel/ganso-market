@@ -169,8 +169,9 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     let dependencies: string[];
     let before: Awaited<ReturnType<typeof retentionCapacity>>;
 
-    // Data construction has its own bounded hook: slow CI setup must not
-    // consume the behavior timeout or weaken the writer's unchanged 5s SQL limit.
+    // All 36,865 inserts run the real allocation/capacity triggers. Allow a
+    // bounded 120s for corpus construction on slower CI hosts; this is separate
+    // from the unchanged 30s behavior test and the writer's 5s SQL/2s lock limits.
     beforeEach(async () => {
       const seededAt = performance.now();
       // Worst permitted builder fan-in: 32,768 trades + 4,096 captures + metadata.
@@ -198,7 +199,7 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
       console.info(
         `retention fan-in fixture: inputs=${size}, seed_ms=${Math.round(performance.now() - seededAt)}`,
       );
-    }, 60_000);
+    }, 120_000);
 
     it("validates a full 36,865-input bar inside the existing SQL write budget", async () => {
       const started = performance.now();
