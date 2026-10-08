@@ -6,6 +6,10 @@ usam o username da sessão autenticada como owner, leitura limitada e
 `Cache-Control: no-store`. Sessão de outro proprietário recebe 404, inclusive
 para cortes persistidos; a query não escolhe ou substitui owner.
 GET não captura evidência, altera contas, chama JEV nem executa ordens.
+O gateway publica os três caminhos exatos com prefixo `/api`, somente GET;
+métodos de escrita e caminhos descendentes permanecem fechados.
+O orçamento de SQL é 4s para métricas e 1,5s para referências/cortes, dentro
+do teto de 4s existente; limites financeiros e recursos não são alterados.
 O parâmetro opcional `origin=mock` seleciona exclusivamente o journal sintético;
 o padrão é `real`. Os dois nunca são misturados.
 
