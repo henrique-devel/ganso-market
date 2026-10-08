@@ -101,7 +101,9 @@ function testConfig(): ApiConfig {
 const authService = {
   session(token: string) {
     return Promise.resolve(
-      token === "good-token" ? { status: "ok" } : { status: "unauthenticated" },
+      token === "good-token"
+        ? { status: "ok", username: "operator" }
+        : { status: "unauthenticated" },
     );
   },
 };
@@ -160,6 +162,9 @@ const SAMPLE_QUERY: Readonly<Record<string, () => string>> = {
   "/trading/positions": () => "?account_id=manual",
   "/trading/orders": () => "?account_id=manual",
   "/trading/operation": () => "?account_id=manual&order_id=fixture:order",
+  "/trading/jev/metrics": () => "?account_id=fixture:jev:paper",
+  "/trading/jev/benchmarks": () => "?account_id=fixture:jev:paper",
+  "/trading/jev/results": () => "?evidence_id=jev-metrics:fixture:cut",
   // `from` is relative to the real clock because the window ceiling is, and a
   // fixed date here would age into a 400 the day after it was written.
 };

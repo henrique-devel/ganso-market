@@ -127,7 +127,7 @@ wait_for_code 401 "$gateway/api/auth/session"
 wait_for_code 404 "$gateway/api/polymarket/overview"
 wait_for_code 401 "$gateway/api/trading/accounts"
 # Exact reads reach authentication; only the private report POST is allowed.
-for path in accounts account positions orders experiment-datasets experiments experiment-system; do
+for path in accounts account positions orders experiment-datasets experiments experiment-system jev/metrics jev/benchmarks jev/results; do
   wait_for_code 401 "$gateway/api/trading/$path"
   code="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST "$gateway/api/trading/$path")"
   if [ "$path" = experiments ]; then
@@ -135,6 +135,12 @@ for path in accounts account positions orders experiment-datasets experiments ex
   else
     test "$code" = 404
   fi
+done
+for path in jev/metrics jev/benchmarks jev/results; do
+  headers="$(curl --silent --show-error --output /dev/null --dump-header - "$gateway/api/trading/$path")"
+  printf '%s\n' "$headers" | grep -i '^cache-control: no-store' >/dev/null
+  test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X DELETE "$gateway/api/trading/$path")" = 404
+  wait_for_code 404 "$gateway/api/trading/$path/unpublished"
 done
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X DELETE "$gateway/api/trading/experiments")" = 404
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Content-Type: application/json' --data '{"private_input":"synthetic-billing-body-must-not-be-logged"}' "$gateway/api/trading/experiments")" = 401

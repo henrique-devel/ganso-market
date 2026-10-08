@@ -29,6 +29,9 @@ class NginxPerimeterTests(unittest.TestCase):
                 "orders",
                 "operation",
                 "jev",
+                "jev/metrics",
+                "jev/benchmarks",
+                "jev/results",
                 "experiment-datasets",
                 "experiments",
                 "experiment-system",
@@ -52,6 +55,8 @@ class NginxPerimeterTests(unittest.TestCase):
             else:
                 self.assertEqual(re.findall(r"\$request_method\s*!=\s*(\w+)", body), ["GET"])
             self.assertIn("return 404", body)
+            if path.startswith("/api/trading/jev/"):
+                self.assertIn(f"proxy_pass http://api:3000{path.removeprefix('/api')};", body)
 
     def test_unknown_and_retired_api_routes_are_closed(self) -> None:
         all_locations = locations()
