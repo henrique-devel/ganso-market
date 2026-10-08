@@ -453,6 +453,7 @@ export async function retainJevEvidence(
       AND ((c.closed_at AT TIME ZONE 'UTC')+interval '180 days') AT TIME ZONE 'UTC'<=clock_timestamp()
       AND NOT EXISTS(SELECT 1 FROM jev_evidence_pins WHERE object_id=o.object_id)
       AND NOT EXISTS(SELECT 1 FROM jev_evidence_dependencies WHERE dependency_id=o.object_id)
+      AND NOT EXISTS(SELECT 1 FROM jev_decision_participants WHERE context_id=o.object_id)
       ORDER BY c.closed_at,o.object_id LIMIT $1`,
         [options.limit],
       )
