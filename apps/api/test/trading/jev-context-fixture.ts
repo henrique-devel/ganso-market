@@ -14,10 +14,10 @@ import { jevHash } from "../../src/storage/jev-hash.js";
 import { jevScope } from "../../src/storage/jev-ledger.js";
 import type { ClosedBar } from "../../src/trading/bars.js";
 import { jevIdentity, start, iso } from "./jev-v2-fixture.js";
-export function contextFixture() {
+export function contextFixture(at?: number) {
   const manifest = initialJevManifest(1),
     identity = jevIdentity(),
-    cut = start + 15 * 900000 + 12000;
+    cut = at ?? start + 15 * 900000 + 12000;
   identity.bindings[0]!.profile.manifest_hash = validateJevManifest(manifest);
   const amount = (unit: "BTC" | "USD_PER_BTC", raw: string) =>
     parseTradingAmount(unit, { unit, decimals: unit === "BTC" ? 8 : 6, raw });
@@ -97,7 +97,10 @@ export function contextFixture() {
   const scope = jevScope(identity.bindings[0]!.binding, identity.instrument);
   const bars: Array<JevContextRecord<ClosedBar>> = [];
   for (let i = 0; i < 15; i++) {
-    const end = start + (15 - i) * 900000;
+    const end = Math.floor(cut / 900000) * 900000 - i * 900000,
+      // Controlled synthetic receipt, including cuts at the closing boundary.
+      // Never carry a future receipt or a prior quarter's candle into the cut.
+      closed = Math.min(end + 10000, cut);
     bars.push(
       record(
         `bar:${i}`,
@@ -110,7 +113,7 @@ export function contextFixture() {
           interval_ms: 900000,
           start_at: iso(end - 900000),
           end_at: iso(end),
-          closed_at: iso(end + 10000),
+          closed_at: iso(closed),
           ohlc: {
             open: "100000000",
             high: "103000000",
@@ -128,7 +131,7 @@ export function contextFixture() {
           },
           input_ids: [`dep:${i}`],
         },
-        end + 10000,
+        closed,
       ),
     );
   }
