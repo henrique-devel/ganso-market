@@ -63,24 +63,59 @@ export async function assertExecutionLeaseTx(
     fail();
 }
 export function executionFencedPool(pool: Pool, lease: ExecutionLease): Pool {
+  // Same-process writers already share one DB fence. Wait before BEGIN instead
+  // of spending another connection's SQL budget on that same lock. Call sites
+  // are bounded (one scheduler lane, consumer/funding/sample and command drain).
+  let pending = Promise.resolve();
   return {
     readOnly: pool.readOnly.bind(pool),
-    transaction: (run) =>
-      pool.transaction(async (tx) => {
-        // All process mutations share this short fence. Never hold it over HTTP.
-        await assertExecutionLeaseTx(tx, lease);
-        const value = await run(tx);
-        if (
-          !(
-            await tx.query(
-              "UPDATE execution_worker_head SET lease_until=clock_timestamp()+interval '10 seconds' WHERE singleton AND generation=$1 AND worker_id=$2 AND lease_until>clock_timestamp()",
-              [lease.generation, lease.worker_id],
-            )
-          ).rowCount
-        )
-          fail();
-        return value;
-      }),
+    async transaction(run) {
+      const prior = pending;
+      let release!: () => void;
+      pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await prior;
+      try {
+        return await pool.transaction(async (tx) => {
+          // All process mutations share this short fence. Never hold it over HTTP.
+          // Isolation/budget preambles must precede the first data query. Their
+          // whitelist cannot contain a second statement or any financial mutation.
+          let locked = false;
+          const lock = async () => {
+            if (!locked) {
+              await assertExecutionLeaseTx(tx, lease);
+              locked = true;
+            }
+          };
+          const guarded: SqlExecutor = {
+            async query(sql, params) {
+              if (
+                !/^\s*SET\s+(?:TRANSACTION\s+ISOLATION\s+LEVEL\s+(?:READ\s+COMMITTED|REPEATABLE\s+READ|SERIALIZABLE)(?:\s+READ\s+ONLY)?|LOCAL\s+(?:statement_timeout|lock_timeout)\s*=\s*(?:'[0-9]+(?:ms|s)?'|[0-9]+)|LOCAL\s+TIME\s+ZONE\s+'UTC')\s*;?\s*$/i.test(
+                  sql,
+                )
+              )
+                await lock();
+              return tx.query(sql, params);
+            },
+          };
+          const value = await run(guarded);
+          await lock();
+          if (
+            !(
+              await tx.query(
+                "UPDATE execution_worker_head SET lease_until=clock_timestamp()+interval '10 seconds' WHERE singleton AND generation=$1 AND worker_id=$2 AND lease_until>clock_timestamp()",
+                [lease.generation, lease.worker_id],
+              )
+            ).rowCount
+          )
+            fail();
+          return value;
+        });
+      } finally {
+        release();
+      }
+    },
   };
 }
 export async function releaseExecutionWorker(

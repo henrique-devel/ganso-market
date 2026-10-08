@@ -12,6 +12,13 @@ lock: reserva/custo/original permanecem no journal JE04, e a proteção continua
 em sua cadência independente. O heartbeat é do PID real do worker; saúde da API
 não comprova saúde de execução.
 
+As escritas do mesmo processo aguardam a fila local antes de `BEGIN`, para não
+consumir o orçamento SQL disputando seu próprio lock. Os chamadores são limitados;
+nenhuma inferência HTTP ocupa essa fila. Preâmbulos de isolamento/snapshot e
+budgets precedem o primeiro fence, mas nenhuma consulta de dados ou comando
+financeiro passa sem verificar o dono. O fence final e os limites SQL continuam
+iguais. Falha libera a fila e conserva rollback integral.
+
 `make up`/`make server-up` gravam o SHA do checkout na imagem. Um archive de
 produção já carrega seu SHA imutável. Ao usar Compose diretamente num checkout,
 informe `GANSO_RELEASE_SHA` com a revisão construída; o worker recusa stamp ausente

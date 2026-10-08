@@ -170,6 +170,19 @@ class LedgerDeploymentTests(unittest.TestCase):
         ]
         self.assertEqual(deploy_paths.affected_services(paths), {"btc-worker"})
 
+    def test_worker_fence_fix_preserves_api_and_stopped_collector(self) -> None:
+        tests = [
+            "apps/api/test/trading/execution-worker.pg.test.ts",
+            "apps/api/test/trading/commands.pg.test.ts",
+        ]
+        self.assertEqual(deploy_paths.affected_services(tests), set())
+        self.assertEqual(
+            deploy_paths.affected_services(
+                ["apps/api/src/storage/execution-worker-lease.ts", *tests]
+            ),
+            {"execution-worker"},
+        )
+
     def test_inactive_baseline_contract_preserves_collector(self) -> None:
         paths = [
             "config/trading/baseline.json",

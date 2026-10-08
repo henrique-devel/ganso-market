@@ -94,6 +94,14 @@ def affected_services(paths: list[str]) -> set[str]:
             continue
         if is_text_path(path):
             continue
+        if path in {
+            "apps/api/test/trading/execution-worker.pg.test.ts",
+            "apps/api/test/trading/jev-worker.pg.test.ts",
+            "apps/api/test/trading/jev-scheduler.test.ts",
+            "apps/api/test/trading/commands.pg.test.ts",
+        }:
+            # Worker/outbox regressions do not change any image consumer.
+            continue
         if path.startswith(
             ("apps/api/src/btc-worker", "apps/api/src/btc/", "config/btc-worker")
         ) or path in {
