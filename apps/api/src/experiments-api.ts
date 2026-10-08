@@ -5,6 +5,11 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { DatabasePool } from "./database.js";
 import { currentBudgetMs } from "./budgets.js";
+import { readJevMetrics } from "./storage/jev-metrics.js";
+import {
+  readJevBenchmark,
+  readJevResult,
+} from "./storage/jev-benchmarkstore.js";
 import {
   accountMetrics,
   compareMetrics,
@@ -42,17 +47,26 @@ export function registerExperimentRoutes(
   app: FastifyInstance,
   deps: {
     pool: Pick<DatabasePool, "readOnly">;
-    authService: { session(token: string): Promise<{ status: string }> };
+    authService: {
+      session(token: string): Promise<{ status: string; username?: string }>;
+    };
     clock: () => Date;
   },
 ) {
+  const jevOwners = new WeakMap<FastifyRequest, string>();
   async function guard(request: FastifyRequest, reply: FastifyReply) {
     reply.header("Cache-Control", "no-store");
     const token = /^Bearer (.+)$/.exec(
       request.headers.authorization ?? "",
     )?.[1];
-    if (!token || (await deps.authService.session(token)).status !== "ok")
+    const session = token ? await deps.authService.session(token) : null;
+    if (!session || session.status !== "ok")
       return reply.code(401).send({ reason_code: "AUTH_UNAUTHENTICATED" });
+    if (request.routeOptions.url?.startsWith("/trading/jev/")) {
+      if (!session.username || !accountId.test(session.username))
+        return reply.code(401).send({ reason_code: "AUTH_UNAUTHENTICATED" });
+      jevOwners.set(request, session.username);
+    }
   }
   // CLI replay loads allow 5s; HTTP must stay inside the existing 4s API ceiling.
   const reportPool: Pick<DatabasePool, "readOnly"> = {
@@ -61,7 +75,9 @@ export function registerExperimentRoutes(
   let reportBusy = false;
   function handler(run: (request: FastifyRequest) => Promise<unknown>) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
-      const report = request.routeOptions.url === "/trading/experiments";
+      const report =
+        request.routeOptions.url === "/trading/experiments" ||
+        request.routeOptions.url?.startsWith("/trading/jev/");
       if (report && reportBusy)
         return reply.code(503).send({ reason_code: "EXPERIMENT_READ_BUSY" });
       if (report) reportBusy = true;
@@ -73,7 +89,10 @@ export function registerExperimentRoutes(
           code === "EXPERIMENT_INVALID_QUERY" ||
           code === "EXPERIMENT_ACCOUNT_MISMATCH" ||
           /^BTC_METRICS_/.test(code);
-        const missing = code === "BTC_REPLAY_DATASET_MISSING_OR_OVERSIZE";
+        const missing =
+          code === "BTC_REPLAY_DATASET_MISSING_OR_OVERSIZE" ||
+          code === "JEV_ACCOUNT_NOT_FOUND" ||
+          code === "JEV_RESULT_NOT_FOUND";
         return reply.code(invalid ? 400 : missing ? 404 : 503).send({
           reason_code:
             invalid || missing ? code : "EXPERIMENT_READ_UNAVAILABLE",
@@ -83,6 +102,54 @@ export function registerExperimentRoutes(
       }
     };
   }
+  app.get(
+    "/trading/jev/metrics",
+    { preHandler: guard },
+    handler(async (request) => {
+      const q = params(request, ["account_id", "origin"]);
+      if (
+        !q.account_id ||
+        !accountId.test(q.account_id) ||
+        (q.origin !== undefined && !["real", "mock"].includes(q.origin))
+      )
+        throw new Error("EXPERIMENT_INVALID_QUERY");
+      return readJevMetrics(
+        reportPool,
+        jevOwners.get(request)!,
+        q.account_id,
+        q.origin === "mock" ? "mock" : "real",
+      );
+    }),
+  );
+  app.get(
+    "/trading/jev/benchmarks",
+    { preHandler: guard },
+    handler(async (request) => {
+      const q = params(request, ["account_id"]);
+      if (!q.account_id || !accountId.test(q.account_id))
+        throw new Error("EXPERIMENT_INVALID_QUERY");
+      return readJevBenchmark(
+        reportPool,
+        jevOwners.get(request)!,
+        q.account_id,
+      );
+    }),
+  );
+  app.get(
+    "/trading/jev/results",
+    { preHandler: guard },
+    handler(async (request) => {
+      const q = params(request, ["evidence_id"]);
+      if (
+        !q.evidence_id ||
+        !/^jev-(metrics|benchmark):[A-Za-z0-9][A-Za-z0-9._:/-]{1,320}$/.test(
+          q.evidence_id,
+        )
+      )
+        throw new Error("EXPERIMENT_INVALID_QUERY");
+      return readJevResult(reportPool, jevOwners.get(request)!, q.evidence_id);
+    }),
+  );
   app.get(
     "/trading/experiment-datasets",
     { preHandler: guard },
