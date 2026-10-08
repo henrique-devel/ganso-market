@@ -6,13 +6,18 @@ import {
 } from "../../src/models/jev-decision-contract.js";
 import { decisionFixture, decisionResponse } from "./jev-decision-fixture.js";
 describe("principal JEV contract, synthetic only", () => {
-  it("keeps synthetic sources and own positions in the past across quarter-hour rollover", () => {
+  it("uses the exact cut and latest closed candles across quarter-hour rollover", () => {
     const boundary = Date.parse("2026-10-08T10:30:00.000Z");
-    for (const offset of [-1, 0, 1, 11999, 12000, 12001, 899999, 900000]) {
+    for (const offset of [
+      -1, 0, 1, 9999, 10000, 10123, 11999, 12000, 12001, 899999, 900000,
+    ]) {
       const at = boundary + offset;
       const { batch } = decisionFixture(at);
-      expect(Date.parse(batch.cut_at)).toBeLessThanOrEqual(at);
+      expect(Date.parse(batch.cut_at)).toBe(at);
       for (const { context } of batch.participants) {
+        expect(context.indicators!.last_closed_bar_end_at).toBe(
+          new Date(Math.floor(at / 900000) * 900000).toISOString(),
+        );
         for (const ref of context.input_refs) {
           expect(Date.parse(ref.recorded_at)).toBeLessThanOrEqual(at);
           expect(Date.parse(ref.received_at)).toBeLessThanOrEqual(at);

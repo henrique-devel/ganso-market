@@ -63,7 +63,7 @@ let template: JevBatch, tariff: JevTariff;
 async function prepare() {
   const f = decisionFixture(Date.now());
   await registerJevPair(pool, 1, f.identity, f.stress, f.manifest);
-  const cut = new Date().toISOString();
+  const cut = f.input.cut_at;
   for (const [i, input] of [f.input, f.accountInput].entries()) {
     input.cut_at = cut;
     input.account.payload.observed_at = cut;

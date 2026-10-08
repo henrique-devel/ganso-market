@@ -8,32 +8,11 @@ import {
   type JevBatch,
 } from "../../src/models/jev-decision-contract.js";
 export function decisionFixture(at?: number) {
-  const f = contextFixture(),
+  const f = contextFixture(at),
     stress = jevIdentity("stress");
   stress.bindings[0]!.profile.manifest_hash =
     f.identity.bindings[0]!.profile.manifest_hash;
-  // Move every origin timestamp equally, preserving bars/windows and source ages.
-  const delta =
-    at === undefined
-      ? 0
-      : Math.floor((at - (f.cut % 900000)) / 900000) * 900000 +
-        (f.cut % 900000) -
-        f.cut;
-  const input = JSON.parse(
-    JSON.stringify(f.input).replace(
-      /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g,
-      (s) => new Date(Date.parse(s) + delta).toISOString(),
-    ),
-  ) as typeof f.input;
-  for (const r of [
-    input.account,
-    input.book!,
-    input.mark_funding!,
-    ...input.trades,
-    ...input.bars,
-    input.coverage!,
-  ])
-    r.payload_hash = jevHash(r.payload);
+  const input = structuredClone(f.input);
   const accountInput = structuredClone(input);
   accountInput.account.object_id = "account:stress";
   accountInput.account.payload.scope = jevScope(
