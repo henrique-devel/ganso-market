@@ -36,13 +36,15 @@ export function jevAccountMetrics(
   costs: Costs,
   funding_complete: boolean,
   cost_origin: "real" | "mock" = "real",
+  knowledge_at: string = market.as_of,
 ) {
   utc(market.as_of);
+  requireMetric(utc(knowledge_at) >= utc(market.as_of), "JEV_KNOWLEDGE_CUT");
   requireMetric(identity.account.mode !== "live", "JEV_LIVE_UNFUNDED");
   requireMetric(
     events.length <= JEV_METRICS_LIMIT &&
       events.every(
-        (e) => e.recorded_at <= market.as_of && e.occurred_at <= market.as_of,
+        (e) => e.recorded_at <= knowledge_at && e.occurred_at <= market.as_of,
       ),
     "JEV_CUT",
   );
@@ -100,6 +102,7 @@ export function jevAccountMetrics(
     schema_version: JEV_METRICS_VERSION,
     scope,
     as_of: market.as_of,
+    knowledge_at,
     ledger_sequence: projection.last_sequence,
     capital_usd6: identity.account.initial_allocation.raw,
     capital_origin: identity.account.capital_origin,
@@ -132,6 +135,46 @@ export function jevAccountMetrics(
   };
 }
 export type JevMetrics = ReturnType<typeof jevAccountMetrics>;
+/** Historical valuation uses reconciled event-time cashflows known at the
+ * evaluation's knowledge cut. Original event/receive clocks remain in inputs;
+ * only the transient reducer sequence is dense, never the stored journal. */
+export function jevHistoricalMetrics(
+  identity: JevLedgerIdentity,
+  history: readonly JevLedgerEvent[],
+  market: ValuationMarket,
+  costs: Costs,
+  funding_complete: boolean,
+  knowledge_at: string,
+) {
+  replayJevLedger(identity, history);
+  requireMetric(
+    history.every((e) => e.recorded_at <= knowledge_at),
+    "JEV_KNOWLEDGE_CUT",
+  );
+  const original = history.filter((e) => e.occurred_at <= market.as_of);
+  const dense = original.map((e, n) => ({
+    ...e,
+    sequence: String(n + 1) as JevLedgerEvent["sequence"],
+  }));
+  const result = jevAccountMetrics(
+    identity,
+    dense,
+    market,
+    costs,
+    funding_complete,
+    "real",
+    knowledge_at,
+  );
+  return {
+    ...result,
+    ledger_sequence: original.at(-1)?.sequence ?? "0",
+    derived_projection_sequence: result.ledger_sequence,
+    source_event_ids: original.map((e) => e.event_id),
+    convention:
+      "reconciled_event_time_cashflows_original_knowledge_clocks_dense_transient_projection",
+  };
+}
+
 /** Window PnL carries the opening marked position/cost basis. Subtract its
  * full opening PnL; exclude only positive END PnL from conservative results. */
 export function jevMetricsWindow(opening: JevMetrics, closing: JevMetrics) {

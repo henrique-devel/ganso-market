@@ -164,6 +164,8 @@ const SAMPLE_QUERY: Readonly<Record<string, () => string>> = {
   "/trading/operation": () => "?account_id=manual&order_id=fixture:order",
   "/trading/jev/metrics": () => "?account_id=fixture:jev:paper",
   "/trading/jev/benchmarks": () => "?account_id=fixture:jev:paper",
+  "/trading/jev/evaluations": () =>
+    "?profile_id=fixture:jev&profile_version=v1",
   "/trading/jev/results": () => "?evidence_id=jev-metrics:fixture:cut",
   // `from` is relative to the real clock because the window ceiling is, and a
   // fixed date here would age into a 400 the day after it was written.

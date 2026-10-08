@@ -16,6 +16,7 @@ import {
 } from "./storage/jev-scheduler.js";
 import { loadChallengerConfig } from "./models/jev-config.js";
 import { loadJevDecisionBackend } from "./models/jev-decision-runtime.js";
+import { runJevContinuousEvaluation } from "./storage/jev-evaluationstore.js";
 export const EXECUTION_HEALTH_PATH = "/tmp/ganso-execution-health.json";
 export function inspectExecutionHealth(
   state: { service: string; pid: number; timestamp: string; ready: boolean },
@@ -102,12 +103,41 @@ export async function runExecutionWorker() {
       evaluate: (batch, signal) => backend.evaluate(batch, signal),
     });
     stopScheduler = scheduler.stop;
+    let lastEvaluationMinute = -1;
+    let evaluationTask: Promise<void> | null = null;
+    let evaluationStatus = "not_started";
+    const finishEvaluation = async () => {
+      await evaluationTask;
+    };
+    const priorStop = stopScheduler;
+    stopScheduler = async () => {
+      await priorStop?.();
+      await finishEvaluation();
+    };
     while (!stopped) {
       const began = Date.now();
       // Heartbeat fencing is independent of provider latency and API lifetime.
       await fenced.transaction((tx) => tx.query("SELECT 1"));
       await scheduler.tick();
       await drainDeskCommands(fenced);
+      const minute = Math.floor(began / 60000);
+      if (minute !== lastEvaluationMinute && !evaluationTask) {
+        lastEvaluationMinute = minute;
+        evaluationStatus = "running";
+        evaluationTask = runJevContinuousEvaluation(fenced)
+          .then((r) => {
+            evaluationStatus = r.admitted_accounts
+              ? "captured"
+              : "not_admitted";
+          })
+          .catch(() => {
+            evaluationStatus = "unavailable";
+            log("JEV_EVALUATION_UNAVAILABLE");
+          })
+          .finally(() => {
+            evaluationTask = null;
+          });
+      }
       await publish({
         service: "execution-worker",
         pid: process.pid,
@@ -119,6 +149,7 @@ export async function runExecutionWorker() {
         admission: "per_account_closed_by_default",
         backend: backend.status,
         metrics: scheduler.metrics,
+        evaluation: { version: "jev.evaluation.v1", status: evaluationStatus },
       });
       await delay(Math.max(0, 250 - (Date.now() - began)));
     }
