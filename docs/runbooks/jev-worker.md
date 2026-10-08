@@ -12,6 +12,11 @@ lock: reserva/custo/original permanecem no journal JE04, e a proteção continua
 em sua cadência independente. O heartbeat é do PID real do worker; saúde da API
 não comprova saúde de execução.
 
+`make up`/`make server-up` gravam o SHA do checkout na imagem. Um archive de
+produção já carrega seu SHA imutável. Ao usar Compose diretamente num checkout,
+informe `GANSO_RELEASE_SHA` com a revisão construída; o worker recusa stamp ausente
+ou inválido em vez de declarar uma versão desconhecida.
+
 As contas JEV não ganham controles ou admissão no boot. `jev_worker_controls`
 começa vazio; seus defaults são `admitted=false` e `entries_paused=true`. Admissão
 referenciada, tarifa/modelo fixado, orçamento, custo de funding, contexto completo
