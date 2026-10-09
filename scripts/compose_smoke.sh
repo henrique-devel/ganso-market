@@ -150,6 +150,21 @@ if docker compose logs --no-color nginx api web | grep --fixed-strings 'syntheti
   echo "compose smoke failed: private report body reached logs" >&2
   exit 1
 fi
+# Initial live authorization remains behind the exact authenticated POST boundary.
+activation_headers="$(curl --silent --show-error --output /dev/null --dump-header - -X POST "$gateway/api/trading/jev/activate")"
+printf '%s\n' "$activation_headers" | grep -E '^HTTP/[^ ]+ 401' >/dev/null
+printf '%s\n' "$activation_headers" | grep -i '^cache-control: no-store' >/dev/null
+for method in GET DELETE PUT; do
+  test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X "$method" "$gateway/api/trading/jev/activate")" = 404
+done
+wait_for_code 404 "$gateway/api/trading/jev/activate/unpublished"
+rearm_headers="$(curl --silent --show-error --output /dev/null --dump-header - -X POST "$gateway/api/trading/jev/rearm")"
+printf '%s\n' "$rearm_headers" | grep -E '^HTTP/[^ ]+ 401' >/dev/null
+printf '%s\n' "$rearm_headers" | grep -i '^cache-control: no-store' >/dev/null
+for method in GET DELETE PUT; do
+  test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X "$method" "$gateway/api/trading/jev/rearm")" = 404
+done
+wait_for_code 404 "$gateway/api/trading/jev/rearm/unpublished"
 # Queue writes keep the exact perimeter and reach authentication only on POST.
 queue_headers="$(curl --silent --show-error --output /dev/null --dump-header - -X POST "$gateway/api/trading/jev/queue")"
 printf '%s\n' "$queue_headers" | grep -E '^HTTP/[^ ]+ 401' >/dev/null

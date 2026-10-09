@@ -1,3 +1,4 @@
+import { activateJevLive, rearmJevLive } from "./storage/jev-promotion.js";
 import { commandJevQueue } from "./storage/jev-queue.js";
 import { commandJevOperator } from "./storage/jev-operator.js";
 import { sameOriginViolation, csrfValid } from "./auth/http.js";
@@ -28,6 +29,47 @@ export function registerJevPanelRoutes(
       return reply.code(401).send({ reason_code: "AUTH_UNAUTHENTICATED" });
     owners.set(request, session.username);
   }
+  function liveHandler(command: typeof activateJevLive | typeof rearmJevLive) {
+    return async (request: FastifyRequest, reply: FastifyReply) => {
+      const violation = sameOriginViolation(request);
+      if (violation) return reply.code(403).send({ reason_code: violation });
+      if (!csrfValid(request))
+        return reply.code(403).send({ reason_code: "CSRF_INVALID" });
+      try {
+        const key = request.headers["idempotency-key"];
+        if (
+          typeof key !== "string" ||
+          Object.keys(request.query as object).length
+        )
+          throw new JevPanelCommandError(400, "JEV_LIVE_INVALID_COMMAND");
+        return await command(
+          deps.pool,
+          owners.get(request)!,
+          request.body,
+          key,
+        );
+      } catch (e) {
+        return reply
+          .code(e instanceof JevPanelCommandError ? e.status : 503)
+          .send({
+            reason_code:
+              e instanceof JevPanelCommandError
+                ? e.code
+                : "JEV_LIVE_UNAVAILABLE",
+          });
+      }
+    };
+  }
+  app.post(
+    "/trading/jev/activate",
+    { preHandler: guard, bodyLimit: 2048 },
+    liveHandler(activateJevLive),
+  );
+  app.post(
+    "/trading/jev/rearm",
+    { preHandler: guard, bodyLimit: 2048 },
+    liveHandler(rearmJevLive),
+  );
   app.post(
     "/trading/jev/control",
     { preHandler: guard, bodyLimit: 2048 },

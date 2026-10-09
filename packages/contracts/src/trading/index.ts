@@ -45,6 +45,7 @@ export * from "./jev.js";
 
 export type {
   JevPanelSnapshot,
+  JevLivePanel,
   JevPanelAccount,
   JevPanelMetrics,
 } from "./jev-panel.js";

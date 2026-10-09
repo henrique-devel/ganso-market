@@ -1,3 +1,4 @@
+import { readJevLivePanelTx } from "./jev-promotion.js";
 import { readJevQueueTx } from "./jev-queue.js";
 import type { JevExecutionFill } from "./jev-execution-contract.js";
 import { readJevReadinessTx } from "./jev-readiness.js";
@@ -216,7 +217,9 @@ export async function readJevPanel(
           [owner, month],
         )
       ).rows[0]?.usd6 ?? null;
+    const live = await readJevLivePanelTx(tx, owner);
     return {
+      live,
       queue: await readJevQueueTx(tx, owner),
       platform: {
         month,
@@ -236,7 +239,7 @@ export async function readJevPanel(
       schema_version: "jev.panel.v1",
       as_of: at,
       accounts,
-      live_activation_available: false,
+      live_activation_available: live.can_activate,
       alternative_banks_summable: false,
     };
   });

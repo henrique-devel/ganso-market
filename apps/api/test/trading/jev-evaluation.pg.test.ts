@@ -14,6 +14,7 @@ import {
   captureJevCoverage,
   readJevCoverageTx,
   captureJevEvaluation,
+  assessJevProfileTx,
   readJevEvaluation,
   runJevContinuousEvaluation,
 } from "../../src/storage/jev-evaluationstore.js";
@@ -105,6 +106,20 @@ describe.skipIf(!url)(
     });
     afterEach(async () => {
       await f?.dispose();
+    });
+    it("JE14 reassesses both current financial accounts without treating an old cut or absent costs/readiness as approval", async () => {
+      const fresh = await f.poolAdapter.transaction((tx) =>
+        assessJevProfileTx(tx, "operator", "h1", "v1", iso(end + 62000)),
+      );
+      expect(fresh.result.state).not.toBe("eligible");
+      expect(fresh.result.accounts.map((a) => a.mode).sort()).toEqual([
+        "paper",
+        "stress",
+      ]);
+      expect(
+        (await f.pool.query("SELECT count(*)::int n FROM jev_evaluation_cuts"))
+          .rows[0].n,
+      ).toBe(0);
     });
     it("seeds no qualification/evaluation/admission and the worker writes nothing when not admitted", async () => {
       const before = await readJevAccount(

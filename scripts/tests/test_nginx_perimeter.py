@@ -50,6 +50,8 @@ class NginxPerimeterTests(unittest.TestCase):
                 "jev/control",
                 "jev/infrastructure",
                 "jev/queue",
+                "jev/activate",
+                "jev/rearm",
             )
         }
         published = {spec.split()[-1] for spec, _ in locations() if "/api/trading" in spec}
