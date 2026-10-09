@@ -1,4 +1,4 @@
-import { jevLiveAuthorityTx } from "./jev-promotion.js";
+import { jevLiveAuthorityTx, readJevPromotionTx } from "./jev-promotion.js";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import type { JevScope } from "@ganso-market/contracts/trading";
 import { jevHash } from "./jev-hash.js";
@@ -355,6 +355,11 @@ export class PgLiveStore implements LiveStore {
         );
         return { fresh: false, reservation: existing.reservation };
       }
+      const profile = await readJevPromotionTx(tx, this.identity.account_id);
+      liveCheck(
+        !profile || profile.experiment_id === input.scope.experiment_id,
+        "PROFILE_FENCE",
+      );
       const now = await dbNow(tx),
         o = (
           await tx.query<{

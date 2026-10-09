@@ -631,12 +631,15 @@ export async function jevLiveAuthorityTx(
       [i.account_id, owner, i.identity_hash],
     )
   ).rows[0];
+  const promotion = await readJevPromotionTx(tx, i.account_id);
   if (!checkEntries)
     return {
-      activation_id: activation?.idempotency_key ?? null,
+      activation_id:
+        promotion?.experiment_id === scope.experiment_id
+          ? (activation?.idempotency_key ?? null)
+          : null,
       entries_allowed: false,
     };
-  const promotion = await readJevPromotionTx(tx, i.account_id);
   if (
     !activation ||
     !promotion ||

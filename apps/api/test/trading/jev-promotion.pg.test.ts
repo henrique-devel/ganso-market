@@ -468,6 +468,57 @@ describe.skipIf(!url)("JE14 singleton handoff on disposable PostgreSQL", () => {
     expect(after.events).toEqual(before.events);
     expect(after.projection).toEqual(before.projection);
     expect(after.identity.bindings).toHaveLength(2);
+    const oldScope = jevScope(
+        before.identity.bindings[0]!.binding,
+        before.identity.instrument,
+      ),
+      newScope = jevScope(
+        after.identity.bindings.find((b) => b.binding.profile_id === "h2")!
+          .binding,
+        after.identity.instrument,
+      );
+    expect(
+      await f.poolAdapter.transaction((tx) =>
+        jevLiveAuthorityTx(tx, "operator", oldScope, false),
+      ),
+    ).toMatchObject({ activation_id: null, entries_allowed: false });
+    expect(
+      await f.poolAdapter.transaction((tx) =>
+        jevLiveAuthorityTx(tx, "operator", newScope, false),
+      ),
+    ).toMatchObject({ activation_id: "initial", entries_allowed: false });
+    const c = liveEntryCommand(Date.now() - 10),
+      lease = await store.claim("late-profile-process");
+    const request: LiveCommand = {
+      version: c.version,
+      kind: "close",
+      scope: oldScope,
+      operation_id: "late-old-exit",
+      metadata: c.metadata,
+      metadata_at: c.metadata_at,
+      snapshot: liveSnapshot(Date.now() - 10),
+      limit_price_raw: "60000000000",
+      cause: "delayed_old_profile",
+    };
+    await expect(
+      store.reserve({
+        scope: oldScope,
+        operation_id: request.operation_id,
+        kind: "close",
+        request,
+        lease,
+        action: (cloid) =>
+          buildLiveAction(liveIdentity, request, cloid, Date.now()),
+      }),
+    ).rejects.toThrow("PROFILE_FENCE");
+    expect(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int n FROM jev_live_requests WHERE operation_id='late-old-exit'",
+        )
+      ).rows[0].n,
+    ).toBe(0);
+
     expect(
       (
         await f.pool.query(
