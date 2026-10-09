@@ -1098,7 +1098,9 @@ describe.skipIf(!url)(
         EXCEPT SELECT object_id FROM protected) missing`)
       ).rows[0].n;
       expect(missing).toBe(0);
-    }, 30000);
+      // Includes construction of 8,640 immutable fixture inputs; SQL/read/write
+      // budgets and the concurrent collector assertions above remain unchanged.
+    }, 60000);
     it.each(["neutral", "gap", "absent"])(
       "persists %s skip without orders and repeated polling returns first result",
       async (kind) => {

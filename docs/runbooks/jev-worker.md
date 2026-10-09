@@ -163,6 +163,9 @@ O boot padrão fica sem signer, conexão live, admissão ou envios. Capacidade m
 deve corresponder ao registry atual, incluindo a promoção live; a versão anterior
 do engine não qualifica automaticamente este workload. Os aceites históricos são
 preservados. A saúde do processo não comprova admissão operacional.
+Os motivos sanitizados `last_decision_reason` e `last_execution_reason` permitem
+diagnosticar uma decisão recusada ou um comando vencido antes do envio, sem
+publicar dados do signer, respostas privadas ou erros brutos do transporte.
 
 A configuração pública opcional usa `GANSO_LIVE_RUNTIME_CONFIG_FILE` e exatamente
 `version: jev.live-runtime.v1`, `environment: mainnet` e `identity_hash` da identidade

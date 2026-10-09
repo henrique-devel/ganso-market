@@ -95,11 +95,15 @@ try {
       // This corpus already has four 60s preparation hooks plus a final
       // 60s link/ANALYZE hook. Let them finish before the existing 30s read
       // assertion; its 1500ms SQL gate and every production trigger remain.
+      // The retention corpus also has a 120s seed hook followed by its real
+      // write-budget assertions; its file watchdog must allow both to finish.
       // Keep the shorter file watchdog for all other tests.
       const fileTimeoutMs =
         file === "apps/api/test/trading/baseline-evidence.pg.test.ts"
           ? 360_000
-          : 120_000;
+          : file === "apps/api/test/trading/retention.pg.test.ts"
+            ? 180_000
+            : 120_000;
       const startedAt = Date.now();
       const run = spawnSync(
         process.execPath,

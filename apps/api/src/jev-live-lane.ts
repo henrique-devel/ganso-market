@@ -41,6 +41,7 @@ import {
 } from "./venues/hyperliquid/live-execution.js";
 import type { LiveLease } from "./storage/jev-live-store.js";
 import { requireLiveFreshSnapshot } from "./venues/hyperliquid/live-reconcile.js";
+import { LiveError } from "./venues/hyperliquid/live-contract.js";
 
 type Pool = Pick<DatabasePool, "transaction" | "readOnly">;
 export interface JevLiveLane {
@@ -65,6 +66,7 @@ export interface JevLiveLane {
     running: boolean;
     decision_refusals: number;
     last_decision_reason: string | null;
+    last_execution_reason: string | null;
   };
 }
 /** One independent live lane, no queued ticks and no provider/HTTP inside a DB
@@ -85,6 +87,7 @@ export function createJevLiveLane(
     running: false,
     decision_refusals: 0,
     last_decision_reason: null as string | null,
+    last_execution_reason: null as string | null,
   };
   let task: Promise<void> | null = null,
     stopped = false,
@@ -193,6 +196,9 @@ export function createJevLiveLane(
         : null;
     const requests = await adapter.store.operations(),
       receipts = await adapter.store.events<LiveReceipt>("receipt");
+    // A decision can commit while these reads are in progress. Recheck before
+    // entering the slower protection/succession path for an already flat pilot.
+    if (pendingCommands.size && s.flat && !observed.pending) return;
     const entry = requests
       .filter(
         (r) =>
@@ -274,6 +280,7 @@ export function createJevLiveLane(
         markPrice,
       );
     await settle(s, requests, receipts);
+    if (pendingCommands.size && s.flat && !observed.pending) return;
     const limit = closeLimit(s.position_raw, markPrice, metadata, entry);
     if (limit)
       await adapter.succession.reconcile({
@@ -608,6 +615,13 @@ export function createJevLiveLane(
         task = sending;
         try {
           await sending;
+          metrics.last_execution_reason = "ok";
+        } catch (error) {
+          metrics.last_execution_reason =
+            error instanceof LiveError
+              ? error.code
+              : "live_execution_unavailable";
+          throw error;
         } finally {
           if (task === sending) task = null;
         }

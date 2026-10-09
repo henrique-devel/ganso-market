@@ -829,7 +829,16 @@ describe.skipIf(!url)(
               | undefined) ?? [],
         )
         .filter((o) => o.t.trigger);
-      expect(stops.length).toBeGreaterThanOrEqual(2);
+      expect(
+        stops.length,
+        JSON.stringify({
+          receipts: await store.events("receipt"),
+          protection: await store.events("protection"),
+          gaps: await store.events("gap"),
+          position: venue.position().toString(),
+          live: r.health.at(-2)?.live,
+        }),
+      ).toBeGreaterThanOrEqual(2);
       expect(stops.every((o) => o.r)).toBe(true);
       const fees = await store.accountView();
       expect(fees.fees_raw).toBe("2000");
