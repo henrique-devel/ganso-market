@@ -2,6 +2,8 @@
 
 O [índice](README.md) organiza 14 entregas JE01–JE14 com 46 checkpoints de código/diagnóstico e seis etapas operacionais próprias; os 52 IDs GJ e seus aceites permanecem. Execute a entrega ou etapa selecionada, avançando internamente sem novo pedido. A preparação documental não inicia implementação. A [especificação vigente](../../docs/PRD-GANSO-JEV.md) prevalece sobre baseline/filtro e banca US$1.000 do ciclo antigo.
 
+O [complemento de 09/10/2026](../../docs/roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md) acrescenta JE15–JE17 e 10 checkpoints GJ16–GJ18: total atual 17 entregas, 62 IDs e as mesmas seis etapas operacionais. Aplicar este protocolo aos novos grupos, preservando o histórico original. São itens planejados; publicar prompts não implementa os contratos. Antes de entradas reais, a prontidão precisa comprovar runtime, pausa/emergência e painel live integrados, além dos gates operacionais existentes.
+
 ## Autonomia e contexto
 
 A [autorização JEV](../../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) cobre alteração, branch `codex/`, commit/push, criação/correção/revisão do PR, merge após checks/proteções e implantação seletiva de todo o grupo. Inclui migrations aditivas, configuração, quiescência reversível e restart previstos. Selecionar um grupo autoriza continuar seus checkpoints, sem novo pedido por ID. Pedido restrito a um ID limita o escopo. Outra entrega exige seleção, salvo sequência expressamente solicitada. Não criar chats/agentes/agendamentos automaticamente.
