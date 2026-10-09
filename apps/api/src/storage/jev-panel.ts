@@ -1,3 +1,4 @@
+import { readJevQueueTx } from "./jev-queue.js";
 import type { JevExecutionFill } from "./jev-execution-contract.js";
 import { readJevReadinessTx } from "./jev-readiness.js";
 import { readJevExecutionTx } from "./jev-executionstore.js";
@@ -27,7 +28,7 @@ export async function readJevPanel(
       COALESCE(c.entries_paused,true) AS entries_paused FROM jev_accounts a
       JOIN LATERAL (SELECT * FROM jev_bindings WHERE account_id=a.account_id ORDER BY binding->>'started_at' DESC,experiment_id DESC LIMIT 1) b ON true
       JOIN jev_profiles p ON p.owner_id=b.owner_id AND p.profile_id=b.profile_id AND p.profile_version=b.profile_version LEFT JOIN jev_worker_controls c ON c.account_id=a.account_id
-      WHERE a.owner_id=$1 ORDER BY b.profile_id,a.mode,a.account_id LIMIT 8`,
+      WHERE a.owner_id=$1 AND (a.mode='live' OR a.account_id IN(SELECT paper_account_id FROM jev_active_pairs UNION SELECT stress_account_id FROM jev_active_pairs)) ORDER BY b.profile_id,a.mode,a.account_id LIMIT 8`,
         [owner],
       )
     ).rows;
@@ -202,7 +203,9 @@ export async function readJevPanel(
         unknown_requests: number;
         known: string;
       }>(
-        `SELECT COUNT(*)::int AS captured_requests,COUNT(*) FILTER(WHERE s.cost_usd6 IS NULL)::int AS unknown_requests,COALESCE(SUM(s.cost_usd6),0)::text AS known FROM jev_decision_requests r LEFT JOIN jev_decision_results s USING(origin,request_id) WHERE r.origin='real' AND r.started_at>=($2||'-01')::timestamptz AND r.started_at<$3 AND EXISTS(SELECT 1 FROM jev_decision_participants p WHERE p.origin=r.origin AND p.request_id=r.request_id AND p.owner_id=$1)`,
+        `SELECT COUNT(*)::int AS captured_requests,COUNT(*) FILTER(WHERE cost_usd6 IS NULL)::int AS unknown_requests,COALESCE(SUM(cost_usd6),0)::text AS known FROM (
+ SELECT s.cost_usd6 FROM jev_decision_requests r LEFT JOIN jev_decision_results s USING(origin,request_id) WHERE r.origin='real' AND r.started_at>=($2||'-01')::timestamptz AND r.started_at<$3 AND EXISTS(SELECT 1 FROM jev_decision_participants p WHERE p.origin=r.origin AND p.request_id=r.request_id AND p.owner_id=$1)
+ UNION ALL SELECT s.cost_usd6 FROM jev_proposal_requests r LEFT JOIN jev_proposal_results s USING(origin,request_id) WHERE r.origin='real' AND r.owner_id=$1 AND r.started_at>=($2||'-01')::timestamptz AND r.started_at<$3) costs`,
         [owner, month, at],
       )
     ).rows[0]!;
@@ -214,6 +217,7 @@ export async function readJevPanel(
         )
       ).rows[0]?.usd6 ?? null;
     return {
+      queue: await readJevQueueTx(tx, owner),
       platform: {
         month,
         scope: "captured_principal_requests_only",

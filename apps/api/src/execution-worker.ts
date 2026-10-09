@@ -1,3 +1,4 @@
+import { createJevProposalLane } from "./storage/jev-proposal-lane.js";
 import { createJevEngineMonitor } from "./storage/jev-readiness.js";
 import { createJevFundingLane } from "./storage/jev-funding-store.js";
 import { readFile, writeFile, rename } from "node:fs/promises";
@@ -114,6 +115,9 @@ export async function runExecutionWorker() {
       backend.status.model,
       backend.status.enabled,
     );
+    const proposals = createJevProposalLane(fenced, challengerConfig, () =>
+      log("JEV_PROPOSAL_LANE_UNAVAILABLE"),
+    );
     const funding = createJevFundingLane(fenced, store.accounts);
     let fundingTask: Promise<void> | null = null,
       lastFundingAt = -Infinity;
@@ -127,8 +131,10 @@ export async function runExecutionWorker() {
     };
     const priorStop = stopScheduler;
     stopScheduler = async () => {
-      await priorStop?.();
+      const proposalsStopped = proposals.stop();
       fundingController.abort();
+      await priorStop?.();
+      await proposalsStopped;
       await fundingTask;
       await finishEvaluation();
       await monitorTask;
@@ -179,6 +185,7 @@ export async function runExecutionWorker() {
             evaluationTask = null;
           });
       }
+      proposals.tick(began);
       await publish({
         service: "execution-worker",
         pid: process.pid,
@@ -195,6 +202,7 @@ export async function runExecutionWorker() {
         dispatch_admission: store.metrics,
         funding: { version: "jev.funding.v1", ...funding.metrics },
         evaluation: { version: "jev.evaluation.v1", status: evaluationStatus },
+        proposals: proposals.metrics,
       });
       await delay(Math.max(0, 250 - (Date.now() - began)));
     }

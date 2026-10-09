@@ -37,6 +37,8 @@ attempts=50
 until docker compose exec -T execution-worker node apps/api/dist/execution-worker.js --health; do
   attempts=$((attempts - 1)); test "$attempts" -gt 0; sleep 1
 done
+# The proposal controller is wired into the real process but remains dormant.
+docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const p=h.proposals; if(p?.version!=="jev.proposal-lane.v1" || p.configured!==false || p.status!=="disabled" || p.cycles!==0) process.exit(1)'
 execution_id="$(docker compose ps --quiet execution-worker)"
 execution_started="$(docker inspect --format '{{.State.StartedAt}}' "$execution_id")"
 risk_before="$(docker compose exec -T execution-worker node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")).metrics.risk_cycles)')"
@@ -148,6 +150,14 @@ if docker compose logs --no-color nginx api web | grep --fixed-strings 'syntheti
   echo "compose smoke failed: private report body reached logs" >&2
   exit 1
 fi
+# Queue writes keep the exact perimeter and reach authentication only on POST.
+queue_headers="$(curl --silent --show-error --output /dev/null --dump-header - -X POST "$gateway/api/trading/jev/queue")"
+printf '%s\n' "$queue_headers" | grep -E '^HTTP/[^ ]+ 401' >/dev/null
+printf '%s\n' "$queue_headers" | grep -i '^cache-control: no-store' >/dev/null
+for method in GET DELETE PUT; do
+  test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X "$method" "$gateway/api/trading/jev/queue")" = 404
+done
+wait_for_code 404 "$gateway/api/trading/jev/queue/unpublished"
 wait_for_code 404 "$gateway/api/trading/unpublished"
 
 docker compose run --rm --no-deps migrate

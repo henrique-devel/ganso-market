@@ -54,3 +54,5 @@ export type {
   JevPanelExecution,
   JevPlatformCosts,
 } from "./jev-panel.js";
+
+export type { JevQueueProposal, JevQueueSnapshot } from "./jev-panel.js";

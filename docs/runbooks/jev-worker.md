@@ -1,4 +1,4 @@
-# Worker de execução JEV — JE07/JE10
+# Worker de execução JEV — JE07/JE10/JE12
 
 O serviço `execution-worker` usa a imagem TypeScript existente e seu próprio pool
 (quatro conexões, 256 MiB). A API serve leituras, autenticação, prévias e a fila de
@@ -90,6 +90,34 @@ fila e espera do fence, transações, custo/capacidade bloqueados e funding.
 O ensaio PostgreSQL do delta mede CPU, crescimento físico, WAL, escrita e fontes
 protegidas para seis contas com ciclos coincidentes. É carga delimitada de teste;
 não comprova CPU sustentada, tarifa/usage real, cobertura prospectiva ou sete dias.
+
+## Propostas e sucessão — JE12
+
+`jev.proposal-lane.v1` inicia no máximo um ciclo por minuto, sem backlog nem
+sobreposição. A tarefa é independente do heartbeat, da proteção, do funding e
+da avaliação. HTTP de validação não retém o fence SQL. Desligamento cancela o
+pedido e aguarda seu registro; uma geração expirada não pode finalizar. Pedido
+incerto após crash permanece cobrado conservadoramente, abre circuito e não é
+reenviado. A saúde interna expõe configuração, estado, ciclos e falhas desta tarefa.
+
+Configuração protegida, credencial/tarifa e controles explicitamente admitidos
+são gates separados. `jev_generator_controls` começa vazio, com `enabled=false`
+por padrão; boot e deploy não provisionam controles, prova, crédito ou chave.
+Sem esses gates o controlador permanece desligado. Aposentadoria revalida
+controle e capacidade dentro da transação antes de pausar/cancelar entradas.
+Contas com inventário/reservas/funding/reconciliação pendentes continuam sob a
+proteção existente. Somente reprovação definitiva e encerramento reconciliado
+liberam a vaga; perdas, bindings, manifestos, ledger e eventos antigos permanecem.
+
+A retirada invalida a prova de capacidade do registry anterior. Geração exige
+prova do registry corrente; admissão exige prova prospectiva da substituição,
+fontes frescas e observação do worker. Esses originais devem ser comprovados no
+fluxo operacional próprio, nunca copiados das fixtures. O controlador consome a
+primeira proposta da fila vigente, com validação real positiva e custo conhecido,
+antes de gerar outro append. Reordenação e remoção do operador usam revisão CAS;
+a geração não muda a prioridade nem a versão ativa silenciosamente. Aptidão
+JEV é técnica e não comprova qualificação econômica. GJ12.2/12.3, GJ13.5 e
+GJ15.1–3 continuam fora desta entrega; nenhuma sucessão live é implementada aqui.
 
 ## Handoff inicial
 
