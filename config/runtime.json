@@ -22,6 +22,7 @@
           "/trading/accounts": 1500,
           "/trading/jev": 1500,
           "/trading/jev/metrics": 4000,
+          "/trading/jev/panel": 4000,
           "/trading/jev/benchmarks": 1500,
           "/trading/jev/results": 1500,
           "/trading/jev/evaluations": 1500,

@@ -615,7 +615,23 @@ export async function applyJevExecution(
       await reconcileExecutionTx(tx, s, ledger, now, request.operation_id);
       const risk = await observeJevRiskTx(tx, s.owner_id, s.account_id),
         value = finance(ledger, market, now);
-      if (risk.checkpoint.cancel_entries) cancel(now);
+      const operator = (
+        await tx.query<{
+          entries_paused: boolean;
+          operator_close_requested: boolean;
+        }>(
+          "SELECT entries_paused,operator_close_requested FROM jev_worker_controls WHERE account_id=$1",
+          [s.account_id],
+        )
+      ).rows[0];
+      if (risk.checkpoint.cancel_entries || operator?.entries_paused)
+        cancel(now);
+      if (
+        operator?.operator_close_requested &&
+        state.protection &&
+        BigInt(state.protection.quantity_btc_raw) > 0n
+      )
+        close(["OPERATOR_EMERGENCY"], state.maker!.plan.worst_exit_price_raw);
       if (state.protection && BigInt(state.protection.quantity_btc_raw) > 0n) {
         const exit = jevMandatoryExit(m, state.protection, {
           now_at: now,

@@ -269,6 +269,7 @@ async function evaluateJevMetricsTx(
   owner: string,
   account: string,
   origin: "real" | "mock",
+  cut_at?: string,
 ) {
   const ledger = await loadJevAccountTx(
     tx,
@@ -277,9 +278,11 @@ async function evaluateJevMetricsTx(
     false,
     JEV_METRICS_LIMIT,
   );
-  const at = (
-    await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
-  ).rows[0]!.now.toISOString();
+  const at =
+    cut_at ??
+    (
+      await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
+    ).rows[0]!.now.toISOString();
   const s = jevScope(
     ledger.identity.bindings[0]!.binding,
     ledger.identity.instrument,
@@ -315,8 +318,10 @@ export async function readJevMetricsTx(
   owner: string,
   account: string,
   origin: "real" | "mock",
+  cut_at?: string,
 ) {
-  return (await evaluateJevMetricsTx(tx, owner, account, origin)).result;
+  return (await evaluateJevMetricsTx(tx, owner, account, origin, cut_at))
+    .result;
 }
 export async function readJevMetrics(
   pool: Pick<DatabasePool, "readOnly">,

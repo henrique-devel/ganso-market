@@ -144,6 +144,8 @@ describe("RFC-023 D1 — every published route declares a budget", () => {
       (route) => route.method === "POST" && isPublished(route, locations),
     );
     expect(publishedWrites.map((route) => route.url)).toEqual([
+      "/trading/jev/control",
+      "/trading/jev/infrastructure",
       "/trading/preview",
       "/trading/submit",
       "/trading/cancel",

@@ -124,9 +124,12 @@ export function createJevWorkerStore(
           const t = await jevWorkerAccountTokenTx(tx, a.scope);
           // A reserve without a send receipt never left the atomic paper boundary.
           // On takeover do not replay the old decision or manufacture an ACK/fill.
-          if (recover)
+          if (recover || t.control?.entries_paused)
             for (const e of t.entries)
-              if (e.status !== "released")
+              if (
+                e.status !== "released" &&
+                (recover || e.status === "cancel_requested")
+              )
                 await jevEntryEventTx(
                   tx,
                   e.plan,

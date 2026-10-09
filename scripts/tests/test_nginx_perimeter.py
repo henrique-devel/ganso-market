@@ -30,6 +30,7 @@ class NginxPerimeterTests(unittest.TestCase):
                 "operation",
                 "jev",
                 "jev/metrics",
+                "jev/panel",
                 "jev/benchmarks",
                 "jev/results",
                 "jev/evaluations",
@@ -39,7 +40,16 @@ class NginxPerimeterTests(unittest.TestCase):
             )
         }
         commands = {
-            f"/api/trading/{name}" for name in ("preview", "submit", "cancel", "close", "pause")
+            f"/api/trading/{name}"
+            for name in (
+                "preview",
+                "submit",
+                "cancel",
+                "close",
+                "pause",
+                "jev/control",
+                "jev/infrastructure",
+            )
         }
         published = {spec.split()[-1] for spec, _ in locations() if "/api/trading" in spec}
         self.assertEqual(published, expected | commands)

@@ -1,3 +1,5 @@
+import { readJevPanel } from "../../src/storage/jev-panel.js";
+import { commandJevOperator } from "../../src/storage/jev-operator.js";
 import { reconcileJevFunding } from "../../src/storage/jev-funding-store.js";
 import { jevEpisodes } from "../../src/storage/jev-evaluation.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -329,6 +331,66 @@ describe.skipIf(!url)("JE06 unified execution on disposable PostgreSQL", () => {
       ).toBe(before.events.length + 4);
     },
   );
+  it("JE11 emergency preempts pending inference, preserves late partial fill and remains pending across stale IOC/restart", async () => {
+    await submit();
+    await capture(1000);
+    await command();
+    await print(1100, "1000");
+    await capture(1200);
+    await command();
+    await f.pool.query(
+      "INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference) VALUES($1,true,false,'fixture_only')",
+      [scope.account_id],
+    );
+    const request = { account_id: scope.account_id, action: "emergency" };
+    await commandJevOperator(
+      f.poolAdapter,
+      "operator",
+      request,
+      "emergency-one",
+    );
+    await print(1500, "1000");
+    await capture(2200);
+    let result = await command();
+    expect(result.state.protection?.quantity_btc_raw).toBe("2000");
+    expect(result.state.close?.pending).toBe(true);
+    expect(result.reconciled_flat).toBe(false);
+    const original = result.state.close?.requested_at;
+    await commandJevOperator(
+      f.poolAdapter,
+      "operator",
+      request,
+      "emergency-one",
+    );
+    await command("recover");
+    expect((await command()).state.close?.requested_at).toBe(original);
+    await capture(3200, { stale: true });
+    expect((await command()).reconciled_flat).toBe(false);
+    await capture(4200);
+    result = await command();
+    expect(result.reconciled_flat).toBe(true);
+    expect(result.fills.every((f) => f.kind === "IOC")).toBe(true);
+    await command(); // A later empty cycle must not erase the earlier maker/IOC receipts from the panel.
+    const panel = await readJevPanel(
+      { readOnly: (_ms, run) => f.poolAdapter.transaction(run) },
+      "operator",
+    );
+    const fills = panel.accounts.find(
+      (a) => a.account_id === scope.account_id,
+    )!.fills!;
+    expect(fills.some((f) => f.kind === "maker")).toBe(true);
+    expect(fills.some((f) => f.kind === "IOC")).toBe(true);
+    expect(new Set(fills.map((f) => f.execution_id)).size).toBe(fills.length);
+    expect(fills.length).toBeLessThanOrEqual(20);
+
+    expect(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int AS n FROM jev_operator_commands",
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  });
   it("rejects post-only crossing at arrival and cannot turn rejection into taker", async () => {
     await submit();
     await capture(1000, { ask: "64901000000" });

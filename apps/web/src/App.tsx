@@ -1,3 +1,4 @@
+import { JevPanel } from "./JevPanel.tsx";
 import { ExperimentSystem } from "./Experiments.tsx";
 import { BtcWorkspace } from "./BtcOperations.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -264,6 +265,12 @@ function Dashboard({
           </button>
         ))}
       </nav>
+      {tab === "Mesa" && (
+        <JevPanel
+          accessToken={session.accessToken}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
       <BtcWorkspace
         accessToken={session.accessToken}
         onUnauthorized={onUnauthorized}

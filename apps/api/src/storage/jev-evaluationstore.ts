@@ -1,3 +1,4 @@
+import { readJevReadinessTx } from "./jev-readiness.js";
 import { requireJev } from "@ganso-market/contracts/trading";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import { currentBudgetMs } from "../budgets.js";
@@ -32,7 +33,7 @@ import {
 } from "./jev-evaluation.js";
 import type { JevRiskCheckpoint } from "../trading/jev-risk.js";
 
-const engineVersion = "jev.scheduler.v1";
+const engineVersion = "jev.scheduler.v2";
 type Writer = Pick<DatabasePool, "transaction">;
 /** Small immutable elapsed-time segments. Original collector health clocks
  * are copied into protected quality evidence; JEV calls never enter this path. */
@@ -252,6 +253,13 @@ async function accountInputTx(
     ref(window.end_at),
   ]);
   const benchmark = first && last ? jevBenchmarkWindow(first, last) : null;
+  const interventions =
+    (
+      await tx.query(
+        `SELECT 1 FROM jev_operator_commands WHERE owner_id=$1 AND $2=ANY(account_ids) AND recorded_at<=$3 LIMIT 1`,
+        [owner, account, knowledge_at],
+      )
+    ).rowCount > 0;
   const input: EvaluationAccount = {
     scope: s,
     manifest_hash: b.profile.manifest_hash,
@@ -263,6 +271,7 @@ async function accountInputTx(
       opening.costs.evaluation.jev_usd6 !== null &&
       closing.costs.evaluation.jev_usd6 !== null,
     reconciled:
+      !interventions &&
       !!risk &&
       risk.history_complete &&
       risk.ledger_sequence === l.projection.last_sequence &&
@@ -284,6 +293,7 @@ async function accountInputTx(
       benchmark,
       risk: risk ?? null,
       failures,
+      interventions,
     },
   };
 }
@@ -354,10 +364,11 @@ export async function captureJevEvaluation(
       );
     const q = (
       await tx.query<{ evidence_id: string; qualified: boolean }>(
-        `SELECT q.evidence_id,(q.qualified AND NOT EXISTS(SELECT 1 FROM jev_risk_events r JOIN jev_accounts a USING(account_id) WHERE a.owner_id=$1 AND r.checkpoint->>'history_complete'='false')) AS qualified FROM jev_engine_qualifications q WHERE q.owner_id=$1 AND q.engine_version=$2 AND q.end_at<=$3 ORDER BY q.end_at DESC,q.evidence_id DESC LIMIT 1`,
+        `SELECT q.evidence_id,(q.qualified AND EXISTS(SELECT 1 FROM jev_worker_observation o WHERE o.observed_at>clock_timestamp()-interval '5 seconds' AND EXISTS(SELECT 1 FROM jsonb_array_elements(o.payload->'accounts') a WHERE a->>'owner_id'=$1 AND a->>'ready'='true')) AND NOT EXISTS(SELECT 1 FROM jev_risk_events r JOIN jev_accounts a USING(account_id) WHERE a.owner_id=$1 AND r.checkpoint->>'history_complete'='false')) AS qualified FROM jev_engine_qualifications q WHERE q.owner_id=$1 AND q.engine_version=$2 AND q.end_at<=$3 AND EXISTS(SELECT 1 FROM execution_worker_head h JOIN execution_worker_owners w USING(generation) JOIN jev_evidence_objects e ON e.object_id=q.evidence_id WHERE h.singleton AND h.lease_until>clock_timestamp() AND e.envelope->'payload'->'original'->>'code_sha'=w.code_sha) ORDER BY q.end_at DESC,q.evidence_id DESC LIMIT 1`,
         [owner, engineVersion, selected.window.end_at],
       )
     ).rows[0];
+    const readiness = await readJevReadinessTx(tx, owner, now);
     if (q) dependencies.push(q.evidence_id);
     const previous = (
       await tx.query<{ evidence_id: string }>(
@@ -370,7 +381,8 @@ export async function captureJevEvaluation(
       as_of: selected.window.end_at,
       ...selected,
       accounts: results.map((r) => r.input),
-      engine_qualified: q?.qualified === true,
+      engine_qualified:
+        q?.qualified === true && readiness.qualification.qualified,
       previous_failed: !!previous,
     });
     await storeJevEvidenceTx(

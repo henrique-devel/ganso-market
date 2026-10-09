@@ -1,0 +1,71 @@
+.jev-panel {
+  margin-top: 2rem;
+}
+.jev-accounts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.2rem;
+}
+.jev-account {
+  padding: 1.25rem;
+  border: 1px solid #3e5748;
+  border-radius: 12px;
+  background: #132019;
+}
+.jev-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.jev-heading h3 {
+  margin: 0.4rem 0;
+}
+.jev-numbers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.jev-numbers strong {
+  display: block;
+  margin-top: 0.5rem;
+  color: #d6f4e0;
+  font-size: 1.15rem;
+}
+.jev-chart-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.jev-chart {
+  min-width: 540px;
+  width: 100%;
+  margin-top: 1rem;
+}
+.jev-chart text {
+  fill: #d6e9dc;
+  font-size: 14px;
+}
+.jev-account table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.jev-account th,
+.jev-account td {
+  padding: 0.5rem;
+  border-bottom: 1px solid #33483a;
+  text-align: left;
+}
+.jev-account td {
+  text-align: right;
+}
+.jev-account details {
+  margin-top: 1rem;
+}
+@media (max-width: 760px) {
+  .jev-accounts {
+    grid-template-columns: 1fr;
+  }
+  .jev-numbers {
+    grid-template-columns: 1fr;
+  }
+}

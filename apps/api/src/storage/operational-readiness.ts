@@ -38,7 +38,7 @@ export function consumerReadiness(row: ConsumerObservation, now: number) {
 /** Bounded indexed projections only. No locks, payload exports, writes or reconciliation.
  * History reuses retained capture timestamps already charged by G2-12, including missing intervals.
  * It measures data coverage, not unobserved process uptime or economic readiness. */
-export async function readOperationalReadiness(tx: SqlExecutor, now: Date) {
+export async function readSourceReadinessTx(tx: SqlExecutor, now: Date) {
   const rows = (
     await tx.query<{
       kind: "book" | "context";
@@ -126,6 +126,10 @@ export async function readOperationalReadiness(tx: SqlExecutor, now: Date) {
           : "unknown",
     };
   });
+  return { channels, capture };
+}
+export async function readOperationalReadiness(tx: SqlExecutor, now: Date) {
+  const { channels, capture } = await readSourceReadinessTx(tx, now);
   const end = new Date(Math.floor(now.getTime() / 900000) * 900000);
   const start = new Date(end.getTime() - 7 * 86400000);
   // Two index seeks per quarter-hour; never scan all captures or TOAST payloads.
