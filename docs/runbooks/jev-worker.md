@@ -156,6 +156,9 @@ para reconciliação, proteção nativa, cancelamento e redução do residual. O
 Envios e reconciliação da mesma identidade compartilham essa tarefa limitada,
 fora de locks SQL, para não tratar um envio ainda em curso como pedido perdido.
 Essa serialização não aguarda inferência JEV nem acumula ticks de proteção.
+Reserva de comando em curso pertence ao processo até encerrar o envio; não é
+abandonada por um ciclo concorrente. Em flat comprovado, a tarefa cede ao comando
+sem renovar admissão. Após restart, reserva sem intenção enviada expira sem replay.
 O boot padrão fica sem signer, conexão live, admissão ou envios. Capacidade medida
 deve corresponder ao registry atual, incluindo a promoção live; a versão anterior
 do engine não qualifica automaticamente este workload. Os aceites históricos são

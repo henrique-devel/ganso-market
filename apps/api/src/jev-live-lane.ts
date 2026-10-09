@@ -93,6 +93,7 @@ export function createJevLiveLane(
     metadata: TradingInstrumentMetadata | null = null;
   let recovered = false;
   let retired = false;
+  const pendingCommands = new Set<string>();
   const scopeAccounts = async (): Promise<WorkerAccount[]> => {
     if (!adapter) return [];
     return pool.readOnly(1500, async (tx) => {
@@ -160,6 +161,10 @@ export function createJevLiveLane(
       return;
     }
     requireLiveFreshSnapshot(adapter.store.identity, s, Date.now());
+    // A validated command waiting for this lane owns its financial reserve.
+    // At a proven flat cut no protective action is needed: yield to its send
+    // without refreshing admission or waiting on provider inference.
+    if (pendingCommands.size && s.flat && !observed.pending) return;
     const pilot = await pool.transaction((tx) =>
       readJevPilotTx(tx, a.scope.account_id),
     );
@@ -389,6 +394,7 @@ export function createJevLiveLane(
         adapter.store.identity.account_id,
       )) {
         if (e.status === "released") continue;
+        if (pendingCommands.has(e.order_id)) continue;
         const sent = requests.find(
           (r) =>
             r.kind === "entry" &&
@@ -589,19 +595,24 @@ export function createJevLiveLane(
       // Reconciliation must not classify this process's in-flight first send as
       // a lost request. Share the bounded venue lane, outside every SQL lock;
       // provider inference remains entirely independent and ticks never queue.
-      while (task) await task;
-      if (!adapter || stopped || !liveLease) return;
-      const lease = liveLease;
-      const sending = Promise.resolve().then(async () => {
-        if (command.kind === "close")
-          await adapter.execution.executeResidual(command, lease);
-        else await adapter.execution.execute(command, lease);
-      });
-      task = sending;
+      pendingCommands.add(command.operation_id);
       try {
-        await sending;
+        while (task) await task;
+        if (!adapter || stopped || !liveLease) return;
+        const lease = liveLease;
+        const sending = Promise.resolve().then(async () => {
+          if (command.kind === "close")
+            await adapter.execution.executeResidual(command, lease);
+          else await adapter.execution.execute(command, lease);
+        });
+        task = sending;
+        try {
+          await sending;
+        } finally {
+          if (task === sending) task = null;
+        }
       } finally {
-        if (task === sending) task = null;
+        pendingCommands.delete(command.operation_id);
       }
     },
     tick() {
