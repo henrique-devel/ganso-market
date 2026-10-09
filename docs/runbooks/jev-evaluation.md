@@ -9,6 +9,10 @@ calendária inteira, interseção dos canais book/context/trades e os relógios 
 de origem/recebimento. Book tem 2s de frescor, context 5s; os limites seguem os
 contratos de decisão existentes. Gaps conhecidos, truncamento, reinício e períodos
 sem capturas elegíveis não ganham cobertura por bordas, duplicação ou restart.
+O minuto UTC aguarda 2s para receber o capture seguinte que comprova sua borda,
+com `knowledge_at` limitado e explícito. Essa prova é recortada à janela original;
+frescor começa apenas no máximo dos relógios de origem e recebimento. Um dado
+recebido depois da borda não preenche o passado.
 As provas copiam os captures originais em evidência protegida. Segmentos são
 não sobrepostos e append-only; ausência de um segmento conta no denominador.
 Não há backfill sintético. Limites de leitura recusam evidência excessiva sem aprovar.

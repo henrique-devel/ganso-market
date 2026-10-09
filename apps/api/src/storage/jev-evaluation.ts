@@ -15,6 +15,7 @@ export const JEV_EVALUATION_POLICY = Object.freeze({
   minimum_episodes: 60,
   day_ms: 86400000,
   daily_settlement_delay_ms: 60000,
+  coverage_settlement_delay_ms: 2000,
   rolling_days: 90,
   preview_days: 30,
   margin_usd6: "12500000",
@@ -73,10 +74,17 @@ export interface CoverageCapture {
 export function jevDurationCoverage(
   window: { start_at: string; end_at: string },
   records: readonly CoverageCapture[],
+  knowledge_at: string = window.end_at,
 ) {
   const start = jevTime(window.start_at),
-    end = jevTime(window.end_at);
+    end = jevTime(window.end_at),
+    known = jevTime(knowledge_at);
   requireJev(start < end && records.length <= 512, "COVERAGE_WINDOW");
+  requireJev(
+    known >= end &&
+      known <= end + JEV_EVALUATION_POLICY.coverage_settlement_delay_ms,
+    "COVERAGE_KNOWLEDGE",
+  );
   const ranges: Interval[] = [],
     gaps: Interval[] = [],
     sources: string[] = [];
@@ -99,9 +107,9 @@ export function jevDurationCoverage(
       "COVERAGE_CAPTURE",
     );
     if (
-      jevTime(r.recorded_at) > end ||
-      jevTime(r.received_at) > end ||
-      c.at > end
+      jevTime(r.recorded_at) > known ||
+      jevTime(r.received_at) > known ||
+      c.at > known
     )
       continue;
     sources.push(r.object_id);
@@ -183,6 +191,7 @@ export function jevDurationCoverage(
   return {
     schema_version: JEV_EVALUATION_POLICY.coverage_version,
     window,
+    knowledge_at,
     denominator_ms: duration,
     covered_ms: covered,
     coverage_ppm: Math.floor((covered * 1000000) / duration),
