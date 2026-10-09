@@ -56,3 +56,58 @@ Os arquivos abaixo são pontos de partida para a implementação. Sua existênci
 | Interface | [Experiments.test.tsx](../../apps/web/test/Experiments.test.tsx), [BtcOperations.test.tsx](../../apps/web/test/BtcOperations.test.tsx) | Estados reais do ciclo, separação de custos e patrimônios, fila e controles idempotentes |
 
 Fixtures financeiras devem ter resultados calculados independentemente da implementação, com falhas e fronteiras relevantes. PostgreSQL descartável serve aos testes SQL; fixtures não substituem execução/proteção observadas na venue, latência JEV efetiva ou janela econômica prospectiva.
+
+## JE13 — fronteira live implementada desativada
+
+`createLiveAdapter` em `venues/hyperliquid/live-adapter.ts` conecta o journal PostgreSQL,
+a fronteira autenticada, reconciliação, execução e proteção. Sua construção não
+registra contas, procura credenciais nem faz chamadas. Registro, ownership e leituras
+exigem invocação explícita. Nenhum boot hook, rota ou ativador foi instalado; o
+checkpoint persistente existente continua com `executor_enabled=false`, mesmo com
+wallet fornecida. A integração operacional pertence à JE14 e o ensaio externo à GJ13.5.
+
+A identidade pública distingue conta consultada, agente signer, ambiente e geração.
+A migration 0066 é aditiva, sem seed, e conserva requests, nonces e fontes imutáveis.
+0062–0065 estão reservadas pelo PR JE12 ainda aberto; sua futura integração precisa
+reconciliar o contador de quota com estas quatro tabelas. Nenhuma migration aplicada
+foi alterada. Lease/fence compartilham o lock da conta financeira; nonce não se renova
+com takeover, rejeição, timeout ou restart. Cada intenção tem uma única tentativa
+persistida antes da assinatura; evidências e controle são revalidados antes e depois
+da assinatura. Recuperação consulta `orderStatus`, sem reenvio.
+
+O snapshot remoto e a visão de conta têm saldo/posição desconhecidos como `null`.
+Fees, rebates, PnL realizado e funding efetivos vêm das fontes únicas da venue;
+ACK/trigger não produzem lançamentos financeiros. Histórias saturadas, gaps,
+atribuição desconhecida e mudanças durante a leitura bloqueiam admissão. Observação
+pode alimentar o supervisor somente se o piloto já tiver capital admitido, preservando
+HWM, perfil, limites e executor desativado. A baseline fictícia do ledger paper/stress
+não representa o saldo live reconciliado.
+
+A prova de caixa conserva a observação inicial já admitida e confere o saldo com
+PnL realizado menos fees mais funding deduplicados desde aquela evidência. Capital
+inicial desconhecido ou variação sem recibo permanece pendente; depósito, saque
+ou custo de JEV/infra não vira PnL nem eleva o HWM. Um funding recebido depois
+pode resolver a divergência por nova prova imutável, sem reescrever eventos.
+Enquanto a prova falta, entradas e atualização de HWM ficam bloqueadas; proteção
+e redução conservam suas tentativas independentes.
+
+Entrada exige plano financeiro reservado, decisão/book/metadata válidos e snapshot
+flat recente; usa ALO. Cancelamento só atinge a entrada do próprio perfil. IOC e SL
+usam quantidade observada e `reduceOnly`, sem arredondar residual para cima. Residual
+abaixo do mínimo de entrada gera tentativa explícita de redução; rejeição permanece
+pendente, sem alegar exceção de mínimo ou fechamento confirmado pela venue.
+
+A primeira parcial congela preço, ATR e horário. A proteção usa stop market de posição
+independente da entrada, trigger de mark e orçamento conservador de 10%; parciais
+seguintes mudam somente quantidade. ACK requer confirmação pelo snapshot de ordens.
+Proteção incerta bloqueia entradas, cancela o restante e solicita IOC independente de
+JEV; falha de cancelamento não impede a tentativa de saída. Stop acionado/ACK de IOC
+não equivale a flat. Testes usam transporte simulado e PostgreSQL descartável; não
+certificam atuação na venue, qualificação ou piloto.
+
+Contratos oficiais revalidados: [nonces/agentes](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets),
+[exchange](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint),
+[info/paginação/status](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint),
+[TP/SL](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/take-profit-and-stop-loss-orders-tp-sl)
+e [erros por lote](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/error-responses).
+Assinatura/canonicalização usa o SDK já fixado `@nktkas/hyperliquid@0.33.3`.
