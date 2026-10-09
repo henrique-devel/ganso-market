@@ -92,6 +92,8 @@ export class LiveProtectionCoordinator {
     try {
       requireLiveFreshSnapshot(store.identity, s, now);
       await store.save(s);
+      if ((await store.latest()).pending)
+        reasons.push("FINANCIAL_RECONCILIATION_PENDING");
     } catch {
       reasons.push("RECONCILIATION_REQUIRED");
       urgent_close_requested = true;
@@ -108,7 +110,8 @@ export class LiveProtectionCoordinator {
     const pos = BigInt(s.position_raw),
       quantity = (pos < 0n ? -pos : pos).toString();
     if (pos === 0n) {
-      if (s.flat && s.history_complete) return persist("flat");
+      if (s.flat && s.history_complete && reasons.length === 0)
+        return persist("flat");
       reasons.push("CANCEL_OR_HISTORY_PENDING");
       return persist("pending");
     }
@@ -225,6 +228,8 @@ export class LiveProtectionCoordinator {
           s = await this.refresh();
           requireLiveFreshSnapshot(store.identity, s, clock());
           await store.save(s);
+          if ((await store.latest()).pending)
+            reasons.push("FINANCIAL_RECONCILIATION_PENDING");
           liveCheck(
             s.position_raw === pos.toString(),
             "POSITION_CHANGED_DURING_STOP",

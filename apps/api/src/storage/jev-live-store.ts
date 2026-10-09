@@ -25,7 +25,23 @@ export interface LiveLease {
   lease_until: number;
 }
 export type LiveEventKind =
-  "snapshot" | "fill" | "funding" | "receipt" | "gap" | "protection";
+  | "snapshot"
+  | "fill"
+  | "funding"
+  | "receipt"
+  | "gap"
+  | "protection"
+  | "balance";
+export interface LiveBalanceProof {
+  version: "hyperliquid.live-balance.v1";
+  identity_hash: string;
+  snapshot_id: string;
+  opening_evidence_id: string | null;
+  expected_trading_balance_raw: string | null;
+  observed_trading_balance_raw: string;
+  reconciled: boolean;
+  reason: "RECONCILED" | "INITIAL_CAPITAL_UNKNOWN" | "BALANCE_UNEXPLAINED";
+}
 export interface LiveStore {
   identity: LiveIdentity;
   append(kind: LiveEventKind, key: string, payload: unknown): Promise<void>;
@@ -209,7 +225,85 @@ export class PgLiveStore implements LiveStore {
         `snapshot:${snapshot.snapshot_id}`,
         snapshot,
       );
+      await this.proveBalanceTx(tx, snapshot);
     });
+  }
+  private async balanceTx(tx: SqlExecutor, snapshot: LiveSnapshot | null) {
+    if (!snapshot) return null;
+    return (
+      (
+        await tx.query<{ payload: LiveBalanceProof }>(
+          "SELECT payload FROM jev_live_events WHERE identity_hash=$1 AND kind='balance' AND payload->>'snapshot_id'=$2 ORDER BY recorded_at DESC,event_key DESC LIMIT 1",
+          [this.identityHash, snapshot.snapshot_id],
+        )
+      ).rows[0]?.payload ?? null
+    );
+  }
+  /** Only the existing admission's actual flat cash can anchor the lifetime
+   * proof. An unexplained deposit/withdrawal or absent source stays pending;
+   * neither an invoice nor a configured capital is a trading-cash receipt. */
+  private async proveBalanceTx(tx: SqlExecutor, snapshot: LiveSnapshot) {
+    const opening = (
+      await tx.query<{
+        observation: import("./jev-pilotstore.js").JevPilotObservation;
+      }>(
+        "SELECT checkpoint->'observation' observation FROM jev_pilot_events WHERE account_id=$1 AND sequence=1",
+        [this.identity.account_id],
+      )
+    ).rows[0]?.observation;
+    const source = opening?.original as LiveSnapshot | undefined;
+    const anchor = opening ? Date.parse(opening.observed_at) : NaN;
+    const anchored =
+      this.identity.environment === "mainnet" &&
+      opening?.source === "hyperliquid:mainnet:reconciliation" &&
+      opening.reconciled &&
+      opening.flat &&
+      opening.trading_balance_usd_raw === "250000000" &&
+      opening.open_pnl_usd_raw === "0" &&
+      source?.version === "hyperliquid.live.v1" &&
+      source.identity_hash === this.identityHash &&
+      source.snapshot_id === opening.evidence_id &&
+      source.flat &&
+      source.consistent &&
+      source.history_complete &&
+      source.position_raw === "0" &&
+      source.trading_balance_raw === opening.trading_balance_usd_raw &&
+      source.open_pnl_raw === "0" &&
+      source.venue_at === anchor &&
+      Number.isSafeInteger(anchor) &&
+      anchor <= snapshot.venue_at;
+    let expected: string | null = null;
+    if (anchored) {
+      const money = (
+        await tx.query<{ change_raw: string }>(
+          "SELECT COALESCE(sum(CASE WHEN kind='fill' THEN (payload->>'realized_pnl_raw')::numeric-(payload->>'fee_raw')::numeric ELSE (payload->>'amount_raw')::numeric END),0)::text change_raw FROM jev_live_events WHERE identity_hash=$1 AND kind IN ('fill','funding') AND (payload->>'time')::bigint >= $2 AND (payload->>'time')::bigint <= $3",
+          [this.identityHash, anchor, snapshot.venue_at],
+        )
+      ).rows[0]!;
+      expected = (
+        BigInt(opening.trading_balance_usd_raw) + BigInt(money.change_raw)
+      ).toString();
+    }
+    const reconciled =
+      expected !== null &&
+      expected === snapshot.trading_balance_raw &&
+      snapshot.consistent &&
+      snapshot.history_complete;
+    const proof: LiveBalanceProof = {
+      version: "hyperliquid.live-balance.v1",
+      identity_hash: this.identityHash,
+      snapshot_id: snapshot.snapshot_id,
+      opening_evidence_id: anchored ? opening.evidence_id : null,
+      expected_trading_balance_raw: expected,
+      observed_trading_balance_raw: snapshot.trading_balance_raw,
+      reconciled,
+      reason: reconciled
+        ? "RECONCILED"
+        : expected === null
+          ? "INITIAL_CAPITAL_UNKNOWN"
+          : "BALANCE_UNEXPLAINED",
+    };
+    await this.eventTx(tx, "balance", `balance:${jevHash(proof)}`, proof);
   }
   async latest() {
     return this.pool.transaction(async (tx) => {
@@ -225,12 +319,14 @@ export class PgLiveStore implements LiveStore {
       ).rows;
       const s = rows.find((r) => r.kind === "snapshot"),
         gap = rows.find((r) => r.kind === "gap");
+      const balance = await this.balanceTx(tx, s?.payload ?? null);
       return {
         snapshot: s?.payload ?? null,
         pending:
           !s ||
           !s.payload.consistent ||
           !s.payload.history_complete ||
+          !balance?.reconciled ||
           (!!gap && gap.recorded_at >= s.recorded_at),
       };
     });
@@ -456,6 +552,7 @@ export class PgLiveStore implements LiveStore {
       ).rows;
       const snapshot = observations.find((e) => e.kind === "snapshot"),
         gap = observations.find((e) => e.kind === "gap");
+      const balance = await this.balanceTx(tx, snapshot?.payload ?? null);
       const reconciled =
         c.kind === "entry" &&
         snapshot &&
@@ -463,6 +560,7 @@ export class PgLiveStore implements LiveStore {
         snapshot.payload.flat &&
         snapshot.payload.consistent &&
         snapshot.payload.history_complete &&
+        balance?.reconciled &&
         pilot?.checkpoint.observation.evidence_id ===
           snapshot.payload.snapshot_id &&
         pilot?.checkpoint.observation.reconciled === true &&
@@ -573,6 +671,7 @@ export class PgLiveStore implements LiveStore {
       const last = rows.find((r) => r.kind === "snapshot"),
         gap = rows.find((r) => r.kind === "gap"),
         s = last?.payload ?? null;
+      const balance = await this.balanceTx(tx, s);
       const money = (
         await tx.query<{
           fees_raw: string;
@@ -589,12 +688,14 @@ export class PgLiveStore implements LiveStore {
           !s ||
           !s.consistent ||
           !s.history_complete ||
+          !balance?.reconciled ||
           s.received_at > now ||
           now - s.started_at > 2000 ||
           (!!gap && !!last && gap.recorded_at >= last.recorded_at),
         trading_balance_raw: s?.trading_balance_raw ?? null,
         equity_raw: s?.equity_raw ?? null,
         position_raw: s?.position_raw ?? null,
+        balance_proof: balance,
         ...money,
       };
     });
@@ -607,9 +708,24 @@ export class PgLiveStore implements LiveStore {
         this.identity.environment === "mainnet",
       "PILOT_OBSERVATION_OWNER",
     );
-    const previous = await this.pool.transaction((tx) =>
-      readJevPilotTx(tx, this.identity.account_id),
-    );
+    const previous = await this.pool.transaction(async (tx) => {
+      await this.lock(tx);
+      const pilot = await readJevPilotTx(tx, this.identity.account_id);
+      if (!pilot) return null;
+      const stored = (
+        await tx.query<{ payload: LiveSnapshot }>(
+          "SELECT payload FROM jev_live_events WHERE identity_hash=$1 AND kind='snapshot' AND event_key=$2",
+          [this.identityHash, `snapshot:${snapshot.snapshot_id}`],
+        )
+      ).rows[0]?.payload;
+      liveCheck(
+        stored && jevHash(stored) === jevHash(snapshot),
+        "OBSERVATION_SOURCE",
+      );
+      const balance = await this.balanceTx(tx, snapshot);
+      liveCheck(balance?.reconciled, "CASH_RECONCILIATION_REQUIRED");
+      return pilot;
+    });
     if (!previous) return null;
     const duplicate = await this.pool.transaction(
       async (tx) =>

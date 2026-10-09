@@ -32,7 +32,7 @@ CREATE UNIQUE INDEX jev_live_cloid ON jev_live_requests(identity_hash,(reservati
 CREATE TABLE jev_live_events (
  identity_hash TEXT NOT NULL REFERENCES jev_live_identities(identity_hash),
  event_key TEXT NOT NULL CHECK(length(event_key) BETWEEN 1 AND 512),
- kind TEXT NOT NULL CHECK(kind IN ('snapshot','fill','funding','receipt','gap','protection')),
+ kind TEXT NOT NULL CHECK(kind IN ('snapshot','fill','funding','receipt','gap','protection','balance')),
  payload_hash TEXT NOT NULL CHECK(payload_hash ~ '^[a-f0-9]{64}$'), payload JSONB NOT NULL,
  recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(identity_hash,event_key), CHECK(octet_length(payload::text)<=1048576)

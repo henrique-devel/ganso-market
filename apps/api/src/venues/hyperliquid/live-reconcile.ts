@@ -175,7 +175,10 @@ export async function recoverLiveAccount(input: {
       snapshot.orders.some((o) => !owns(o.cloid, o.oid)) ||
       snapshot.fills.some((f) => !owns(f.cloid, f.oid));
     const pending =
-      !snapshot.history_complete || !snapshot.consistent || unknown;
+      !snapshot.history_complete ||
+      !snapshot.consistent ||
+      unknown ||
+      (await store.latest()).pending;
     if (pending)
       await store.append("gap", `gap:recovery:${snapshot.snapshot_id}`, {
         reason: unknown ? "VENUE_OWNERSHIP_UNKNOWN" : "RECONCILIATION_REQUIRED",

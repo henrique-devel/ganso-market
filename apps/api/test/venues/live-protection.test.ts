@@ -95,6 +95,28 @@ describe("JE13 first-partial native protection (simulated venue)", () => {
     // No ACK is credited as a financial fill.
     expect(await f.store.events("fill")).toEqual([]);
   });
+  it("cash proof pending preserves the native stop attempt and independently requests reduction without claiming flat", async () => {
+    const f = setup();
+    await f.begin();
+    vi.spyOn(f.store, "latest").mockImplementation(async () => ({
+      snapshot: f.store.snapshot,
+      pending: true,
+    }));
+    const result = await f.coordinator.reconcile(f.input());
+    expect(result.state).toBe("pending");
+    expect(result.reasons).toContain("FINANCIAL_RECONCILIATION_PENDING");
+    expect(result.urgent_close_requested).toBe(true);
+    expect(f.store.requests.map((r) => r.kind)).toEqual([
+      "entry",
+      "stop",
+      "cancel",
+      "close",
+    ]);
+    expect(f.store.requests.filter((r) => r.kind === "stop")).toHaveLength(1);
+    expect(f.store.requests.at(-1)!.action).toMatchObject({
+      orders: [{ r: true, t: { limit: { tif: "Ioc" } } }],
+    });
+  });
   it("additional partials and restart preserve first price/ATR/time, increasing only protected size", async () => {
     const f = setup();
     await f.begin();
