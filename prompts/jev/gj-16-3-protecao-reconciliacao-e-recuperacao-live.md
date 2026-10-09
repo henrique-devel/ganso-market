@@ -62,4 +62,3 @@ Confira versão/saúde/persistência do delta publicado; reversão preserva prot
 ## Fechamento
 
 Marque GJ16.3 somente após verificar todos os aceites; no grupo, continue e consolide JE15/IDs cobertos no estado. Registre PR/SHA e validação/gate pendente efetivos. Se incompleto, mantenha aberto e registre delta/falha/próximo checkpoint. Não alterar estados históricos nem executar outra entrega/chat/agente/agendamento automaticamente.
-

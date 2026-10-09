@@ -54,4 +54,3 @@ GJ12.2/GJ12.3/GJ13.5/GJ15.1–3 permanecem etapas separadas; não executá-las p
 Atualize somente JE16 e seus checkpoints verificados no estado, com PR/SHA, validação resumida e publicação/gates pendentes. O mesmo PR/SHA pode cobrir vários IDs. Preserve os estados JE01–JE14 e etapas operacionais.
 
 Se interrompido, registre base/branch, IDs validados, delta, falhas e próximo checkpoint na linha existente, sem relatório/recibo extra. Sem delta, registre reaproveitamento e não crie PR vazio. Relate resultado, validações e publicação/bloqueio observado; encerre após o escopo selecionado.
-

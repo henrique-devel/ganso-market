@@ -116,4 +116,3 @@ O [estado JEV](GANSO_JEV_EXECUTION_STATE.md) recebe JE15–JE17 e os 10 checkpoi
 Ao desenvolver, atualizar apenas o grupo selecionado e seus IDs efetivamente verificados. Na interrupção, registrar base/branch, delta, testes/falhas e próximo checkpoint. Não criar relatório/recibo separado, novo chat/agente, mensagens externas ou agendamento automaticamente.
 
 Referências: [índice de prompts](../../prompts/jev/README.md), [protocolo](../../prompts/jev/00-protocolo.md), [plano original](GANSO_JEV_IMPLEMENTATION_PLAN.md), [autorização JEV](../ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco).
-
