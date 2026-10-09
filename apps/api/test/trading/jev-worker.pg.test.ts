@@ -6,6 +6,8 @@ import { health } from "./bars-fixture.js";
 import { scope as retentionScope } from "./risk-fixture.js";
 import { jevRiskCheckpoint } from "../../src/trading/jev-risk.js";
 import { beforeEach, afterEach, describe, it, expect } from "vitest";
+import { createJevFundingLane } from "../../src/storage/jev-funding-store.js";
+import { writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createPgFixture } from "../pg-fixture.js";
 import type { DatabasePool, SqlExecutor } from "../../src/database.js";
@@ -17,6 +19,10 @@ import {
   createJevWorkerStore,
   jevWorkerAccountTokenTx,
 } from "../../src/storage/jev-worker-store.js";
+import { initialJevManifest } from "../../src/storage/jev-manifest.js";
+import { jevIdentity } from "./jev-v2-fixture.js";
+import { jevHash } from "../../src/storage/jev-hash.js";
+import { seedDispatchCapacityTx } from "./jev-dispatch-fixture.js";
 import { decisionFixture } from "./jev-decision-fixture.js";
 import {
   registerJevPair,
@@ -124,6 +130,16 @@ describe.skipIf(!url)("JE07 durable cadence/state fencing", () => {
       initial.stress,
       initial.manifest,
     );
+    for (const [slot, h] of [3, 5].entries()) {
+      const manifest = initialJevManifest(h as 3 | 5),
+        p = jevIdentity("paper", `h${h}`),
+        s = jevIdentity("stress", `h${h}`);
+      for (const i of [p, s]) {
+        i.bindings[0]!.profile.horizon_minutes = h as 3 | 5;
+        i.bindings[0]!.profile.manifest_hash = jevHash(manifest);
+      }
+      await registerJevPair(pool, slot + 2, p, s, manifest);
+    }
     const lease = await claimExecutionWorker(pool, "a".repeat(40));
     const fixture = decisionFixture(Date.now()),
       cut = fixture.input.cut_at,
@@ -142,14 +158,18 @@ describe.skipIf(!url)("JE07 durable cadence/state fencing", () => {
       flat: true,
       global_blocked: false,
     });
-    await f.pool.query(
-      "INSERT INTO jev_risk_events(account_id,sequence,operation_id,checkpoint,evidence) VALUES($1,1,'fixture',$2,'{}')",
-      [scope.account_id, checkpoint],
-    );
-    await f.pool.query(
-      "INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference) VALUES($1,true,false,'fixture-only')",
-      [scope.account_id],
-    );
+    for (const account of (
+      await f.pool.query("SELECT account_id FROM jev_accounts")
+    ).rows) {
+      await f.pool.query(
+        "INSERT INTO jev_risk_events(account_id,sequence,operation_id,checkpoint,evidence) VALUES($1,1,'fixture',$2,'{}')",
+        [account.account_id, checkpoint],
+      );
+      await f.pool.query(
+        "INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference,funding_debit_rate9_raw,cost_evidence_id) VALUES($1,true,false,'fixture-only',0,'fixture:capacity')",
+        [account.account_id],
+      );
+    }
     await withBtcRetentionTransaction(pool, async (tx) => {
       const save = async (
         r: { object_id: string; payload: unknown; recorded_at: string },
@@ -194,6 +214,10 @@ describe.skipIf(!url)("JE07 durable cadence/state fencing", () => {
               ? "trades"
               : "context",
         );
+      const capacityId = await seedDispatchCapacityTx(tx, at);
+      await tx.query("UPDATE jev_worker_controls SET capacity_evidence_id=$1", [
+        capacityId,
+      ]);
       for (let n = 0; n <= 60; n++) {
         const t = at - 60000 + n * 1000;
         const h = health(t);
@@ -221,36 +245,106 @@ describe.skipIf(!url)("JE07 durable cadence/state fencing", () => {
       lease,
       fixture.batch.model,
     );
-    const accounts = (await store.accounts()).filter(
-      (a) => a.scope.mode === "paper",
+    const accounts = await store.accounts();
+    expect(accounts).toHaveLength(6);
+    let publicCalls = 0;
+    const funding = createJevFundingLane(
+      { ...pool, readOnly: pool.readOnly.bind(pool) },
+      store.accounts,
+      async () => {
+        publicCalls++;
+        throw Error("unexpected");
+      },
     );
-    expect(accounts).toHaveLength(1);
-    // Rebuild input dependency hashes independently of their old synthetic fixture hashes.
-    // The store reads their actual retained originals, so these are consistent by construction.
-    const prepared = await store.prepare(accounts, at + 100);
-    expect(prepared?.batch.participants).toHaveLength(1);
-    expect(prepared?.batch.participants[0]!.context.quality.state).toBe(
-      "observed_no_known_gap",
+    await funding.tick();
+    expect(publicCalls).toBe(0);
+
+    const groups = [1, 3, 5].map((h) =>
+      accounts.filter((a) => a.scope.profile_id === `h${h}`),
     );
-    expect(
-      (
-        await f.pool.query(
-          "SELECT state->>'mode' mode FROM jev_worker_cadences",
-        )
-      ).rows[0].mode,
-    ).toBe("slow");
-    expect(await store.prepare(accounts, at + 101)).toBeNull();
+    await f.pool.query(
+      "UPDATE jev_worker_controls SET capacity_evidence_id=NULL WHERE account_id=$1",
+      [scope.account_id],
+    );
+    const missing = await store.prepare(
+      [accounts.find((a) => a.scope.account_id === scope.account_id)!],
+      at + 100,
+    );
+    expect(missing).toBeNull();
+    expect(store.metrics.capacity_skips).toBe(1);
+    await f.pool.query(
+      "UPDATE jev_worker_controls SET capacity_evidence_id='fixture:capacity' WHERE account_id=$1",
+      [scope.account_id],
+    );
+    const started = performance.now(),
+      cpu = process.cpuUsage();
+    const walBefore = (
+      await f.pool.query(
+        "SELECT pg_current_wal_lsn() AS lsn,pg_database_size(current_database())::text AS bytes",
+      )
+    ).rows[0];
+    const prepared = await Promise.all(
+      groups.map((g) => store.prepare(g, at + 100)),
+    );
+    for (const [i, p] of prepared.entries()) {
+      expect(p?.batch.participants).toHaveLength(2);
+      expect(p?.batch.manifest.horizon_minutes).toBe([1, 3, 5][i]);
+      expect(
+        p?.batch.participants.every(
+          (p) => p.context.quality.state === "observed_no_known_gap",
+        ),
+      ).toBe(true);
+      expect(
+        p?.batch.participants.map((p) => p.context.scope.mode).sort(),
+      ).toEqual(["paper", "stress"]);
+    }
+    for (const g of groups) expect(await store.prepare(g, at + 101)).toBeNull();
     expect(
       (
         await f.pool.query(
           "SELECT count(*)::int n FROM jev_worker_cycles WHERE phase='scheduled'",
         )
       ).rows[0].n,
-    ).toBe(1);
+    ).toBe(6);
     expect(
       (await f.pool.query("SELECT count(*)::int n FROM jev_evidence_objects"))
         .rows[0].n,
-    ).toBe(2);
+    ).toBe(12);
+    const walAfter = (
+      await f.pool.query(
+        "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),$1)::text AS wal_bytes,pg_database_size(current_database())::text AS bytes",
+        [walBefore.lsn],
+      )
+    ).rows[0];
+    const report = {
+      profiles: 3,
+      accounts: 6,
+      elapsed_ms: performance.now() - started,
+      cpu_us: process.cpuUsage(cpu),
+      logical_bytes: (
+        await f.pool.query(
+          "SELECT total_bytes::text n FROM btc_retention_policy",
+        )
+      ).rows[0].n,
+      physical_growth_bytes: (
+        BigInt(walAfter.bytes) - BigInt(walBefore.bytes)
+      ).toString(),
+      wal_bytes: walAfter.wal_bytes,
+      pins: (
+        await f.pool.query("SELECT count(*)::int n FROM btc_retention_pins")
+      ).rows[0].n,
+      protected_sources: (
+        await f.pool.query("SELECT count(*)::int n FROM jev_evidence_sources")
+      ).rows[0].n,
+      pending_cycles: 6,
+      duplicate_cycles: 0,
+      origin: "disposable_postgres_fixture_not_admission",
+    };
+    if (process.env.GANSO_JE10_LOAD_PATH)
+      writeFileSync(
+        process.env.GANSO_JE10_LOAD_PATH,
+        JSON.stringify(report, null, 2),
+      );
   });
   it("consumes one current response and clears its exact pending cutoff", async () => {
     const x = await scheduled();

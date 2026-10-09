@@ -1,3 +1,5 @@
+import { reconcileJevFunding } from "../../src/storage/jev-funding-store.js";
+import { jevEpisodes } from "../../src/storage/jev-evaluation.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { riskFixture } from "./risk-fixture.js";
 import { jevIdentity, iso } from "./jev-v2-fixture.js";
@@ -137,11 +139,16 @@ async function ready(s = scope) {
     evidence: { fixture: true },
   });
 }
-async function submit(s = scope, direction: "long" | "short" = "long") {
+async function submit(
+  s = scope,
+  direction: "long" | "short" = "long",
+  m = manifest,
+) {
   await ready(s);
   const input = {
     ...sizingInput,
     scope: s,
+    order_id: `entry:${s.account_id}`,
     decision_at: iso(at),
     atr_captured_at: iso(at - 1000),
     direction,
@@ -152,7 +159,7 @@ async function submit(s = scope, direction: "long" | "short" = "long") {
       metadata,
     ),
   };
-  const r = await reserveJevEntry(f.poolAdapter, manifest, metadata, input);
+  const r = await reserveJevEntry(f.poolAdapter, m, metadata, input);
   expect(r.status).toBe("reserved");
   return applyJevExecution(f.poolAdapter, s, {
     action: "submit",
@@ -355,6 +362,167 @@ describe.skipIf(!url)("JE06 unified execution on disposable PostgreSQL", () => {
     expect(s.fills[0]!.quantity_btc_raw).toBe("1000");
     expect(p.fills[0]!.fee_usd_raw).toBe("98");
     expect(s.fills[0]!.fee_usd_raw).toBe("195");
+  });
+  it("JE10 three pairs diverge prospectively, settle their own funding and close without sharing inventory or liquidity", async () => {
+    const all = [
+      { identity: owner, scope, manifest },
+      { identity: stress, scope: stressScope, manifest },
+    ];
+    for (const [slot, h] of [3, 5].entries()) {
+      const m = initialJevManifest(h as 3 | 5),
+        p = jevIdentity("paper", `h${h}`),
+        s = jevIdentity("stress", `h${h}`);
+      for (const i of [p, s]) {
+        i.bindings[0]!.profile.horizon_minutes = h as 3 | 5;
+        i.bindings[0]!.profile.manifest_hash = jevHash(m);
+        all.push({
+          identity: i,
+          scope: jevScope(i.bindings[0]!.binding, i.instrument),
+          manifest: m,
+        });
+      }
+      await registerJevPair(f.poolAdapter, slot + 2, p, s, m);
+    }
+    for (const a of all) await submit(a.scope, "long", a.manifest);
+    await capture(1000);
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    await print(1100);
+    await capture(1200);
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    await capture(2000);
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    await print(2100);
+    await capture(2200);
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    for (const a of all) {
+      const l = await readJevAccount(
+        f.poolAdapter,
+        "operator",
+        a.scope.account_id,
+      );
+      expect(l.projection.positions[0]!.quantity_btc_raw).toBe(
+        a.scope.mode === "paper" ? "2000" : "1000",
+      );
+    }
+    await Promise.all(all.map((a) => command("cancel", a.scope)));
+    await capture(4200);
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    // Synthetic public snapshots and final rows exercise the original paper
+    // funding model. These fixtures are not venue or operational qualification.
+    await f.capture({ at: base + 4300, httpSnapshot: true });
+    const oracle = (
+      await f.pool.query(
+        "SELECT object_id FROM btc_market_records WHERE kind='context' ORDER BY received_at DESC LIMIT 1",
+      )
+    ).rows[0].object_id;
+    const cutoff = base + 4400,
+      hour = iso(Math.floor(cutoff / 3600000) * 3600000);
+    f.setClock(iso(base + 4500));
+    const funding = {
+      operation_id: "three-pairs",
+      period_hour: hour,
+      oracle_object_id: oracle,
+      observation: {
+        source: "hyperliquid:mainnet:fundingHistory" as const,
+        received_at: iso(base + 4500),
+        row: { coin: "BTC", time: cutoff, fundingRate: "0.001", premium: "0" },
+      },
+    };
+    const results = await Promise.all(
+      all.map((a) => reconcileJevFunding(f.poolAdapter, a.scope, funding)),
+    );
+    for (const [i, receipt] of results.entries()) {
+      expect(receipt.status).toBe("settled");
+      expect(receipt.positions[0]!.delta_usd_raw).toBe(
+        all[i]!.scope.mode === "paper" ? "-1300" : "-650",
+      );
+    }
+    await Promise.all(
+      all.map((a) => reconcileJevFunding(f.poolAdapter, a.scope, funding)),
+    );
+    expect(
+      (await f.pool.query("SELECT count(*)::int n FROM jev_funding_receipts"))
+        .rows[0].n,
+    ).toBe(6);
+    for (const a of all)
+      await applyJevExecution(f.poolAdapter, a.scope, {
+        action: "close",
+        operation_id: `close:${a.scope.account_id}`,
+        limit_price_raw: "58000000000",
+      });
+    await capture(5600, { quantity: "2000" });
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    await capture(6600, { quantity: "1000" });
+    await Promise.all(all.map((a) => command("advance", a.scope)));
+    for (const a of all) {
+      const l = await readJevAccount(
+        f.poolAdapter,
+        "operator",
+        a.scope.account_id,
+      );
+      expect(
+        l.projection.positions.every((p) => p.quantity_btc_raw === "0"),
+      ).toBe(true);
+      expect(l.projection.cash_usd_raw).toBe(
+        a.scope.mode === "paper" ? "249997920" : "249998570",
+      );
+      expect(
+        jevEpisodes(
+          l.identity,
+          l.events,
+          a.scope,
+          { start_at: iso(base), end_at: iso(base + 10000) },
+          iso(Date.now()),
+        ).closed_count,
+      ).toBe(1);
+      expect(
+        l.events.every(
+          (e) =>
+            e.account_id === a.scope.account_id &&
+            e.profile_id === a.scope.profile_id,
+        ),
+      ).toBe(true);
+    }
+    expect(
+      (
+        await f.pool.query(
+          "SELECT count(DISTINCT account_id)::int n FROM jev_liquidity_claims",
+        )
+      ).rows[0].n,
+    ).toBe(6);
+    await expect(
+      f.pool.query("UPDATE jev_funding_receipts SET sequence=99"),
+    ).rejects.toThrow(/IMMUTABLE/);
+    for (const a of all)
+      await f.pool.query(
+        "INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference) VALUES($1,true,false,'fixture-only')",
+        [a.scope.account_id],
+      );
+    f.setClock(iso(base + 7000));
+    const before = await readJevAccount(
+      f.poolAdapter,
+      "operator",
+      scope.account_id,
+    );
+    const correction = await reconcileJevFunding(f.poolAdapter, scope, {
+      ...funding,
+      operation_id: "correction",
+      observation: {
+        ...funding.observation,
+        row: { ...funding.observation.row, fundingRate: "0.002" },
+      },
+    });
+    expect(correction.status).toBe("conflict");
+    expect(
+      await readJevAccount(f.poolAdapter, "operator", scope.account_id),
+    ).toEqual(before);
+    expect(
+      (
+        await f.pool.query(
+          "SELECT account_id FROM jev_worker_controls WHERE entries_paused",
+        )
+      ).rows,
+    ).toEqual([{ account_id: scope.account_id }]);
   });
   it("wait is 2s from ACK; prints in cancel transit reconcile, later prints cannot fill", async () => {
     await submit();

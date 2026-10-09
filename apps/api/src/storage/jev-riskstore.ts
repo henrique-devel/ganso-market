@@ -1,3 +1,4 @@
+import { jevFundingEvidenceReadyTx } from "./jev-funding-status.js";
 import { randomUUID } from "node:crypto";
 import {
   assertJevOwnership,
@@ -174,6 +175,7 @@ export async function observeJevRiskTx(
     )
   ).rows[0];
   const reconciled =
+    (await jevFundingEvidenceReadyTx(tx, id, ledger.events, now)) &&
     !!reconciliations &&
     reconciliations.ledger_sequence === ledger.projection.last_sequence &&
     riskTime(now) - reconciliations.observed_at.getTime() <= 2000 &&

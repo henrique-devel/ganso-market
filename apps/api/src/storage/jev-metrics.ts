@@ -1,3 +1,4 @@
+import { jevFundingEvidenceReadyTx } from "./jev-funding-status.js";
 import {
   requireJev,
   type JevScope,
@@ -290,11 +291,12 @@ async function evaluateJevMetricsTx(
     )
   ).rows[0];
   const fundingComplete =
-    !ledger.events.some((e) => e.payload.event_type === "fill") ||
-    (!!reconciliation &&
-      reconciliation.ledger_sequence === ledger.projection.last_sequence &&
-      reconciliation.funding_through_at.getTime() >=
-        Math.floor(utc(at) / 3600000) * 3600000);
+    (await jevFundingEvidenceReadyTx(tx, account, ledger.events, at)) &&
+    (!ledger.events.some((e) => e.payload.event_type === "fill") ||
+      (!!reconciliation &&
+        reconciliation.ledger_sequence === ledger.projection.last_sequence &&
+        reconciliation.funding_through_at.getTime() >=
+          Math.floor(utc(at) / 3600000) * 3600000));
   const market = { as_of: at, ...(await readValuationMarketTx(tx, at)) };
   return {
     market,
