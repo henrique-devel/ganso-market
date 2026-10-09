@@ -25,7 +25,11 @@ export function dispatchCapacity(
     protection_max_ms: 1000,
   };
 }
-export async function seedDispatchCapacityTx(tx: SqlExecutor, at: number) {
+export async function seedDispatchCapacityTx(
+  tx: SqlExecutor,
+  at: number,
+  resourceOverride: Record<string, unknown> = {},
+) {
   const proof = dispatchCapacity(await jevDispatchRegistryHashTx(tx), at);
   const refs = [
     proof.sustained_resources_reference,
@@ -38,7 +42,19 @@ export async function seedDispatchCapacityTx(tx: SqlExecutor, at: number) {
       class: "raw",
       identity: scope,
       recordedAt: new Date(at),
-      payload: { fixture_only: true },
+      payload:
+        id === proof.sustained_resources_reference
+          ? {
+              fixture_only: true,
+              origin: "observed_runtime",
+              observed_at: proof.observed_at,
+              valid_until: proof.valid_until,
+              host_ram_used_bytes: "8000000000",
+              host_cpu_busy_ppm: 400000,
+              db_write_max_ms: 20,
+              ...resourceOverride,
+            }
+          : { fixture_only: true },
       dependencies: [],
     });
   await storeRetentionObjectTx(tx, {

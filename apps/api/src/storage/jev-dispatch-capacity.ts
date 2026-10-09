@@ -109,6 +109,58 @@ export async function readJevDispatchCapacityTx(
         "SELECT object_id FROM btc_retention_objects WHERE object_id=ANY($1::text[]) AND recorded_at<=$2 AND object_id IN (SELECT dependency_id FROM btc_retention_dependencies WHERE object_id=$3)",
         [refs, new Date(now).toISOString(), evidenceId],
       )
-    ).rowCount === refs.length
+    ).rowCount === refs.length &&
+    (await readJevResourcesTx(tx, evidenceId, now))
   );
+}
+
+export function jevResourcesReady(value: unknown, now: number) {
+  const r = value as {
+    origin?: unknown;
+    observed_at?: string;
+    valid_until?: string;
+    host_ram_used_bytes?: string;
+    host_cpu_busy_ppm?: number;
+    db_write_max_ms?: number;
+  } | null;
+  return (
+    !!r &&
+    r.origin === "observed_runtime" &&
+    typeof r.observed_at === "string" &&
+    typeof r.valid_until === "string" &&
+    Date.parse(r.observed_at) <= now &&
+    now < Date.parse(r.valid_until) &&
+    typeof r.host_ram_used_bytes === "string" &&
+    /^(0|[1-9][0-9]*)$/.test(r.host_ram_used_bytes) &&
+    BigInt(r.host_ram_used_bytes) <= 13000000000n &&
+    typeof r.host_cpu_busy_ppm === "number" &&
+    Number.isSafeInteger(r.host_cpu_busy_ppm) &&
+    r.host_cpu_busy_ppm >= 0 &&
+    r.host_cpu_busy_ppm <= 750000 &&
+    typeof r.db_write_max_ms === "number" &&
+    Number.isFinite(r.db_write_max_ms) &&
+    r.db_write_max_ms >= 0 &&
+    r.db_write_max_ms <= 1000
+  );
+}
+export async function readJevResourcesTx(
+  tx: SqlExecutor,
+  evidenceId: string | null,
+  now: number,
+) {
+  if (!evidenceId) return false;
+  const row = (
+    await tx.query<{ payload: JevDispatchCapacity }>(
+      "SELECT payload FROM btc_retention_objects WHERE object_id=$1 AND class='raw'",
+      [evidenceId],
+    )
+  ).rows[0];
+  if (!row) return false;
+  const resource = (
+    await tx.query<{ payload: unknown }>(
+      "SELECT payload FROM btc_retention_objects WHERE object_id=$1 AND recorded_at<=$2",
+      [row.payload.sustained_resources_reference, new Date(now).toISOString()],
+    )
+  ).rows[0];
+  return jevResourcesReady(resource?.payload, now);
 }

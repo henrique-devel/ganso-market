@@ -42,3 +42,15 @@ export type {
 export type { DeskOperation } from "./history.js";
 
 export * from "./jev.js";
+
+export type {
+  JevPanelSnapshot,
+  JevPanelAccount,
+  JevPanelMetrics,
+} from "./jev-panel.js";
+
+export type {
+  JevPanelDecision,
+  JevPanelExecution,
+  JevPlatformCosts,
+} from "./jev-panel.js";

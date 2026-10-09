@@ -1,3 +1,4 @@
+import { createJevEngineMonitor } from "./storage/jev-readiness.js";
 import { createJevFundingLane } from "./storage/jev-funding-store.js";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -106,10 +107,18 @@ export async function runExecutionWorker() {
       evaluate: (batch, signal) => backend.evaluate(batch, signal),
     });
     stopScheduler = scheduler.stop;
+    const engineMonitor = createJevEngineMonitor(
+      fenced,
+      lease,
+      sha,
+      backend.status.model,
+      backend.status.enabled,
+    );
     const funding = createJevFundingLane(fenced, store.accounts);
     let fundingTask: Promise<void> | null = null,
       lastFundingAt = -Infinity;
     const fundingController = new AbortController();
+    let monitorTask: Promise<void> | null = null;
     let lastEvaluationMinute = -1;
     let evaluationTask: Promise<void> | null = null;
     let evaluationStatus = "not_started";
@@ -122,6 +131,7 @@ export async function runExecutionWorker() {
       fundingController.abort();
       await fundingTask;
       await finishEvaluation();
+      await monitorTask;
     };
     while (!stopped) {
       const began = Date.now();
@@ -129,6 +139,15 @@ export async function runExecutionWorker() {
       await fenced.transaction((tx) => tx.query("SELECT 1"));
       await scheduler.tick();
       await drainDeskCommands(fenced);
+      if (!monitorTask)
+        monitorTask = engineMonitor
+          .tick()
+          .catch(() => {
+            log("JEV_ENGINE_OBSERVATION_UNAVAILABLE");
+          })
+          .finally(() => {
+            monitorTask = null;
+          });
       if (!fundingTask && began - lastFundingAt >= 30000) {
         lastFundingAt = began;
         fundingTask = funding

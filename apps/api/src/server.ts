@@ -1,3 +1,4 @@
+import { registerJevPanelRoutes } from "./jev-panel-api.js";
 import { registerExperimentRoutes } from "./experiments-api.js";
 import type { ChallengerConfig } from "./models/jev-config.js";
 import { registerTradingCommandRoutes } from "./trading-commandapi.js";
@@ -245,6 +246,10 @@ export function buildApi(options: BuildApiOptions): FastifyInstance {
       authService: options.authService,
     });
     const readPool = budgetedPool(options.pool);
+    registerJevPanelRoutes(app, {
+      pool: readPool,
+      authService: options.authService,
+    });
     registerExperimentRoutes(app, {
       pool: readPool,
       authService: options.authService,
