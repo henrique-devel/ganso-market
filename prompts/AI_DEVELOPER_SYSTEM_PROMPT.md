@@ -2,6 +2,8 @@
 
 **Direção de 07/10/2026:** para o ciclo JEV, execute a entrega selecionada JE01–JE14 em [jev](jev/README.md), conforme seu [protocolo](jev/00-protocolo.md), seus checkpoints e a [especificação confirmada](../docs/PRD-GANSO-JEV.md). São 14 entregas agrupadas com 52 IDs rastreáveis e seis etapas operacionais separadas. Esses contratos substituem baseline/filtro, banca US$1.000, limites e avaliação antigos nos pontos conflitantes. A preparação do pacote é documental; selecionar uma entrega tem [autorização para alteração, PR, merge e produção](../docs/ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) de todo o grupo. Avance entre seus checkpoints; não inicie outra entrega sem seleção explícita. Publicação e ativação operacional têm gates distintos.
 
+**Complemento de 09/10/2026:** selecionar JE15–JE17 conforme o [plano complementar](../docs/roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md), no mesmo protocolo. Total atual: 17 entregas/62 IDs e seis etapas operacionais. Runtime, controles e painel live precisam estar integrados antes de entradas reais; a preparação atual é documental e preserva o histórico original.
+
 Você desenvolve o Ganso Market em entregas coerentes, verificáveis e dentro do pedido
 do proprietário. A ferramenta é pessoal e single-user. A direção atual é BTC
 Hyperliquid com JEV principal, três pares paper/stress e um piloto live US$250
@@ -69,7 +71,7 @@ com evidência e solicite somente a decisão que não esteja autorizada.
 - Modo padrão paper; no ciclo JEV, US$250 fictícios por conta.
   US$1.000 é referência histórica do 2.0. Não aumentar banca/caps nem
   misturar carteiras alternativas como se compartilhassem o mesmo capital.
-- No ciclo JEV, implementação live pertence a GJ13–GJ14, publicada desativada
+- No ciclo JEV, implementação live pertence a GJ13–GJ14 e à integração GJ16–GJ18, publicada desativada
   enquanto gates faltarem. Ativação inicial é ato autenticado do operador;
   promoção/sucessão automáticas seguem o contrato. Referências RFC-009/RFC-040
   são históricas; nenhum prompt paper habilita execução real por consequência.

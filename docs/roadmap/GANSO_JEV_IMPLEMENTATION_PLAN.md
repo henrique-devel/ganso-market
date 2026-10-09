@@ -4,6 +4,8 @@ Planejamento de **07/10/2026**, baseado na [especificação confirmada](../PRD-G
 
 **Estado desta revisão: somente documentação local.** Os 16 blocos GJ00–GJ15 abaixo continuam planejados. O [pacote de execução](../../prompts/jev/README.md) passa a usar **14 entregas agrupadas (JE01–JE14), 52 IDs rastreáveis e seis etapas operacionais separadas**. São 43 checkpoints de código e três diagnósticos nos grupos, além das seis etapas. Selecionar uma entrega tem [autorização para alteração, PR, merge e produção](../ops/DEVELOPMENT_AUTHORIZATION.md#ciclo-jev-com-autonomia-por-bloco) de todo seu escopo; preparar o formato não executa implementação, qualificação, compra, promoção ou ordens.
 
+**Complemento de 09/10/2026:** o [plano JE15–JE17](GANSO_JEV_LIVE_COMPLETION_PLAN.md) fecha as três lacunas de integração live encontradas após o desenvolvimento do pacote original. Acrescenta 10 checkpoints GJ16–GJ18, preservando os 52 IDs, suas publicações e as seis etapas operacionais. O estado atual está no [acompanhamento](GANSO_JEV_EXECUTION_STATE.md); as declarações de planejamento de 07/10 são históricas, não prova de ausência de código hoje. A preparação do complemento não inicia desenvolvimento/operação.
+
 ## Sequência e dependências
 
 | Marco | Fatias | Resultado e condição de avanço |

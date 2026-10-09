@@ -2,7 +2,7 @@
 id: GJ15.1
 macro: GJ15
 part: 1
-depends_on: ["GJ14.3","GJ13.5"]
+depends_on: ["GJ14.3","GJ13.5", "GJ16.4", "GJ17.3", "GJ18.3"]
 operational_gates: ["GJ12.3 operational-qualified","GJ13.5 venue-verified","Elegibilidade paper/stress atual","Ativação autenticada do operador para operar"]
 mode: observacao
 authorization: alteracoes-pr-merge-producao
@@ -33,6 +33,8 @@ Localize os símbolos relevantes nestas entradas; abra apenas os trechos necess�
 - [apps/api/src/storage/operational-readiness.ts](../../apps/api/src/storage/operational-readiness.ts)
 - [apps/api/src/storage/riskstore.ts](../../apps/api/src/storage/riskstore.ts)
 - [docs/roadmap/GANSO_JEV_EXECUTION_STATE.md](../../docs/roadmap/GANSO_JEV_EXECUTION_STATE.md)
+
+**Complemento de 09/10/2026:** antes de readiness/ativação, comprovar JE15–JE17 integradas conforme o [plano complementar](../../docs/roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md): runtime pelo entrypoint publicado, pausa/emergência no live e painel econômico/operacional reconciliado. Factory isolado ou API que somente persiste ativação não cumprem essa condição de código. Publicação documental não aprova essas dependências nem os gates já existentes.
 
 ## Resultado e limite
 

@@ -2,7 +2,9 @@
 
 Formato aprovado em **07/10/2026**: **14 entregas agrupadas (JE01–JE14), 52 IDs rastreáveis e seis etapas operacionais separadas**. Os 43 itens de código e três diagnósticos passam a ser checkpoints das entregas. Os 16 blocos GJ00–GJ15 continuam descrevendo a arquitetura; cada ID preserva seu contrato e aceite. Uma sessão pode executar todo o grupo com checkpoints internos, sem novo prompt do proprietário a cada parte.
 
-Esta preparação é documental. Nenhuma entrega foi implementada, serviço implantado, crédito comprado ou piloto ativado por esta revisão.
+A preparação de 07/10 foi documental e não iniciou entregas. O [estado de execução](../../docs/roadmap/GANSO_JEV_EXECUTION_STATE.md) registra as implementações/publicações posteriores.
+
+**Complemento de 09/10/2026:** [JE15–JE17](../../docs/roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md) acrescentam três entregas/10 checkpoints para as lacunas de runtime, controles e painel live. Total atual: **17 entregas, 62 IDs rastreáveis e as mesmas seis etapas operacionais**. Os novos itens estão planned; este pedido prepara documentos, sem executar código/operação.
 
 ## Como executar
 
@@ -39,6 +41,18 @@ Depois, selecione a próxima entrega com dependências verificadas. Uma sequênc
 | [JE14](entregas/je-14-promocao-e-sucessao.md) | Promoção e sucessão | GJ14.1, GJ14.2, GJ14.3 | JE12, JE13 |
 
 Dependências acima são resumidas transitivamente. Os `depends_on` por ID no catálogo permanecem e devem ser conferidos. Contratos internos podem ser comprovados na mesma branch; contratos externos devem estar integrados ou comprovados na base de trabalho. O número da entrega identifica o grupo, sem obrigar ordem serial entre grupos independentes.
+
+## Complemento JE15–JE17
+
+Mesmo formato e protocolo do pacote original. Ordem JE15 → JE16 → JE17; entradas reais exigem todas integradas e os gates operacionais existentes. A preparação não executa os grupos.
+
+| Entrega executável | Resultado | Checkpoints incluídos | Depende de entregas |
+| --- | --- | --- | --- |
+| [JE15](entregas/je-15-runtime-live-integrado.md) | Runtime live integrado | GJ16.1, GJ16.2, GJ16.3, GJ16.4 | JE07, JE13, JE14 |
+| [JE16](entregas/je-16-pausa-e-emergencia-live.md) | Pausa e emergência live | GJ17.1, GJ17.2, GJ17.3 | JE11, JE15 |
+| [JE17](entregas/je-17-painel-financeiro-e-operacional-live.md) | Painel financeiro e operacional live | GJ18.1, GJ18.2, GJ18.3 | JE08, JE11, JE15, JE16 |
+
+Pedidos prontos e justificativa dos aceites no [plano complementar](../../docs/roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md). Não iniciar outra entrega/chat/agente automaticamente.
 
 ## Etapas operacionais separadas
 
@@ -122,9 +136,24 @@ Após JE11/JE12 e gates reais, selecionar GJ12.2 para iniciar a observação; n�
 | GJ14.1 | [JE14](entregas/je-14-promocao-e-sucessao.md) | [Implementar promoção condicionada e singleton live](gj-14-1-implementar-promocao-condicionada-e-singleton-live.md) | GJ08.3, GJ12.1, GJ13.4 | Aceite verificado na entrega |
 | GJ14.2 | [JE14](entregas/je-14-promocao-e-sucessao.md) | [Criar ativação explícita do piloto no painel](gj-14-2-criar-ativacao-explicita-do-piloto-no-painel.md) | GJ14.1, GJ10.3 | Aceite verificado na entrega |
 | GJ14.3 | [JE14](entregas/je-14-promocao-e-sucessao.md) | [Implementar sucessão live somente por reprovação](gj-14-3-implementar-sucessao-live-somente-por-reprovacao.md) | GJ14.2, GJ11.4 | Aceite verificado na entrega |
-| GJ15.1 | Operacional | [Conferir readiness do piloto e ativação pelo operador](gj-15-1-conferir-readiness-do-piloto-e-ativacao-pelo-operador.md) | GJ14.3, GJ13.5 | Estado observado ou condição para retorno |
+| GJ15.1 | Operacional | [Conferir readiness do piloto e ativação pelo operador](gj-15-1-conferir-readiness-do-piloto-e-ativacao-pelo-operador.md) | GJ14.3, GJ13.5, GJ16.4, GJ17.3, GJ18.3 | Estado observado ou condição para retorno |
 | GJ15.2 | Operacional | [Verificar piloto ativo e reconciliação observada](gj-15-2-verificar-piloto-ativo-e-reconciliacao-observada.md) | GJ15.1 | Estado observado ou condição para retorno |
 | GJ15.3 | Operacional | [Verificar avaliação contínua e janela completa](gj-15-3-verificar-avaliacao-continua-e-janela-completa.md) | GJ08.3, GJ11.4, GJ15.1 | Estado observado ou condição para retorno |
+
+## Catálogo dos 10 checkpoints complementares
+
+| ID | Entrega | Contrato | Depende de código | Resultado |
+| --- | --- | --- | --- | --- |
+| GJ16.1 | [JE15](entregas/je-15-runtime-live-integrado.md) | [Admissão, configuração e ownership live](gj-16-1-admissao-configuracao-e-ownership-live.md) | GJ06.2, GJ13.1, GJ14.2 | Aceite verificado na entrega |
+| GJ16.2 | [JE15](entregas/je-15-runtime-live-integrado.md) | [Decisões JEV e execução live](gj-16-2-decisoes-jev-e-execucao-live.md) | GJ16.1, GJ03.4, GJ06.3, GJ13.3 | Aceite verificado na entrega |
+| GJ16.3 | [JE15](entregas/je-15-runtime-live-integrado.md) | [Proteção, reconciliação e recuperação live](gj-16-3-protecao-reconciliacao-e-recuperacao-live.md) | GJ16.2, GJ06.1, GJ13.2, GJ13.4 | Aceite verificado na entrega |
+| GJ16.4 | [JE15](entregas/je-15-runtime-live-integrado.md) | [Promoção, sucessão e integração do runtime](gj-16-4-promocao-sucessao-e-integracao-do-runtime.md) | GJ16.3, GJ14.3, GJ08.3 | Aceite verificado na entrega |
+| GJ17.1 | [JE16](entregas/je-16-pausa-e-emergencia-live.md) | [Controles live persistentes e autenticados](gj-17-1-controles-live-persistentes-e-autenticados.md) | GJ10.3, GJ16.4 | Aceite verificado na entrega |
+| GJ17.2 | [JE16](entregas/je-16-pausa-e-emergencia-live.md) | [Cancelamento e encerramento live pelo worker](gj-17-2-cancelamento-e-encerramento-live-pelo-worker.md) | GJ17.1, GJ16.3 | Aceite verificado na entrega |
+| GJ17.3 | [JE16](entregas/je-16-pausa-e-emergencia-live.md) | [Painel de intervenção live e fluxo integrado](gj-17-3-painel-de-intervencao-live-e-fluxo-integrado.md) | GJ17.2, GJ14.2 | Aceite verificado na entrega |
+| GJ18.1 | [JE17](entregas/je-17-painel-financeiro-e-operacional-live.md) | [Projeção financeira live e custos atribuídos](gj-18-1-projecao-financeira-live-e-custos-atribuidos.md) | GJ07.1, GJ07.2, GJ16.4 | Aceite verificado na entrega |
+| GJ18.2 | [JE17](entregas/je-17-painel-financeiro-e-operacional-live.md) | [Snapshot live de execução, proteção e decisões](gj-18-2-snapshot-live-de-execucao-protecao-e-decisoes.md) | GJ18.1, GJ17.3, GJ10.2 | Aceite verificado na entrega |
+| GJ18.3 | [JE17](entregas/je-17-painel-financeiro-e-operacional-live.md) | [Painel live completo e aceite integrado](gj-18-3-painel-live-completo-e-aceite-integrado.md) | GJ18.2 | Aceite verificado na entrega |
 
 ## Referências
 

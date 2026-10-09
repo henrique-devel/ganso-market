@@ -1,5 +1,7 @@
 > **07/10/2026 — direção confirmada:** JEV será o motor principal; três perfis paper/stress e um piloto live de US$250; infraestrutura excluída do PnL/aprovação das estratégias. Leia a [especificação](docs/PRD-GANSO-JEV.md), o [plano](docs/roadmap/GANSO_JEV_IMPLEMENTATION_PLAN.md) e a [comparação com o código](docs/architecture/ganso-jev-code-map.md). O [pacote de execução](prompts/jev/README.md) usa **14 entregas agrupadas, 52 critérios rastreáveis e seis etapas operacionais separadas**. Selecionar uma entrega autoriza seus checkpoints até PR, merge e produção aplicável; a preparação documental não inicia implementação. O desenho não comprova runtime entregue; prompts antigos de baseline/filtro não governam o novo ciclo.
 
+> **Complemento de 09/10/2026:** o [plano JE15–JE17](docs/roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md) acrescenta três entregas e 10 checkpoints GJ16–GJ18 para runtime live, pausa/emergência live e painel live. Total atual: 17 entregas/62 IDs e as mesmas seis etapas operacionais. Histórico JE01–JE14 preservado; novos itens planned. Preparar documentos não inicia implementação nem ativação.
+
 > **Histórico de 28/09/2026:** Polymarket continua retirada. O runtime BTC existente e as entregas anteriores permanecem preservados; consulte o [escopo](docs/SCOPE.md) para distinguir direção futura e estado histórico.
 
 # Instruções para agentes — Ganso Market

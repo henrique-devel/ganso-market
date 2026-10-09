@@ -9,7 +9,9 @@ critérios de aceite e seis etapas operacionais próprias. Essa revisão substit
 obrigação de uma sessão/PR por ID e o alvo de 3–6 arquivos. A preparação do formato
 é documental e não inicia suas entregas.
 
-Ao selecionar uma entrega JE01–JE14 em [prompts/jev](../../prompts/jev/README.md), ficam
+Em **09/10/2026**, o proprietário solicitou preparar, no mesmo padrão, os prompts para as três lacunas de código da auditoria. O [complemento JE15–JE17](../roadmap/GANSO_JEV_LIVE_COMPLETION_PLAN.md) acrescenta 10 checkpoints planejados dentro do escopo JEV vigente. A solicitação atual prepara/publica documentação; não seleciona sua implementação nem concede nova autorização de capital, compra ou ativação. A seleção posterior aplica o mesmo fluxo contínuo de desenvolvimento/entrega registrado aqui.
+
+Ao selecionar uma entrega JE01–JE17 em [prompts/jev](../../prompts/jev/README.md), ficam
 autorizados inspeção, implementação e correções do escopo, branch `codex/`,
 commit/push, criação/atualização/revisão do PR, acompanhamento dos checks,
 merge após checks/proteções e publicação em produção dos componentes afetados.
