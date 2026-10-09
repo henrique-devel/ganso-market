@@ -37,6 +37,8 @@ attempts=50
 until docker compose exec -T execution-worker node apps/api/dist/execution-worker.js --health; do
   attempts=$((attempts - 1)); test "$attempts" -gt 0; sleep 1
 done
+# The proposal controller is wired into the real process but remains dormant.
+docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const p=h.proposals; if(p?.version!=="jev.proposal-lane.v1" || p.configured!==false || p.status!=="disabled" || p.cycles!==0) process.exit(1)'
 execution_id="$(docker compose ps --quiet execution-worker)"
 execution_started="$(docker inspect --format '{{.State.StartedAt}}' "$execution_id")"
 risk_before="$(docker compose exec -T execution-worker node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")).metrics.risk_cycles)')"

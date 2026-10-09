@@ -104,7 +104,7 @@ export async function generationEnabledTx(
 ) {
   const control = (
     await tx.query<{ enabled: boolean; capacity_evidence_id: string }>(
-      "SELECT enabled,capacity_evidence_id FROM jev_generator_controls WHERE owner_id=$1",
+      "SELECT enabled,capacity_evidence_id FROM jev_generator_controls WHERE owner_id=$1 FOR UPDATE",
       [owner],
     )
   ).rows[0];
@@ -128,6 +128,7 @@ export async function generateJevProposal(
   options: { enabled: boolean; signal?: AbortSignal },
 ) {
   if (!options.enabled) return { status: "disabled" };
+  if (options.signal?.aborted) return { status: "cancelled" };
   const reservation = await withBtcRetentionTransaction(pool, async (tx) => {
     const expired = (
       await tx.query<{
@@ -273,6 +274,7 @@ export async function generateJevProposal(
     ...(options.signal ? [options.signal] : []),
   ]);
   try {
+    signal.throwIfAborted();
     wire = await transport.evaluate(reservation.payload, signal);
   } catch {
     failure = signal.aborted ? "timeout" : "provider_error";

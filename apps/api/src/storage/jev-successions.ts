@@ -16,6 +16,7 @@ import { jevHash } from "./jev-hash.js";
 import { readJevQueueTx, queueSnapshotTx } from "./jev-queue.js";
 import { proposalEventTx, type JevProposal } from "./jev-proposals.js";
 import { readJevDispatchCapacityTx } from "./jev-dispatch-capacity.js";
+import { generationEnabledTx } from "./jev-generator.js";
 import { readSourceReadinessTx } from "./operational-readiness.js";
 export interface JevPairSlot {
   slot: number;
@@ -30,8 +31,15 @@ export interface JevPairSlot {
 export async function retireFailedJevPairs(
   pool: Pick<DatabasePool, "transaction">,
   owner: string,
+  options: { model?: string } = {},
 ) {
   return withBtcRetentionTransaction(pool, async (tx) => {
+    if (options.model && !(await generationEnabledTx(tx, owner, options.model)))
+      return {
+        retired_slots: [],
+        waiting_reconciliation: 0,
+        status: "capacity_pending",
+      };
     const rows = (
       await tx.query<JevPairSlot>(
         "SELECT q.* FROM jev_active_pairs q WHERE q.owner_id=$1 AND EXISTS(SELECT 1 FROM jev_evaluation_cuts e WHERE e.owner_id=q.owner_id AND e.profile_id=q.profile_id AND e.profile_version=q.profile_version AND e.state='failed' AND e.as_of<=clock_timestamp()) ORDER BY q.slot",
@@ -176,7 +184,9 @@ export async function admitJevSuccessor(
         enabled: boolean;
         admission_reference: string;
         successor_capacity_evidence_id: string | null;
-      }>("SELECT * FROM jev_generator_controls WHERE owner_id=$1", [owner])
+      }>("SELECT * FROM jev_generator_controls WHERE owner_id=$1 FOR UPDATE", [
+        owner,
+      ])
     ).rows[0];
     if (
       !control?.enabled ||

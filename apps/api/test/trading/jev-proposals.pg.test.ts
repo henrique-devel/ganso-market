@@ -1,4 +1,8 @@
-import { claimExecutionWorker } from "../../src/storage/execution-worker-lease.js";
+import {
+  claimExecutionWorker,
+  executionFencedPool,
+  releaseExecutionWorker,
+} from "../../src/storage/execution-worker-lease.js";
 import { storeRetentionObjectTx } from "../../src/storage/btc-retention.js";
 import { market } from "./valuation-fixture.js";
 import { scope as retentionScope } from "./risk-fixture.js";
@@ -288,6 +292,117 @@ describe.skipIf(!process.env.GANSO_TEST_DATABASE_URL)(
     });
     afterEach(async () => {
       await fixture?.dispose();
+    });
+    it("worker retirement rechecks explicit admission and current capacity before touching accounts", async () => {
+      await closedSource(false);
+      await fixture.pool.query(
+        "INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference) SELECT account_id,true,false,'fixture_only' FROM jev_accounts",
+      );
+      const guarded = () =>
+        retireFailedJevPairs(store, "operator", { model: "jev-1.13.0" });
+      expect((await guarded()).status).toBe("capacity_pending");
+      await enable();
+      await fixture.pool.query(
+        "UPDATE jev_generator_controls SET enabled=false",
+      );
+      expect((await guarded()).status).toBe("capacity_pending");
+      await fixture.pool.query(
+        "UPDATE jev_generator_controls SET enabled=true",
+      );
+      expect(
+        (await retireFailedJevPairs(store, "operator", { model: "different" }))
+          .status,
+      ).toBe("capacity_pending");
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT admitted,entries_paused,operator_close_requested FROM jev_worker_controls",
+          )
+        ).rows,
+      ).toEqual([
+        {
+          admitted: true,
+          entries_paused: false,
+          operator_close_requested: false,
+        },
+        {
+          admitted: true,
+          entries_paused: false,
+          operator_close_requested: false,
+        },
+      ]);
+      expect((await guarded()).retired_slots).toEqual([1]);
+    });
+    it("provider I/O releases the process fence; a displaced worker cannot finalize or repeat its request", async () => {
+      const tariff = await enable();
+      await closedSource();
+      const base = {
+        ...store,
+        readOnly: <T>(_ms: number, run: (tx: SqlExecutor) => Promise<T>) =>
+          store.transaction(run),
+      };
+      const old = await claimExecutionWorker(store, "a".repeat(40));
+      const fenced = executionFencedPool(base, old);
+      let release!: () => void, began!: () => void;
+      const started = new Promise<void>((r) => {
+        began = r;
+      });
+      let calls = 0;
+      const delayed = transport("adequate", true, async () => {
+        calls++;
+        began();
+        await new Promise<void>((r) => {
+          release = r;
+        });
+      });
+      const generation = generateJevProposal(
+        fenced,
+        "operator",
+        tariff,
+        delayed,
+        { enabled: true },
+      );
+      await started;
+      await expect(
+        fenced.transaction((tx) => tx.query("SELECT 1")),
+      ).resolves.toBeDefined();
+      await releaseExecutionWorker(store, old);
+      const next = await claimExecutionWorker(store, "b".repeat(40));
+      const failure = expect(generation).rejects.toThrow(
+        "EXECUTION_WORKER_FENCED",
+      );
+      release();
+      await failure;
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT count(*)::int n FROM jev_proposal_results",
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      await new Promise((r) => setTimeout(r, 1600));
+      await generateJevProposal(
+        executionFencedPool(base, next),
+        "operator",
+        tariff,
+        delayed,
+        { enabled: true },
+      );
+      expect(calls).toBe(1);
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT reason,cost_usd6 FROM jev_proposal_results",
+          )
+        ).rows,
+      ).toEqual([{ reason: "recovered_uncertain", cost_usd6: null }]);
+      expect(
+        (
+          await fixture.pool.query(
+            "SELECT circuit_open FROM jev_cost_pools WHERE purpose='generation_validation'",
+          )
+        ).rows[0].circuit_open,
+      ).toBe(true);
     });
     it("canonicalizes keys, serializes retries and refuses renaming a withdrawn fingerprint", async () => {
       const p = proposal();
