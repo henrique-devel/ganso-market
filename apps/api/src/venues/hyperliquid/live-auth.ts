@@ -104,13 +104,20 @@ export function createHyperliquidLiveBoundary(input: {
     ): Promise<unknown> {
       liveCheck(enabled && wallet, "EXECUTOR_DISABLED");
       const r = structuredClone(reservation);
+      const requireCurrentAction = () =>
+        liveCheck(
+          jevHash(
+            buildLiveAction(
+              identity,
+              r.request as LiveCommand,
+              r.cloid,
+              clock(),
+            ),
+          ) === jevHash(r.action),
+          "ACTION_INTENT",
+        );
       assertLiveGate(identity, r, await gate(r), clock());
-      liveCheck(
-        jevHash(
-          buildLiveAction(identity, r.request as LiveCommand, r.cloid, clock()),
-        ) === jevHash(r.action),
-        "ACTION_INTENT",
-      );
+      requireCurrentAction();
       let address: string;
       try {
         address = await getWalletAddress(wallet);
@@ -130,6 +137,8 @@ export function createHyperliquidLiveBoundary(input: {
       // Signature order, environment and expiry are delegated to the pinned SDK.
       // The durable nonce must already be reserved before this call.
       try {
+        assertLiveGate(identity, r, await gate(r), clock());
+        requireCurrentAction();
         const signature = await signL1Action({
           wallet,
           action,
@@ -141,6 +150,7 @@ export function createHyperliquidLiveBoundary(input: {
           expiresAfter: r.expires_after,
         });
         assertLiveGate(identity, r, await gate(r), clock());
+        requireCurrentAction();
         return await wire.request(
           "exchange",
           {

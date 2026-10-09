@@ -217,6 +217,31 @@ describe("JE13 authenticated boundary (no venue request)", () => {
       action: { orders: [{ t: { limit: { tif: "Alo" } } }] },
     });
   });
+  it("does not send when signing outlives snapshot freshness despite a still-valid nonce/lease", async () => {
+    const f = setup();
+    const c = f.r.request as ReturnType<typeof liveEntryCommand>;
+    c.snapshot.started_at = now - 1900;
+    c.snapshot.received_at = now - 1900;
+    c.snapshot.venue_at = now - 1900;
+    f.gate.reservation_hash = jevHash(f.r);
+    let observed = now;
+    f.signTypedData.mockImplementation(async () => {
+      observed += 200;
+      return `0x${"3".repeat(128)}1b`;
+    });
+    const boundary = createHyperliquidLiveBoundary({
+      identity,
+      executor_enabled: true,
+      wallet: f.wallet,
+      wire: f.wire,
+      gate: async () => f.gate,
+      claim: async () => true,
+      clock: () => observed,
+    });
+    await expect(boundary.submit(f.r)).rejects.toThrow("SUBMISSION_UNCERTAIN");
+    expect(f.signTypedData).toHaveBeenCalledOnce();
+    expect(f.request).not.toHaveBeenCalled();
+  });
   it("binds reads to the actual account, rejects query-owner injection, and scrubs errors", async () => {
     const f = setup();
     const a = createHyperliquidLiveBoundary({

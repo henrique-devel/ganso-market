@@ -72,7 +72,8 @@ A migration 0066 é aditiva, sem seed, e conserva requests, nonces e fontes imut
 reconciliar o contador de quota com estas quatro tabelas. Nenhuma migration aplicada
 foi alterada. Lease/fence compartilham o lock da conta financeira; nonce não se renova
 com takeover, rejeição, timeout ou restart. Cada intenção tem uma única tentativa
-persistida antes da assinatura; recuperação consulta `orderStatus`, sem reenvio.
+persistida antes da assinatura; evidências e controle são revalidados antes e depois
+da assinatura. Recuperação consulta `orderStatus`, sem reenvio.
 
 O snapshot remoto e a visão de conta têm saldo/posição desconhecidos como `null`.
 Fees, rebates, PnL realizado e funding efetivos vêm das fontes únicas da venue;
