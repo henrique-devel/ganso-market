@@ -1,3 +1,7 @@
+import {
+  jevDispatchRegistryHashTx,
+  readJevDispatchCapacityTx,
+} from "./jev-dispatch-capacity.js";
 import { randomUUID } from "node:crypto";
 import type {
   JevScope,
@@ -47,6 +51,7 @@ type Control = {
   revision: string;
   funding_debit_rate9_raw: string | null;
   cost_evidence_id: string | null;
+  capacity_evidence_id: string | null;
 };
 export interface WorkerAccount {
   scope: JevScope;
@@ -59,7 +64,7 @@ export async function jevWorkerAccountTokenTx(tx: SqlExecutor, s: JevScope) {
   const control =
     (
       await tx.query<Control>(
-        "SELECT admitted,entries_paused,revision::text,funding_debit_rate9_raw::text,cost_evidence_id FROM jev_worker_controls WHERE account_id=$1",
+        "SELECT admitted,entries_paused,revision::text,funding_debit_rate9_raw::text,cost_evidence_id,capacity_evidence_id FROM jev_worker_controls WHERE account_id=$1",
         [s.account_id],
       )
     ).rows[0] ?? null;
@@ -85,7 +90,9 @@ export function createJevWorkerStore(
   lease: ExecutionLease,
   model: string | null,
 ) {
+  const metrics = { capacity_skips: 0 };
   return {
+    metrics,
     async accounts(): Promise<WorkerAccount[]> {
       return pool.readOnly(1500, async (tx) => {
         const rows = (
@@ -181,6 +188,17 @@ export function createJevWorkerStore(
           );
         });
     },
+    async unavailable(accounts: WorkerAccount[], _error: unknown) {
+      // No synthetic hold and no pause of unrelated accounts. A durable failure
+      // to close admission is fatal to health; protection is still attempted for all.
+      await pool.transaction(async (tx) => {
+        for (const a of accounts)
+          await tx.query(
+            "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id=$1 AND NOT entries_paused",
+            [a.scope.account_id],
+          );
+      });
+    },
     async prepare(accounts: WorkerAccount[], now: number) {
       if (!model) return null;
       return withBtcRetentionTransaction(pool, async (tx) => {
@@ -189,6 +207,7 @@ export function createJevWorkerStore(
           >[0]["participants"] = [],
           tokens: Record<string, string> = {};
         const request = `cycle:${randomUUID()}`;
+        const registryHash = await jevDispatchRegistryHashTx(tx);
         for (const a of accounts) {
           const s = a.scope,
             t = await jevWorkerAccountTokenTx(tx, s);
@@ -250,6 +269,22 @@ export function createJevWorkerStore(
                 ).toString())
           )
             continue;
+          if (!p && t.control.entries_paused) continue;
+          if (
+            !p &&
+            (!t.control.cost_evidence_id ||
+              t.control.funding_debit_rate9_raw === null ||
+              !(await readJevDispatchCapacityTx(
+                tx,
+                t.control.capacity_evidence_id,
+                registryHash,
+                model,
+                now,
+              )))
+          ) {
+            metrics.capacity_skips++;
+            continue;
+          }
           const account: JevAccountContext = {
             scope: s,
             observed_at: risk.observed_at,
@@ -542,6 +577,15 @@ export function createJevWorkerStore(
     ) {
       await pool.transaction(async (tx) => {
         for (const p of cycle.batch.participants) {
+          if (
+            (
+              await tx.query(
+                "SELECT 1 FROM jev_worker_cycles WHERE request_id=$1 AND account_id=$2 AND phase<>'scheduled'",
+                [cycle.batch.request_id, p.context.scope.account_id],
+              )
+            ).rowCount
+          )
+            continue;
           await tx.query(
             "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id=$1 AND NOT entries_paused",
             [p.context.scope.account_id],
@@ -563,76 +607,81 @@ export function createJevWorkerStore(
       });
     },
     async complete(result: JevBatchResult, tokens: Record<string, string>) {
-      for (const d of result.decisions)
-        await withBtcRetentionTransaction(pool, async (tx) => {
-          const s = d.scope,
-            t = await jevWorkerAccountTokenTx(tx, s),
-            head = (
-              await tx.query<{
-                pending_request_id: string;
-                pending_cut_at: Date;
-                generation: string;
-              }>(
-                "SELECT pending_request_id,pending_cut_at,generation::text FROM jev_worker_cadences WHERE account_id=$1 FOR UPDATE",
-                [s.account_id],
+      const outcomes = await Promise.allSettled(
+        result.decisions.map((d) =>
+          withBtcRetentionTransaction(pool, async (tx) => {
+            const s = d.scope,
+              t = await jevWorkerAccountTokenTx(tx, s),
+              head = (
+                await tx.query<{
+                  pending_request_id: string;
+                  pending_cut_at: Date;
+                  generation: string;
+                }>(
+                  "SELECT pending_request_id,pending_cut_at,generation::text FROM jev_worker_cadences WHERE account_id=$1 FOR UPDATE",
+                  [s.account_id],
+                )
+              ).rows[0];
+            const now = (
+              await tx.query<{ now: Date }>("SELECT clock_timestamp() now")
+            ).rows[0]!.now.toISOString();
+            const terminal = (
+              await tx.query(
+                "SELECT 1 FROM jev_worker_cycles WHERE request_id=$1 AND account_id=$2 AND phase<>'scheduled'",
+                [result.batch.request_id, s.account_id],
               )
-            ).rows[0];
-          const now = (
-            await tx.query<{ now: Date }>("SELECT clock_timestamp() now")
-          ).rows[0]!.now.toISOString();
-          const terminal = (
+            ).rowCount;
+            if (terminal) return;
+            const valid =
+              head?.generation === lease.generation &&
+              head.pending_request_id === result.batch.request_id &&
+              head.pending_cut_at.toISOString() === result.batch.cut_at &&
+              now <= result.batch.deadline_at &&
+              now <= result.batch.expires_at &&
+              t.hash === tokens[s.account_id] &&
+              d.reason === "ok" &&
+              result.cost_usd6 !== null;
+            const phase = valid ? "completed" : "discarded";
+            // Wrap library operations in the same already fenced transaction. No
+            // inference or nested BEGIN; state check, reserve and send commit together.
+            const store = {
+              transaction: <T>(run: (tx: SqlExecutor) => Promise<T>) => run(tx),
+            };
+            const executionStarted = Date.now();
+            if (valid) await executeDecision(store, tx, result, d, t.control!);
+            if (!valid && d.reason !== "ok")
+              await tx.query(
+                "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id=$1 AND NOT entries_paused",
+                [s.account_id],
+              );
             await tx.query(
-              "SELECT 1 FROM jev_worker_cycles WHERE request_id=$1 AND account_id=$2 AND phase<>'scheduled'",
-              [result.batch.request_id, s.account_id],
-            )
-          ).rowCount;
-          if (terminal) return;
-          const valid =
-            head?.generation === lease.generation &&
-            head.pending_request_id === result.batch.request_id &&
-            head.pending_cut_at.toISOString() === result.batch.cut_at &&
-            now <= result.batch.deadline_at &&
-            now <= result.batch.expires_at &&
-            t.hash === tokens[s.account_id] &&
-            d.reason === "ok" &&
-            result.cost_usd6 !== null;
-          const phase = valid ? "completed" : "discarded";
-          // Wrap library operations in the same already fenced transaction. No
-          // inference or nested BEGIN; state check, reserve and send commit together.
-          const store = {
-            transaction: <T>(run: (tx: SqlExecutor) => Promise<T>) => run(tx),
-          };
-          const executionStarted = Date.now();
-          if (valid) await executeDecision(store, tx, result, d, t.control!);
-          if (!valid && d.reason !== "ok")
-            await tx.query(
-              "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id=$1 AND NOT entries_paused",
-              [s.account_id],
+              "INSERT INTO jev_worker_cycles(request_id,account_id,phase,generation,data) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING",
+              [
+                result.batch.request_id,
+                s.account_id,
+                phase,
+                lease.generation,
+                JSON.stringify({
+                  reason: valid ? d.reason : "stale_or_failed",
+                  decision: d,
+                  decision_ms:
+                    Date.parse(result.finished_at) -
+                    Date.parse(result.started_at),
+                  action_at: now,
+                  execution_ms: Date.now() - executionStarted,
+                }),
+              ],
             );
-          await tx.query(
-            "INSERT INTO jev_worker_cycles(request_id,account_id,phase,generation,data) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING",
-            [
-              result.batch.request_id,
-              s.account_id,
-              phase,
-              lease.generation,
-              JSON.stringify({
-                reason: valid ? d.reason : "stale_or_failed",
-                decision: d,
-                decision_ms:
-                  Date.parse(result.finished_at) -
-                  Date.parse(result.started_at),
-                action_at: now,
-                execution_ms: Date.now() - executionStarted,
-              }),
-            ],
-          );
-          if (head?.pending_request_id === result.batch.request_id)
-            await tx.query(
-              "UPDATE jev_worker_cadences SET pending_request_id=NULL,pending_cut_at=NULL WHERE account_id=$1",
-              [s.account_id],
-            );
-        });
+            if (head?.pending_request_id === result.batch.request_id)
+              await tx.query(
+                "UPDATE jev_worker_cadences SET pending_request_id=NULL,pending_cut_at=NULL WHERE account_id=$1",
+                [s.account_id],
+              );
+          }),
+        ),
+      );
+      const failure = outcomes.find((o) => o.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
     },
   };
 }
@@ -670,6 +719,19 @@ async function executeDecision(
     !context.indicators ||
     !context.book ||
     !d.direction
+  )
+    return;
+  const admissionNow = (
+    await tx.query<{ now: Date }>("SELECT clock_timestamp() now")
+  ).rows[0]!.now.getTime();
+  if (
+    !(await readJevDispatchCapacityTx(
+      tx,
+      control.capacity_evidence_id,
+      await jevDispatchRegistryHashTx(tx),
+      result.batch.model,
+      admissionNow,
+    ))
   )
     return;
   const metadata = (

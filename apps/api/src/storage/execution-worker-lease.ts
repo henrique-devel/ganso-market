@@ -62,20 +62,48 @@ export async function assertExecutionLeaseTx(
   )
     fail();
 }
-export function executionFencedPool(pool: Pool, lease: ExecutionLease): Pool {
+export interface ExecutionFenceMetrics {
+  pending: number;
+  max_pending: number;
+  transactions: number;
+  failures: number;
+  last_wait_ms: number;
+  max_wait_ms: number;
+  last_transaction_ms: number;
+}
+export function executionFencedPool(
+  pool: Pool,
+  lease: ExecutionLease,
+): Pool & { metrics: ExecutionFenceMetrics } {
   // Same-process writers already share one DB fence. Wait before BEGIN instead
   // of spending another connection's SQL budget on that same lock. Call sites
-  // are bounded (one scheduler lane, consumer/funding/sample and command drain).
+  // are bounded (three profile lanes, protection, consumer and command drain).
   let pending = Promise.resolve();
+  const metrics: ExecutionFenceMetrics = {
+    pending: 0,
+    max_pending: 0,
+    transactions: 0,
+    failures: 0,
+    last_wait_ms: 0,
+    max_wait_ms: 0,
+    last_transaction_ms: 0,
+  };
   return {
+    metrics,
     readOnly: pool.readOnly.bind(pool),
     async transaction(run) {
+      const enqueued = performance.now();
+      metrics.pending++;
+      metrics.max_pending = Math.max(metrics.max_pending, metrics.pending);
       const prior = pending;
       let release!: () => void;
       pending = new Promise<void>((resolve) => {
         release = resolve;
       });
       await prior;
+      const started = performance.now();
+      metrics.last_wait_ms = started - enqueued;
+      metrics.max_wait_ms = Math.max(metrics.max_wait_ms, metrics.last_wait_ms);
       try {
         return await pool.transaction(async (tx) => {
           // All process mutations share this short fence. Never hold it over HTTP.
@@ -112,7 +140,13 @@ export function executionFencedPool(pool: Pool, lease: ExecutionLease): Pool {
             fail();
           return value;
         });
+      } catch (error) {
+        metrics.failures++;
+        throw error;
       } finally {
+        metrics.transactions++;
+        metrics.last_transaction_ms = performance.now() - started;
+        metrics.pending--;
         release();
       }
     },

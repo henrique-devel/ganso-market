@@ -1,3 +1,4 @@
+import { createJevFundingLane } from "./storage/jev-funding-store.js";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { loadConfig, requireStatementBudgets } from "./config.js";
@@ -13,6 +14,7 @@ import { createJevWorkerStore } from "./storage/jev-worker-store.js";
 import {
   createJevScheduler,
   JEV_SCHEDULER_VERSION,
+  JEV_DISPATCH_LIMITS,
 } from "./storage/jev-scheduler.js";
 import { loadChallengerConfig } from "./models/jev-config.js";
 import { loadJevDecisionBackend } from "./models/jev-decision-runtime.js";
@@ -104,6 +106,10 @@ export async function runExecutionWorker() {
       evaluate: (batch, signal) => backend.evaluate(batch, signal),
     });
     stopScheduler = scheduler.stop;
+    const funding = createJevFundingLane(fenced, store.accounts);
+    let fundingTask: Promise<void> | null = null,
+      lastFundingAt = -Infinity;
+    const fundingController = new AbortController();
     let lastEvaluationMinute = -1;
     let evaluationTask: Promise<void> | null = null;
     let evaluationStatus = "not_started";
@@ -113,6 +119,8 @@ export async function runExecutionWorker() {
     const priorStop = stopScheduler;
     stopScheduler = async () => {
       await priorStop?.();
+      fundingController.abort();
+      await fundingTask;
       await finishEvaluation();
     };
     while (!stopped) {
@@ -121,6 +129,17 @@ export async function runExecutionWorker() {
       await fenced.transaction((tx) => tx.query("SELECT 1"));
       await scheduler.tick();
       await drainDeskCommands(fenced);
+      if (!fundingTask && began - lastFundingAt >= 30000) {
+        lastFundingAt = began;
+        fundingTask = funding
+          .tick(fundingController.signal)
+          .catch(() => {
+            log("JEV_FUNDING_UNAVAILABLE");
+          })
+          .finally(() => {
+            fundingTask = null;
+          });
+      }
       const minute = Math.floor(
         (began - JEV_EVALUATION_POLICY.coverage_settlement_delay_ms) / 60000,
       );
@@ -152,6 +171,10 @@ export async function runExecutionWorker() {
         admission: "per_account_closed_by_default",
         backend: backend.status,
         metrics: scheduler.metrics,
+        dispatch_limits: JEV_DISPATCH_LIMITS,
+        fence: fenced.metrics,
+        dispatch_admission: store.metrics,
+        funding: { version: "jev.funding.v1", ...funding.metrics },
         evaluation: { version: "jev.evaluation.v1", status: evaluationStatus },
       });
       await delay(Math.max(0, 250 - (Date.now() - began)));

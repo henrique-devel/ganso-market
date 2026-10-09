@@ -2,13 +2,27 @@ import type {
   JevBatch,
   JevBatchResult,
 } from "../models/jev-decision-contract.js";
-export const JEV_SCHEDULER_VERSION = "jev.scheduler.v1";
+export const JEV_SCHEDULER_VERSION = "jev.scheduler.v2";
+export const JEV_DISPATCH_LIMITS = Object.freeze({
+  profiles: 3,
+  accounts: 6,
+  accounts_per_profile: 2,
+  protection_concurrency: 3,
+  protection_interval_ms: 1000,
+});
 export interface PreparedCycle {
   batch: JevBatch;
   tokens: Record<string, string>;
 }
 export interface SchedulerMetrics {
   risk_cycles: number;
+  protection_failures: number;
+  preparation_failures: number;
+  accounts: number;
+  profiles: number;
+  active_lanes: number;
+  max_active_lanes: number;
+  protected_accounts: number;
   decision_cycles: number;
   decision_failures: number;
   busy_skips: number;
@@ -33,15 +47,24 @@ export function createJevScheduler<A>(options: {
     tokens: Record<string, string>,
   ) => Promise<void>;
   failed: (cycle: PreparedCycle, error: unknown) => Promise<void>;
+  unavailable?: (accounts: A[], error: unknown) => Promise<void>;
 }) {
   const now = options.now ?? Date.now,
     lanes = new Map<
       string,
       { controller: AbortController; task: Promise<void> }
     >(),
-    recovered = new Set<string>();
+    recovered = new Set<string>(),
+    blocked = new Set<string>();
   const metrics: SchedulerMetrics = {
     risk_cycles: 0,
+    protection_failures: 0,
+    preparation_failures: 0,
+    accounts: 0,
+    profiles: 0,
+    active_lanes: 0,
+    max_active_lanes: 0,
+    protected_accounts: 0,
     decision_cycles: 0,
     decision_failures: 0,
     busy_skips: 0,
@@ -54,73 +77,151 @@ export function createJevScheduler<A>(options: {
     lastRisk = -Infinity,
     persistenceError: unknown = null,
     running: Promise<void> | null = null;
+  const unavailable = async (accounts: A[], error: unknown) => {
+    if (
+      !options.unavailable ||
+      (error instanceof Error && error.message === "EXECUTION_WORKER_FENCED")
+    )
+      throw error;
+    await options.unavailable(accounts, error);
+  };
   const cycle = async () => {
     const started = now(),
       accounts = await options.accounts();
-    // Protection and takeover reconciliation always precede decisions.
-    if (started - lastRisk >= 1000) {
-      for (const a of accounts) {
-        const key = options.accountKey(a);
-        await options.protect(a, !recovered.has(key));
-      }
-      for (const a of accounts) recovered.add(options.accountKey(a));
-      lastRisk = started;
-      metrics.risk_cycles++;
-      metrics.last_risk_at = now();
-      metrics.last_risk_ms = now() - started;
-    }
-    const groups = new Map<string, A[]>();
+    const keys = accounts.map(options.accountKey),
+      groups = new Map<string, A[]>();
     for (const a of accounts) {
       const key = options.profile(a);
       groups.set(key, [...(groups.get(key) ?? []), a]);
     }
-    // JE07 integrates a single profile. Multi-profile dispatch belongs to JE10.
-    for (const [key, group] of [...groups].slice(0, 1)) {
-      if (lanes.has(key)) {
+    if (
+      accounts.length > JEV_DISPATCH_LIMITS.accounts ||
+      new Set(keys).size !== keys.length ||
+      groups.size > JEV_DISPATCH_LIMITS.profiles ||
+      [...groups.values()].some(
+        (g) => g.length > JEV_DISPATCH_LIMITS.accounts_per_profile,
+      )
+    )
+      throw new Error("JEV_DISPATCH_REGISTRY");
+    metrics.accounts = accounts.length;
+    metrics.profiles = groups.size;
+    // Separate bounded protection lanes: an account-local fault or a slow SQL
+    // read cannot prevent another account's reduction from being attempted.
+    if (started - lastRisk >= JEV_DISPATCH_LIMITS.protection_interval_ms) {
+      let index = 0;
+      let fatal: unknown = null;
+      await Promise.all(
+        Array.from(
+          {
+            length: Math.min(
+              accounts.length,
+              JEV_DISPATCH_LIMITS.protection_concurrency,
+            ),
+          },
+          async () => {
+            while (index < accounts.length) {
+              const a = accounts[index++]!,
+                key = options.accountKey(a);
+              try {
+                await options.protect(a, !recovered.has(key));
+                recovered.add(key);
+                blocked.delete(key);
+              } catch (error) {
+                blocked.add(key);
+                metrics.protection_failures++;
+                try {
+                  await unavailable([a], error);
+                } catch (failure) {
+                  fatal ??= failure;
+                }
+              }
+            }
+          },
+        ),
+      );
+      lastRisk = started;
+      metrics.risk_cycles++;
+      metrics.protected_accounts = accounts.filter(
+        (a) => !blocked.has(options.accountKey(a)),
+      ).length;
+      metrics.last_risk_at = now();
+      metrics.last_risk_ms = now() - started;
+      if (fatal) throw fatal;
+    }
+    if (stopped) return;
+    for (const [key, group] of groups) {
+      if (lanes.has(key) || lanes.size >= JEV_DISPATCH_LIMITS.profiles) {
         metrics.busy_skips++;
         continue;
       }
-      const prepared = await options.prepare(group, now());
-      if (!prepared) continue;
+      const ready = group.filter(
+        (a) =>
+          recovered.has(options.accountKey(a)) &&
+          !blocked.has(options.accountKey(a)),
+      );
+      if (!ready.length) continue;
       const controller = new AbortController(),
         began = now();
       const lane = { controller, task: Promise.resolve() };
       lanes.set(key, lane);
-      const timer = setTimeout(
-        () => controller.abort(),
-        Math.max(0, Date.parse(prepared.batch.deadline_at) - now()),
-      );
-      metrics.decision_cycles++;
+      metrics.active_lanes = lanes.size;
+      metrics.max_active_lanes = Math.max(metrics.max_active_lanes, lanes.size);
+      // Preparation also owns its profile lane. No accumulated ticks and no
+      // serial await that lets one profile's context block the protection clock.
       lane.task = Promise.resolve()
-        .then(() => options.evaluate(prepared.batch, controller.signal))
-        .then(async (result) => {
-          // Never act on a cancelled/late response. Costs/originals stay in JE04's
-          // independent durable journal, including rejection during worker shutdown.
-          if (
-            stopped ||
-            controller.signal.aborted ||
-            now() > Date.parse(prepared.batch.deadline_at)
-          ) {
-            await options.failed(prepared, new Error("JEV_RESPONSE_STALE"));
+        .then(async () => {
+          let prepared: PreparedCycle | null;
+          try {
+            prepared = await options.prepare(ready, now());
+          } catch (error) {
+            metrics.preparation_failures++;
+            await unavailable(ready, error);
             return;
           }
-          await options.complete(result, prepared.tokens);
+          if (!prepared) return;
+          const timer = setTimeout(
+            () => controller.abort(),
+            Math.max(0, Date.parse(prepared.batch.deadline_at) - now()),
+          );
+          try {
+            if (
+              stopped ||
+              controller.signal.aborted ||
+              now() > Date.parse(prepared.batch.deadline_at)
+            ) {
+              await options.failed(prepared, new Error("JEV_RESPONSE_STALE"));
+              return;
+            }
+            metrics.decision_cycles++;
+            const result = await options.evaluate(
+              prepared.batch,
+              controller.signal,
+            );
+            if (
+              stopped ||
+              controller.signal.aborted ||
+              now() > Date.parse(prepared.batch.deadline_at)
+            ) {
+              await options.failed(prepared, new Error("JEV_RESPONSE_STALE"));
+              return;
+            }
+            await options.complete(result, prepared.tokens);
+          } catch (error) {
+            metrics.decision_failures++;
+            await options.failed(prepared, error);
+          } finally {
+            clearTimeout(timer);
+          }
         })
-        .catch(async (error) => {
+        .catch((error) => {
           metrics.decision_failures++;
-          await options.failed(prepared, error);
+          persistenceError = error;
         })
         .finally(() => {
-          clearTimeout(timer);
           metrics.last_decision_ms = now() - began;
           lanes.delete(key);
+          metrics.active_lanes = lanes.size;
         });
-      // A failed durable finalization stops the next tick and its health
-      // publication. Takeover recovers the pending marker without resending it.
-      lane.task = lane.task.catch((error) => {
-        metrics.decision_failures++;
-        persistenceError = error;
-      });
     }
     metrics.last_cycle_ms = now() - started;
   };
