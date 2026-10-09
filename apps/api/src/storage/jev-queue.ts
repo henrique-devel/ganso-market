@@ -107,9 +107,10 @@ export async function commandJevQueue(
         tx,
         owner,
         b.proposal_id,
-        `withdraw:${key}`,
+        `withdraw:${jevHash([owner, key])}`,
         "withdrawn",
         "Retirada pelo operador",
+        { idempotency_key: key },
       );
     } else {
       ids = b.proposal_ids;

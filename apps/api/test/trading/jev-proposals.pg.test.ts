@@ -680,7 +680,7 @@ describe.skipIf(!process.env.GANSO_TEST_DATABASE_URL)(
         store,
         "operator",
         { action: "remove", revision: next.revision, proposal_id: "a" },
-        "remove",
+        "r".repeat(192),
       );
       expect(
         (await store.transaction((tx) => readJevQueueTx(tx, "operator")))
