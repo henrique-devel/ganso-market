@@ -1,3 +1,4 @@
+import { readJevPanel } from "../../src/storage/jev-panel.js";
 import { commandJevOperator } from "../../src/storage/jev-operator.js";
 import { reconcileJevFunding } from "../../src/storage/jev-funding-store.js";
 import { jevEpisodes } from "../../src/storage/jev-evaluation.js";
@@ -369,6 +370,19 @@ describe.skipIf(!url)("JE06 unified execution on disposable PostgreSQL", () => {
     result = await command();
     expect(result.reconciled_flat).toBe(true);
     expect(result.fills.every((f) => f.kind === "IOC")).toBe(true);
+    await command(); // A later empty cycle must not erase the earlier maker/IOC receipts from the panel.
+    const panel = await readJevPanel(
+      { readOnly: (_ms, run) => f.poolAdapter.transaction(run) },
+      "operator",
+    );
+    const fills = panel.accounts.find(
+      (a) => a.account_id === scope.account_id,
+    )!.fills!;
+    expect(fills.some((f) => f.kind === "maker")).toBe(true);
+    expect(fills.some((f) => f.kind === "IOC")).toBe(true);
+    expect(new Set(fills.map((f) => f.execution_id)).size).toBe(fills.length);
+    expect(fills.length).toBeLessThanOrEqual(20);
+
     expect(
       (
         await f.pool.query(

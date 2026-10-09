@@ -43,6 +43,7 @@ export interface JevPanelExecution {
   reason: string;
   maker: {
     status: string;
+    order_id: string;
     filled_btc_raw: string;
     planned_btc_raw: string;
     ack_at: string | null;
@@ -82,6 +83,17 @@ export interface JevPanelAccount {
     status: "pending_reconciliation" | "reconciled_flat";
   };
   metrics: JevPanelMetrics | null;
+  fills?: {
+    execution_id: string;
+    order_id: string;
+    position_id: string;
+    side: "buy" | "sell";
+    occurred_at: string;
+    kind: "maker" | "IOC";
+    quantity_btc_raw: string;
+    price_usd_raw: string;
+    fee_usd_raw: string;
+  }[];
   decisions?: JevPanelDecision[];
   execution?: JevPanelExecution | null;
   risk: {

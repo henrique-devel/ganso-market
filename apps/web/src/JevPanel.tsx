@@ -3,7 +3,7 @@ import type {
   JevPanelAccount,
   JevPanelSnapshot,
 } from "@ganso-market/contracts/trading";
-import { displayRaw } from "./btc-ticket.js";
+import { displayRaw, createTicketKey } from "./btc-ticket.js";
 import "./jev-panel.css";
 import { useRef } from "react";
 import { readCsrfCookie } from "./auth.js";
@@ -140,7 +140,8 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
           .
         </p>
         <p>
-          Ordem: {a.execution?.maker?.status ?? "sem recibo"} · preenchido{" "}
+          Ordem {a.execution?.maker?.order_id ?? "indisponível"}:{" "}
+          {a.execution?.maker?.status ?? "sem recibo"} · preenchido{" "}
           {displayRaw(a.execution?.maker?.filled_btc_raw, 8)} /{" "}
           {displayRaw(a.execution?.maker?.planned_btc_raw, 8)} BTC. ACK não
           comprova fill.
@@ -156,6 +157,46 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
           Última observação de execução:{" "}
           {a.execution?.observed_at ?? "indisponível"}. {a.execution?.reason}
         </p>
+        {!!a.fills?.length ? (
+          <div className="jev-chart-wrap">
+            <table>
+              <caption>
+                Últimos fills observados · simulação paper/stress
+              </caption>
+              <thead>
+                <tr>
+                  <th>Ordem / horário</th>
+                  <th>Execução</th>
+                  <th>Quantidade BTC</th>
+                  <th>Preço</th>
+                  <th>Taxa</th>
+                </tr>
+              </thead>
+              <tbody>
+                {a.fills.map((f) => (
+                  <tr key={f.execution_id}>
+                    <td>
+                      {f.order_id}
+                      <br />
+                      {f.occurred_at}
+                    </td>
+                    <td>
+                      {f.kind} · {f.side === "buy" ? "Compra" : "Venda"}
+                    </td>
+                    <td>{displayRaw(f.quantity_btc_raw, 8)}</td>
+                    <td>{usd(f.price_usd_raw)}</td>
+                    <td>{usd(f.fee_usd_raw)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p>
+            Sem fills observados para esta conta; ACK não cria recibo de
+            execução.
+          </p>
+        )}
         {!a.decisions?.length && (
           <p>Sem decisões JEV capturadas para esta conta.</p>
         )}
@@ -450,7 +491,7 @@ function InfrastructureForm(props: Access & { refresh: () => void }) {
                 usd6: infrastructureRaw(amount),
               });
               if (attempt.current?.body !== body)
-                attempt.current = { body, key: crypto.randomUUID() };
+                attempt.current = { body, key: createTicketKey() };
               const response = await fetch("/api/trading/jev/infrastructure", {
                 method: "POST",
                 headers: {
@@ -528,7 +569,7 @@ function JevControls(
     try {
       const body = JSON.stringify({ action, account_id: account });
       if (attempt.current?.body !== body)
-        attempt.current = { body, key: crypto.randomUUID() };
+        attempt.current = { body, key: createTicketKey() };
       const response = await fetch("/api/trading/jev/control", {
         method: "POST",
         headers: {

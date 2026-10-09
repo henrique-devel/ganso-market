@@ -34,12 +34,29 @@ export const account = (): JevPanelAccount => ({
 });
 describe("JE11 financial presentation", () => {
   it("uses the same signed components in table/chart and independent result cards", () => {
-    const html = renderToStaticMarkup(<JevAccountCard account={account()} />);
+    const a = account();
+    a.fills = [
+      {
+        execution_id: "fill-confirmed",
+        order_id: "maker-order",
+        position_id: "partial",
+        side: "sell",
+        kind: "maker",
+        occurred_at: "2026-10-08T00:00:00Z",
+        quantity_btc_raw: "40000",
+        price_usd_raw: "65000000000",
+        fee_usd_raw: "13000",
+      },
+    ];
+    const html = renderToStaticMarkup(<JevAccountCard account={a} />);
     expect(html).toContain("US$ −1,00");
     expect(html).toContain("Componentes do resultado");
     expect(html).toContain("Short");
     expect(html).toContain("−0,0004");
     expect(html).toContain("SALDO FICTÍCIO");
+    expect(html).toContain("maker-order");
+    expect(html).toContain("Últimos fills observados");
+    expect(html).toContain("maker · Venda");
   });
   it("keeps unknown cost and stale data unavailable and hides a profit chart", () => {
     const a = account();

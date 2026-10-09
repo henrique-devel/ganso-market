@@ -35,5 +35,6 @@ CREATE OR REPLACE FUNCTION jev_evidence_allocated_bytes() RETURNS BIGINT LANGUAG
     +pg_total_relation_size('jev_result_cuts')+pg_total_relation_size('jev_coverage_segments')+pg_total_relation_size('jev_engine_qualifications')+pg_total_relation_size('jev_evaluation_cuts')
     +pg_total_relation_size('jev_funding_receipts')+pg_total_relation_size('jev_infrastructure_events')+pg_total_relation_size('jev_operator_commands')
 $$;
+CREATE INDEX jev_panel_fills ON jev_execution_events(account_id,sequence DESC) WHERE jsonb_array_length(result->'fills')>0;
 INSERT INTO schema_versions(component,version,checksum_sha256)
 VALUES ('foundation', :'migration_version'::INTEGER, :'migration_checksum') ON CONFLICT DO NOTHING;

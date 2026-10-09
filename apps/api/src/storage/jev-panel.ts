@@ -1,3 +1,4 @@
+import type { JevExecutionFill } from "./jev-execution-contract.js";
 import { readJevReadinessTx } from "./jev-readiness.js";
 import { readJevExecutionTx } from "./jev-executionstore.js";
 import type { JevBatchResult } from "../models/jev-decision-contract.js";
@@ -59,6 +60,37 @@ export async function readJevPanel(
         )
       ).rows[0];
       const execution = await readJevExecutionTx(tx, row.account_id);
+      const fills = (
+        await tx.query<{ fills: JevExecutionFill[] }>(
+          "SELECT result->'fills' AS fills FROM jev_execution_events WHERE account_id=$1 AND jsonb_array_length(result->'fills')>0 ORDER BY sequence DESC LIMIT 10",
+          [row.account_id],
+        )
+      ).rows
+        .flatMap((r) => [...r.fills].reverse())
+        .slice(0, 20)
+        .map(
+          ({
+            execution_id,
+            order_id,
+            position_id,
+            side,
+            occurred_at,
+            kind,
+            quantity_btc_raw,
+            price_usd_raw,
+            fee_usd_raw,
+          }) => ({
+            execution_id,
+            order_id,
+            position_id,
+            side,
+            occurred_at,
+            kind,
+            quantity_btc_raw,
+            price_usd_raw,
+            fee_usd_raw,
+          }),
+        );
       const decisions = (
         await tx.query<{
           request_id: string;
@@ -119,6 +151,7 @@ export async function readJevPanel(
             }
           : {}),
         decisions,
+        fills,
         execution: execution
           ? {
               observed_at: execution.observed_at,
@@ -126,6 +159,7 @@ export async function readJevPanel(
               maker: execution.maker
                 ? {
                     status: execution.maker.status,
+                    order_id: execution.maker.plan.input.order_id,
                     filled_btc_raw: execution.maker.filled_btc_raw,
                     planned_btc_raw: execution.maker.plan.quantity_btc_raw,
                     ack_at: execution.maker.ack_at,
