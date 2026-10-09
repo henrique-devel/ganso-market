@@ -63,14 +63,15 @@ describe("JE11 financial presentation", () => {
     a.metrics = {
       ...a.metrics!,
       attributed_jev_usd6: null,
-      strategy_after_jev_usd6: null,
-      conservative_result_usd6: null,
+      strategy_after_jev_usd6: "5000000",
+      conservative_result_usd6: "5000000",
       quality: "stale",
     };
     const html = renderToStaticMarkup(<JevAccountCard account={a} />);
     expect(html).toContain("Indisponível");
     expect(html).toContain("stale");
     expect(html).not.toContain("<svg");
+    expect(html).not.toContain("US$ 5,00");
   });
   it("shows an empty experiment and never exposes a live activation button", () => {
     const html = renderToStaticMarkup(

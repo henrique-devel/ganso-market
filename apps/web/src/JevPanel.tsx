@@ -17,7 +17,17 @@ const evaluation: Record<string, string> = {
   failed: "Reprovado",
 };
 export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
-  const m = a.metrics;
+  // Keep historical ledger components visible while current results/quotes are unavailable.
+  const m =
+    a.metrics && a.metrics.quality !== "fresh"
+      ? {
+          ...a.metrics,
+          trading: { ...a.metrics.trading, open_usd6: null, pnl_usd6: null },
+          risk_equity_usd6: null,
+          strategy_after_jev_usd6: null,
+          conservative_result_usd6: null,
+        }
+      : a.metrics;
   const components: [string, string | null | undefined][] = [
     ["Realizado", m?.trading.realized_usd6],
     ["Aberto", m?.trading.open_usd6],
