@@ -1,5 +1,5 @@
 import { readCsrfCookie } from "./auth.js";
-import { displayRaw } from "./btc-ticket.js";
+import { displayRaw, createTicketKey } from "./btc-ticket.js";
 import { useRef, useState } from "react";
 import type { JevLivePanel } from "@ganso-market/contracts/trading";
 type Props = {
@@ -43,26 +43,27 @@ export function JevLive(props: Props) {
     if (lock.current || (!intent.current && (!confirmed || !available))) return;
     lock.current = true;
     setBusy(true);
-    intent.current ??= {
-      key: crypto.randomUUID(),
-      action: rearming ? "rearm" : "activate",
-      body: rearming
-        ? {
-            version: "jev.live-rearm.v1",
-            confirmed_high_water_usd6: props.value.high_water_usd6,
-            identity_hash: props.value.identity_hash,
-            expected_pilot_sequence: props.value.pilot_sequence,
-          }
-        : {
-            version: "jev.live-activation.v1",
-            confirmed_capital_usd6: "250000000",
-            identity_hash: props.value.identity_hash,
-            expected_pilot_sequence: props.value.pilot_sequence,
-          },
-    };
     const c = new AbortController(),
       timer = setTimeout(() => c.abort(), 10000);
     try {
+      intent.current ??= {
+        key: createTicketKey(),
+        action: rearming ? "rearm" : "activate",
+        body: rearming
+          ? {
+              version: "jev.live-rearm.v1",
+              confirmed_high_water_usd6: props.value.high_water_usd6,
+              identity_hash: props.value.identity_hash,
+              expected_pilot_sequence: props.value.pilot_sequence,
+            }
+          : {
+              version: "jev.live-activation.v1",
+              confirmed_capital_usd6: "250000000",
+              identity_hash: props.value.identity_hash,
+              expected_pilot_sequence: props.value.pilot_sequence,
+            },
+      };
+
       const r = await fetch(`/api/trading/jev/${intent.current.action}`, {
         method: "POST",
         headers: {
