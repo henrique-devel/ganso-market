@@ -47,10 +47,10 @@ const readPool = {
       return run(tx);
     }),
 };
-async function captures(minute: number) {
+async function captures(minute: number, offset = 0) {
   await withBtcRetentionTransaction(f.poolAdapter, async (tx) => {
-    for (let n = 1; n <= 60; n++) {
-      const at = minute - 60000 + n * 1000,
+    for (let n = offset ? 0 : 1; n <= 60; n++) {
+      const at = minute - 60000 + n * 1000 + offset,
         from = at - 1000,
         id = `evaluation-capture:${at}`;
       const payload = {
@@ -101,7 +101,7 @@ describe.skipIf(!url)(
       f = await riskFixture(url);
       f.setClock(iso(begun));
       await registerJevPair(f.poolAdapter, 1, paper, stress, manifest);
-      f.setClock(iso(end + 60000));
+      f.setClock(iso(end + 62000));
     });
     afterEach(async () => {
       await f?.dispose();
@@ -164,7 +164,7 @@ describe.skipIf(!url)(
       expect(
         evidence.payload.records[0].payload.health.channels.book.last_source_at,
       ).toBe(end);
-      f.setClock(iso(end + 180000));
+      f.setClock(iso(end + 182000));
       await captures(end + 180000);
       await captureJevCoverage(f.poolAdapter, "operator", s.account_id);
       const restarted = await readPool.readOnly(1500, (tx) =>
@@ -187,6 +187,55 @@ describe.skipIf(!url)(
       await expect(
         captureJevCoverage(f.poolAdapter, "other", s.account_id),
       ).rejects.toThrow(/NOT_FOUND/);
+    });
+    it("waits for bounded post-cut proof, keeps original clocks and covers an offset collector at the minute edge", async () => {
+      await captures(end + 60000, 100);
+      f.setClock(iso(end + 61999));
+      const early = await captureJevCoverage(
+        f.poolAdapter,
+        "operator",
+        s.account_id,
+      );
+      expect(early).toMatchObject({
+        status: "captured",
+        quality: { window: { end_at: iso(end) } },
+      });
+      f.setClock(iso(end + 62000));
+      const settled = await captureJevCoverage(
+        f.poolAdapter,
+        "operator",
+        s.account_id,
+      );
+      expect(settled).toMatchObject({
+        status: "captured",
+        quality: {
+          window: { start_at: iso(end), end_at: iso(end + 60000) },
+          knowledge_at: iso(end + 62000),
+          covered_ms: 60000,
+          coverage_ppm: 1000000,
+        },
+      });
+      const envelope = (
+        await f.pool.query(
+          "SELECT envelope FROM jev_evidence_objects WHERE object_id=$1",
+          [settled.status === "captured" ? settled.evidence_id : "missing"],
+        )
+      ).rows[0].envelope;
+      expect(envelope.payload.records.at(-1)).toMatchObject({
+        recorded_at: iso(end + 60100),
+        received_at: iso(end + 60100),
+        payload: { at: end + 60100, from: end + 59100 },
+      });
+      expect(
+        await captureJevCoverage(f.poolAdapter, "operator", s.account_id),
+      ).toEqual({ status: "already_captured" });
+      expect(
+        (
+          await f.pool.query(
+            "SELECT max(received_at) AS at FROM btc_market_records WHERE kind='capture'",
+          )
+        ).rows[0].at.toISOString(),
+      ).toBe(iso(end + 60100));
     });
     it("persists a daily versioned inconclusion without qualification, and GET is owned, immutable and read-only", async () => {
       f.setClock(iso(end + 59999));

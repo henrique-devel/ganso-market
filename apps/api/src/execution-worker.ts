@@ -16,6 +16,7 @@ import {
 } from "./storage/jev-scheduler.js";
 import { loadChallengerConfig } from "./models/jev-config.js";
 import { loadJevDecisionBackend } from "./models/jev-decision-runtime.js";
+import { JEV_EVALUATION_POLICY } from "./storage/jev-evaluation.js";
 import { runJevContinuousEvaluation } from "./storage/jev-evaluationstore.js";
 export const EXECUTION_HEALTH_PATH = "/tmp/ganso-execution-health.json";
 export function inspectExecutionHealth(
@@ -120,7 +121,9 @@ export async function runExecutionWorker() {
       await fenced.transaction((tx) => tx.query("SELECT 1"));
       await scheduler.tick();
       await drainDeskCommands(fenced);
-      const minute = Math.floor(began / 60000);
+      const minute = Math.floor(
+        (began - JEV_EVALUATION_POLICY.coverage_settlement_delay_ms) / 60000,
+      );
       if (minute !== lastEvaluationMinute && !evaluationTask) {
         lastEvaluationMinute = minute;
         evaluationStatus = "running";

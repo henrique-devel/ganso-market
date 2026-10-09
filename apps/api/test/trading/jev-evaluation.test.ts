@@ -158,6 +158,65 @@ describe("JE09 episodes and duration coverage", () => {
       ).covered_ms,
     ).toBe(99000);
   });
+  it("settles the UTC edge using the next original capture without losing arbitrary collector offsets", () => {
+    const end = start + 60000,
+      window = { start_at: iso(start), end_at: iso(end) },
+      records = Array.from({ length: 62 }, (_, n) => {
+        const at = start + (n - 1) * 1000 + 100;
+        const r = capture(at - 1000, at);
+        for (const k of ["book", "context"] as const) {
+          r.payload.health.channels[k]!.last_source_at = at;
+          r.payload.health.channels[k]!.last_received_at = at;
+        }
+        return r;
+      });
+    expect(jevDurationCoverage(window, records).covered_ms).toBe(59100);
+    const q = jevDurationCoverage(window, records, iso(end + 2000));
+    expect(q).toMatchObject({
+      covered_ms: 60000,
+      coverage_ppm: 1000000,
+      knowledge_at: iso(end + 2000),
+      valid_intervals: [[start, end]],
+    });
+    records.at(-1)!.payload.health.gaps = [
+      {
+        channel: "book",
+        epoch: 1,
+        reason: "disconnect",
+        recovery: "current_state_only",
+        detected_at: end + 100,
+        after_source_at: end - 100,
+        resumed_at: end + 100,
+      },
+    ];
+    expect(
+      jevDurationCoverage(window, records, iso(end + 2000)).covered_ms,
+    ).toBe(59900);
+    expect(() => jevDurationCoverage(window, records, iso(end + 2001))).toThrow(
+      /COVERAGE_KNOWLEDGE/,
+    );
+  });
+  it("never counts a source received after the UTC edge or proof settlement as earlier freshness", () => {
+    const end = start + 60000,
+      window = { start_at: iso(start), end_at: iso(end) };
+    const r = capture(end - 100, end + 100);
+    for (const k of ["book", "context"] as const) {
+      r.payload.health.channels[k]!.last_source_at = end - 200;
+      r.payload.health.channels[k]!.last_received_at = end + 100;
+    }
+    expect(jevDurationCoverage(window, [r], iso(end + 2000)).covered_ms).toBe(
+      0,
+    );
+    for (const k of ["book", "context"] as const)
+      r.payload.health.channels[k]!.last_received_at = end - 200;
+    expect(jevDurationCoverage(window, [r], iso(end + 2000)).covered_ms).toBe(
+      100,
+    );
+    r.received_at = iso(end + 2001);
+    expect(jevDurationCoverage(window, [r], iso(end + 2000)).covered_ms).toBe(
+      0,
+    );
+  });
   it("does not heal gaps with restart, stale source, receive time or healthy edges", () => {
     const window = { start_at: iso(start), end_at: iso(start + 60000) };
     const a = capture(start, start + 1000),

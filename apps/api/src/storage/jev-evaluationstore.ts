@@ -47,7 +47,14 @@ export async function captureJevCoverage(
     const now = (
       await tx.query<{ now: Date }>("SELECT clock_timestamp() AS now")
     ).rows[0]!.now.toISOString();
-    const end = Math.floor(jevTime(now) / 60000) * 60000;
+    const end =
+      Math.floor(
+        (jevTime(now) - JEV_EVALUATION_POLICY.coverage_settlement_delay_ms) /
+          60000,
+      ) * 60000;
+    const knowledge_at = new Date(
+      end + JEV_EVALUATION_POLICY.coverage_settlement_delay_ms,
+    ).toISOString();
     const last = (
       await tx.query<{ end_at: Date; evidence_id: string }>(
         "SELECT end_at,evidence_id FROM jev_coverage_segments WHERE account_id=$1 ORDER BY end_at DESC LIMIT 1",
@@ -76,7 +83,7 @@ export async function captureJevCoverage(
         `SELECT r.object_id,o.recorded_at,r.received_at,o.payload FROM btc_market_records r JOIN btc_retention_objects o USING(object_id)
        WHERE r.kind='capture' AND r.received_at>$1::timestamptz-interval '5 seconds' AND r.received_at<=$2 AND o.recorded_at<=$2
        AND o.identity->>'instrument_version'=$3 ORDER BY r.received_at,r.object_id LIMIT 513`,
-        [window.start_at, window.end_at, s.instrument_version],
+        [window.start_at, knowledge_at, s.instrument_version],
       )
     ).rows;
     requireJev(rows.length <= 512, "COVERAGE_LIMIT");
@@ -85,7 +92,7 @@ export async function captureJevCoverage(
       recorded_at: r.recorded_at.toISOString(),
       received_at: r.received_at.toISOString(),
     }));
-    const q = jevDurationCoverage(window, records),
+    const q = jevDurationCoverage(window, records, knowledge_at),
       id = `jev-coverage:${account}:${end}`;
     await storeJevEvidenceTx(
       tx,
