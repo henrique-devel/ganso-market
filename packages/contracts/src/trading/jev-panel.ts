@@ -110,7 +110,24 @@ export interface JevPanelAccount {
   } | null;
   evaluation: { state: string; as_of: string; evidence_id: string } | null;
 }
+export interface JevQueueProposal {
+  proposal_id: string;
+  fingerprint: string;
+  profile_id: string;
+  profile_version: string;
+  reason: string;
+  horizon_minutes: 1 | 3 | 5;
+  rank: number;
+  cost_usd6: string | null;
+  origin: "real" | "mock";
+}
+export interface JevQueueSnapshot {
+  revision: string;
+  proposal_ids: string[];
+  proposals: JevQueueProposal[];
+}
 export interface JevPanelSnapshot {
+  queue?: JevQueueSnapshot;
   schema_version: "jev.panel.v1";
   as_of: string;
   accounts: JevPanelAccount[];

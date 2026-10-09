@@ -250,7 +250,12 @@ export async function readJevCostsTx(
        FROM jev_decision_participants p WHERE p.origin=r.origin AND p.request_id=r.request_id) AS participants
     FROM jev_decision_requests r LEFT JOIN jev_decision_results s USING(origin,request_id)
     WHERE r.origin=$1 AND r.started_at<$2 AND EXISTS(SELECT 1 FROM jev_decision_participants p WHERE p.origin=r.origin AND p.request_id=r.request_id AND p.owner_id=$3)
-    ORDER BY r.started_at,r.request_id LIMIT 20001`,
+    UNION ALL
+    SELECT r.request_id,'generation_validation' AS purpose,r.started_at,s.cost_usd6::text,r.proposal_id,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('owner_id',b.owner_id,'account_id',b.account_id,'profile_id',b.profile_id,'profile_version',b.profile_version) ORDER BY b.account_id) FROM jev_bindings b WHERE b.owner_id=p.owner_id AND b.profile_id=p.profile_id AND b.profile_version=p.profile_version),jsonb_build_array(jsonb_build_object('owner_id',p.owner_id,'account_id','proposal:'||p.fingerprint,'profile_id',p.profile_id,'profile_version',p.profile_version))) AS participants
+    FROM jev_proposal_requests r JOIN jev_proposals p USING(owner_id,proposal_id) LEFT JOIN jev_proposal_results s USING(origin,request_id)
+    WHERE r.origin=$1 AND r.started_at<$2 AND r.owner_id=$3
+    ORDER BY started_at,request_id LIMIT 20001`,
       [origin, end, scope.owner_id],
     )
   ).rows;

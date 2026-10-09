@@ -1,3 +1,4 @@
+import { commandJevQueue } from "./storage/jev-queue.js";
 import { commandJevOperator } from "./storage/jev-operator.js";
 import { sameOriginViolation, csrfValid } from "./auth/http.js";
 import {
@@ -87,6 +88,38 @@ export function registerJevPanelRoutes(
               e instanceof JevPanelCommandError
                 ? e.code
                 : "JEV_PANEL_COMMAND_UNAVAILABLE",
+          });
+      }
+    },
+  );
+  app.post(
+    "/trading/jev/queue",
+    { preHandler: guard, bodyLimit: 2048 },
+    async (request, reply) => {
+      const violation = sameOriginViolation(request);
+      if (violation) return reply.code(403).send({ reason_code: violation });
+      if (!csrfValid(request))
+        return reply.code(403).send({ reason_code: "CSRF_INVALID" });
+      try {
+        if (Object.keys(request.query as object).length)
+          throw new JevPanelCommandError(400, "JEV_QUEUE_INVALID_COMMAND");
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string")
+          throw new JevPanelCommandError(400, "JEV_QUEUE_INVALID_COMMAND");
+        return await commandJevQueue(
+          deps.pool,
+          owners.get(request)!,
+          request.body,
+          key,
+        );
+      } catch (e) {
+        return reply
+          .code(e instanceof JevPanelCommandError ? e.status : 503)
+          .send({
+            reason_code:
+              e instanceof JevPanelCommandError
+                ? e.code
+                : "JEV_QUEUE_UNAVAILABLE",
           });
       }
     },

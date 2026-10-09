@@ -101,7 +101,7 @@ export function createJevWorkerStore(
             binding: Parameters<typeof jevScope>[0];
             manifest: JevManifest;
           }>(
-            `SELECT a.identity,b.binding,p.manifest FROM jev_pairs q JOIN jev_bindings b ON b.experiment_id IN(q.paper_experiment_id,q.stress_experiment_id) JOIN jev_accounts a USING(account_id) JOIN jev_profiles p ON p.owner_id=b.owner_id AND p.profile_id=b.profile_id AND p.profile_version=b.profile_version WHERE a.mode IN('paper','stress') ORDER BY q.slot,a.account_id LIMIT 6`,
+            `SELECT a.identity,b.binding,p.manifest FROM jev_active_pairs q JOIN jev_bindings b ON b.experiment_id IN(q.paper_experiment_id,q.stress_experiment_id) JOIN jev_accounts a USING(account_id) JOIN jev_profiles p ON p.owner_id=b.owner_id AND p.profile_id=b.profile_id AND p.profile_version=b.profile_version WHERE a.mode IN('paper','stress') ORDER BY q.slot,a.account_id LIMIT 6`,
           )
         ).rows;
         return rows.map((r) => ({

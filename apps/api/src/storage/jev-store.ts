@@ -25,7 +25,7 @@ const same = (a: unknown, b: unknown) =>
     canonicalFingerprint(a) === canonicalFingerprint(b),
     "IDEMPOTENCY_COLLISION",
   );
-async function registerProfileTx(
+export async function registerProfileTx(
   tx: SqlExecutor,
   p: JevProfile,
   manifest: unknown,
@@ -156,7 +156,10 @@ export async function appendJevLedgerTx(
     );
   return { status: "appended" as const, events: next };
 }
-async function createAccountTx(tx: SqlExecutor, input: JevLedgerIdentity) {
+export async function createAccountTx(
+  tx: SqlExecutor,
+  input: JevLedgerIdentity,
+) {
   validateJevLedgerIdentity(input);
   requireJev(input.bindings.length === 1, "REGISTRATION_BINDING");
   const { account: a, instrument: i } = input;

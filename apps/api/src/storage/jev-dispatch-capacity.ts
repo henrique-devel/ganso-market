@@ -25,7 +25,7 @@ export async function jevDispatchRegistryHashTx(tx: SqlExecutor) {
   return jevHash(
     (
       await tx.query(
-        "SELECT slot,owner_id,profile_id,profile_version,paper_account_id,stress_account_id,paper_experiment_id,stress_experiment_id FROM jev_pairs ORDER BY slot",
+        "SELECT slot,owner_id,profile_id,profile_version,paper_account_id,stress_account_id,paper_experiment_id,stress_experiment_id FROM jev_active_pairs ORDER BY slot",
       )
     ).rows,
   );
