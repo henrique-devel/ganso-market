@@ -74,11 +74,14 @@ describe.skipIf(!url)("JE13 journals on disposable PostgreSQL", () => {
     ).rejects.toThrow("IDEMPOTENCY_COLLISION");
     expect((await store.gate(out[0]!.reservation)).signer_enabled).toBe(false);
     expect(
-      await Promise.all([
-        store.claimSubmission(out[0]!.reservation),
-        store.claimSubmission(out[0]!.reservation),
-      ]),
-    ).toEqual([true, false]);
+      (
+        await Promise.all([
+          store.claimSubmission(out[0]!.reservation),
+          store.claimSubmission(out[0]!.reservation),
+        ])
+      ).sort(),
+    ).toEqual([false, true]);
+    expect(await store.events("receipt")).toHaveLength(1);
     expect(
       (
         await f.pool.query(
