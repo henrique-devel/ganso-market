@@ -126,7 +126,36 @@ export interface JevQueueSnapshot {
   proposal_ids: string[];
   proposals: JevQueueProposal[];
 }
+export interface JevLivePanel {
+  version: string;
+  limits: {
+    capital_usd6: string;
+    entry_risk_bps: number;
+    exposure_bps: number;
+    daily_loss_bps: number;
+    drawdown_usd6: string;
+    leverage: number;
+    margin: string;
+  };
+  identity_hash: string | null;
+  pilot_sequence: string;
+  activated: boolean;
+  can_activate: boolean;
+  can_rearm: boolean;
+  reasons: string[];
+  equity_usd6: string | null;
+  high_water_usd6: string | null;
+  global_blocked: boolean;
+  promotion: {
+    sequence: string;
+    state: "active" | "draining" | "waiting";
+    profile_id: string;
+    profile_version: string;
+    experiment_id: string;
+  } | null;
+}
 export interface JevPanelSnapshot {
+  live?: JevLivePanel;
   queue?: JevQueueSnapshot;
   schema_version: "jev.panel.v1";
   as_of: string;
@@ -155,6 +184,6 @@ export interface JevPanelSnapshot {
     operational_admission: false;
   };
   platform?: JevPlatformCosts;
-  live_activation_available: false;
+  live_activation_available: boolean;
   alternative_banks_summable: false;
 }

@@ -1,3 +1,4 @@
+import { jevLiveAuthorityTx, readJevPromotionTx } from "./jev-promotion.js";
 import type { DatabasePool, SqlExecutor } from "../database.js";
 import type { JevScope } from "@ganso-market/contracts/trading";
 import { jevHash } from "./jev-hash.js";
@@ -354,6 +355,11 @@ export class PgLiveStore implements LiveStore {
         );
         return { fresh: false, reservation: existing.reservation };
       }
+      const profile = await readJevPromotionTx(tx, this.identity.account_id);
+      liveCheck(
+        !profile || profile.experiment_id === input.scope.experiment_id,
+        "PROFILE_FENCE",
+      );
       const now = await dbNow(tx),
         o = (
           await tx.query<{
@@ -521,12 +527,13 @@ export class PgLiveStore implements LiveStore {
           [this.identity.account_id],
         )
       ).rows[0];
-      // Current schema keeps executor_enabled=false. JE14 must supply its own
-      // authenticated activation/schema change; this adapter does not arm it.
-      const activated =
-        pilot?.checkpoint.executor_enabled === true &&
-        pilot?.request.operator_decision?.actor_id === this.identity.owner_id &&
-        typeof pilot?.request.operator_decision?.decision_id === "string";
+      const authority = await jevLiveAuthorityTx(
+        tx,
+        this.identity.owner_id,
+        r.scope,
+        r.kind === "entry",
+      );
+      const activated = authority.activation_id !== null;
       const entries =
         r.kind === "entry"
           ? await readJevEntriesTx(tx, this.identity.account_id)
@@ -568,18 +575,17 @@ export class PgLiveStore implements LiveStore {
       return {
         identity_hash: this.identityHash,
         reservation_hash: stored ? jevHash(stored.reservation) : null,
-        operator_activation_id: activated
-          ? pilot.request.operator_decision.decision_id
-          : null,
+        operator_activation_id: activated ? authority.activation_id : null,
         signer_enabled: activated,
         generation: o?.generation ?? "0",
         lease_until: o?.lease_until.getTime() ?? 0,
         entries_allowed:
           activated &&
-          pilot.checkpoint.supervisor_authorized &&
-          !pilot.checkpoint.global_blocked &&
-          !pilot.checkpoint.risk.entries_paused &&
-          pilot.checkpoint.active_experiment_id === r.scope.experiment_id &&
+          authority.entries_allowed &&
+          pilot?.checkpoint.supervisor_authorized &&
+          !pilot?.checkpoint.global_blocked &&
+          !pilot?.checkpoint.risk.entries_paused &&
+          pilot?.checkpoint.active_experiment_id === r.scope.experiment_id &&
           entryReady &&
           !!reconciled,
       };

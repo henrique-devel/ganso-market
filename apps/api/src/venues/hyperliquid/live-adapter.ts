@@ -1,3 +1,5 @@
+import { LiveSuccessionCoordinator } from "./live-succession.js";
+import { advanceJevPromotion } from "../../storage/jev-promotion.js";
 import type { AbstractWallet } from "@nktkas/hyperliquid/signing";
 import { PgLiveStore } from "../../storage/jev-live-store.js";
 import type { DatabasePool } from "../../database.js";
@@ -18,6 +20,9 @@ export function createLiveAdapter(input: {
   wallet?: AbstractWallet;
   wire?: LiveWire;
   clock?: () => number;
+  succession_context?: () => Promise<
+    Parameters<LiveSuccessionCoordinator["reconcile"]>[0]
+  >;
 }) {
   const clock = input.clock ?? Date.now;
   const store = new PgLiveStore(input.pool, input.identity);
@@ -36,25 +41,40 @@ export function createLiveAdapter(input: {
   const protection = new LiveProtectionCoordinator(execution, () =>
     collectLiveSnapshot(boundary, input.history_from, clock),
   );
+  async function reconcileAccount() {
+    const recovered = await recoverLiveAccount({
+      boundary,
+      execution,
+      from: input.history_from,
+      clock,
+    });
+    if (
+      recovered.snapshot &&
+      !recovered.pending &&
+      input.identity.environment === "mainnet"
+    )
+      await store.observeExistingPilot(recovered.snapshot);
+    return recovered;
+  }
+  const succession = new LiveSuccessionCoordinator(
+    store,
+    execution,
+    reconcileAccount,
+  );
+  async function reconcile() {
+    const recovered = await reconcileAccount();
+    if (input.succession_context)
+      await succession.reconcile(await input.succession_context());
+    else if (input.identity.environment === "mainnet")
+      await advanceJevPromotion(input.pool, input.identity.owner_id);
+    return recovered;
+  }
   return {
     store,
     boundary,
     execution,
     protection,
-    async reconcile() {
-      const recovered = await recoverLiveAccount({
-        boundary,
-        execution,
-        from: input.history_from,
-        clock,
-      });
-      if (
-        recovered.snapshot &&
-        !recovered.pending &&
-        input.identity.environment === "mainnet"
-      )
-        await store.observeExistingPilot(recovered.snapshot);
-      return recovered;
-    },
+    reconcile,
+    succession,
   };
 }

@@ -297,6 +297,91 @@ async function accountInputTx(
     },
   };
 }
+/** Fresh prospective assessment; no daily cut is treated as permanent approval. */
+export async function assessJevProfileTx(
+  tx: SqlExecutor,
+  owner: string,
+  profile: string,
+  version: string,
+  now: string,
+) {
+  const bindings = (
+    await tx.query<{ account_id: string; binding: { started_at: string } }>(
+      "SELECT account_id,binding FROM jev_bindings WHERE owner_id=$1 AND profile_id=$2 AND profile_version=$3 AND mode IN('paper','stress') ORDER BY mode",
+      [owner, profile, version],
+    )
+  ).rows;
+  requireJev(bindings.length === 2, "EVALUATION_PAIR");
+  const end =
+    Date.parse(now) - JEV_EVALUATION_POLICY.coverage_settlement_delay_ms;
+  const begun = Date.parse(bindings[0]!.binding.started_at);
+  requireJev(end > begun, "EVALUATION_WINDOW");
+  const full = end - begun >= 90 * 86400000;
+  const window = {
+    start_at: new Date(full ? end - 90 * 86400000 : begun).toISOString(),
+    end_at: new Date(end).toISOString(),
+  };
+  const dependencies: string[] = [],
+    sources: string[] = [];
+  const accounts = [];
+  for (const b of bindings) {
+    const current = (
+      await accountInputTx(
+        tx,
+        owner,
+        b.account_id,
+        window,
+        dependencies,
+        now,
+        sources,
+      )
+    ).input;
+    // The duration proof settles two seconds behind the clock. New financial
+    // events/corrections and new/uncertain JEV bills must settle before this
+    // otherwise favorable cut may authorize promotion or signing.
+    const changes = !!(
+      await tx.query(
+        "SELECT 1 FROM jev_ledger_events WHERE account_id=$1 AND ((event->>'occurred_at')::timestamptz>$2 OR (event->>'recorded_at')::timestamptz>$2) LIMIT 1",
+        [b.account_id, window.end_at],
+      )
+    ).rowCount;
+    const closed = !!(
+      await tx.query(
+        "SELECT 1 FROM jev_evidence_closures c JOIN jev_bindings b USING(experiment_id) WHERE b.account_id=$1 AND c.closed_at<=$2 LIMIT 1",
+        [b.account_id, now],
+      )
+    ).rowCount;
+    if (changes || closed) current.reconciled = false;
+    const pending = !!(
+      await tx.query(
+        `SELECT 1 FROM jev_decision_requests r LEFT JOIN jev_decision_results s USING(origin,request_id) WHERE r.origin='real' AND (r.started_at>$2 OR s.finished_at>$2 OR s.cost_usd6 IS NULL) AND EXISTS(SELECT 1 FROM jev_decision_participants p WHERE p.origin=r.origin AND p.request_id=r.request_id AND p.account_id=$1)
+      UNION ALL SELECT 1 FROM jev_proposal_requests r JOIN jev_proposals p USING(owner_id,proposal_id) LEFT JOIN jev_proposal_results s USING(origin,request_id) WHERE r.origin='real' AND (r.started_at>$2 OR s.finished_at>$2 OR s.cost_usd6 IS NULL) AND p.owner_id=$3 AND p.profile_id=$4 AND p.profile_version=$5 LIMIT 1`,
+        [b.account_id, window.end_at, owner, profile, version],
+      )
+    ).rowCount;
+    if (pending) current.costs_complete = false;
+    accounts.push(current);
+  }
+  const previous_failed = !!(
+    await tx.query(
+      "SELECT 1 FROM jev_evaluation_cuts WHERE owner_id=$1 AND profile_id=$2 AND profile_version=$3 AND state='failed' AND as_of<=$4 LIMIT 1",
+      [owner, profile, version, now],
+    )
+  ).rowCount;
+  const readiness = await readJevReadinessTx(tx, owner, now);
+  return {
+    result: evaluateJevProfile({
+      as_of: window.end_at,
+      window,
+      phase: full ? "rolling90" : "initial",
+      accounts,
+      previous_failed,
+      engine_qualified: readiness.qualification.qualified,
+    }),
+    dependencies,
+    sources,
+  };
+}
 export async function captureJevEvaluation(
   pool: Writer,
   owner: string,

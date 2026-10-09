@@ -1,3 +1,4 @@
+import { JevLive } from "./JevLive.tsx";
 import { JevQueue } from "./JevQueue.js";
 import { useEffect, useState } from "react";
 import type {
@@ -458,6 +459,13 @@ export function JevPanel(props: Access) {
       {state?.value && (
         <>
           <JevPanelView value={state.value} />
+          {state.value.live && (
+            <JevLive
+              {...props}
+              value={state.value.live}
+              refresh={() => setRefresh((x) => x + 1)}
+            />
+          )}
           {state.value.queue && (
             <JevQueue
               {...props}
