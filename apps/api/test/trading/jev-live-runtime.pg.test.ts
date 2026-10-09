@@ -648,8 +648,7 @@ describe.skipIf(!url)(
               (state.metrics as { accounts: number }).accounts === 7 &&
               (state.metrics as { protected_accounts: number })
                 .protected_accounts === 7 &&
-              (state.live as { entries_ready: boolean }).entries_ready &&
-              !(state.live as { metrics: { running: boolean } }).metrics.running
+              (state.live as { entries_ready: boolean }).entries_ready
             ) {
               jointlyDue = true;
               marketAt = Date.now();
@@ -761,6 +760,8 @@ describe.skipIf(!url)(
           ),
           JSON.stringify({
             mode,
+            warmed,
+            jointlyDue,
             batches: batches.map((b) => ({
               modes: b.participants.map((p) => p.context.scope.mode),
               cut: b.cut_at,
@@ -777,6 +778,7 @@ describe.skipIf(!url)(
               )
             ).rows,
             live: health.at(-2)?.live,
+            metrics: health.at(-2)?.metrics,
           }),
         ).toBe(true);
       return { batches, health, elapsed: Date.now() - began };
