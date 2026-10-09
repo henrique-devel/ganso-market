@@ -54,6 +54,7 @@ import {
 import { withBtcRetentionTransaction } from "../../src/storage/btc-retention.js";
 import { jevIdentity } from "./jev-v2-fixture.js";
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
+let enabledTariff: ReturnType<typeof mockTariff>;
 const store: Pick<DatabasePool, "transaction"> = {
   async transaction<T>(run: (tx: SqlExecutor) => Promise<T>) {
     const c = await fixture.pool.connect();
@@ -112,6 +113,7 @@ function response(choice = "adequate", cost = true) {
   });
 }
 async function enable(origin: "mock" | "real" = "mock", tariff = mockTariff()) {
+  enabledTariff = tariff;
   await provisionJevCostPool(store, {
     origin,
     purpose: "generation_validation",
@@ -154,7 +156,7 @@ async function closedSource(closed = true) {
     });
     const l = await readJevAccount(store, "operator", i.account.account_id);
     await fixture.pool.query(
-      "INSERT INTO jev_risk_reconciliations(account_id,operation_id,ledger_sequence,observed_at,funding_through_at,request) VALUES($1,'fixture_reconciliation',$2,clock_timestamp(),clock_timestamp(),'{}')",
+      "INSERT INTO jev_risk_reconciliations(account_id,operation_id,ledger_sequence,observed_at,funding_through_at,request) VALUES($1,'fixture_reconciliation',$2,statement_timestamp(),statement_timestamp(),'{}')",
       [i.account.account_id, l.projection.last_sequence],
     );
     if (closed)
@@ -217,7 +219,7 @@ async function approveAndEnqueue(
   origin: "real" | "mock" = "mock",
 ) {
   await storeJevProposal(store, p);
-  const tariff = mockTariff(),
+  const tariff = enabledTariff,
     body = response(),
     r = deriveProposalResult(
       { body, status: 200, received_at: new Date().toISOString() },
@@ -727,7 +729,7 @@ describe.skipIf(!process.env.GANSO_TEST_DATABASE_URL)(
       ).toEqual([]);
       const l = await readJevAccount(store, "operator", i.account.account_id);
       await fixture.pool.query(
-        "INSERT INTO jev_risk_reconciliations(account_id,operation_id,ledger_sequence,observed_at,funding_through_at,request) VALUES($1,'final',$2,clock_timestamp(),clock_timestamp(),'{}')",
+        "INSERT INTO jev_risk_reconciliations(account_id,operation_id,ledger_sequence,observed_at,funding_through_at,request) VALUES($1,'final',$2,statement_timestamp(),statement_timestamp(),'{}')",
         [i.account.account_id, l.projection.last_sequence],
       );
       expect(
@@ -762,20 +764,20 @@ describe.skipIf(!process.env.GANSO_TEST_DATABASE_URL)(
           jevCommand(
             i,
             "partial-entry",
-            fill("partial-entry", "buy", "1000"),
+            fill("partial-entry", "buy", "4000"),
             start + 3000,
           ),
           jevCommand(
             i,
             "partial-exit",
-            fill("partial-exit", "sell", "750"),
+            fill("partial-exit", "sell", "3000"),
             start + 4000,
           ),
         ],
       });
       const l = await readJevAccount(store, "operator", i.account.account_id);
       await fixture.pool.query(
-        "INSERT INTO jev_risk_reconciliations(account_id,operation_id,ledger_sequence,observed_at,funding_through_at,request) VALUES($1,'partial',$2,clock_timestamp(),clock_timestamp(),'{}')",
+        "INSERT INTO jev_risk_reconciliations(account_id,operation_id,ledger_sequence,observed_at,funding_through_at,request) VALUES($1,'partial',$2,statement_timestamp(),statement_timestamp(),'{}')",
         [i.account.account_id, l.projection.last_sequence],
       );
       expect(
