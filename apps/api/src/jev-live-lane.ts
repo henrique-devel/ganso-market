@@ -54,6 +54,7 @@ export interface JevLiveLane {
     control: WorkerControl,
   ): Promise<LiveCommand | null>;
   execute(command: LiveCommand): Promise<void>;
+  heartbeat(): Promise<void>;
   tick(): void;
   halt(): void;
   assertActive(): void;
@@ -436,6 +437,10 @@ export function createJevLiveLane(
   }
   return {
     metrics,
+    // The runtime projection is this process's fenced heartbeat, not a venue
+    // timestamp. Reservation/signing still recheck the original financial
+    // sources, protection, controls, qualification and integration gates.
+    heartbeat: publish,
     assertActive() {
       if (retired) throw new Error("JEV_LIVE_RUNTIME_RETIRED");
     },
@@ -594,7 +599,13 @@ export function createJevLiveLane(
           }
         : refuse(
             "reason" in reserved
-              ? reserved.reason
+              ? [
+                  reserved.reason,
+                  ...("admission_reasons" in reserved &&
+                  Array.isArray(reserved.admission_reasons)
+                    ? reserved.admission_reasons
+                    : []),
+                ].join(":")
               : "live_reservation_not_sendable",
           );
     },

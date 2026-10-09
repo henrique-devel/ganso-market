@@ -238,6 +238,7 @@ export async function runExecutionWorker(
           });
       }
       proposals.tick(began);
+      await liveLane.heartbeat();
       await publishHealth({
         service: "execution-worker",
         pid: process.pid,

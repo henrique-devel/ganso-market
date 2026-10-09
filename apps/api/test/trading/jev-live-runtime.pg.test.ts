@@ -1143,13 +1143,27 @@ describe.skipIf(!url)(
       await exercise(venue, "partial");
       const sent = venue.exchanges.length;
       venue.configure({ stale: true });
-      const h = await resume(
-        venue,
-        async (state) =>
+      let staleHeartbeat = false;
+      const h = await resume(venue, async (state) => {
+        if (
           Number(
             (state.live as { metrics: { failures: number } }).metrics.failures,
-          ) >= 2,
-      );
+          ) < 2
+        )
+          return false;
+        const runtime = (
+          await f.pool.query(
+            "SELECT state,extract(epoch FROM clock_timestamp()-observed_at)*1000 AS age_ms FROM jev_live_runtime WHERE identity_hash=$1",
+            [store.identityHash],
+          )
+        ).rows[0];
+        expect(runtime.state.entries_ready).toBe(false);
+        expect(Number(runtime.age_ms)).toBeLessThan(1500);
+        const snapshot = (await store.latest()).snapshot!;
+        expect(Date.now() - snapshot.venue_at).toBeGreaterThan(2000);
+        staleHeartbeat = true;
+        return true;
+      });
       expect(
         h
           .filter((x) => x.ready)
@@ -1161,6 +1175,7 @@ describe.skipIf(!url)(
       expect(venue.exchanges.length).toBe(sent);
       expect(venue.orders.some((o) => o.isTrigger)).toBe(true);
       expect((await store.events("gap")).length).toBeGreaterThan(0);
+      expect(staleHeartbeat).toBe(true);
     }, 30000);
     it("keeps protection and cancellation progressing while unrelated JEV transports ignore their deadlines", async () => {
       const venue = runtimeVenue();

@@ -340,22 +340,36 @@ export async function reserveJevEntry(
       const state = await jevLiveDecisionStateTx(tx, s),
         now = Date.parse(await jevRiskClock(tx));
       const authority = await jevLiveAuthorityTx(tx, s.owner_id, s);
-      if (
-        !state?.ready ||
-        pilot.checkpoint.risk.entries_paused ||
-        !authority.entries_allowed ||
-        now - state.snapshot.started_at > 2000 ||
-        now < state.snapshot.received_at ||
-        !state.snapshot.flat ||
-        existing.some((e) => e.status !== "released") ||
-        now < riskTime(request.decision_at) ||
-        now - riskTime(request.decision_at) > manifest.freshness.decision_ttl_ms
-      )
+      const admission_reasons = [
+        ...(!state?.ready ? ["live_state_unready"] : []),
+        ...(pilot.checkpoint.risk.entries_paused ? ["live_risk_paused"] : []),
+        ...(!authority.entries_allowed ? ["live_authority_closed"] : []),
+        ...(state && now - state.snapshot.started_at > 2000
+          ? ["live_snapshot_stale"]
+          : []),
+        ...(state && now < state.snapshot.received_at
+          ? ["live_snapshot_future"]
+          : []),
+        ...(state && !state.snapshot.flat ? ["live_position_not_flat"] : []),
+        ...(existing.some((e) => e.status !== "released")
+          ? ["live_reserve_pending"]
+          : []),
+        ...(now < riskTime(request.decision_at)
+          ? ["live_decision_future"]
+          : []),
+        ...(now - riskTime(request.decision_at) >
+        manifest.freshness.decision_ttl_ms
+          ? ["live_decision_stale"]
+          : []),
+      ];
+      if (admission_reasons.length)
         return {
           status: "refused",
           checkpoint: pilot.checkpoint.risk,
           reason: "LIVE_ADMISSION_CLOSED",
+          admission_reasons,
         };
+      jevRiskCheck(state, "LIVE_STATE");
       const plan = sizeJevEntry(
         manifest,
         meta,
