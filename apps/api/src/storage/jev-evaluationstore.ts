@@ -1,3 +1,4 @@
+import { JEV_SCHEDULER_VERSION } from "./jev-scheduler.js";
 import { readJevReadinessTx } from "./jev-readiness.js";
 import { requireJev } from "@ganso-market/contracts/trading";
 import type { DatabasePool, SqlExecutor } from "../database.js";
@@ -33,7 +34,7 @@ import {
 } from "./jev-evaluation.js";
 import type { JevRiskCheckpoint } from "../trading/jev-risk.js";
 
-const engineVersion = "jev.scheduler.v2";
+const engineVersion = JEV_SCHEDULER_VERSION;
 type Writer = Pick<DatabasePool, "transaction">;
 /** Small immutable elapsed-time segments. Original collector health clocks
  * are copied into protected quality evidence; JEV calls never enter this path. */

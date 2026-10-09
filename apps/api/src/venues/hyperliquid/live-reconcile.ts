@@ -62,6 +62,25 @@ export interface LiveSnapshot {
   funding: LiveFunding[];
   original: unknown;
 }
+/** An identical fresh venue observation may advance its source clock during a
+ * signing attempt. Financial changes still invalidate that immutable intent. */
+export function liveSnapshotStateHash(s: LiveSnapshot) {
+  return jevHash({
+    version: s.version,
+    identity_hash: s.identity_hash,
+    position: s.position_raw,
+    balance: s.trading_balance_raw,
+    equity: s.equity_raw,
+    open_pnl: s.open_pnl_raw,
+    isolated: s.isolated_1x,
+    complete: s.history_complete,
+    consistent: s.consistent,
+    flat: s.flat,
+    orders: s.orders,
+    fills: s.fills,
+    funding: s.funding,
+  });
+}
 function venueHash(v: unknown) {
   liveCheck(typeof v === "string" && /^0x[a-f0-9]{64}$/.test(v), "SOURCE_HASH");
   return v;
@@ -153,7 +172,11 @@ export async function recoverLiveAccount(input: {
       const latest = receipts
         .filter((e) => e.operation_id === r.operation_id)
         .at(-1);
-      if (!latest || latest.state === "uncertain") await execution.recover(r);
+      if (
+        !latest ||
+        !["filled", "cancelled", "rejected", "triggered"].includes(latest.state)
+      )
+        await execution.recover(r);
     }
     const snapshot = await collectLiveSnapshot(
       input.boundary,
@@ -377,8 +400,10 @@ export function requireLiveFreshSnapshot(
     s.identity_hash === jevHash(i) &&
       s.version === LIVE_VERSION &&
       s.received_at <= now &&
+      s.started_at <= s.received_at &&
       s.venue_at <= now &&
       now - s.started_at <= 2000 &&
+      now - s.venue_at <= 2000 &&
       s.consistent,
     "RECONCILIATION_REQUIRED",
   );

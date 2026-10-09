@@ -264,7 +264,7 @@ describe.skipIf(!url)(
               artifact_id: id,
               original: {
                 schema_version: "jev.engine-qualification.v1",
-                engine_version: "jev.scheduler.v2",
+                engine_version: "jev.scheduler.v3",
                 engine_fingerprint:
                   envelope.payload.original.engine_fingerprint,
                 origin,
@@ -279,7 +279,7 @@ describe.skipIf(!url)(
         ]);
         await expect(
           f.pool.query(
-            "INSERT INTO jev_engine_qualifications(evidence_id,owner_id,engine_version,start_at,end_at,qualified) VALUES($1,'operator','jev.scheduler.v2',$2,$3,true)",
+            "INSERT INTO jev_engine_qualifications(evidence_id,owner_id,engine_version,start_at,end_at,qualified) VALUES($1,'operator','jev.scheduler.v3',$2,$3,true)",
             [id, start_at, end_at],
           ),
         ).rejects.toThrow("JEV_QUALIFICATION_UNOBSERVED");

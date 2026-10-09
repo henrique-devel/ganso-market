@@ -13,6 +13,10 @@ import { makeJevEvidence, storeJevEvidenceTx } from "./jev-evidence.js";
 import type { LiveSnapshot } from "../venues/hyperliquid/live-reconcile.js";
 import type { LiveIdentity } from "../venues/hyperliquid/live-contract.js";
 import type { LiveBalanceProof } from "./jev-live-store.js";
+import {
+  jevLiveIntegrationReady,
+  jevLiveRuntimeEntriesTx,
+} from "./jev-live-capabilities.js";
 
 export const JEV_LIVE_LIMITS = Object.freeze({
   capital_usd6: "250000000",
@@ -36,7 +40,7 @@ export async function readJevPromotionTx(tx: SqlExecutor, account: string) {
   return (
     (
       await tx.query<Promotion>(
-        "SELECT sequence::text,state,profile_id,profile_version,experiment_id FROM jev_live_promotions WHERE account_id=$1 ORDER BY sequence DESC LIMIT 1",
+        "SELECT sequence::text,state,profile_id,profile_version,experiment_id FROM jev_live_promotions WHERE account_id=$1 ORDER BY jev_live_promotions.sequence DESC LIMIT 1",
         [account],
       )
     ).rows[0] ?? null
@@ -93,6 +97,8 @@ export async function jevPromotionGateTx(
   const at = await nowTx(tx),
     i = await identityTx(tx, owner),
     reasons: string[] = [];
+  if (!settlementOnly && !jevLiveIntegrationReady())
+    reasons.push("live_integration_pending");
   const readiness = settlementOnly
     ? null
     : await readJevReadinessTx(tx, owner, at);
@@ -140,10 +146,11 @@ export async function jevPromotionGateTx(
   const clock = Date.parse(at);
   const fresh =
     !!snapshot &&
-    snapshot.started_at <= snapshot.venue_at &&
+    snapshot.started_at <= snapshot.received_at &&
     snapshot.venue_at <= snapshot.received_at &&
     snapshot.received_at <= clock &&
-    clock - snapshot.started_at <= 2000;
+    clock - snapshot.started_at <= 2000 &&
+    clock - snapshot.venue_at <= 2000;
   const reconciled =
     fresh &&
     snapshot?.consistent &&
@@ -248,6 +255,22 @@ async function appendPromotionTx(
     previous?.experiment_id ??
     `live:${jevHash([i.account_id, p.profile_id, p.profile_version])}`;
   if (state === "active") {
+    // Admission originates at authenticated promotion. Succession preserves any
+    // live pause latch; its new registry requires fresh measured capacity.
+    await tx.query(
+      `INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference,funding_debit_rate9_raw,cost_evidence_id,capacity_evidence_id)
+      SELECT $1,c.admitted,c.entries_paused,$2,c.funding_debit_rate9_raw,c.cost_evidence_id,c.capacity_evidence_id
+      FROM jev_active_pairs q JOIN jev_worker_controls c ON c.account_id=q.paper_account_id
+      WHERE q.owner_id=$3 AND q.profile_id=$4 AND q.profile_version=$5 AND c.admitted
+      ON CONFLICT(account_id) DO UPDATE SET funding_debit_rate9_raw=EXCLUDED.funding_debit_rate9_raw,cost_evidence_id=EXCLUDED.cost_evidence_id,capacity_evidence_id=EXCLUDED.capacity_evidence_id`,
+      [
+        i.account_id,
+        `live-promotion:${next}`,
+        owner,
+        p.profile_id,
+        p.profile_version,
+      ],
+    );
     const old = (
       await tx.query<{ experiment_id: string }>(
         "SELECT experiment_id FROM jev_bindings WHERE account_id=$1 AND profile_id=$2 AND profile_version=$3 AND mode='live'",
@@ -540,7 +563,11 @@ function canRearm(gate: Awaited<ReturnType<typeof jevPromotionGateTx>>) {
     !!gate.pilot?.checkpoint.global_blocked &&
     gate.settled &&
     gate.reasons.every((r) =>
-      ["global_drawdown_blocked", "daily_or_global_risk_paused"].includes(r),
+      [
+        "global_drawdown_blocked",
+        "daily_or_global_risk_paused",
+        "live_integration_pending",
+      ].includes(r),
     ) &&
     !!gate.snapshot &&
     BigInt(gate.snapshot.equity_raw) >
@@ -651,8 +678,13 @@ export async function jevLiveAuthorityTx(
       entries_allowed: false,
     };
   const gate = await jevPromotionGateTx(tx, owner, { ...promotion, slot: 0 });
+  const runtime = await jevLiveRuntimeEntriesTx(
+    tx,
+    i.identity_hash,
+    i.account_id,
+  );
   return {
     activation_id: activation.idempotency_key,
-    entries_allowed: gate.ready && gate.reconciled,
+    entries_allowed: gate.ready && gate.reconciled && runtime,
   };
 }

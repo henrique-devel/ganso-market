@@ -22,13 +22,17 @@ export interface JevDispatchCapacity {
   protection_max_ms: number | null;
 }
 export async function jevDispatchRegistryHashTx(tx: SqlExecutor) {
-  return jevHash(
-    (
-      await tx.query(
-        "SELECT slot,owner_id,profile_id,profile_version,paper_account_id,stress_account_id,paper_experiment_id,stress_experiment_id FROM jev_active_pairs ORDER BY slot",
-      )
-    ).rows,
-  );
+  const pairs = (
+    await tx.query(
+      "SELECT slot,owner_id,profile_id,profile_version,paper_account_id,stress_account_id,paper_experiment_id,stress_experiment_id FROM jev_active_pairs ORDER BY slot",
+    )
+  ).rows;
+  const live = (
+    await tx.query(
+      `SELECT DISTINCT ON(account_id) account_id,owner_id,profile_id,profile_version,experiment_id,state FROM jev_live_promotions ORDER BY account_id,sequence DESC`,
+    )
+  ).rows;
+  return jevHash(live.length ? { pairs, live } : pairs);
 }
 export function jevDispatchCapacityReady(
   input: unknown,

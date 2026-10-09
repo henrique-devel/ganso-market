@@ -20,12 +20,18 @@ export function createLiveAdapter(input: {
   wallet?: AbstractWallet;
   wire?: LiveWire;
   clock?: () => number;
+  entries_ready?: () => boolean;
+  observe_pilot?: boolean;
   succession_context?: () => Promise<
     Parameters<LiveSuccessionCoordinator["reconcile"]>[0]
   >;
 }) {
   const clock = input.clock ?? Date.now;
-  const store = new PgLiveStore(input.pool, input.identity);
+  const store = new PgLiveStore(
+    input.pool,
+    input.identity,
+    input.observe_pilot,
+  );
   const boundary = createHyperliquidLiveBoundary({
     identity: store.identity,
     ...(input.executor_enabled !== undefined
@@ -34,7 +40,14 @@ export function createLiveAdapter(input: {
     ...(input.wallet ? { wallet: input.wallet } : {}),
     ...(input.wire ? { wire: input.wire } : {}),
     clock,
-    gate: (r) => store.gate(r),
+    gate: async (r) => {
+      const gate = await store.gate(r);
+      return {
+        ...gate,
+        entries_allowed:
+          gate.entries_allowed && (input.entries_ready?.() ?? true),
+      };
+    },
     claim: (r) => store.claimSubmission(r),
   });
   const execution = new LiveExecution(store, boundary, clock);
@@ -51,6 +64,7 @@ export function createLiveAdapter(input: {
     if (
       recovered.snapshot &&
       !recovered.pending &&
+      !input.observe_pilot &&
       input.identity.environment === "mainnet"
     )
       await store.observeExistingPilot(recovered.snapshot);
@@ -75,6 +89,7 @@ export function createLiveAdapter(input: {
     execution,
     protection,
     reconcile,
+    reconcileAccount,
     succession,
   };
 }

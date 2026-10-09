@@ -433,9 +433,9 @@ describe.skipIf(!url)(
         decision_at: iso(at),
         atr_captured_at: iso(at - 1000),
       };
-      await expect(
-        reserveJevEntry(f.poolAdapter, manifest, metadata, entry),
-      ).rejects.toThrow(/NOT_ADMITTED/);
+      expect(
+        await reserveJevEntry(f.poolAdapter, manifest, metadata, entry),
+      ).toMatchObject({ status: "refused", reason: "LIVE_ADMISSION_CLOSED" });
     });
     it("unreconciled/stale pilot evidence or missing midnight cannot authorize supervisor", async () => {
       await registerJevLiveIdentity(f.poolAdapter, live(), manifest);

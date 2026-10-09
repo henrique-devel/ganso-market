@@ -1,0 +1,19 @@
+# Operator-selected wiring for an already authorized pilot. Never loaded by
+# default or by this delivery's deploy. No activation or entry flags exist here.
+services:
+  execution-worker:
+    environment:
+      GANSO_LIVE_RUNTIME_CONFIG_FILE: /etc/ganso/jev-live.json
+    volumes:
+      - type: bind
+        source: ${GANSO_LIVE_PUBLIC_CONFIG_PATH:?public configuration required}
+        target: /etc/ganso/jev-live.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GANSO_LIVE_SIGNER_FILE_PATH:?protected signer file required}
+        target: /run/secrets/jev_live_signer
+        read_only: true
+        bind:
+          create_host_path: false

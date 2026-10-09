@@ -238,7 +238,9 @@ describe("JE13 authenticated boundary (no venue request)", () => {
       claim: async () => true,
       clock: () => observed,
     });
-    await expect(boundary.submit(f.r)).rejects.toThrow("SUBMISSION_UNCERTAIN");
+    await expect(boundary.submit(f.r)).rejects.toThrow(
+      "RECONCILIATION_REQUIRED",
+    );
     expect(f.signTypedData).toHaveBeenCalledOnce();
     expect(f.request).not.toHaveBeenCalled();
   });

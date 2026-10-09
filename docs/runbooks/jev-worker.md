@@ -147,3 +147,83 @@ worker de proteção ativo. Não retornar ownership à API antiga com posição 
 reserva pendente. Transferência inversa só após flat/reconciliação e término do
 dono atual; gerações e eventos anteriores permanecem. Não reverter migrations,
 apagar volumes, reescrever ledger, liberar HOLD ou remover pins.
+
+## Runtime live — JE15
+
+O mesmo entrypoint publicado conecta o adaptador live, com uma tarefa independente
+para reconciliação, proteção nativa, cancelamento e redução do residual. O dispatch
+`jev.scheduler.v3` permite sete contas, três perfis e três participantes por lote.
+Envios e reconciliação da mesma identidade compartilham essa tarefa limitada,
+fora de locks SQL, para não tratar um envio ainda em curso como pedido perdido.
+Essa serialização não aguarda inferência JEV nem acumula ticks de proteção.
+O boot padrão fica sem signer, conexão live, admissão ou envios. Capacidade medida
+deve corresponder ao registry atual, incluindo a promoção live; a versão anterior
+do engine não qualifica automaticamente este workload. Os aceites históricos são
+preservados. A saúde do processo não comprova admissão operacional.
+
+A configuração pública opcional usa `GANSO_LIVE_RUNTIME_CONFIG_FILE` e exatamente
+`version: jev.live-runtime.v1`, `environment: mainnet` e `identity_hash` da identidade
+persistida. Não aceita chave, flag de ativação ou alteração de limites. Apenas o
+executor recebe esse arquivo. O signer vem exclusivamente do arquivo protegido
+`/run/secrets/jev_live_signer`, montado somente leitura no executor, fora de Git e
+do frontend, sem symlink, com permissões 0400/0600 e acesso pelo usuário 1000 da
+imagem. A chave nunca deve ser fornecida por chat, variável de ambiente, JSON de
+runtime ou SQL. O operador provisiona esse segredo pelo mecanismo protegido do
+servidor e registra o ato inicial autenticado; este deploy não o faz.
+
+O overlay opcional `infra/compose/jev-live.yml` conecta somente esses dois arquivos
+ao executor. Sua seleção é ato operacional posterior aos gates, com os caminhos
+`GANSO_LIVE_PUBLIC_CONFIG_PATH` e `GANSO_LIVE_SIGNER_FILE_PATH` provisionados pelo
+operador. Os binds são somente leitura e não criam arquivos faltantes. O Compose
+padrão e o deploy desta entrega não selecionam esse overlay. Sua configuração
+não ativa piloto nem habilita entradas por boot.
+
+Só uma identidade já persistida e previamente ativada pode carregar o signer e
+reconstruir o piloto. Configurar ou reiniciar não cria conta, capital, admissão ou
+ativação. Ausência/divergência de identidade, ambiente, segredo ou ativação fecha
+o adaptador. `live.capabilities` distingue implementação de runtime, intervenções
+e painel financeiro. JE16/JE17 ainda fecham entradas por capacidade do código;
+nenhuma configuração operacional contorna esse gate. Qualificação GJ12.3,
+validação GJ13.5, elegibilidade, custos, cobertura e capacidade atuais continuam
+necessários em suas etapas próprias. Fixtures não aprovam essas etapas.
+
+No heartbeat interno, verificar `live.connected`, `signer_loaded`, `entries_ready`,
+`reasons`, ciclos/falhas/duração e o SHA/geração. A projeção SQL `jev_live_runtime`
+é limitada, pertence à geração corrente e expira para admissão após 1,5 s.
+Snapshots, fills, funding assinado, fees, receipts e metadata originais permanecem
+no journal imutável. Fonte stale, lacuna ou saldo divergente fecha entradas;
+nenhuma leitura fabrica horário de origem ou patrimônio.
+
+O contexto JEV usa snapshot, risco e proteção persistidos até o corte do coletor.
+Uma observação posterior financeiramente idêntica não invalida o lote; alteração
+de posição, ordens, fills, funding, HWM, bloqueios ou vínculo invalida a resposta.
+Tempo original da venue pode anteceder o pedido, desde que fonte e consulta
+continuem frescas. Ambos os relógios permanecem verificados sem reescrever fonte.
+
+Na recuperação, primeiro reconstruir pedidos, reservas, ordens, stops, residual
+financeiro e risco do piloto a partir dos journals e da venue. Pedido enviado sem
+recibo é consultado por seu identificador; nunca reenviar por timeout. ACK de
+cancelamento/IOC não é flat. Cancelamento expirado só admite nova intenção/nonce
+quando uma consulta fresca
+posterior à expiração comprova a ordem ainda aberta; o pedido anterior é imutável.
+A primeira parcial fixa stop e prazo de seis horas;
+quantidade protegida acompanha fills e reduções. JEV lento/indisponível, custo
+incerto e pausa de entradas não suspendem reconciliação/proteção. Shutdown fecha
+entradas antes de aguardar tarefas e mantém stops nativos. Geração antiga não pode
+assinar nem confirmar depois de takeover; saída normal libera apenas seu lease.
+
+Reprovação comprovada conduz a draining, cancelamento, IOC reduce-only e consulta
+do residual. Sucessora só recebe o vínculo após confirmação financeira flat e
+sem ordens/reservas, com elegibilidade atual. Estado inconclusivo ou lucro maior
+de outra estratégia não troca o piloto. Capital, HWM, perda diária, bloqueios,
+controles e autorização inicial são contínuos; não existe novo aporte por troca.
+
+Publicação seletiva aplica 0068 e atualiza somente serviços afetados já ativos,
+sem iniciar coletor ou montar signer. Verificar checksums, SHA da imagem, saúde,
+leases, contagens de ativações e journals antes/depois. Para reversão, pausar
+entradas e usar código compatível com 0068 que mantenha proteção/reconciliação
+live. Não voltar à imagem anterior que só conhece paper com um piloto aberto.
+Nunca desfazer migrations ou apagar ledger, pins, reservas e histórico financeiro.
+A integração Compose executa o boot padrão fechado e o mesmo entrypoint com
+PostgreSQL e transporte sintéticos em uma imagem de teste separada, sem acesso
+à venue real ou a signer operacional.

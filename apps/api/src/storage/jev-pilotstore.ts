@@ -47,7 +47,7 @@ export async function readJevPilotTx(tx: SqlExecutor, id: string) {
   return (
     (
       await tx.query<{ sequence: string; checkpoint: JevPilotCheckpoint }>(
-        "SELECT sequence::text,checkpoint FROM jev_pilot_events WHERE account_id=$1 ORDER BY sequence DESC LIMIT 1",
+        "SELECT sequence::text,checkpoint FROM jev_pilot_events WHERE account_id=$1 ORDER BY jev_pilot_events.sequence DESC LIMIT 1",
         [id],
       )
     ).rows[0] ?? null

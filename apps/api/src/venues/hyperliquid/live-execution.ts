@@ -305,7 +305,108 @@ export class LiveExecution {
     readonly boundary: Boundary,
     readonly clock: () => number = Date.now,
   ) {}
+  /** Repeated protective intent queries the immutable request; new evidence
+   * cannot be substituted into an old nonce. */
+  async protectOnce(c: LiveCommand, lease: LiveLease) {
+    const previous = (await this.store.operations()).find(
+      (r) => r.operation_id === c.operation_id,
+    );
+    if (previous) {
+      liveCheck(
+        previous.kind === c.kind &&
+          jevHash(previous.scope) === jevHash(c.scope),
+        "IDEMPOTENCY_COLLISION",
+      );
+      return this.recover(previous);
+    }
+    return this.execute(c, lease);
+  }
+  async executeResidual(
+    c: Extract<LiveCommand, { kind: "close" }>,
+    lease: LiveLease,
+  ) {
+    const receipts = await this.store.events<LiveReceipt>("receipt");
+    const requests = (await this.store.operations()).filter(
+      (r) => r.kind === "close" && jevHash(r.scope) === jevHash(c.scope),
+    );
+    const unresolved = requests.find(
+      (r) =>
+        r.kind === "close" &&
+        jevHash(r.scope) === jevHash(c.scope) &&
+        !["filled", "cancelled", "rejected"].includes(
+          receipts.filter((e) => e.operation_id === r.operation_id).at(-1)
+            ?.state ?? "uncertain",
+        ),
+    );
+    if (unresolved) return this.recover(unresolved);
+    const previous = requests.at(-1);
+    const terminal = previous
+      ? receipts.filter((e) => e.operation_id === previous.operation_id).at(-1)
+      : null;
+    if (
+      previous &&
+      terminal &&
+      ((previous.request as Extract<LiveCommand, { kind: "close" }>).snapshot
+        .snapshot_id === c.snapshot.snapshot_id ||
+        terminal.observed_at > c.snapshot.venue_at)
+    )
+      return terminal;
+    return this.protectOnce(c, lease);
+  }
+  async cancelEntry(
+    entry: LiveReservation,
+    lease: LiveLease,
+    metadata: TradingInstrumentMetadata,
+    metadataAt = Date.parse(metadata.instrument.origin.received_at),
+  ) {
+    const previous = (await this.store.operations())
+      .filter(
+        (r) =>
+          r.kind === "cancel" &&
+          (r.request as Extract<LiveCommand, { kind: "cancel" }>)
+            .target_operation_id === entry.operation_id &&
+          jevHash(r.scope) === jevHash(entry.scope),
+      )
+      .at(-1);
+    let operation_id = `cancel:${jevHash(entry.operation_id)}`;
+    if (previous) {
+      const { snapshot } = await this.store.latest();
+      const oids = (await this.store.events<LiveReceipt>("receipt"))
+        .filter((r) => r.operation_id === entry.operation_id && r.oid !== null)
+        .map((r) => r.oid);
+      // A new cancellation needs a fresh query proving the parent still open
+      // after the old intent's venue expiry. Never replay its nonce/signature,
+      // and never create another entry to resolve an uncertain cancellation.
+      if (
+        !snapshot ||
+        snapshot.venue_at <= previous.expires_after ||
+        !snapshot.orders.some(
+          (o) => o.cloid === entry.cloid || oids.includes(o.oid),
+        )
+      )
+        return this.recover(previous);
+      requireLiveFreshSnapshot(this.store.identity, snapshot, this.clock());
+      operation_id += `:${jevHash([previous.operation_id, snapshot.snapshot_id])}`;
+    }
+    return this.protectOnce(
+      {
+        version: LIVE_COMMAND_VERSION,
+        kind: "cancel",
+        scope: entry.scope,
+        operation_id,
+        metadata,
+        metadata_at: metadataAt,
+        target_operation_id: entry.operation_id,
+        target_cloid: entry.cloid,
+      },
+      lease,
+    );
+  }
   async recover(r: LiveReservation): Promise<LiveReceipt> {
+    if (r.expires_after <= this.clock() && this.store.expiredUnsent) {
+      const unsent = await this.store.expiredUnsent(r);
+      if (unsent) return unsent;
+    }
     let receipt: LiveReceipt;
     try {
       const oid =
@@ -438,25 +539,13 @@ export class LiveExecution {
       (r) =>
         r.operation_id === entry.operation_id &&
         r.kind === "entry" &&
-        r.state === "acknowledged",
+        ["acknowledged", "open"].includes(r.state),
     );
     if (!ack) {
       await this.recover(entry);
       return null;
     }
     if (this.clock() < ack.observed_at + 2000) return null;
-    return this.execute(
-      {
-        version: LIVE_COMMAND_VERSION,
-        kind: "cancel",
-        scope: entry.scope,
-        operation_id: `cancel:${jevHash(entry.operation_id)}`,
-        metadata,
-        metadata_at: metadataAt,
-        target_operation_id: entry.operation_id,
-        target_cloid: entry.cloid,
-      },
-      lease,
-    );
+    return this.cancelEntry(entry, lease, metadata, metadataAt);
   }
 }
