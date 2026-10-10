@@ -306,6 +306,33 @@ describe.skipIf(!url)(
         },
       });
       expect(b.metrics.trading).toEqual(a.metrics.trading);
+      const app = Fastify();
+      registerJevPanelRoutes(app, {
+        pool: { ...readPool, transaction: f.poolAdapter.transaction },
+        authService: {
+          session: async () => ({
+            status: "ok",
+            username: "operator",
+            expiresAt: new Date(Date.now() + 60000),
+          }),
+        },
+      });
+      try {
+        const response = await app.inject({
+          url: "/trading/jev/panel",
+          headers: { authorization: "Bearer fixture" },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().accounts[0].metrics).toMatchObject({
+          capital_usd6: "250000000",
+          risk_equity_usd6: "255550000",
+          strategy_after_jev_usd6: "5550000",
+          conservative_result_usd6: "3550000",
+          trading: { fees_usd6: "150000", funding_usd6: "200000" },
+        });
+      } finally {
+        await app.close();
+      }
       expect(
         (await f.pool.query("SELECT count(*)::int n FROM jev_live_events"))
           .rows,
