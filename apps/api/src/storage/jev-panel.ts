@@ -1,3 +1,5 @@
+import { readJevLiveAccountTx } from "./jev-live-panel.js";
+import type { JevLiveHistoryCursor } from "@ganso-market/contracts/trading";
 import { readJevLivePanelTx } from "./jev-promotion.js";
 import { readJevQueueTx } from "./jev-queue.js";
 import type { JevExecutionFill } from "./jev-execution-contract.js";
@@ -16,6 +18,7 @@ import { readJevRiskTx } from "./jev-riskstore.js";
 export async function readJevPanel(
   pool: Pick<DatabasePool, "readOnly">,
   owner: string,
+  historyCursor?: JevLiveHistoryCursor,
 ): Promise<JevPanelSnapshot> {
   return pool.readOnly(currentBudgetMs() ?? 4000, async (tx) => {
     await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
@@ -37,7 +40,17 @@ export async function readJevPanel(
     if (rows.length > 7) throw new Error("JEV_PANEL_LIMIT");
     const accounts: JevPanelAccount[] = [];
     for (const row of rows) {
-      let metrics: JevPanelAccount["metrics"] = null;
+      const liveAccount =
+        row.mode === "live"
+          ? await readJevLiveAccountTx(
+              tx,
+              owner,
+              row.account_id,
+              at,
+              historyCursor,
+            )
+          : null;
+      let metrics: JevPanelAccount["metrics"] = liveAccount?.metrics ?? null;
       if (row.mode !== "live") {
         const m = await readJevMetricsTx(tx, owner, row.account_id, "real", at);
         metrics = {
@@ -62,40 +75,48 @@ export async function readJevPanel(
           [owner, row.profile_id, row.profile_version],
         )
       ).rows[0];
-      const execution = await readJevExecutionTx(tx, row.account_id);
-      const fills = (
-        await tx.query<{ fills: JevExecutionFill[] }>(
-          "SELECT result->'fills' AS fills FROM jev_execution_events WHERE account_id=$1 AND jsonb_array_length(result->'fills')>0 ORDER BY sequence DESC LIMIT 10",
-          [row.account_id],
-        )
-      ).rows
-        .flatMap((r) => [...r.fills].reverse())
-        .slice(0, 20)
-        .map(
-          ({
-            execution_id,
-            order_id,
-            position_id,
-            side,
-            occurred_at,
-            kind,
-            quantity_btc_raw,
-            price_usd_raw,
-            fee_usd_raw,
-          }) => ({
-            execution_id,
-            order_id,
-            position_id,
-            side,
-            occurred_at,
-            kind,
-            quantity_btc_raw,
-            price_usd_raw,
-            fee_usd_raw,
-          }),
-        );
+      const execution =
+        row.mode === "live"
+          ? null
+          : await readJevExecutionTx(tx, row.account_id);
+      const fills =
+        liveAccount?.fills ??
+        (
+          await tx.query<{ fills: JevExecutionFill[] }>(
+            "SELECT result->'fills' AS fills FROM jev_execution_events WHERE account_id=$1 AND jsonb_array_length(result->'fills')>0 ORDER BY sequence DESC LIMIT 10",
+            [row.account_id],
+          )
+        ).rows
+          .flatMap((r) => [...r.fills].reverse())
+          .slice(0, 20)
+          .map(
+            ({
+              execution_id,
+              order_id,
+              position_id,
+              side,
+              occurred_at,
+              kind,
+              quantity_btc_raw,
+              price_usd_raw,
+              fee_usd_raw,
+            }) => ({
+              execution_id,
+              order_id,
+              position_id,
+              side,
+              occurred_at,
+              kind,
+              quantity_btc_raw,
+              price_usd_raw,
+              fee_usd_raw,
+            }),
+          );
       const decisions = (
         await tx.query<{
+          profile_id: string;
+          profile_version: string;
+          experiment_id: string;
           request_id: string;
           started_at: Date;
           finished_at: Date | null;
@@ -104,14 +125,20 @@ export async function readJevPanel(
           questions_version: string;
           result: JevBatchResult | null;
         }>(
-          `SELECT r.request_id,r.started_at,s.finished_at,p.context_id,r.batch->>'model' AS model,r.batch->>'questions_version' AS questions_version,s.result FROM jev_decision_participants p JOIN jev_decision_requests r USING(origin,request_id) LEFT JOIN jev_decision_results s USING(origin,request_id) WHERE p.account_id=$1 AND p.owner_id=$2 AND p.origin='real' ORDER BY r.started_at DESC,r.request_id DESC LIMIT 10`,
+          `SELECT p.profile_id,p.profile_version,p.experiment_id,r.request_id,r.started_at,s.finished_at,p.context_id,r.batch->>'model' AS model,r.batch->>'questions_version' AS questions_version,s.result FROM jev_decision_participants p JOIN jev_decision_requests r USING(origin,request_id) LEFT JOIN jev_decision_results s USING(origin,request_id) WHERE p.account_id=$1 AND p.owner_id=$2 AND p.origin='real' ORDER BY r.started_at DESC,r.request_id DESC LIMIT 10`,
           [row.account_id, owner],
         )
       ).rows.map((d) => {
         const value = d.result?.decisions.find(
-          (v) => v.scope.account_id === row.account_id,
+          (v) =>
+            v.scope.account_id === row.account_id &&
+            v.scope.owner_id === owner &&
+            v.scope.experiment_id === d.experiment_id,
         );
         return {
+          profile_id: d.profile_id,
+          profile_version: d.profile_version,
+          experiment_id: d.experiment_id,
           request_id: d.request_id,
           started_at: d.started_at.toISOString(),
           finished_at: d.finished_at?.toISOString() ?? null,
@@ -229,8 +256,11 @@ export async function readJevPanel(
             }
           : null,
         ...row,
+        ...(liveAccount ? { live_state: liveAccount.live_state } : {}),
         metrics,
-        risk: await readJevRiskTx(tx, row.account_id),
+        risk: liveAccount
+          ? liveAccount.risk
+          : await readJevRiskTx(tx, row.account_id),
         evaluation: e
           ? {
               ...e,

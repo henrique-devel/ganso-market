@@ -3,7 +3,7 @@
 export const JEV_LIVE_CAPABILITIES = Object.freeze({
   runtime: true,
   interventions: true,
-  financial_panel: false,
+  financial_panel: true,
 });
 export function jevLiveIntegrationReady() {
   return Object.values(JEV_LIVE_CAPABILITIES).every(Boolean);

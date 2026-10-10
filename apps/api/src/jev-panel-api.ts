@@ -1,3 +1,4 @@
+import { parseLiveHistoryCursor } from "./storage/jev-live-panel.js";
 import { activateJevLive, rearmJevLive } from "./storage/jev-promotion.js";
 import { commandJevQueue } from "./storage/jev-queue.js";
 import { commandJevOperator } from "./storage/jev-operator.js";
@@ -170,12 +171,19 @@ export function registerJevPanelRoutes(
     "/trading/jev/panel",
     { preHandler: guard },
     async (request, reply) => {
-      if (Object.keys(request.query as object).length)
+      const query = request.query as Record<string, unknown>;
+      let cursor;
+      try {
+        if (Object.keys(query).some((k) => k !== "history_before"))
+          throw new Error("query");
+        cursor = parseLiveHistoryCursor(query.history_before);
+      } catch {
         return reply.code(400).send({ reason_code: "JEV_PANEL_INVALID_QUERY" });
+      }
       if (busy) return reply.code(503).send({ reason_code: "JEV_PANEL_BUSY" });
       busy = true;
       try {
-        return await readJevPanel(deps.pool, owners.get(request)!);
+        return await readJevPanel(deps.pool, owners.get(request)!, cursor);
       } catch {
         return reply.code(503).send({ reason_code: "JEV_PANEL_UNAVAILABLE" });
       } finally {

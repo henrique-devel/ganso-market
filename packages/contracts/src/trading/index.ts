@@ -47,6 +47,8 @@ export type {
   JevPanelSnapshot,
   JevLivePanel,
   JevPanelAccount,
+  JevPanelLiveState,
+  JevLiveHistoryCursor,
   JevPanelMetrics,
 } from "./jev-panel.js";
 

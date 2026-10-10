@@ -551,7 +551,7 @@ export async function readJevLivePanelTx(tx: SqlExecutor, owner: string) {
         ? ["initial_capital_mismatch"]
         : []),
     ],
-    equity_usd6: gate.snapshot?.equity_raw ?? null,
+    equity_usd6: gate.reconciled ? (gate.snapshot?.equity_raw ?? null) : null,
     high_water_usd6: gate.pilot?.checkpoint.risk.high_water_usd_raw ?? null,
     global_blocked: gate.pilot?.checkpoint.global_blocked ?? false,
     promotion: gate.i ? await readJevPromotionTx(tx, gate.i.account_id) : null,
