@@ -44,8 +44,10 @@ import { quoteJevMaker } from "./jev-execution-contract.js";
 import type { ExecutionLease } from "./execution-worker-lease.js";
 import type { ClosedBar } from "../trading/bars.js";
 import type { JevRiskCheckpoint } from "../trading/jev-risk.js";
+import { jevLiveDecisionStateTx } from "./jev-live-decision.js";
+import type { JevLiveLane } from "../jev-live-lane.js";
 type Pool = Pick<DatabasePool, "transaction" | "readOnly">;
-type Control = {
+export type WorkerControl = {
   admitted: boolean;
   entries_paused: boolean;
   revision: string;
@@ -53,6 +55,7 @@ type Control = {
   cost_evidence_id: string | null;
   capacity_evidence_id: string | null;
 };
+type Control = WorkerControl;
 export interface WorkerAccount {
   scope: JevScope;
   manifest: JevManifest;
@@ -68,15 +71,18 @@ export async function jevWorkerAccountTokenTx(tx: SqlExecutor, s: JevScope) {
         [s.account_id],
       )
     ).rows[0] ?? null;
+  const live = s.mode === "live" ? await jevLiveDecisionStateTx(tx, s) : null;
   return {
     l,
     entries,
     e,
     control,
+    live,
     hash: jevHash({
       scope: s,
-      sequence: l.projection.last_sequence,
-      positions: l.projection.positions,
+      sequence:
+        s.mode === "live" ? (live?.hash ?? null) : l.projection.last_sequence,
+      positions: s.mode === "live" ? null : l.projection.positions,
       entries,
       e: e
         ? { maker: e.maker, protection: e.protection, close: e.close }
@@ -89,12 +95,13 @@ export function createJevWorkerStore(
   pool: Pool,
   lease: ExecutionLease,
   model: string | null,
+  live?: JevLiveLane,
 ) {
   const metrics = { capacity_skips: 0 };
   return {
     metrics,
     async accounts(): Promise<WorkerAccount[]> {
-      return pool.readOnly(1500, async (tx) => {
+      const paper = await pool.readOnly(1500, async (tx) => {
         const rows = (
           await tx.query<{
             identity: { instrument: TradingInstrument };
@@ -109,8 +116,13 @@ export function createJevWorkerStore(
           manifest: r.manifest,
         }));
       });
+      return [...paper, ...((await live?.accounts()) ?? [])];
     },
     async protect(a: WorkerAccount, recover = false) {
+      if (a.scope.mode === "live") {
+        if (!live) throw new Error("JEV_LIVE_RUNTIME_UNAVAILABLE");
+        return live.protect(a, recover);
+      }
       const state = await pool.readOnly(1500, (tx) =>
         readJevExecutionTx(tx, a.scope.account_id),
       );
@@ -211,6 +223,31 @@ export function createJevWorkerStore(
           tokens: Record<string, string> = {};
         const request = `cycle:${randomUUID()}`;
         const registryHash = await jevDispatchRegistryHashTx(tx);
+        // A ready live participant and its paper siblings share a proven cut.
+        // Wait for the next collector capture if reconciliation just completed;
+        // consuming the siblings' cadence first would split every coincident lot.
+        const captureAt = (
+          await tx.query<{ captured_at: string }>(
+            "SELECT o.payload->>'at' AS captured_at FROM btc_market_records r JOIN btc_retention_objects o USING(object_id) WHERE r.kind='capture' AND r.received_at<=clock_timestamp() ORDER BY r.received_at DESC LIMIT 1",
+          )
+        ).rows[0]?.captured_at;
+        for (const a of accounts.filter((a) => a.scope.mode === "live")) {
+          const state = await jevWorkerAccountTokenTx(tx, a.scope);
+          if (
+            state.control?.admitted &&
+            !state.control.entries_paused &&
+            state.live?.ready &&
+            (!captureAt ||
+              !(
+                await jevLiveDecisionStateTx(
+                  tx,
+                  a.scope,
+                  new Date(Number(captureAt)).toISOString(),
+                )
+              )?.ready)
+          )
+            return null;
+        }
         for (const a of accounts) {
           const s = a.scope,
             t = await jevWorkerAccountTokenTx(tx, s);
@@ -246,22 +283,42 @@ export function createJevWorkerStore(
           )
             continue;
           const cut = new Date(capture.payload.at).toISOString();
+          const liveCut =
+            s.mode === "live" ? await jevLiveDecisionStateTx(tx, s, cut) : null;
           if (
             t.l.events.some((e) => e.recorded_at > cut || e.occurred_at > cut)
           )
             continue;
-          const risk = (
-            await tx.query<{ checkpoint: JevRiskCheckpoint }>(
-              "SELECT checkpoint FROM jev_risk_events WHERE account_id=$1 AND (checkpoint->>'observed_at')::timestamptz<=$2 ORDER BY sequence DESC LIMIT 1",
-              [s.account_id, cut],
-            )
-          ).rows[0]?.checkpoint;
-          if (!risk || risk.ledger_sequence !== t.l.projection.last_sequence)
+          const risk = liveCut
+            ? liveCut.risk
+            : (
+                await tx.query<{ checkpoint: JevRiskCheckpoint }>(
+                  "SELECT checkpoint FROM jev_risk_events WHERE account_id=$1 AND (checkpoint->>'observed_at')::timestamptz<=$2 ORDER BY sequence DESC LIMIT 1",
+                  [s.account_id, cut],
+                )
+              ).rows[0]?.checkpoint;
+          if (
+            !risk ||
+            (s.mode !== "live" &&
+              risk.ledger_sequence !== t.l.projection.last_sequence) ||
+            (s.mode === "live" &&
+              (!t.live?.ready ||
+                !liveCut?.ready ||
+                liveCut.hash !== t.live.hash ||
+                t.live.promotion.state !== "active"))
+          )
             continue;
-          const p = t.l.projection.positions.find(
-              (p) => p.quantity_btc_raw !== "0",
-            ),
-            protection = t.e?.protection;
+          const p = liveCut
+              ? liveCut.snapshot.position_raw !== "0"
+                ? {
+                    quantity_btc_raw: liveCut.snapshot.position_raw,
+                    position_id: liveCut.protection?.position_id ?? "",
+                  }
+                : undefined
+              : t.l.projection.positions.find(
+                  (p) => p.quantity_btc_raw !== "0",
+                ),
+            protection = liveCut?.protection ?? t.e?.protection;
           if (
             p &&
             (!protection ||
@@ -290,8 +347,12 @@ export function createJevWorkerStore(
           }
           const account: JevAccountContext = {
             scope: s,
-            observed_at: risk.observed_at,
-            cash_usd_raw: t.l.projection.cash_usd_raw,
+            observed_at: liveCut
+              ? new Date(liveCut.snapshot.received_at).toISOString()
+              : risk.observed_at,
+            cash_usd_raw:
+              liveCut?.snapshot.trading_balance_raw ??
+              t.l.projection.cash_usd_raw,
             equity_usd_raw: risk.equity_usd_raw,
             entries_paused: t.control.entries_paused,
             risk_blocked: risk.entries_paused,
@@ -643,7 +704,8 @@ export function createJevWorkerStore(
               now <= result.batch.expires_at &&
               t.hash === tokens[s.account_id] &&
               d.reason === "ok" &&
-              result.cost_usd6 !== null;
+              result.cost_usd6 !== null &&
+              t.control?.admitted === true;
             const phase = valid ? "completed" : "discarded";
             // Wrap library operations in the same already fenced transaction. No
             // inference or nested BEGIN; state check, reserve and send commit together.
@@ -651,7 +713,12 @@ export function createJevWorkerStore(
               transaction: <T>(run: (tx: SqlExecutor) => Promise<T>) => run(tx),
             };
             const executionStarted = Date.now();
-            if (valid) await executeDecision(store, tx, result, d, t.control!);
+            let command;
+            if (valid)
+              command =
+                s.mode === "live"
+                  ? await live?.decisionTx(tx, result, d, t.control!)
+                  : await executeDecision(store, tx, result, d, t.control!);
             if (!valid && d.reason !== "ok")
               await tx.query(
                 "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id=$1 AND NOT entries_paused",
@@ -680,6 +747,9 @@ export function createJevWorkerStore(
                 "UPDATE jev_worker_cadences SET pending_request_id=NULL,pending_cut_at=NULL WHERE account_id=$1",
                 [s.account_id],
               );
+            return command;
+          }).then(async (command) => {
+            if (command && live) await live.execute(command);
           }),
         ),
       );

@@ -1,0 +1,20 @@
+# Test-only image and network. Not included by deploy or the default Compose boot.
+services:
+  jev-runtime-test:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: build
+    command: ["node", "scripts/jev-runtime-compose-test.mjs"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ganso_jev_runtime_test
+      PGUSER: ganso_market
+    volumes:
+      - ./scripts/jev-runtime-compose-test.mjs:/workspace/scripts/jev-runtime-compose-test.mjs:ro
+    secrets: [postgres_password]
+    networks: [backend]
+    restart: "no"
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128

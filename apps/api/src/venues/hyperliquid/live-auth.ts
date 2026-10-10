@@ -21,6 +21,7 @@ import {
 } from "./live-contract.js";
 import { jevHash } from "../../storage/jev-hash.js";
 import { buildLiveAction, type LiveCommand } from "./live-execution.js";
+import { parseHyperliquidBtcMetadata } from "./metadata.js";
 
 export interface LiveWire {
   readonly isTestnet: boolean;
@@ -62,6 +63,21 @@ export function createHyperliquidLiveBoundary(input: {
   return {
     identity,
     executor_enabled: enabled,
+    async metadata() {
+      liveCheck(identity.environment === "mainnet", "METADATA_ENVIRONMENT");
+      try {
+        const original = await wire.request("info", { type: "meta", dex: "" });
+        return {
+          original,
+          metadata: parseHyperliquidBtcMetadata(
+            original,
+            new Date(clock()).toISOString(),
+          ),
+        };
+      } catch {
+        throw new LiveError("METADATA_UNAVAILABLE");
+      }
+    },
     async info(
       type:
         | "clearinghouseState"
@@ -164,7 +180,8 @@ export function createHyperliquidLiveBoundary(input: {
           },
           signal,
         );
-      } catch {
+      } catch (error) {
+        if (error instanceof LiveError) throw error;
         throw new LiveError("SUBMISSION_UNCERTAIN");
       }
     },

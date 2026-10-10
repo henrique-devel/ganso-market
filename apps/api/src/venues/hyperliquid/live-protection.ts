@@ -222,7 +222,7 @@ export class LiveProtectionCoordinator {
         metadata_at: input.metadata_at,
         protection,
       };
-      const receipt = await this.execution.execute(c, lease);
+      const receipt = await this.execution.protectOnce(c, lease);
       if (receipt.state === "acknowledged" || receipt.state === "open") {
         try {
           s = await this.refresh();
@@ -256,7 +256,7 @@ export class LiveProtectionCoordinator {
       // Parent cancellation failure must not prevent an independent exit. Native
       // stops remain installed. Both concurrent exits are reduce-only at the venue.
       try {
-        await this.execution.execute(
+        await this.execution.protectOnce(
           {
             version: LIVE_COMMAND_VERSION,
             kind: "cancel",
@@ -287,7 +287,7 @@ export class LiveProtectionCoordinator {
           metadata,
         );
         liveCheck(limit !== null && limit > 0n, "CLOSE_PRICE");
-        await this.execution.execute(
+        await this.execution.executeResidual(
           {
             version: LIVE_COMMAND_VERSION,
             kind: "close",

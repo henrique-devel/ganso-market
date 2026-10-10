@@ -170,7 +170,7 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
     let before: Awaited<ReturnType<typeof retentionCapacity>>;
 
     // All 36,865 inserts run the real allocation/capacity triggers. Allow a
-    // bounded 120s for corpus construction on slower CI hosts; this is separate
+    // bounded 180s for corpus construction on slower CI hosts; this is separate
     // from the unchanged 30s behavior test and the writer's 5s SQL/2s lock limits.
     beforeEach(async () => {
       const seededAt = performance.now();
@@ -199,7 +199,7 @@ describe.skipIf(!url)("new BTC retention on real PostgreSQL", () => {
       console.info(
         `retention fan-in fixture: inputs=${size}, seed_ms=${Math.round(performance.now() - seededAt)}`,
       );
-    }, 120_000);
+    }, 180_000);
 
     it("validates a full 36,865-input bar inside the existing SQL write budget", async () => {
       const started = performance.now();

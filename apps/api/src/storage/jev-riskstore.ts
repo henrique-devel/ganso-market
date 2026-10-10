@@ -25,6 +25,8 @@ import {
 } from "./jev-sizing.js";
 import { readJevPilotTx } from "./jev-pilotstore.js";
 import type { JevManifest } from "./jev-manifest.js";
+import { jevLiveAuthorityTx } from "./jev-promotion.js";
+import { jevLiveDecisionStateTx } from "./jev-live-decision.js";
 type Store = Pick<DatabasePool, "transaction">;
 export const jevRiskClock = async (tx: SqlExecutor) =>
   (
@@ -335,7 +337,56 @@ export async function reserveJevEntry(
     if (s.mode === "live") {
       const pilot = await readJevPilotTx(tx, s.account_id);
       jevRiskCheck(pilot && !pilot.checkpoint.global_blocked, "GLOBAL_BLOCK");
-      throw new Error("JEV_RISK_LIVE_EXECUTION_NOT_ADMITTED");
+      const state = await jevLiveDecisionStateTx(tx, s),
+        now = Date.parse(await jevRiskClock(tx));
+      const authority = await jevLiveAuthorityTx(tx, s.owner_id, s);
+      const admission_reasons = [
+        ...(!state?.ready ? ["live_state_unready"] : []),
+        ...(pilot.checkpoint.risk.entries_paused ? ["live_risk_paused"] : []),
+        ...(!authority.entries_allowed ? ["live_authority_closed"] : []),
+        ...(state && now - state.snapshot.started_at > 2000
+          ? ["live_snapshot_stale"]
+          : []),
+        ...(state && now < state.snapshot.received_at
+          ? ["live_snapshot_future"]
+          : []),
+        ...(state && !state.snapshot.flat ? ["live_position_not_flat"] : []),
+        ...(existing.some((e) => e.status !== "released")
+          ? ["live_reserve_pending"]
+          : []),
+        ...(now < riskTime(request.decision_at)
+          ? ["live_decision_future"]
+          : []),
+        ...(now - riskTime(request.decision_at) >
+        manifest.freshness.decision_ttl_ms
+          ? ["live_decision_stale"]
+          : []),
+      ];
+      if (admission_reasons.length)
+        return {
+          status: "refused",
+          checkpoint: pilot.checkpoint.risk,
+          reason: "LIVE_ADMISSION_CLOSED",
+          admission_reasons,
+        };
+      jevRiskCheck(state, "LIVE_STATE");
+      const plan = sizeJevEntry(
+        manifest,
+        meta,
+        request,
+        state.snapshot.equity_raw,
+      );
+      await jevEntryEventTx(
+        tx,
+        plan,
+        "reserved",
+        `reserve:${request.order_id}`,
+      );
+      return {
+        status: "reserved",
+        plan,
+        order: jevSizedOrder(plan, jevHash(plan)),
+      };
     }
     const observed = await observeJevRiskTx(tx, s.owner_id, s.account_id);
     // Return refusals, so observed pauses/cancel requests commit instead of rolling back.

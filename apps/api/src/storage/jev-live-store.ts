@@ -11,13 +11,18 @@ import {
   type LiveGate,
   type LiveReservation,
 } from "../venues/hyperliquid/live-contract.js";
-import type { LiveSnapshot } from "../venues/hyperliquid/live-reconcile.js";
+import {
+  liveSnapshotStateHash,
+  requireLiveFreshSnapshot,
+  type LiveSnapshot,
+} from "../venues/hyperliquid/live-reconcile.js";
 import { readJevEntriesTx } from "./jev-riskstore.js";
 import {
   buildLiveAction,
   type LiveCommand,
+  type LiveReceipt,
 } from "../venues/hyperliquid/live-execution.js";
-import { commandJevPilot, readJevPilotTx } from "./jev-pilotstore.js";
+import { commandJevPilotTx, readJevPilotTx } from "./jev-pilotstore.js";
 
 type Pool = Pick<DatabasePool, "transaction">;
 export interface LiveLease {
@@ -32,7 +37,8 @@ export type LiveEventKind =
   | "receipt"
   | "gap"
   | "protection"
-  | "balance";
+  | "balance"
+  | "metadata";
 export interface LiveBalanceProof {
   version: "hyperliquid.live-balance.v1";
   identity_hash: string;
@@ -59,6 +65,7 @@ export interface LiveStore {
   gate(reservation: LiveReservation): Promise<LiveGate>;
   operations(): Promise<LiveReservation[]>;
   events<T>(kind: LiveEventKind): Promise<T[]>;
+  expiredUnsent?(reservation: LiveReservation): Promise<LiveReceipt | null>;
 }
 async function dbNow(tx: SqlExecutor) {
   return (
@@ -73,6 +80,7 @@ export class PgLiveStore implements LiveStore {
   constructor(
     readonly pool: Pool,
     identity: LiveIdentity,
+    readonly observe_pilot = false,
   ) {
     this.identity = Object.freeze(structuredClone(identity));
     this.identityHash = validateLiveIdentity(this.identity);
@@ -171,6 +179,15 @@ export class PgLiveStore implements LiveStore {
       return { process_id, generation, lease_until: now + ttl };
     });
   }
+  async release(process_id: string) {
+    return this.pool.transaction(async (tx) => {
+      await this.lock(tx);
+      await tx.query(
+        "UPDATE jev_live_owners SET lease_until=clock_timestamp() WHERE identity_hash=$1 AND process_id=$2",
+        [this.identityHash, process_id],
+      );
+    });
+  }
   private async eventTx(
     tx: SqlExecutor,
     kind: LiveEventKind,
@@ -227,6 +244,34 @@ export class PgLiveStore implements LiveStore {
         snapshot,
       );
       await this.proveBalanceTx(tx, snapshot);
+      if (this.observe_pilot && this.identity.environment === "mainnet") {
+        const sources = [...snapshot.orders, ...snapshot.fills];
+        const known = (
+          await tx.query<{ cloid: string; oid: string | null }>(
+            "SELECT r.reservation->>'cloid' cloid,e.payload->>'oid' oid FROM jev_live_requests r LEFT JOIN jev_live_events e ON e.identity_hash=r.identity_hash AND e.kind='receipt' AND e.payload->>'operation_id'=r.operation_id WHERE r.identity_hash=$1 AND (r.reservation->>'cloid'=ANY($2::text[]) OR (e.payload->>'oid')::numeric=ANY($3::numeric[]))",
+            [
+              this.identityHash,
+              sources.flatMap((o) => (o.cloid ? [o.cloid] : [])),
+              sources.map((o) => o.oid),
+            ],
+          )
+        ).rows;
+        const owned = sources.every((o) =>
+          known.some((k) => k.cloid === o.cloid || Number(k.oid) === o.oid),
+        );
+        if (!owned)
+          await this.eventTx(
+            tx,
+            "gap",
+            `gap:atomic-recovery:${snapshot.snapshot_id}`,
+            {
+              reason: "VENUE_OWNERSHIP_UNKNOWN",
+              snapshot_id: snapshot.snapshot_id,
+            },
+          );
+        else if ((await this.balanceTx(tx, snapshot))?.reconciled)
+          await this.observeExistingPilotTx(tx, snapshot);
+      }
     });
   }
   private async balanceTx(tx: SqlExecutor, snapshot: LiveSnapshot | null) {
@@ -560,10 +605,21 @@ export class PgLiveStore implements LiveStore {
       const snapshot = observations.find((e) => e.kind === "snapshot"),
         gap = observations.find((e) => e.kind === "gap");
       const balance = await this.balanceTx(tx, snapshot?.payload ?? null);
+      let fresh = false;
+      if (snapshot) {
+        try {
+          requireLiveFreshSnapshot(this.identity, snapshot.payload, Date.now());
+          fresh = true;
+        } catch {
+          /* Close entry admission; reductions retain independent gates. */
+        }
+      }
       const reconciled =
         c.kind === "entry" &&
         snapshot &&
-        snapshot.payload.snapshot_id === c.snapshot.snapshot_id &&
+        fresh &&
+        liveSnapshotStateHash(snapshot.payload) ===
+          liveSnapshotStateHash(c.snapshot) &&
         snapshot.payload.flat &&
         snapshot.payload.consistent &&
         snapshot.payload.history_complete &&
@@ -649,6 +705,50 @@ export class PgLiveStore implements LiveStore {
       ).rows.map((r) => r.reservation),
     );
   }
+  async expiredUnsent(reservation: LiveReservation) {
+    return this.pool.transaction(async (tx) => {
+      await this.lock(tx);
+      const now = await dbNow(tx);
+      const stored = (
+        await tx.query<{ reservation: LiveReservation }>(
+          "SELECT reservation FROM jev_live_requests WHERE identity_hash=$1 AND operation_id=$2",
+          [this.identityHash, reservation.operation_id],
+        )
+      ).rows[0];
+      liveCheck(
+        stored && jevHash(stored.reservation) === jevHash(reservation),
+        "RECEIPT_OWNER",
+      );
+      if (
+        now < reservation.expires_after ||
+        (
+          await tx.query(
+            "SELECT 1 FROM jev_live_events WHERE identity_hash=$1 AND event_key=$2",
+            [this.identityHash, `receipt:attempt:${reservation.operation_id}`],
+          )
+        ).rowCount
+      )
+        return null;
+      const key = `receipt:unsent:${reservation.operation_id}`;
+      const previous = (
+        await tx.query<{ payload: LiveReceipt }>(
+          "SELECT payload FROM jev_live_events WHERE identity_hash=$1 AND event_key=$2",
+          [this.identityHash, key],
+        )
+      ).rows[0]?.payload;
+      if (previous) return previous;
+      const receipt: LiveReceipt = {
+        operation_id: reservation.operation_id,
+        kind: reservation.kind,
+        observed_at: now,
+        state: "rejected",
+        oid: null,
+        original: { reason: "INTENT_EXPIRED_WITHOUT_SEND" },
+      };
+      await this.eventTx(tx, "receipt", key, receipt);
+      return receipt;
+    });
+  }
   async events<T>(kind: LiveEventKind): Promise<T[]> {
     return this.pool.transaction(async (tx) =>
       (
@@ -709,55 +809,58 @@ export class PgLiveStore implements LiveStore {
   /** Only feeds the already funded pilot seam. No observer may create funding,
    * arm the executor, change a profile or reset its financial high-water mark. */
   async observeExistingPilot(snapshot: LiveSnapshot) {
+    return this.pool.transaction(async (tx) => {
+      await this.lock(tx);
+      return this.observeExistingPilotTx(tx, snapshot);
+    });
+  }
+  private async observeExistingPilotTx(
+    tx: SqlExecutor,
+    snapshot: LiveSnapshot,
+  ) {
     liveCheck(
       snapshot.identity_hash === this.identityHash &&
         this.identity.environment === "mainnet",
       "PILOT_OBSERVATION_OWNER",
     );
-    const previous = await this.pool.transaction(async (tx) => {
-      await this.lock(tx);
-      const pilot = await readJevPilotTx(tx, this.identity.account_id);
-      if (!pilot) return null;
-      const stored = (
-        await tx.query<{ payload: LiveSnapshot }>(
-          "SELECT payload FROM jev_live_events WHERE identity_hash=$1 AND kind='snapshot' AND event_key=$2",
-          [this.identityHash, `snapshot:${snapshot.snapshot_id}`],
-        )
-      ).rows[0]?.payload;
-      liveCheck(
-        stored && jevHash(stored) === jevHash(snapshot),
-        "OBSERVATION_SOURCE",
-      );
-      const balance = await this.balanceTx(tx, snapshot);
-      liveCheck(balance?.reconciled, "CASH_RECONCILIATION_REQUIRED");
-      return pilot;
-    });
+    const previous = await readJevPilotTx(tx, this.identity.account_id);
     if (!previous) return null;
-    const duplicate = await this.pool.transaction(
-      async (tx) =>
-        (
-          await tx.query<{
-            request: import("./jev-pilotstore.js").JevPilotCommand;
-          }>(
-            "SELECT request FROM jev_pilot_events WHERE account_id=$1 AND operation_id=$2",
-            [this.identity.account_id, `live:${snapshot.snapshot_id}`],
-          )
-        ).rows[0],
+    const stored = (
+      await tx.query<{ payload: LiveSnapshot }>(
+        "SELECT payload FROM jev_live_events WHERE identity_hash=$1 AND kind='snapshot' AND event_key=$2",
+        [this.identityHash, `snapshot:${snapshot.snapshot_id}`],
+      )
+    ).rows[0]?.payload;
+    liveCheck(
+      stored && jevHash(stored) === jevHash(snapshot),
+      "OBSERVATION_SOURCE",
     );
+    liveCheck(
+      (await this.balanceTx(tx, snapshot))?.reconciled,
+      "CASH_RECONCILIATION_REQUIRED",
+    );
+    const duplicate = (
+      await tx.query<{
+        request: import("./jev-pilotstore.js").JevPilotCommand;
+      }>(
+        "SELECT request FROM jev_pilot_events WHERE account_id=$1 AND operation_id=$2",
+        [this.identity.account_id, `live:${snapshot.snapshot_id}`],
+      )
+    ).rows[0];
     if (duplicate) {
       liveCheck(
         jevHash(duplicate.request.observation.original) === jevHash(snapshot),
         "SOURCE_COLLISION",
       );
-      return commandJevPilot(
-        this.pool,
+      return commandJevPilotTx(
+        tx,
         this.identity.owner_id,
         this.identity.account_id,
         duplicate.request,
       );
     }
-    return commandJevPilot(
-      this.pool,
+    return commandJevPilotTx(
+      tx,
       this.identity.owner_id,
       this.identity.account_id,
       {

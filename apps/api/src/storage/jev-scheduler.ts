@@ -2,11 +2,11 @@ import type {
   JevBatch,
   JevBatchResult,
 } from "../models/jev-decision-contract.js";
-export const JEV_SCHEDULER_VERSION = "jev.scheduler.v2";
+export const JEV_SCHEDULER_VERSION = "jev.scheduler.v3";
 export const JEV_DISPATCH_LIMITS = Object.freeze({
   profiles: 3,
-  accounts: 6,
-  accounts_per_profile: 2,
+  accounts: 7,
+  accounts_per_profile: 3,
   protection_concurrency: 3,
   protection_interval_ms: 1000,
 });

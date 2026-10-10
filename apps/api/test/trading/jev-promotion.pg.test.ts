@@ -43,6 +43,13 @@ const flags = vi.hoisted(() => ({
   eligible: true,
   failed: "",
 }));
+// JE14 contracts under an integrated future build; JE15 separately verifies the
+// actual build's missing JE16/JE17 gate, which configuration cannot override.
+vi.mock("../../src/storage/jev-live-capabilities.js", async (original) => ({
+  ...(await original<object>()),
+  jevLiveIntegrationReady: () => true,
+  jevLiveRuntimeEntriesTx: async () => true,
+}));
 // Financial qualification and evaluation have their own real PG/algorithm suites.
 // These synthetic adapters isolate the transaction handoff; they certify no
 // observed runtime/venue qualification and are absent from production code.

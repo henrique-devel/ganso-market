@@ -174,7 +174,9 @@ async function closedSource(closed = true) {
   }
   const i = jevIdentity(),
     scope = jevScope(i.bindings[0]!.binding, i.instrument),
-    at = new Date().toISOString();
+    at = (
+      await fixture.pool.query<{ at: Date }>("SELECT clock_timestamp() AS at")
+    ).rows[0]!.at.toISOString();
   await storeJevEvidence(store, [
     makeJevEvidence({
       object_id: "failure:fixture",

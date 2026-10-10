@@ -3,8 +3,12 @@ import { createJevEngineMonitor } from "./storage/jev-readiness.js";
 import { createJevFundingLane } from "./storage/jev-funding-store.js";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import { loadConfig, requireStatementBudgets } from "./config.js";
-import { createDatabasePool } from "./database.js";
+import {
+  loadConfig,
+  requireStatementBudgets,
+  type ApiConfig,
+} from "./config.js";
+import { createDatabasePool, type DatabasePool } from "./database.js";
 import {
   claimExecutionWorker,
   executionFencedPool,
@@ -22,6 +26,8 @@ import { loadChallengerConfig } from "./models/jev-config.js";
 import { loadJevDecisionBackend } from "./models/jev-decision-runtime.js";
 import { JEV_EVALUATION_POLICY } from "./storage/jev-evaluation.js";
 import { runJevContinuousEvaluation } from "./storage/jev-evaluationstore.js";
+import { loadJevLiveRuntime } from "./jev-live-runtime.js";
+import { createJevLiveLane } from "./jev-live-lane.js";
 export const EXECUTION_HEALTH_PATH = "/tmp/ganso-execution-health.json";
 export function inspectExecutionHealth(
   state: { service: string; pid: number; timestamp: string; ready: boolean },
@@ -50,39 +56,72 @@ const log = (reason_code: string) =>
   process.stderr.write(
     `${JSON.stringify({ service: "execution-worker", level: "warn", timestamp: new Date().toISOString(), reason_code })}\n`,
   );
-export async function runExecutionWorker() {
+export async function runExecutionWorker(
+  options: {
+    configuration?: ApiConfig;
+    pool?: DatabasePool;
+    sha?: string;
+    backend?: Pick<
+      Awaited<ReturnType<typeof loadJevDecisionBackend>>,
+      "status" | "evaluate"
+    >;
+    signal?: AbortSignal;
+    publish?: (state: unknown) => Promise<void>;
+    live?: Pick<
+      Parameters<typeof loadJevLiveRuntime>[0],
+      "configuration" | "signer" | "wire"
+    >;
+  } = {},
+) {
+  const publishHealth = options.publish ?? publish;
   if (process.argv.includes("--health")) {
     inspectExecutionHealth(
       JSON.parse(await readFile(EXECUTION_HEALTH_PATH, "utf8")),
     );
     return;
   }
-  const config = await loadConfig();
+  const config = options.configuration ?? (await loadConfig());
   if (config.executionMode !== "paper")
     throw new Error("EXECUTION_WORKER_PAPER_REQUIRED");
-  const sha = (
-    await readFile(
-      process.env.GANSO_RELEASE_SHA_FILE ?? "/etc/ganso/release-sha",
-      "utf8",
-    )
-  ).trim();
-  const pool = createDatabasePool(config, {
-    max: 4,
-    queryTimeoutMs: requireStatementBudgets(config).ceilingMs,
-    applicationName: "ganso-execution-worker",
-  });
+  const sha =
+    options.sha ??
+    (
+      await readFile(
+        process.env.GANSO_RELEASE_SHA_FILE ?? "/etc/ganso/release-sha",
+        "utf8",
+      )
+    ).trim();
+  const pool =
+    options.pool ??
+    createDatabasePool(config, {
+      max: 4,
+      queryTimeoutMs: requireStatementBudgets(config).ceilingMs,
+      applicationName: "ganso-execution-worker",
+    });
   let stopDesk: (() => Promise<void>) | undefined,
     stopScheduler: (() => Promise<void>) | undefined,
     lease: Awaited<ReturnType<typeof claimExecutionWorker>> | undefined,
+    haltLive: (() => void) | undefined,
     stopped = false;
   const halt = () => {
     stopped = true;
+    haltLive?.();
   };
+  options.signal?.addEventListener("abort", halt, { once: true });
+  if (options.signal?.aborted) stopped = true;
   process.once("SIGTERM", halt);
   process.once("SIGINT", halt);
   try {
     lease = await claimExecutionWorker(pool, sha);
     const fenced = executionFencedPool(pool, lease);
+    const live = await loadJevLiveRuntime({
+      pool: fenced,
+      lease,
+      sha,
+      ...options.live,
+    });
+    const liveLane = createJevLiveLane(live, fenced, lease, sha);
+    haltLive = liveLane.halt;
     // Reversible rollout pause. Existing history/reservations/positions are kept;
     // old v1 ownership still requires its independent reconciliation generation.
     await fenced.transaction((tx) =>
@@ -95,11 +134,18 @@ export async function runExecutionWorker() {
     });
     // Per-account authenticated admission stays separate from constructing a
     // configured provider. No rows or admission are created by boot.
-    const backend = await loadJevDecisionBackend(pool, {
-      admitted: true,
-      configuration: challengerConfig,
-    });
-    const store = createJevWorkerStore(fenced, lease, backend.status.model);
+    const backend =
+      options.backend ??
+      (await loadJevDecisionBackend(pool, {
+        admitted: true,
+        configuration: challengerConfig,
+      }));
+    const store = createJevWorkerStore(
+      fenced,
+      lease,
+      backend.status.model,
+      liveLane,
+    );
     const scheduler = createJevScheduler({
       ...store,
       profile: (a) =>
@@ -118,7 +164,9 @@ export async function runExecutionWorker() {
     const proposals = createJevProposalLane(fenced, challengerConfig, () =>
       log("JEV_PROPOSAL_LANE_UNAVAILABLE"),
     );
-    const funding = createJevFundingLane(fenced, store.accounts);
+    const funding = createJevFundingLane(fenced, async () =>
+      (await store.accounts()).filter((a) => a.scope.mode !== "live"),
+    );
     let fundingTask: Promise<void> | null = null,
       lastFundingAt = -Infinity;
     const fundingController = new AbortController();
@@ -131,6 +179,7 @@ export async function runExecutionWorker() {
     };
     const priorStop = stopScheduler;
     stopScheduler = async () => {
+      const liveStopped = liveLane.stop();
       const proposalsStopped = proposals.stop();
       fundingController.abort();
       await priorStop?.();
@@ -138,11 +187,14 @@ export async function runExecutionWorker() {
       await fundingTask;
       await finishEvaluation();
       await monitorTask;
+      await liveStopped;
     };
     while (!stopped) {
       const began = Date.now();
       // Heartbeat fencing is independent of provider latency and API lifetime.
       await fenced.transaction((tx) => tx.query("SELECT 1"));
+      liveLane.assertActive();
+      liveLane.tick();
       await scheduler.tick();
       await drainDeskCommands(fenced);
       if (!monitorTask)
@@ -186,7 +238,8 @@ export async function runExecutionWorker() {
           });
       }
       proposals.tick(began);
-      await publish({
+      await liveLane.heartbeat();
+      await publishHealth({
         service: "execution-worker",
         pid: process.pid,
         timestamp: new Date().toISOString(),
@@ -203,12 +256,13 @@ export async function runExecutionWorker() {
         funding: { version: "jev.funding.v1", ...funding.metrics },
         evaluation: { version: "jev.evaluation.v1", status: evaluationStatus },
         proposals: proposals.metrics,
+        live: { ...live.status, metrics: liveLane.metrics },
       });
       await delay(Math.max(0, 250 - (Date.now() - began)));
     }
   } finally {
     stopped = true;
-    await publish({
+    await publishHealth({
       service: "execution-worker",
       pid: process.pid,
       timestamp: new Date().toISOString(),
@@ -222,6 +276,7 @@ export async function runExecutionWorker() {
       await pool.end();
       process.off("SIGTERM", halt);
       process.off("SIGINT", halt);
+      options.signal?.removeEventListener("abort", halt);
     }
   }
 }

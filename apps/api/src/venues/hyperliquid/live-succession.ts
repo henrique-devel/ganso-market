@@ -21,7 +21,10 @@ import { LiveExecution, LIVE_COMMAND_VERSION } from "./live-execution.js";
 export class LiveSuccessionCoordinator {
   constructor(
     readonly store: PgLiveStore,
-    readonly execution: Pick<LiveExecution, "execute">,
+    readonly execution: Pick<LiveExecution, "execute"> &
+      Partial<
+        Pick<LiveExecution, "protectOnce" | "executeResidual" | "cancelEntry">
+      >,
     readonly reconcileAccount: () => Promise<{
       snapshot: LiveSnapshot | null;
       pending: boolean;
@@ -55,7 +58,19 @@ export class LiveSuccessionCoordinator {
         r.scope.experiment_id === promotion.experiment_id
       ) {
         try {
-          await this.execution.execute(
+          if (this.execution.cancelEntry) {
+            await this.execution.cancelEntry(
+              r,
+              input.lease,
+              input.metadata,
+              input.metadata_at,
+            );
+            continue;
+          }
+          await (
+            this.execution.protectOnce?.bind(this.execution) ??
+            this.execution.execute.bind(this.execution)
+          )(
             {
               version: LIVE_COMMAND_VERSION,
               kind: "cancel",
@@ -75,7 +90,10 @@ export class LiveSuccessionCoordinator {
     const recovered = await this.reconcileAccount();
     if (recovered.snapshot && recovered.snapshot.position_raw !== "0") {
       try {
-        await this.execution.execute(
+        await (
+          this.execution.executeResidual?.bind(this.execution) ??
+          this.execution.execute.bind(this.execution)
+        )(
           {
             version: LIVE_COMMAND_VERSION,
             kind: "close",
