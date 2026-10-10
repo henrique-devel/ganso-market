@@ -284,7 +284,8 @@ manual, separada de risco e aprovação. O resultado conservador é
 
 Ordens, recibos, fills e funding recentes são limitados a 20 itens. Proteção
 confirmada exige posição e stop nativo atuais, reduce-only e quantidade efetiva
-coincidente; ACK ou cancelamento não certifica posição zero. O histórico por
+com cobertura integral (reduce-only maior permanece válido após parcial); ACK ou
+cancelamento não certifica posição zero. O histórico por
 perfil/versão tem páginas de 20, pelo cursor opaco opcional `history_before`;
 paginação não corta os totais da conta. Owner/conta/origem não são substituíveis
 na query. Nenhuma leitura chama JEV, venue, signer ou escritor do journal.
