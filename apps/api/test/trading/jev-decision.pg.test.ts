@@ -31,6 +31,7 @@ import {
 import { jevHash } from "../../src/storage/jev-hash.js";
 import { mockTariff } from "./jev-fixture.js";
 import { readJevCostsTx } from "../../src/storage/jev-metrics.js";
+import { readJevLiveCostTx } from "../../src/storage/jev-live-metrics.js";
 import type { JevTariff } from "../../src/models/jev-contract.js";
 const url = process.env.GANSO_TEST_DATABASE_URL;
 let fixture: Awaited<ReturnType<typeof createPgFixture>>;
@@ -257,6 +258,26 @@ describe.skipIf(!url)(
       expect(c.platform.jev_usd6).toBeNull();
       expect(c.evaluation.jev_usd6).toBeNull();
       expect(c.platform.known_jev_usd6).toBe("0");
+    });
+    it("JE17 a real unfinished principal request makes its participant's attributed cost unknown without charging the reservation", async () => {
+      await provision("operation", "real");
+      const r = await createJevDecisionStore(pool).reserve(
+        batch("live-panel:unknown"),
+        "real",
+        tariff,
+      );
+      expect("token" in r).toBe(true);
+      const at = new Date(Date.now() + 1).toISOString();
+      expect(
+        await pool.transaction((tx) =>
+          readJevLiveCostTx(tx, "operator", "paper:h1", at),
+        ),
+      ).toBeNull();
+      expect(
+        await pool.transaction((tx) =>
+          readJevLiveCostTx(tx, "operator", "unrelated", at),
+        ),
+      ).toBe("0");
     });
     it("seeds no budgets, journals disabled absence, replays it and preserves financial ledger", async () => {
       expect(

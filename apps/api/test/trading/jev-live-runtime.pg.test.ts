@@ -1,3 +1,4 @@
+import { readJevLiveAccountTx } from "../../src/storage/jev-live-panel.js";
 import Fastify from "fastify";
 import { registerJevPanelRoutes } from "../../src/jev-panel-api.js";
 import { commandJevOperator } from "../../src/storage/jev-operator.js";
@@ -487,7 +488,7 @@ describe.skipIf(!url)(
       });
       const tariff = mockTariff();
       await provisionJevCostPool(f.poolAdapter, {
-        origin: "mock",
+        origin: "real",
         purpose: "operation",
         month: new Date().toISOString().slice(0, 7),
         tariff,
@@ -759,7 +760,7 @@ describe.skipIf(!url)(
         enabled: true,
         tariff,
         transport: {
-          origin: "mock",
+          origin: "real",
           model: tariff.model,
           evaluate: async (batch, signal) => {
             batches.push(batch);
@@ -1232,6 +1233,31 @@ describe.skipIf(!url)(
         )
       ).rows[0]?.result;
       expect(invoice.cost_usd6).toBe("42");
+      const display = await f.poolAdapter.transaction(async (tx) => {
+        await tx.query(
+          "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        );
+        return readJevLiveAccountTx(
+          tx,
+          "operator",
+          "live:h1",
+          new Date().toISOString(),
+        );
+      });
+      expect(display.metrics).toMatchObject({
+        source: "hyperliquid_live_reconciled",
+        quality: "fresh",
+        capital_usd6: "250000000",
+        risk_equity_usd6: "249998000",
+        attributed_jev_usd6: "42",
+        strategy_after_jev_usd6: "-2042",
+        conservative_result_usd6: "-2042",
+      });
+      expect(display.live_state.protection.state).toBe("confirmed");
+      expect(display.fills).toHaveLength(2);
+      expect(display.live_state.receipts.some((r) => r.kind === "cancel")).toBe(
+        true,
+      );
       expect(invoice.decisions).toHaveLength(3);
       expect(
         invoice.decisions.every(
@@ -1607,6 +1633,20 @@ describe.skipIf(!url)(
       ).rows[0];
       expect(BigInt(pilot.sequence)).toBeGreaterThan(9n);
       expect(pilot.checkpoint.risk.high_water_usd_raw).toBe("252998000");
+      const display = await f.poolAdapter.transaction((tx) =>
+        readJevLiveAccountTx(
+          tx,
+          "operator",
+          "live:h1",
+          new Date().toISOString(),
+        ),
+      );
+      expect(display.metrics).toMatchObject({
+        trading: { fees_usd6: "2000", funding_usd6: "3000000" },
+        high_water_usd6: "252998000",
+        strategy_after_jev_usd6: "2997958",
+      });
+      expect(display.live_state.funding).toHaveLength(1);
       expect(
         (await f.pool.query("SELECT count(*)::int n FROM jev_live_activations"))
           .rows[0].n,
@@ -1689,6 +1729,33 @@ describe.skipIf(!url)(
         )
       ).rows[0].checkpoint;
       expect(pilot.capital_admitted_usd_raw).toBe("250000000");
+      const display = await f.poolAdapter.transaction((tx) =>
+        readJevLiveAccountTx(
+          tx,
+          "operator",
+          "live:h1",
+          new Date().toISOString(),
+        ),
+      );
+      expect(display.metrics).toMatchObject({
+        capital_usd6: "250000000",
+        high_water_usd6: "250000000",
+        trading: { fees_usd6: "4000" },
+        attributed_jev_usd6: "42",
+        strategy_after_jev_usd6: "-4042",
+      });
+      expect(display.live_state.history.map((h) => h.profile_id)).toEqual([
+        "h5",
+        "h1",
+      ]);
+      expect(
+        display.live_state.history.find((h) => h.profile_id === "h1")
+          ?.attributed_jev_usd6,
+      ).toBe("42");
+      expect(
+        display.live_state.history.find((h) => h.profile_id === "h5")
+          ?.attributed_jev_usd6,
+      ).toBe("0");
       expect(pilot.risk.high_water_usd_raw).toBe("250000000");
       expect(
         (

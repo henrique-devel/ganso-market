@@ -1,13 +1,13 @@
 /** Read-only presentation contract. USD6 values are never summed across banks. */
 export interface JevPanelMetrics {
   as_of: string;
-  capital_usd6: string;
+  capital_usd6: string | null;
   risk_equity_usd6: string | null;
   trading: {
-    realized_usd6: string;
+    realized_usd6: string | null;
     open_usd6: string | null;
-    fees_usd6: string;
-    funding_usd6: string;
+    fees_usd6: string | null;
+    funding_usd6: string | null;
     pnl_usd6: string | null;
     funding_complete: boolean;
   };
@@ -15,9 +15,18 @@ export interface JevPanelMetrics {
   strategy_after_jev_usd6: string | null;
   conservative_result_usd6: string | null;
   quality: string;
+  source?: "hyperliquid_live_reconciled";
+  source_as_of?: string | null;
+  snapshot_id?: string | null;
+  reasons?: string[];
+  trading_balance_usd6?: string | null;
+  high_water_usd6?: string | null;
   positions: { position_id: string; quantity_btc_raw: string }[];
 }
 export interface JevPanelDecision {
+  profile_id?: string;
+  profile_version?: string;
+  experiment_id?: string;
   request_id: string;
   started_at: string;
   finished_at: string | null;
@@ -93,6 +102,7 @@ export interface JevPanelAccount {
     reasons?: string[];
   };
   metrics: JevPanelMetrics | null;
+  live_state?: JevPanelLiveState;
   fills?: {
     execution_id: string;
     order_id: string;
@@ -119,6 +129,64 @@ export interface JevPanelAccount {
     reasons: string[];
   } | null;
   evaluation: { state: string; as_of: string; evidence_id: string } | null;
+}
+export interface JevLiveHistoryCursor {
+  started_at: string;
+  experiment_id: string;
+}
+export interface JevPanelLiveState {
+  version: "jev.live-account-panel.v1";
+  source_as_of: string | null;
+  position_btc_raw: string | null;
+  orders: {
+    order_id: string;
+    side: string;
+    quantity_btc_raw: string;
+    limit_price_usd6: string;
+    reduce_only: boolean;
+    position_stop: boolean;
+  }[];
+  orders_truncated: boolean;
+  receipts: {
+    operation_id: string;
+    kind: string;
+    state: string;
+    observed_at: string | null;
+    order_id: string | null;
+    planned_btc_raw: string | null;
+    filled_btc_raw: string;
+    profile_id: string;
+    profile_version: string;
+    experiment_id: string;
+  }[];
+  protection: {
+    state: "confirmed" | "pending" | "flat" | "unavailable";
+    observed_at: string | null;
+    quantity_btc_raw: string | null;
+    stop_price_usd6: string | null;
+    maximum_exit_at: string | null;
+  };
+  funding: { key: string; occurred_at: string; amount_usd6: string }[];
+  runtime: {
+    observed_at: string;
+    current: boolean;
+    connected: boolean;
+    entries_ready: boolean;
+    reasons: string[];
+  } | null;
+  history: {
+    experiment_id: string;
+    profile_id: string;
+    profile_version: string;
+    start_at: string;
+    end_at: string | null;
+    realized_usd6: string | null;
+    fees_usd6: string | null;
+    funding_usd6: string | null;
+    attributed_jev_usd6: string | null;
+    realized_after_jev_usd6: string | null;
+  }[];
+  history_next_cursor: string | null;
 }
 export interface JevQueueProposal {
   proposal_id: string;

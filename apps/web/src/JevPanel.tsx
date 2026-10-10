@@ -1,3 +1,4 @@
+import { JevLiveAccountState, liveReasons } from "./JevLiveAccount.js";
 import { JevLive } from "./JevLive.tsx";
 import { JevQueue } from "./JevQueue.js";
 import { useEffect, useState } from "react";
@@ -27,7 +28,13 @@ const interventionStatus: Record<string, string> = {
   reconciled_flat: "Posição zero, ordens e reservas reconciliadas",
   unavailable: "Confirmação indisponível; a intenção permanece registrada",
 };
-export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
+export function JevAccountCard({
+  account: a,
+  onHistory,
+}: {
+  account: JevPanelAccount;
+  onHistory?: ((cursor: string) => void) | undefined;
+}) {
   // Keep historical ledger components visible while current results/quotes are unavailable.
   const m =
     a.metrics && a.metrics.quality !== "fresh"
@@ -42,7 +49,12 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
   const components: [string, string | null | undefined][] = [
     ["Realizado", m?.trading.realized_usd6],
     ["Aberto", m?.trading.open_usd6],
-    ["Taxas", m ? (-BigInt(m.trading.fees_usd6)).toString() : null],
+    [
+      "Taxas",
+      m?.trading.fees_usd6 == null
+        ? null
+        : (-BigInt(m.trading.fees_usd6)).toString(),
+    ],
     ["Funding", m?.trading.funding_usd6],
     [
       "JEV atribuído",
@@ -69,7 +81,9 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
         </h3>
         <span className="btc-badge">
           {a.mode === "live"
-            ? "REAL · MÉTRICAS INDISPONÍVEIS"
+            ? m?.quality === "fresh" && m.strategy_after_jev_usd6 !== null
+              ? "REAL · DADOS CONFIRMADOS"
+              : "REAL · MÉTRICAS INDISPONÍVEIS"
             : "SALDO FICTÍCIO"}
         </span>
       </div>
@@ -98,6 +112,24 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
           . A intervenção torna a avaliação econômica inconclusiva, preservando
           falhas comprovadas.
         </p>
+      )}
+      {a.mode === "live" && (
+        <p>
+          Acumulado da conta real · capital admitido: {usd(m?.capital_usd6)} ·
+          saldo de negociação: {usd(m?.trading_balance_usd6)} · pico preservado:{" "}
+          {usd(m?.high_water_usd6)} · PnL de negociação:{" "}
+          {usd(m?.trading.pnl_usd6)}. Fonte Hyperliquid observada em{" "}
+          {m?.source_as_of ?? "Indisponível"}.
+        </p>
+      )}
+      {!!m?.reasons?.length && (
+        <ul>
+          {m.reasons.map((r) => (
+            <li key={r}>
+              {liveReasons[r] ?? "Dados pendentes de confirmação."}
+            </li>
+          ))}
+        </ul>
       )}
       <div className="jev-numbers">
         <p>
@@ -163,70 +195,77 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
       )}
       <details>
         <summary>Decisões automáticas e proteção</summary>
-        <p>
-          Proteção:{" "}
-          {a.execution?.protection
-            ? `simulada em paper/stress, ${displayRaw(a.execution.protection.quantity_btc_raw, 8)} BTC · stop ${usd(a.execution.protection.stop_price_raw)}`
-            : "sem confirmação disponível"}
-          .
-        </p>
-        <p>
-          Ordem {a.execution?.maker?.order_id ?? "indisponível"}:{" "}
-          {a.execution?.maker?.status ?? "sem recibo"} · preenchido{" "}
-          {displayRaw(a.execution?.maker?.filled_btc_raw, 8)} /{" "}
-          {displayRaw(a.execution?.maker?.planned_btc_raw, 8)} BTC. ACK não
-          comprova fill.
-        </p>
-        <p>
-          Saída:{" "}
-          {a.execution?.close?.pending
-            ? "pendente de fills e reconciliação"
-            : "sem redução pendente confirmada"}
-          . Solicitação não comprova encerramento.
-        </p>
-        <p>
-          Última observação de execução:{" "}
-          {a.execution?.observed_at ?? "indisponível"}. {a.execution?.reason}
-        </p>
-        {!!a.fills?.length ? (
-          <div className="jev-chart-wrap">
-            <table>
-              <caption>
-                Últimos fills observados · simulação paper/stress
-              </caption>
-              <thead>
-                <tr>
-                  <th>Ordem / horário</th>
-                  <th>Execução</th>
-                  <th>Quantidade BTC</th>
-                  <th>Preço</th>
-                  <th>Taxa</th>
-                </tr>
-              </thead>
-              <tbody>
-                {a.fills.map((f) => (
-                  <tr key={f.execution_id}>
-                    <td>
-                      {f.order_id}
-                      <br />
-                      {f.occurred_at}
-                    </td>
-                    <td>
-                      {f.kind} · {f.side === "buy" ? "Compra" : "Venda"}
-                    </td>
-                    <td>{displayRaw(f.quantity_btc_raw, 8)}</td>
-                    <td>{usd(f.price_usd_raw)}</td>
-                    <td>{usd(f.fee_usd_raw)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {a.mode === "live" ? (
+          <JevLiveAccountState account={a} onHistory={onHistory} />
         ) : (
-          <p>
-            Sem fills observados para esta conta; ACK não cria recibo de
-            execução.
-          </p>
+          <>
+            <p>
+              Proteção:{" "}
+              {a.execution?.protection
+                ? `simulada em paper/stress, ${displayRaw(a.execution.protection.quantity_btc_raw, 8)} BTC · stop ${usd(a.execution.protection.stop_price_raw)}`
+                : "sem confirmação disponível"}
+              .
+            </p>
+            <p>
+              Ordem {a.execution?.maker?.order_id ?? "indisponível"}:{" "}
+              {a.execution?.maker?.status ?? "sem recibo"} · preenchido{" "}
+              {displayRaw(a.execution?.maker?.filled_btc_raw, 8)} /{" "}
+              {displayRaw(a.execution?.maker?.planned_btc_raw, 8)} BTC. ACK não
+              comprova fill.
+            </p>
+            <p>
+              Saída:{" "}
+              {a.execution?.close?.pending
+                ? "pendente de fills e reconciliação"
+                : "sem redução pendente confirmada"}
+              . Solicitação não comprova encerramento.
+            </p>
+            <p>
+              Última observação de execução:{" "}
+              {a.execution?.observed_at ?? "indisponível"}.{" "}
+              {a.execution?.reason}
+            </p>
+            {!!a.fills?.length ? (
+              <div className="jev-chart-wrap">
+                <table>
+                  <caption>
+                    Últimos fills observados · simulação paper/stress
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th>Ordem / horário</th>
+                      <th>Execução</th>
+                      <th>Quantidade BTC</th>
+                      <th>Preço</th>
+                      <th>Taxa</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {a.fills.map((f) => (
+                      <tr key={f.execution_id}>
+                        <td>
+                          {f.order_id}
+                          <br />
+                          {f.occurred_at}
+                        </td>
+                        <td>
+                          {f.kind} · {f.side === "buy" ? "Compra" : "Venda"}
+                        </td>
+                        <td>{displayRaw(f.quantity_btc_raw, 8)}</td>
+                        <td>{usd(f.price_usd_raw)}</td>
+                        <td>{usd(f.fee_usd_raw)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p>
+                Sem fills observados para esta conta; ACK não cria recibo de
+                execução.
+              </p>
+            )}
+          </>
         )}
         {!a.decisions?.length && (
           <p>Sem decisões JEV capturadas para esta conta.</p>
@@ -238,7 +277,9 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
               {d.direction?.choice ?? "direção indisponível"}
             </summary>
             <p>
-              Modelo {d.model} · latência{" "}
+              Perfil {d.profile_id ?? a.profile_id} · versão{" "}
+              {d.profile_version ?? a.profile_version} · Modelo {d.model} ·
+              latência{" "}
               {d.latency_ms == null ? "indisponível" : `${d.latency_ms} ms`} ·
               custo atribuído {usd(d.attributed_cost_usd6)}.
             </p>
@@ -325,7 +366,13 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
     </article>
   );
 }
-export function JevPanelView({ value }: { value: JevPanelSnapshot }) {
+export function JevPanelView({
+  value,
+  onHistory,
+}: {
+  value: JevPanelSnapshot;
+  onHistory?: ((cursor: string) => void) | undefined;
+}) {
   return (
     <section className="btc-desk jev-panel">
       <h2>Painel JEV</h2>
@@ -334,8 +381,12 @@ export function JevPanelView({ value }: { value: JevPanelSnapshot }) {
         e custos atribuídos não se somam.
       </p>
       <p>
-        Live indisponível. A publicação do painel não admite contas nem ativa o
-        piloto.
+        {value.accounts.some(
+          (a) => a.mode === "live" && a.metrics?.quality === "fresh",
+        )
+          ? "Conta real com fonte reconciliada. "
+          : "Live indisponível. "}
+        A publicação do painel não admite contas nem ativa o piloto.
       </p>
       {!value.accounts.length && (
         <p>
@@ -429,13 +480,18 @@ export function JevPanelView({ value }: { value: JevPanelSnapshot }) {
       )}
       <div className="jev-accounts">
         {value.accounts.map((a) => (
-          <JevAccountCard key={a.account_id} account={a} />
+          <JevAccountCard
+            key={a.account_id}
+            account={a}
+            onHistory={onHistory}
+          />
         ))}
       </div>
     </section>
   );
 }
 export function JevPanel(props: Access) {
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0),
     [state, setState] = useState<{
       value?: JevPanelSnapshot;
@@ -446,11 +502,17 @@ export function JevPanel(props: Access) {
     setState(null);
     const c = new AbortController();
     const t = setTimeout(() => c.abort(), 5000);
-    void fetch("/api/trading/jev/panel", {
-      headers: { authorization: `Bearer ${props.accessToken}` },
-      cache: "no-store",
-      signal: c.signal,
-    })
+    void fetch(
+      "/api/trading/jev/panel" +
+        (historyCursor
+          ? "?history_before=" + encodeURIComponent(historyCursor)
+          : ""),
+      {
+        headers: { authorization: `Bearer ${props.accessToken}` },
+        cache: "no-store",
+        signal: c.signal,
+      },
+    )
       .then(async (r) => {
         if (r.status === 401) props.onUnauthorized();
         if (!r.ok) throw new Error("Dados JEV indisponíveis nesta tentativa.");
@@ -467,17 +529,22 @@ export function JevPanel(props: Access) {
       c.abort();
       clearTimeout(t);
     };
-  }, [props.accessToken, props.onUnauthorized, refresh]);
+  }, [props.accessToken, props.onUnauthorized, refresh, historyCursor]);
   return (
     <>
-      <button onClick={() => setRefresh((x) => x + 1)}>
+      <button
+        onClick={() => {
+          setHistoryCursor(null);
+          setRefresh((x) => x + 1);
+        }}
+      >
         Atualizar painel JEV
       </button>
       {!state && <p role="status">Lendo perfis JEV…</p>}
       {state?.error && <p role="alert">{state.error}</p>}
       {state?.value && (
         <>
-          <JevPanelView value={state.value} />
+          <JevPanelView value={state.value} onHistory={setHistoryCursor} />
           {state.value.live && (
             <JevLive
               {...props}

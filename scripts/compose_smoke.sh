@@ -39,7 +39,7 @@ until docker compose exec -T execution-worker node apps/api/dist/execution-worke
 done
 # The proposal controller is wired into the real process but remains dormant.
 docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const p=h.proposals; if(p?.version!=="jev.proposal-lane.v1" || p.configured!==false || p.status!=="disabled" || p.cycles!==0) process.exit(1)'
-docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const l=h.live; if(l?.version!=="jev.live-runtime.v1" || !l.adapter_available || l.connected || l.signer_loaded || l.entries_ready || l.capabilities.interventions!==true || l.capabilities.financial_panel || h.dispatch_limits.accounts!==7 || h.dispatch_limits.accounts_per_profile!==3) process.exit(1)'
+docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const l=h.live; if(l?.version!=="jev.live-runtime.v1" || !l.adapter_available || l.connected || l.signer_loaded || l.entries_ready || l.capabilities.interventions!==true || l.capabilities.financial_panel!==true || h.dispatch_limits.accounts!==7 || h.dispatch_limits.accounts_per_profile!==3) process.exit(1)'
 execution_id="$(docker compose ps --quiet execution-worker)"
 execution_started="$(docker inspect --format '{{.State.StartedAt}}' "$execution_id")"
 risk_before="$(docker compose exec -T execution-worker node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")).metrics.risk_cycles)')"

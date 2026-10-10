@@ -191,8 +191,8 @@ Só uma identidade já persistida e previamente ativada pode carregar o signer e
 reconstruir o piloto. Configurar ou reiniciar não cria conta, capital, admissão ou
 ativação. Ausência/divergência de identidade, ambiente, segredo ou ativação fecha
 o adaptador. `live.capabilities` distingue implementação de runtime, intervenções
-e painel financeiro. JE16 implementa intervenções; JE17 ainda fecha entradas por capacidade do código;
-nenhuma configuração operacional contorna esse gate. Qualificação GJ12.3,
+e painel financeiro. JE15–JE17 implementam essas três capacidades; sua presença
+comprova somente integração de código. Qualificação GJ12.3,
 validação GJ13.5, elegibilidade, custos, cobertura e capacidade atuais continuam
 necessários em suas etapas próprias. Fixtures não aprovam essas etapas.
 
@@ -262,5 +262,34 @@ de fechamento, âncoras, perdas e histórico. Não há botão de retomada ou ord
 
 A publicação aplica 0069 e mantém backend/signer/entradas desativados. Reversão
 usa código compatível com 0068/0069, preservando controle, proteção e reconciliação,
-sem desfazer migrations ou apagar journals. JE17 e gates operacionais permanecem
+sem desfazer migrations ou apagar journals. Gates operacionais permanecem
 etapas próprias; a capacidade de intervenção não autoriza entradas reais.
+
+## Painel financeiro e operacional live — JE17
+
+O GET autenticado `/api/trading/jev/panel` usa o proprietário da sessão e uma
+transação somente leitura com snapshot consistente. A conta real lê somente o
+journal mainnet reconciliado; paper/stress conservam sua projeção própria.
+Capital de US$250 exige a âncora inicial persistida. Equity, caixa e PnL usam
+fills/fees/funding originais até o horário da venue, conferidos com o saldo.
+Uma lacuna, fonte vencida ou divergência deixa componentes atuais indisponíveis,
+com motivo e horário original. Custo JEV pendente bloqueia resultados econômicos,
+preservando equity de negociação comprovada. HWM vem do histórico do piloto.
+
+O acumulado percorre todo o histórico, sem reset na sucessão. Cada request real
+entra uma vez na fatura global e integralmente na avaliação de cada participante;
+geração vinculada segue o mesmo contrato por versão. Infraestrutura permanece
+manual, separada de risco e aprovação. O resultado conservador é
+`realizado - fees + funding + min(aberto, 0) - JEV`.
+
+Ordens, recibos, fills e funding recentes são limitados a 20 itens. Proteção
+confirmada exige posição e stop nativo atuais, reduce-only e quantidade efetiva
+coincidente; ACK ou cancelamento não certifica posição zero. O histórico por
+perfil/versão tem páginas de 20, pelo cursor opaco opcional `history_before`;
+paginação não corta os totais da conta. Owner/conta/origem não são substituíveis
+na query. Nenhuma leitura chama JEV, venue, signer ou escritor do journal.
+
+A migration 0070 acrescenta apenas índices de leitura. Para reversão, pausar
+entradas e usar código compatível com 0068–0070, preservando ledger, proteção,
+reconciliação, HOLD e pins. Publicação não seleciona os ensaios operacionais,
+aprova observação prospectiva nem substitui o ato inicial autenticado do operador.
