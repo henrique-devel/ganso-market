@@ -214,6 +214,43 @@ describe.skipIf(!url)(
       );
       expect(wrongSide.metrics.quality).toBe("fresh");
       expect(wrongSide.live_state.protection.state).toBe("pending");
+      for (const [quantity, state] of [
+        ["20000", "confirmed"],
+        ["5000", "pending"],
+      ] as const) {
+        await store.save(
+          liveSnapshot(Date.now(), {
+            fills: [fill],
+            funding: [],
+            trading_balance_raw: "249990000",
+            equity_raw: "249990000",
+            orders: [
+              {
+                oid: 999,
+                cloid: "0x" + "1".repeat(32),
+                side: "sell",
+                quantity_raw: quantity,
+                limit_price_raw: "60000000000",
+                trigger_price_raw: "60000000000",
+                reduce_only: true,
+                position_stop: true,
+                original: { synthetic: "residual_stop" },
+              },
+            ],
+          }),
+        );
+        const residual = await f.poolAdapter.transaction((tx) =>
+          readJevLiveAccountTx(
+            tx,
+            "operator",
+            "live:h1",
+            new Date().toISOString(),
+          ),
+        );
+        expect(residual.metrics.quality).toBe("fresh");
+        expect(residual.live_state.protection.state).toBe(state);
+        expect(residual.live_state.protection.quantity_btc_raw).toBe("10000");
+      }
     });
     it("holds the financial/operational snapshot during a concurrent venue fill without GET writes", async () => {
       let changed = false;
