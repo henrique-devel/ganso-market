@@ -104,6 +104,7 @@ export async function readJevLiveAccountTx(
         o.cloid === p.native_cloid &&
         o.position_stop &&
         o.reduce_only &&
+        o.side === (q! > 0n ? "sell" : "buy") &&
         o.quantity_raw === abs &&
         o.trigger_price_raw === p.protection!.stop_price_raw,
     );

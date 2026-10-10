@@ -171,6 +171,49 @@ describe.skipIf(!url)(
       expect(v.live_state.protection.state).toBe("pending");
       expect(v.fills[0]?.fee_usd_raw).toBe("10000");
       expect(v.metrics.trading.pnl_usd6).toBe("-10000");
+      const checked = Date.now();
+      await store.append("protection", "misdirected-stop", {
+        version: "hyperliquid.live-protection.v1",
+        state: "confirmed",
+        observed_at: checked,
+        native_cloid: "0x" + "1".repeat(32),
+        protection: {
+          quantity_btc_raw: "10000",
+          stop_price_raw: "60000000000",
+          maximum_exit_at: new Date(checked + 60000).toISOString(),
+        },
+      });
+      await store.save(
+        liveSnapshot(checked, {
+          fills: [fill],
+          funding: [],
+          trading_balance_raw: "249990000",
+          equity_raw: "249990000",
+          orders: [
+            {
+              oid: 999,
+              cloid: "0x" + "1".repeat(32),
+              side: "buy",
+              quantity_raw: "10000",
+              limit_price_raw: "60000000000",
+              trigger_price_raw: "60000000000",
+              reduce_only: true,
+              position_stop: true,
+              original: { synthetic: "wrong_side_native_stop" },
+            },
+          ],
+        }),
+      );
+      const wrongSide = await f.poolAdapter.transaction((tx) =>
+        readJevLiveAccountTx(
+          tx,
+          "operator",
+          "live:h1",
+          new Date().toISOString(),
+        ),
+      );
+      expect(wrongSide.metrics.quality).toBe("fresh");
+      expect(wrongSide.live_state.protection.state).toBe("pending");
     });
     it("holds the financial/operational snapshot during a concurrent venue fill without GET writes", async () => {
       let changed = false;
