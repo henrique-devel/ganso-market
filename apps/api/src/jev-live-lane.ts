@@ -169,6 +169,7 @@ export function createJevLiveLane(
     // At a proven flat cut no protective action is needed: yield to its send
     // without refreshing admission or waiting on provider inference.
     if (pendingCommands.size && s.flat && !observed.pending) return;
+    const intervention = await adapter.store.operatorControl();
     const pilot = await pool.transaction((tx) =>
       readJevPilotTx(tx, a.scope.account_id),
     );
@@ -248,9 +249,17 @@ export function createJevLiveLane(
         !terminal ||
         !["filled", "cancelled", "rejected"].includes(terminal.state)
       ) {
-        if (riskBlocked || !protectedPosition)
-          await adapter.execution.cancelEntry(entry, lease, metadata);
-        else
+        if (riskBlocked || !protectedPosition || intervention.paused) {
+          if (
+            s.orders.some(
+              (o) =>
+                o.cloid === entry.cloid ||
+                (terminal?.oid !== null && o.oid === terminal?.oid),
+            )
+          )
+            await adapter.execution.cancelEntry(entry, lease, metadata);
+          else await adapter.execution.recover(entry);
+        } else
           await adapter.execution.cancelExpired(
             entry,
             receipts,
@@ -280,6 +289,56 @@ export function createJevLiveLane(
         lease,
         markPrice,
       );
+    if (intervention.paused) {
+      for (const parent of requests.filter((r) => r.kind === "entry")) {
+        const receipt = receipts
+          .filter((r) => r.operation_id === parent.operation_id)
+          .at(-1);
+        if (
+          s.orders.some(
+            (o) =>
+              o.cloid === parent.cloid ||
+              (receipt?.oid !== null && o.oid === receipt?.oid),
+          )
+        )
+          await adapter.execution.cancelEntry(parent, lease, metadata);
+      }
+      // Cancellation may race a late fill or stop. Requery before choosing a
+      // residual; ACK and the pre-cancel snapshot never establish a close size.
+      const after = await adapter.reconcileAccount();
+      if (after.snapshot) {
+        if (intervention.close && after.snapshot.position_raw !== "0")
+          await closeResidual(
+            a.scope,
+            "operator_emergency",
+            after.snapshot,
+            metadata,
+            lease,
+            markPrice,
+          );
+        await settle(
+          after.snapshot,
+          await adapter.store.operations(),
+          await adapter.store.events<LiveReceipt>("receipt"),
+        );
+        if (after.snapshot.position_raw === "0" && !after.pending) {
+          for (const stop of (await adapter.store.operations()).filter(
+            (r) =>
+              r.kind === "stop" &&
+              after.snapshot!.orders.some((o) => o.cloid === r.cloid),
+          )) {
+            // The store rechecks zero position, terminal receipts and financial
+            // reserves both at reservation and immediately before signing.
+            try {
+              await adapter.execution.cancelOrder(stop, lease, metadata);
+            } catch (e) {
+              if (!(e instanceof LiveError)) throw e;
+            }
+          }
+        }
+      }
+      await observeIntervention(lease, protectedPosition);
+    }
     await settle(s, requests, receipts);
     if (pendingCommands.size && s.flat && !observed.pending) return;
     const limit = closeLimit(s.position_raw, markPrice, metadata, entry);
@@ -321,6 +380,73 @@ export function createJevLiveLane(
     ];
     await publish();
     recovered = true;
+  }
+  async function observeIntervention(
+    lease: LiveLease,
+    protectedPosition: boolean,
+  ) {
+    if (!adapter) return;
+    const control = await adapter.store.operatorControl();
+    if (!control.command) return;
+    const current = await adapter.store.latest(),
+      s = current.snapshot;
+    if (!s) return;
+    const requests = await adapter.store.operations(),
+      receipts = await adapter.store.events<LiveReceipt>("receipt");
+    const unresolved = requests.some((r) => {
+      const last = receipts
+        .filter((e) => e.operation_id === r.operation_id)
+        .at(-1);
+      return (
+        !last ||
+        !["filled", "cancelled", "rejected", "triggered"].includes(last.state)
+      );
+    });
+    const reserves = await pool.transaction((tx) =>
+      readJevEntriesTx(tx, adapter.store.identity.account_id),
+    );
+    const makerPending =
+      s.orders.some((o) => !o.reduce_only) ||
+      (reserves.some((e) => e.status !== "released") && s.position_raw === "0");
+    const flat =
+      s.flat &&
+      !current.pending &&
+      !unresolved &&
+      reserves.every((e) => e.status === "released") &&
+      s.venue_at >= control.command.recorded_at.getTime();
+    const status = current.pending
+      ? "unavailable"
+      : flat
+        ? "reconciled_flat"
+        : makerPending
+          ? "cancelling"
+          : control.close
+            ? "reducing"
+            : protectedPosition &&
+                s.position_raw !== "0" &&
+                s.orders.some(
+                  (o) =>
+                    o.reduce_only &&
+                    o.position_stop &&
+                    o.side === (BigInt(s.position_raw) > 0n ? "sell" : "buy") &&
+                    BigInt(o.quantity_raw) >=
+                      (BigInt(s.position_raw) < 0n
+                        ? -BigInt(s.position_raw)
+                        : BigInt(s.position_raw)) &&
+                    requests.some(
+                      (r) => r.kind === "stop" && r.cloid === o.cloid,
+                    ),
+                )
+              ? "protected"
+              : "pending_reconciliation";
+    await adapter.store.recordIntervention({
+      command_key: control.command.idempotency_key,
+      status,
+      snapshot_id: s.snapshot_id,
+      position_raw: s.position_raw,
+      reasons: current.pending ? ["RECONCILIATION_REQUIRED"] : [],
+      lease,
+    });
   }
   function closeLimit(
     position: string,
@@ -385,10 +511,10 @@ export function createJevLiveLane(
   ) {
     if (
       !adapter ||
-      !s.flat ||
+      s.position_raw !== "0" ||
       !s.consistent ||
       !s.history_complete ||
-      s.orders.length ||
+      s.orders.some((o) => !o.reduce_only || !o.position_stop) ||
       (await adapter.store.latest()).pending
     )
       return;
@@ -397,6 +523,16 @@ export function createJevLiveLane(
         "SELECT 1 FROM jev_accounts WHERE account_id=$1 FOR UPDATE",
         [adapter.store.identity.account_id],
       );
+      // Reconciliation also holds this account lock. A newer cut may contain a
+      // late fill; never release reserves from the earlier zero observation.
+      const latest = (
+        await tx.query<{ snapshot_id: string }>(
+          "SELECT payload->>'snapshot_id' AS snapshot_id FROM jev_live_events WHERE identity_hash=$1 AND kind='snapshot' ORDER BY recorded_at DESC,event_key DESC LIMIT 1",
+          [adapter.store.identityHash],
+        )
+      ).rows[0];
+      if (latest?.snapshot_id !== s.snapshot_id) return;
+      requireLiveFreshSnapshot(adapter.store.identity, s, Date.now());
       for (const e of await readJevEntriesTx(
         tx,
         adapter.store.identity.account_id,

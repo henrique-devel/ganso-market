@@ -38,7 +38,8 @@ export type LiveEventKind =
   | "gap"
   | "protection"
   | "balance"
-  | "metadata";
+  | "metadata"
+  | "intervention";
 export interface LiveBalanceProof {
   version: "hyperliquid.live-balance.v1";
   identity_hash: string;
@@ -123,6 +124,10 @@ export class PgLiveStore implements LiveStore {
     });
   }
   private async lock(tx: SqlExecutor) {
+    // Operator commands and financial writers acquire retention before account.
+    // Taking account first here can deadlock an authenticated intervention with
+    // the journal trigger's retention lock, preventing its durable pause.
+    await tx.query("SELECT pg_advisory_xact_lock(741044, 4)");
     const r = (
       await tx.query(
         "SELECT identity FROM jev_accounts WHERE account_id=$1 AND owner_id=$2 AND mode='live' FOR UPDATE",
@@ -452,11 +457,13 @@ export class PgLiveStore implements LiveStore {
           )
         ).rows[0]?.reservation;
         liveCheck(
-          target?.kind === "entry" &&
+          (target?.kind === "entry" || target?.kind === "stop") &&
             target.cloid === command.target_cloid &&
             jevHash(target.scope) === jevHash(input.scope),
           "CANCEL_OWNER",
         );
+        if (target.kind === "stop")
+          liveCheck(await this.canRemoveStopTx(tx), "STOP_REMOVAL_PENDING");
       }
       if (command.kind === "stop") {
         const anchor = (
@@ -628,11 +635,22 @@ export class PgLiveStore implements LiveStore {
           snapshot.payload.snapshot_id &&
         pilot?.checkpoint.observation.reconciled === true &&
         (!gap || gap.recorded_at < snapshot.recorded_at);
+      const target =
+        c.kind === "cancel"
+          ? (
+              await tx.query<{ reservation: LiveReservation }>(
+                "SELECT reservation FROM jev_live_requests WHERE identity_hash=$1 AND operation_id=$2",
+                [this.identityHash, c.target_operation_id],
+              )
+            ).rows[0]?.reservation
+          : null;
+      const removalAllowed =
+        target?.kind !== "stop" || (await this.canRemoveStopTx(tx));
       return {
         identity_hash: this.identityHash,
         reservation_hash: stored ? jevHash(stored.reservation) : null,
         operator_activation_id: activated ? authority.activation_id : null,
-        signer_enabled: activated,
+        signer_enabled: activated && removalAllowed,
         generation: o?.generation ?? "0",
         lease_until: o?.lease_until.getTime() ?? 0,
         entries_allowed:
@@ -693,6 +711,164 @@ export class PgLiveStore implements LiveStore {
         original: { reason: "SEND_RESERVED" },
       });
       return true;
+    });
+  }
+  /** Native stop removal is allowed only after a fresh zero-position cut and
+   * terminal entry/reduction receipts, with every financial reserve released. */
+  private async canRemoveStopTx(tx: SqlExecutor) {
+    const source = (
+      await tx.query<{ payload: LiveSnapshot; recorded_at: Date }>(
+        "SELECT payload,recorded_at FROM jev_live_events WHERE identity_hash=$1 AND kind='snapshot' ORDER BY recorded_at DESC,event_key DESC LIMIT 1",
+        [this.identityHash],
+      )
+    ).rows[0];
+    const snapshot = source?.payload;
+    if (
+      !snapshot ||
+      snapshot.position_raw !== "0" ||
+      !snapshot.consistent ||
+      !snapshot.history_complete ||
+      !(await this.balanceTx(tx, snapshot))?.reconciled
+    )
+      return false;
+    const gap = (
+      await tx.query<{ recorded_at: Date }>(
+        "SELECT recorded_at FROM jev_live_events WHERE identity_hash=$1 AND kind='gap' ORDER BY recorded_at DESC,event_key DESC LIMIT 1",
+        [this.identityHash],
+      )
+    ).rows[0];
+    if (gap && gap.recorded_at >= source.recorded_at) return false;
+    const stops = (
+      await tx.query<{ cloid: string }>(
+        "SELECT reservation->>'cloid' AS cloid FROM jev_live_requests WHERE identity_hash=$1 AND reservation->>'kind'='stop'",
+        [this.identityHash],
+      )
+    ).rows;
+    if (
+      snapshot.orders.some(
+        (o) =>
+          !o.reduce_only ||
+          !o.position_stop ||
+          !stops.some((r) => r.cloid === o.cloid),
+      )
+    )
+      return false;
+    try {
+      requireLiveFreshSnapshot(this.identity, snapshot, Date.now());
+    } catch {
+      return false;
+    }
+    if (
+      (await readJevEntriesTx(tx, this.identity.account_id)).some(
+        (e) => e.status !== "released",
+      )
+    )
+      return false;
+    const pending = (
+      await tx.query<{ payload: LiveReceipt }>(
+        `SELECT e.payload FROM jev_live_requests r LEFT JOIN LATERAL
+      (SELECT payload FROM jev_live_events WHERE identity_hash=r.identity_hash AND kind='receipt' AND payload->>'operation_id'=r.operation_id ORDER BY recorded_at DESC,event_key DESC LIMIT 1) e ON true
+      WHERE r.identity_hash=$1 AND r.reservation->>'kind' IN('entry','close')`,
+        [this.identityHash],
+      )
+    ).rows;
+    return pending.every(
+      (r) =>
+        r.payload &&
+        ["filled", "cancelled", "rejected"].includes(r.payload.state) &&
+        r.payload.observed_at <= snapshot.venue_at,
+    );
+  }
+  async operatorControl() {
+    return this.pool.transaction(async (tx) => {
+      await this.lock(tx);
+      const control = (
+        await tx.query<{
+          entries_paused: boolean;
+          operator_close_requested: boolean;
+        }>(
+          "SELECT entries_paused,operator_close_requested FROM jev_worker_controls WHERE account_id=$1",
+          [this.identity.account_id],
+        )
+      ).rows[0];
+      const command = (
+        await tx.query<{
+          idempotency_key: string;
+          action: "pause" | "emergency";
+          recorded_at: Date;
+        }>(
+          "SELECT idempotency_key,action,recorded_at FROM jev_operator_commands WHERE owner_id=$1 AND $2=ANY(account_ids) ORDER BY recorded_at DESC,idempotency_key DESC LIMIT 1",
+          [this.identity.owner_id, this.identity.account_id],
+        )
+      ).rows[0];
+      return {
+        paused: control?.entries_paused === true,
+        close: control?.operator_close_requested === true,
+        command,
+      };
+    });
+  }
+  async recordIntervention(input: {
+    command_key: string;
+    status: string;
+    snapshot_id: string;
+    position_raw: string;
+    reasons: string[];
+    lease: LiveLease;
+  }) {
+    await this.pool.transaction(async (tx) => {
+      await this.lock(tx);
+      const o = (
+        await tx.query<{
+          process_id: string;
+          generation: string;
+          lease_until: Date;
+        }>(
+          "SELECT process_id,generation::text,lease_until FROM jev_live_owners WHERE identity_hash=$1",
+          [this.identityHash],
+        )
+      ).rows[0];
+      liveCheck(
+        o &&
+          o.process_id === input.lease.process_id &&
+          o.generation === input.lease.generation &&
+          o.lease_until.getTime() > (await dbNow(tx)),
+        "INTERVENTION_FENCE",
+      );
+      const previous = (
+        await tx.query<{ payload: typeof input }>(
+          "SELECT payload FROM jev_live_events WHERE identity_hash=$1 AND kind='intervention' ORDER BY recorded_at DESC,event_key DESC LIMIT 1",
+          [this.identityHash],
+        )
+      ).rows[0]?.payload;
+      const state = {
+        command_key: input.command_key,
+        status: input.status,
+        position_raw: input.position_raw,
+        reasons: input.reasons,
+      };
+      if (
+        previous &&
+        jevHash({
+          command_key: previous.command_key,
+          status: previous.status,
+          position_raw: previous.position_raw,
+          reasons: previous.reasons,
+        }) === jevHash(state)
+      )
+        return;
+      const payload = {
+        version: "jev.live-intervention.v1",
+        ...state,
+        snapshot_id: input.snapshot_id,
+        observed_at: await dbNow(tx),
+      };
+      await this.eventTx(
+        tx,
+        "intervention",
+        `intervention:${jevHash(payload)}`,
+        payload,
+      );
     });
   }
   async operations() {

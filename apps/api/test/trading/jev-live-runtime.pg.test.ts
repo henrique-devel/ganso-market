@@ -1,3 +1,6 @@
+import Fastify from "fastify";
+import { registerJevPanelRoutes } from "../../src/jev-panel-api.js";
+import { commandJevOperator } from "../../src/storage/jev-operator.js";
 import { runtimeVenue } from "../venues/live-runtime-wire.js";
 import { seedRuntimeMarket } from "./jev-runtime-market-fixture.js";
 import { seedDispatchCapacityTx } from "./jev-dispatch-fixture.js";
@@ -54,7 +57,7 @@ const flags = vi.hoisted(() => ({
   rejected: "",
 }));
 // JE14 contracts under an integrated future build; JE15 separately verifies the
-// actual build's missing JE16/JE17 gate, which configuration cannot override.
+// actual build's missing JE17 gate, which configuration cannot override.
 vi.mock("../../src/storage/jev-live-capabilities.js", async (original) => ({
   ...(await original<object>()),
   jevLiveIntegrationReady: () => flags.integrated,
@@ -494,6 +497,225 @@ describe.skipIf(!url)(
       });
       return tariff;
     }
+    it("JE16 overlapping live journal and authenticated pause both commit without losing the durable latch", async () => {
+      await setupLive();
+      let overlap: Promise<unknown> | undefined;
+      f.setHook(async (sql, tx) => {
+        if (!overlap && sql.startsWith("SELECT identity FROM jev_accounts")) {
+          await tx.query(
+            "SELECT 1 FROM jev_accounts WHERE account_id='live:h1' FOR UPDATE",
+          );
+          overlap = commandJevOperator(
+            f.poolAdapter,
+            "operator",
+            { account_id: "live:h1", action: "pause" },
+            "overlapping-pause",
+          ).then(
+            (receipt) => receipt,
+            (error: Error & { code?: string }) => ({
+              error: error.message,
+              code: error.code,
+            }),
+          );
+          // Both transactions overlap while this one owns the account. The
+          // command must wait at retention rather than own it and wait here.
+          await tx.query("SELECT pg_sleep(0.15)");
+        }
+      });
+      try {
+        await store.append("gap", "fixture:overlapping-journal", {
+          reason: "synthetic-overlap",
+        });
+      } finally {
+        f.setHook(null);
+      }
+      expect(await overlap).toMatchObject({ status: "accepted" });
+      expect(
+        (
+          await f.pool.query(
+            "SELECT entries_paused FROM jev_worker_controls WHERE account_id='live:h1'",
+          )
+        ).rows[0].entries_paused,
+      ).toBe(true);
+      expect(
+        (await store.events<{ reason: string }>("gap")).some(
+          (e) => e.reason === "synthetic-overlap",
+        ),
+      ).toBe(true);
+    });
+    it("JE16 accepts all seven admitted accounts once, includes activated live and preserves lifetime anchors on lost-response retry", async () => {
+      await f.pool.query(
+        "INSERT INTO jev_worker_controls(account_id,admitted,entries_paused,admission_reference) VALUES('live:h1',true,false,'fixture-only')",
+      );
+      await expect(
+        commandJevOperator(
+          f.poolAdapter,
+          "operator",
+          { account_id: "live:h1", action: "pause" },
+          "not-active",
+        ),
+      ).rejects.toThrow("NOT_ADMITTED");
+      await f.pool.query(
+        "DELETE FROM jev_worker_controls WHERE account_id='live:h1'",
+      );
+      await setupLive();
+      const before = (
+        await f.pool.query(
+          "SELECT checkpoint FROM jev_pilot_events ORDER BY sequence DESC LIMIT 1",
+        )
+      ).rows[0];
+      const request = { account_id: "all", action: "emergency" };
+      const receipts = await Promise.all([
+        commandJevOperator(f.poolAdapter, "operator", request, "all-live"),
+        commandJevOperator(f.poolAdapter, "operator", request, "all-live"),
+      ]);
+      expect(receipts.map((r) => r.status).sort()).toEqual([
+        "accepted",
+        "duplicate",
+      ]);
+      for (const receipt of receipts) {
+        expect(receipt.account_ids).toHaveLength(7);
+        expect(receipt.live_account_ids).toEqual(["live:h1"]);
+        expect(receipt.execution).toBe("pending_reconciliation");
+      }
+      expect(
+        (
+          await f.pool.query(
+            "SELECT entries_paused,operator_close_requested FROM jev_worker_controls",
+          )
+        ).rows.every((r) => r.entries_paused && r.operator_close_requested),
+      ).toBe(true);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT checkpoint FROM jev_pilot_events ORDER BY sequence DESC LIMIT 1",
+          )
+        ).rows[0],
+      ).toEqual(before);
+      expect(
+        await commandJevOperator(
+          f.poolAdapter,
+          "operator",
+          request,
+          "all-live",
+        ),
+      ).toMatchObject({ status: "duplicate" });
+      await expect(
+        commandJevOperator(
+          f.poolAdapter,
+          "operator",
+          { ...request, action: "pause" },
+          "all-live",
+        ),
+      ).rejects.toThrow("IDEMPOTENCY_COLLISION");
+      await expect(
+        commandJevOperator(f.poolAdapter, "foreign", request, "all-live"),
+      ).rejects.toThrow("NOT_ADMITTED");
+    });
+    it("JE16 live HTTP controls keep auth, owner, same-origin, CSRF and no-store with idempotent recovery", async () => {
+      await setupLive();
+      const app = Fastify();
+      registerJevPanelRoutes(app, {
+        pool: pool(),
+        authService: {
+          session: async (token) =>
+            token === "ok"
+              ? {
+                  status: "ok",
+                  username: "operator",
+                  expiresAt: new Date(Date.now() + 60000),
+                }
+              : { status: "unauthenticated" },
+        },
+      });
+      const csrf = "a".repeat(64),
+        headers = {
+          authorization: "Bearer ok",
+          host: "localhost",
+          origin: "http://localhost",
+          "x-csrf-token": csrf,
+          cookie: `ganso_csrf=${csrf}`,
+          "idempotency-key": "http-live",
+        };
+      const request = {
+        method: "POST" as const,
+        url: "/trading/jev/control",
+        payload: { account_id: "live:h1", action: "pause" },
+      };
+      try {
+        expect((await app.inject(request)).statusCode).toBe(401);
+        expect(
+          (
+            await app.inject({
+              ...request,
+              headers: { authorization: "Bearer ok" },
+            })
+          ).statusCode,
+        ).toBe(403);
+        expect(
+          (
+            await app.inject({
+              ...request,
+              headers: { ...headers, origin: "https://foreign.invalid" },
+            })
+          ).statusCode,
+        ).toBe(403);
+        expect(
+          (
+            await app.inject({
+              ...request,
+              headers,
+              payload: { ...request.payload, owner_id: "foreign" },
+            })
+          ).statusCode,
+        ).toBe(400);
+        expect(
+          (
+            await app.inject({
+              ...request,
+              headers,
+              url: request.url + "?signer=forbidden",
+            })
+          ).statusCode,
+        ).toBe(400);
+        const good = await app.inject({ ...request, headers });
+        expect(good.statusCode).toBe(200);
+        expect(good.headers["cache-control"]).toBe("no-store");
+        const snapshot = await app.inject({
+          url: "/trading/jev/panel",
+          headers: { authorization: "Bearer ok" },
+        });
+        expect(snapshot.statusCode).toBe(200);
+        expect(
+          snapshot
+            .json()
+            .accounts.find((a: { mode: string }) => a.mode === "live"),
+        ).toMatchObject({
+          control_available: true,
+          entries_paused: true,
+          intervention: { status: "unavailable" },
+        });
+        expect(good.json()).toMatchObject({
+          status: "accepted",
+          live_account_ids: ["live:h1"],
+          execution: "pending_reconciliation",
+        });
+        expect(
+          (await app.inject({ ...request, headers })).json(),
+        ).toMatchObject({ status: "duplicate" });
+        expect(
+          (
+            await app.inject({
+              ...request,
+              headers,
+              payload: { ...request.payload, action: "emergency" },
+            })
+          ).statusCode,
+        ).toBe(409);
+      } finally {
+        await app.close();
+      }
+    });
     async function exercise(
       venue: ReturnType<typeof runtimeVenue>,
       mode:
@@ -504,7 +726,11 @@ describe.skipIf(!url)(
         | "uncertain_cancel"
         | "starved"
         | "unsent"
-        | "jev_close",
+        | "jev_close"
+        | "operator_pause"
+        | "operator_emergency"
+        | "pause_after_jev"
+        | "pause_after_sign",
       maxMs = 12000,
     ) {
       const tariff = await setupLive(),
@@ -514,10 +740,16 @@ describe.skipIf(!url)(
       if (mode === "unsent") {
         let paused = false;
         f.setHook(async (sql, tx) => {
-          if (!paused && sql.startsWith("INSERT INTO jev_live_requests")) {
+          if (
+            !paused &&
+            sql.startsWith("SELECT checkpoint,request FROM jev_pilot_events")
+          ) {
             paused = true;
-            await tx.query(
-              "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id='live:h1'",
+            await commandJevOperator(
+              { transaction: (run) => run(tx) },
+              "operator",
+              { account_id: "live:h1", action: "pause" },
+              "pause-before-wire",
             );
           }
         });
@@ -546,6 +778,16 @@ describe.skipIf(!url)(
                 "synthetic transport hung until process shutdown",
               );
             }
+            if (
+              mode === "pause_after_jev" &&
+              batch.participants.some((p) => p.context.scope.mode === "live")
+            )
+              await commandJevOperator(
+                f.poolAdapter,
+                "operator",
+                { account_id: "live:h1", action: "pause" },
+                "pause-after-jev",
+              );
             const response = decisionResponse(batch);
             // Paper accounts hold; only the fixture's authorized live pilot enters.
             for (const [i, p] of batch.participants.entries())
@@ -589,6 +831,8 @@ describe.skipIf(!url)(
       let warmed = false,
         jointlyDue = false,
         closeDue = false,
+        interventionSent = false,
+        lastPanelStatus = "",
         marketAt = -Infinity;
       const timeout = setTimeout(() => controller.abort(), maxMs);
       try {
@@ -607,7 +851,29 @@ describe.skipIf(!url)(
             },
             evaluate: adapter.evaluate,
           },
-          live: { configuration: liveConfig, signer, wire: venue.wire },
+          live: {
+            configuration: liveConfig,
+            signer:
+              mode === "pause_after_sign"
+                ? async () => {
+                    const wallet = await signer();
+                    return {
+                      ...wallet,
+                      signTypedData: async (data: unknown) => {
+                        const signature = await wallet.signTypedData(data);
+                        await commandJevOperator(
+                          f.poolAdapter,
+                          "operator",
+                          { account_id: "live:h1", action: "pause" },
+                          "pause-after-sign",
+                        );
+                        return signature;
+                      },
+                    };
+                  }
+                : signer,
+            wire: venue.wire,
+          },
           publish: async (raw) => {
             const state = raw as Record<string, unknown>;
             health.push(structuredClone(state));
@@ -658,13 +924,34 @@ describe.skipIf(!url)(
                   "SELECT 1 FROM execution_worker_head FOR UPDATE",
                 );
                 await tx.query(
-                  "UPDATE jev_worker_controls SET entries_paused=false",
+                  "UPDATE jev_worker_controls SET entries_paused=false WHERE account_id='live:h1' OR $1",
+                  [!["pause_after_jev", "pause_after_sign"].includes(mode)],
                 );
                 await tx.query(
                   "UPDATE jev_worker_cadences SET state=jsonb_set(state,'{last_decision_at}','null')",
                 );
               });
             }
+            if (
+              mode === "pause_after_jev" &&
+              (
+                await f.pool.query(
+                  "SELECT 1 FROM jev_operator_commands WHERE idempotency_key='pause-after-jev'",
+                )
+              ).rows.length &&
+              (state.live as { metrics: { cycles: number } }).metrics.cycles >=
+                3
+            )
+              controller.abort();
+            if (
+              mode === "pause_after_sign" &&
+              (
+                await store.events<{ original?: { reason?: string } }>(
+                  "receipt",
+                )
+              ).some((r) => r.original?.reason === "ENTRIES_PAUSED")
+            )
+              controller.abort();
             const actions = venue.exchanges;
             if (
               mode === "unsent" &&
@@ -690,6 +977,100 @@ describe.skipIf(!url)(
                   | undefined
               )?.some((o) => o.r && o.t?.limit?.tif === "Ioc"),
             );
+            if (
+              (mode === "operator_pause" || mode === "operator_emergency") &&
+              !interventionSent &&
+              stops.length
+            ) {
+              interventionSent = true;
+              const app = Fastify();
+              registerJevPanelRoutes(app, {
+                pool: pool(),
+                authService: {
+                  session: async () => ({
+                    status: "ok",
+                    username: "operator",
+                    expiresAt: new Date(Date.now() + 60000),
+                  }),
+                },
+              });
+              const csrf = "a".repeat(64),
+                command = {
+                  method: "POST" as const,
+                  url: "/trading/jev/control",
+                  headers: {
+                    authorization: "Bearer ok",
+                    host: "localhost",
+                    origin: "http://localhost",
+                    "x-csrf-token": csrf,
+                    cookie: `ganso_csrf=${csrf}`,
+                    "idempotency-key": mode,
+                  },
+                  payload: {
+                    account_id: "live:h1",
+                    action: mode === "operator_pause" ? "pause" : "emergency",
+                  },
+                };
+              try {
+                const accepted = await app.inject(command); // response may be lost; same persisted intent is retried.
+                expect(accepted.json()).toMatchObject({
+                  status: "accepted",
+                  execution: "pending_reconciliation",
+                });
+                expect((await app.inject(command)).json()).toMatchObject({
+                  status: "duplicate",
+                });
+              } finally {
+                await app.close();
+              }
+            }
+            if (interventionSent) {
+              const progress = (
+                await store.events<{ status: string }>("intervention")
+              ).at(-1);
+              if (progress && progress.status !== lastPanelStatus) {
+                lastPanelStatus = progress.status;
+                const app = Fastify();
+                registerJevPanelRoutes(app, {
+                  pool: pool(),
+                  authService: {
+                    session: async () => ({
+                      status: "ok",
+                      username: "operator",
+                      expiresAt: new Date(Date.now() + 60000),
+                    }),
+                  },
+                });
+                try {
+                  const panel = await app.inject({
+                    url: "/trading/jev/panel",
+                    headers: { authorization: "Bearer fixture" },
+                  });
+                  expect(panel.statusCode).toBe(200);
+                  const live = panel
+                    .json()
+                    .accounts.find((a: { mode: string }) => a.mode === "live");
+                  expect(live.control_available).toBe(true);
+                  expect(live.entries_paused).toBe(true);
+                  if (progress)
+                    expect(live.intervention.status).toBe(progress.status);
+                } finally {
+                  await app.close();
+                }
+              }
+              if (
+                mode === "operator_pause" &&
+                progress?.status === "protected" &&
+                stops.length >= 2 &&
+                cancels.length
+              )
+                controller.abort();
+              if (
+                mode === "operator_emergency" &&
+                progress?.status === "reconciled_flat"
+              )
+                controller.abort();
+            }
             if (
               mode === "jev_close" &&
               !closeDue &&
@@ -753,7 +1134,7 @@ describe.skipIf(!url)(
         clearTimeout(timeout);
         f.setHook(null);
       }
-      if (mode !== "unsent")
+      if (!["unsent", "pause_after_jev", "pause_after_sign"].includes(mode))
         expect(
           venue.exchanges.some((a) =>
             (a.orders as { r: boolean }[] | undefined)?.some((o) => !o.r),
@@ -863,6 +1244,183 @@ describe.skipIf(!url)(
           .rows[0].n,
       ).toBe(1);
     }, 20000);
+    it("JE16 pause at JEV completion prevents a stale open before reservation", async () => {
+      const venue = runtimeVenue();
+      await exercise(venue, "pause_after_jev", 9000);
+      expect(
+        (await store.operations()).filter((r) => r.kind === "entry"),
+      ).toHaveLength(0);
+      expect(venue.exchanges).toHaveLength(0);
+    }, 15000);
+    it("JE16 final signing gate retains an uncertain attempted intent without any wire exposure or replay", async () => {
+      const venue = runtimeVenue();
+      const result = await exercise(venue, "pause_after_sign", 9000);
+      expect(
+        (await store.operations()).filter((r) => r.kind === "entry"),
+        JSON.stringify({
+          health: result.health.at(-2),
+          cycles: (
+            await f.pool.query(
+              "SELECT phase,data FROM jev_worker_cycles WHERE account_id='live:h1' ORDER BY recorded_at",
+            )
+          ).rows,
+        }),
+      ).toHaveLength(1);
+      expect(venue.exchanges).toHaveLength(0);
+      await resume(
+        venue,
+        async (state) =>
+          (state.live as { metrics: { cycles: number } }).metrics.cycles >= 2,
+      );
+      expect(venue.exchanges).toHaveLength(0);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT entries_paused FROM jev_worker_controls WHERE account_id='live:h1'",
+          )
+        ).rows[0].entries_paused,
+      ).toBe(true);
+    }, 22000);
+    it("JE16 pause cancels maker, reconciles a late fill and preserves native protection through API loss and restart without JEV", async () => {
+      const venue = runtimeVenue();
+      venue.configure({ partial: true, late_fill: true });
+      await exercise(venue, "operator_pause", 18000);
+      expect(venue.position()).toBe(14400000n);
+      expect(venue.orders.every((o) => o.reduceOnly && o.isTrigger)).toBe(true);
+      expect(
+        (await store.events<{ status: string }>("intervention")).at(-1)?.status,
+      ).toBe("protected");
+      const sent = venue.exchanges.length;
+      await resume(
+        venue,
+        async (state) =>
+          (state.live as { metrics: { cycles: number } }).metrics.cycles >= 2,
+      );
+      expect(venue.exchanges.length).toBe(sent);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT entries_paused,operator_close_requested FROM jev_worker_controls WHERE account_id='live:h1'",
+          )
+        ).rows[0],
+      ).toMatchObject({
+        entries_paused: true,
+        operator_close_requested: false,
+      });
+    }, 30000);
+    it("JE16 emergency cancels with a late fill, reduces only queried partial IOC residuals and confirms flat through lost response and restart", async () => {
+      const venue = runtimeVenue();
+      venue.configure({ partial: true, late_fill: true, lost_cancel: true });
+      await exercise(venue, "operator_emergency", 20000);
+      expect(venue.position()).toBe(0n);
+      expect(venue.orders).toHaveLength(0);
+      const reductions = venue.exchanges
+        .flatMap(
+          (a) =>
+            (a.orders as
+              | { r: boolean; s: string; t: { limit?: { tif: string } } }[]
+              | undefined) ?? [],
+        )
+        .filter((o) => o.t.limit?.tif === "Ioc");
+      expect(reductions.length).toBeGreaterThanOrEqual(2);
+      expect(reductions.every((o) => o.r)).toBe(true);
+      expect(
+        (await store.events<{ status: string }>("intervention")).at(-1)?.status,
+      ).toBe("reconciled_flat");
+      expect(
+        (await store.operations()).filter((r) => r.kind === "entry"),
+      ).toHaveLength(1);
+      const sent = venue.exchanges.length;
+      await resume(
+        venue,
+        async (state) =>
+          (state.live as { metrics: { cycles: number } }).metrics.cycles >= 2,
+      );
+      expect(venue.exchanges.length).toBe(sent);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT entries_paused,operator_close_requested FROM jev_worker_controls WHERE account_id='live:h1'",
+          )
+        ).rows[0],
+      ).toMatchObject({ entries_paused: true, operator_close_requested: true });
+    }, 35000);
+    it("JE16 preserves stop and durable emergency with no IOC liquidity, then recovers a lost IOC response and removes leftover stops only after zero", async () => {
+      const venue = runtimeVenue();
+      venue.configure({
+        partial: true,
+        late_fill: true,
+        no_liquidity: true,
+        retain_stops: true,
+      });
+      await exercise(venue, "operator_emergency", 11000);
+      expect(venue.position()).toBe(14400000n);
+      expect(venue.orders.some((o) => o.isTrigger && o.reduceOnly)).toBe(true);
+      expect(
+        (await store.events<{ status: string }>("intervention")).at(-1)?.status,
+      ).toBe("reducing");
+      venue.configure({ lost_close: true, retain_stops: true });
+      flags.integrated = false;
+      await resume(
+        venue,
+        async () =>
+          (await store.events<{ status: string }>("intervention")).at(-1)
+            ?.status === "reconciled_flat",
+        14000,
+      );
+      expect(venue.position()).toBe(0n);
+      expect(venue.orders).toHaveLength(0);
+      expect(
+        (await store.operations()).filter((r) => r.kind === "entry"),
+      ).toHaveLength(1);
+      expect(
+        (
+          await store.events<{ original?: { reason?: string } }>("receipt")
+        ).some((r) => r.original?.reason === "SUBMISSION_UNCERTAIN"),
+      ).toBe(true);
+      const snapshots = await store.events<LiveSnapshot>("snapshot");
+      const requests = await store.operations();
+      const stopCancels = requests.filter(
+        (r) =>
+          r.kind === "cancel" &&
+          requests.some(
+            (p) =>
+              p.kind === "stop" &&
+              p.operation_id ===
+                (r.request as { target_operation_id: string })
+                  .target_operation_id,
+          ),
+      );
+      expect(stopCancels.length).toBeGreaterThan(0);
+      for (const cancel of stopCancels)
+        expect(
+          snapshots.some(
+            (s) =>
+              s.position_raw === "0" &&
+              s.consistent &&
+              s.history_complete &&
+              s.venue_at < cancel.nonce &&
+              s.received_at <= cancel.nonce,
+          ),
+        ).toBe(true);
+    }, 35000);
+    it("JE16 concurrent native stop and emergency IOC cannot reverse exposure and retain reconciled intent", async () => {
+      const venue = runtimeVenue();
+      venue.configure({ partial: true, late_fill: true, stop_on_close: true });
+      await exercise(venue, "operator_emergency", 16000);
+      expect(venue.position()).toBe(0n);
+      expect(
+        (await store.events<{ status: string }>("intervention")).at(-1)?.status,
+      ).toBe("reconciled_flat");
+      expect(venue.fills.every((f) => Number(f.startPosition) >= 0)).toBe(true);
+      expect(
+        (
+          await f.pool.query(
+            "SELECT count(*)::int n FROM jev_operator_commands WHERE action='emergency'",
+          )
+        ).rows[0].n,
+      ).toBe(1);
+    }, 22000);
     it("replaces an expired uncertain cancellation only after a fresh query proves its parent still open, with a new nonce and no entry replay", async () => {
       const venue = runtimeVenue();
       venue.configure({ lost_cancel: true });
@@ -1075,8 +1633,11 @@ describe.skipIf(!url)(
           )
         ).rows[0],
       ).toMatchObject({ state: "active", profile_id: "h1" });
-      await f.pool.query(
-        "UPDATE jev_worker_controls SET entries_paused=true WHERE account_id='live:h1'",
+      await commandJevOperator(
+        f.poolAdapter,
+        "operator",
+        { account_id: "live:h1", action: "pause" },
+        "pause-before-succession",
       );
       await failActive();
       flags.eligible = true;

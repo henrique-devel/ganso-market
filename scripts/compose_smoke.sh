@@ -39,7 +39,7 @@ until docker compose exec -T execution-worker node apps/api/dist/execution-worke
 done
 # The proposal controller is wired into the real process but remains dormant.
 docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const p=h.proposals; if(p?.version!=="jev.proposal-lane.v1" || p.configured!==false || p.status!=="disabled" || p.cycles!==0) process.exit(1)'
-docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const l=h.live; if(l?.version!=="jev.live-runtime.v1" || !l.adapter_available || l.connected || l.signer_loaded || l.entries_ready || l.capabilities.interventions || l.capabilities.financial_panel || h.dispatch_limits.accounts!==7 || h.dispatch_limits.accounts_per_profile!==3) process.exit(1)'
+docker compose exec -T execution-worker node -e 'const h=JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")); const l=h.live; if(l?.version!=="jev.live-runtime.v1" || !l.adapter_available || l.connected || l.signer_loaded || l.entries_ready || l.capabilities.interventions!==true || l.capabilities.financial_panel || h.dispatch_limits.accounts!==7 || h.dispatch_limits.accounts_per_profile!==3) process.exit(1)'
 execution_id="$(docker compose ps --quiet execution-worker)"
 execution_started="$(docker inspect --format '{{.State.StartedAt}}' "$execution_id")"
 risk_before="$(docker compose exec -T execution-worker node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/tmp/ganso-execution-health.json")).metrics.risk_cycles)')"
@@ -166,14 +166,16 @@ for method in GET DELETE PUT; do
   test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X "$method" "$gateway/api/trading/jev/rearm")" = 404
 done
 wait_for_code 404 "$gateway/api/trading/jev/rearm/unpublished"
-# Queue writes keep the exact perimeter and reach authentication only on POST.
-queue_headers="$(curl --silent --show-error --output /dev/null --dump-header - -X POST "$gateway/api/trading/jev/queue")"
-printf '%s\n' "$queue_headers" | grep -E '^HTTP/[^ ]+ 401' >/dev/null
-printf '%s\n' "$queue_headers" | grep -i '^cache-control: no-store' >/dev/null
-for method in GET DELETE PUT; do
-  test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X "$method" "$gateway/api/trading/jev/queue")" = 404
+# Queue and intervention writes keep the exact authenticated POST perimeter.
+for endpoint in queue control; do
+  headers="$(curl --silent --show-error --output /dev/null --dump-header - -X POST "$gateway/api/trading/jev/$endpoint")"
+  printf '%s\n' "$headers" | grep -E '^HTTP/[^ ]+ 401' >/dev/null
+  printf '%s\n' "$headers" | grep -i '^cache-control: no-store' >/dev/null
+  for method in GET DELETE PUT; do
+    test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X "$method" "$gateway/api/trading/jev/$endpoint")" = 404
+  done
+  wait_for_code 404 "$gateway/api/trading/jev/$endpoint/unpublished"
 done
-wait_for_code 404 "$gateway/api/trading/jev/queue/unpublished"
 wait_for_code 404 "$gateway/api/trading/unpublished"
 
 docker compose run --rm --no-deps migrate

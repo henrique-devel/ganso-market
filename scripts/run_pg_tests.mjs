@@ -103,7 +103,9 @@ try {
           ? 360_000
           : file === "apps/api/test/trading/retention.pg.test.ts"
             ? 240_000
-            : 120_000;
+            : file === "apps/api/test/trading/jev-live-runtime.pg.test.ts"
+              ? 240_000 // Full JE15/JE16 entrypoint, recovery and restart scenarios.
+              : 120_000;
       const startedAt = Date.now();
       const run = spawnSync(
         process.execPath,

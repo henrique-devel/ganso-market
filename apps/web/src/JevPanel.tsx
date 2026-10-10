@@ -9,6 +9,7 @@ import { displayRaw, createTicketKey } from "./btc-ticket.js";
 import "./jev-panel.css";
 import { useRef } from "react";
 import { readCsrfCookie } from "./auth.js";
+import { createJevControlClient } from "./jev-control.js";
 type Access = { accessToken: string; onUnauthorized: () => void };
 const usd = (v: string | null | undefined) =>
   v == null ? "Indisponível" : `US$ ${displayRaw(v)}`;
@@ -17,6 +18,14 @@ const evaluation: Record<string, string> = {
   eligible: "Elegível",
   inconclusive: "Inconclusivo",
   failed: "Reprovado",
+};
+const interventionStatus: Record<string, string> = {
+  pending_reconciliation: "Pedido recebido; aguardando reconciliação",
+  cancelling: "Cancelando entradas; aguardando confirmação",
+  reducing: "Redução da posição pendente",
+  protected: "Entradas pausadas; posição protegida",
+  reconciled_flat: "Posição zero, ordens e reservas reconciliadas",
+  unavailable: "Confirmação indisponível; a intenção permanece registrada",
 };
 export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
   // Keep historical ledger components visible while current results/quotes are unavailable.
@@ -59,7 +68,9 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
               : "Live"}
         </h3>
         <span className="btc-badge">
-          {a.mode === "live" ? "REAL · INDISPONÍVEL" : "SALDO FICTÍCIO"}
+          {a.mode === "live"
+            ? "REAL · MÉTRICAS INDISPONÍVEIS"
+            : "SALDO FICTÍCIO"}
         </span>
       </div>
       <p>
@@ -73,9 +84,17 @@ export function JevAccountCard({ account: a }: { account: JevPanelAccount }) {
         <p role="status">
           Intervenção {a.intervention.action} registrada em{" "}
           {a.intervention.recorded_at}:{" "}
-          {a.intervention.status === "reconciled_flat"
-            ? "flat reconciliado"
-            : "pendente de reconciliação"}
+          {interventionStatus[a.intervention.status]}
+          {a.intervention.position_btc_raw !== undefined && (
+            <>
+              {" "}
+              · Posição observada:{" "}
+              {displayRaw(a.intervention.position_btc_raw, 8)} BTC
+            </>
+          )}
+          {a.intervention.observed_at && (
+            <> · Última confirmação do worker: {a.intervention.observed_at}</>
+          )}
           . A intervenção torna a avaliação econômica inconclusiva, preservando
           falhas comprovadas.
         </p>
@@ -580,41 +599,34 @@ function InfrastructureForm(props: Access & { refresh: () => void }) {
   );
 }
 
-function JevControls(
+export function JevControls(
   props: Access & { value: JevPanelSnapshot; refresh: () => void },
 ) {
   const [account, setAccount] = useState("all"),
     [pending, setPending] = useState(false),
     [message, setMessage] = useState("");
-  const attempt = useRef<{ body: string; key: string } | null>(null),
+  const client = useRef<ReturnType<typeof createJevControlClient> | null>(null),
     accounts = props.value.accounts.filter(
-      (a) => a.admitted && a.mode !== "live",
+      (a) => a.control_available ?? (a.admitted && a.mode !== "live"),
     );
   async function command(action: "pause" | "emergency") {
+    if (client.current?.busy) return;
+    client.current ??= createJevControlClient(
+      props.value.accounts
+        .map((a) => a.account_id)
+        .sort()
+        .join(","),
+    );
     setPending(true);
     try {
-      const body = JSON.stringify({ action, account_id: account });
-      if (attempt.current?.body !== body)
-        attempt.current = { body, key: createTicketKey() };
-      const response = await fetch("/api/trading/jev/control", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${props.accessToken}`,
-          "content-type": "application/json",
-          "x-csrf-token": readCsrfCookie() ?? "",
-          "idempotency-key": attempt.current!.key,
-        },
-        body,
-        cache: "no-store",
-        signal: AbortSignal.timeout(5000),
-      });
-      if (response.status === 401) props.onUnauthorized();
-      if (!response.ok)
-        throw new Error(
-          "Comando não confirmado. Repetir preserva a mesma chave.",
-        );
+      const response = await client.current.command(
+        props.accessToken,
+        { action, account_id: account },
+        props.onUnauthorized,
+      );
+      if (!response) return;
       setMessage(
-        "Intervenção registrada; cancelamento e redução dependem do supervisor, fills e reconciliação.",
+        "Pedido recebido. Entradas pausadas; acompanhe o cancelamento, a proteção e a redução nos cartões das contas. A confirmação do pedido não comprova posição encerrada.",
       );
       props.refresh();
     } catch (e) {
@@ -633,9 +645,13 @@ function JevControls(
           disabled={pending || !accounts.length}
           onChange={(e) => setAccount(e.target.value)}
         >
-          <option value="all">Todas as contas paper/stress admitidas</option>
+          <option value="all">
+            Todas: {accounts.filter((a) => a.mode !== "live").length} fictícias
+            {accounts.some((a) => a.mode === "live") ? " e 1 real (live)" : ""}
+          </option>
           {accounts.map((a) => (
             <option key={a.account_id} value={a.account_id}>
+              {a.mode === "live" ? "REAL · live" : "FICTÍCIA · " + a.mode} ·{" "}
               {a.account_id}
             </option>
           ))}
@@ -644,7 +660,9 @@ function JevControls(
       <p>
         Pausa cancela novas entradas e mantém a proteção. Emergência também
         solicita redução da posição. As ações são registradas e tornam a
-        avaliação econômica inconclusiva; falhas comprovadas permanecem.
+        avaliação econômica inconclusiva; falhas comprovadas permanecem. A conta
+        real ativada é incluída quando selecionada. A pausa permanece após
+        restart e troca de perfil.
       </p>
       <button
         disabled={pending || !accounts.length}
