@@ -77,10 +77,20 @@ export interface JevPanelAccount {
   horizon_minutes: number;
   admitted: boolean;
   entries_paused: boolean;
+  control_available?: boolean;
   intervention?: {
     action: string;
     recorded_at: string;
-    status: "pending_reconciliation" | "reconciled_flat";
+    status:
+      | "pending_reconciliation"
+      | "cancelling"
+      | "reducing"
+      | "protected"
+      | "reconciled_flat"
+      | "unavailable";
+    observed_at?: string;
+    position_btc_raw?: string;
+    reasons?: string[];
   };
   metrics: JevPanelMetrics | null;
   fills?: {

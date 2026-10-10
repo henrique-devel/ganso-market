@@ -2,7 +2,7 @@
  * verify their contracts before changing these values. Protection is independent. */
 export const JEV_LIVE_CAPABILITIES = Object.freeze({
   runtime: true,
-  interventions: false,
+  interventions: true,
   financial_panel: false,
 });
 export function jevLiveIntegrationReady() {

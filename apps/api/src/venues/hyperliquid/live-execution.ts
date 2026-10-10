@@ -359,6 +359,16 @@ export class LiveExecution {
     metadata: TradingInstrumentMetadata,
     metadataAt = Date.parse(metadata.instrument.origin.received_at),
   ) {
+    liveCheck(entry.kind === "entry", "MAKER_OWNER");
+    return this.cancelOrder(entry, lease, metadata, metadataAt);
+  }
+  async cancelOrder(
+    entry: LiveReservation,
+    lease: LiveLease,
+    metadata: TradingInstrumentMetadata,
+    metadataAt = Date.parse(metadata.instrument.origin.received_at),
+  ) {
+    liveCheck(entry.kind === "entry" || entry.kind === "stop", "CANCEL_OWNER");
     const previous = (await this.store.operations())
       .filter(
         (r) =>
@@ -478,7 +488,7 @@ export class LiveExecution {
         (r) => r.operation_id === c.target_operation_id,
       );
       liveCheck(
-        target?.kind === "entry" &&
+        (target?.kind === "entry" || target?.kind === "stop") &&
           target.cloid === c.target_cloid &&
           jevHash(target.scope) === jevHash(c.scope),
         "CANCEL_OWNER",

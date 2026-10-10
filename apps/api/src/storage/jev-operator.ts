@@ -49,16 +49,25 @@ export async function commandJevOperator(
         status: "duplicate",
         action: request.action,
         account_ids: old.account_ids,
+        live_account_ids: (
+          await tx.query<{ account_id: string }>(
+            "SELECT account_id FROM jev_accounts WHERE owner_id=$1 AND mode='live' AND account_id=ANY($2) ORDER BY account_id",
+            [owner, old.account_ids],
+          )
+        ).rows.map((r) => r.account_id),
         execution: "pending_reconciliation",
       };
     }
     const rows = (
-      await tx.query<{ account_id: string }>(
-        `SELECT a.account_id FROM jev_accounts a JOIN jev_worker_controls c USING(account_id) WHERE a.owner_id=$1 AND a.mode IN('paper','stress') AND c.admitted AND ($2='all' OR a.account_id=$2) ORDER BY a.account_id LIMIT 7 FOR UPDATE OF a,c`,
+      await tx.query<{ account_id: string; mode: string }>(
+        `SELECT a.account_id,a.mode FROM jev_accounts a JOIN jev_worker_controls c USING(account_id)
+        WHERE a.owner_id=$1 AND c.admitted AND (a.mode IN('paper','stress') OR
+        (a.mode='live' AND EXISTS(SELECT 1 FROM jev_live_activations x WHERE x.account_id=a.account_id AND x.owner_id=a.owner_id)))
+        AND ($2='all' OR a.account_id=$2) ORDER BY a.account_id LIMIT 8 FOR UPDATE OF a,c`,
         [owner, request.account_id],
       )
     ).rows;
-    if (!rows.length || rows.length > 6)
+    if (!rows.length || rows.length > 7)
       throw new JevPanelCommandError(409, "JEV_PANEL_ACCOUNT_NOT_ADMITTED");
     const ids = rows.map((r) => r.account_id);
     for (const id of ids) {
@@ -83,6 +92,9 @@ export async function commandJevOperator(
       status: "accepted",
       action: request.action,
       account_ids: ids,
+      live_account_ids: rows
+        .filter((r) => r.mode === "live")
+        .map((r) => r.account_id),
       execution: "pending_reconciliation",
     };
   });

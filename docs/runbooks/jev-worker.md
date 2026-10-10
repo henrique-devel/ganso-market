@@ -191,7 +191,7 @@ Só uma identidade já persistida e previamente ativada pode carregar o signer e
 reconstruir o piloto. Configurar ou reiniciar não cria conta, capital, admissão ou
 ativação. Ausência/divergência de identidade, ambiente, segredo ou ativação fecha
 o adaptador. `live.capabilities` distingue implementação de runtime, intervenções
-e painel financeiro. JE16/JE17 ainda fecham entradas por capacidade do código;
+e painel financeiro. JE16 implementa intervenções; JE17 ainda fecha entradas por capacidade do código;
 nenhuma configuração operacional contorna esse gate. Qualificação GJ12.3,
 validação GJ13.5, elegibilidade, custos, cobertura e capacidade atuais continuam
 necessários em suas etapas próprias. Fixtures não aprovam essas etapas.
@@ -236,3 +236,31 @@ Nunca desfazer migrations ou apagar ledger, pins, reservas e histórico financei
 A integração Compose executa o boot padrão fechado e o mesmo entrypoint com
 PostgreSQL e transporte sintéticos em uma imagem de teste separada, sem acesso
 à venue real ou a signer operacional.
+
+## Pausa e emergência live — JE16
+
+O POST autenticado `/trading/jev/control` aceita somente `action` (`pause` ou
+`emergency`) e `account_id`, com origem, CSRF e chave de idempotência. `all`
+inclui as contas fictícias admitidas e a conta real admitida previamente ativada
+pelo mesmo operador. O painel identifica essa inclusão antes do comando.
+Nenhuma intervenção cria conta, capital ou ato inicial.
+
+Antes de confirmar o pedido, a transação trava entradas e solicita cancelamento
+das reservas. O signer revalida essa trava antes da assinatura e do envio.
+O worker cancela makers comprovadamente abertos, consulta fills após cancelar e,
+na emergência, envia IOC reduce-only do residual consultado. A proteção nativa
+permanece enquanto posição, ordens, reservas ou reconciliação estiverem pendentes.
+Sua remoção exige posição zero fresca, recibos terminais e reservas liberadas,
+revalidados na reserva e na fronteira do signer.
+
+O journal registra pedido recebido, cancelamento, redução, posição protegida e
+posição zero reconciliada. O painel mostra confirmação indisponível quando o
+worker/lease está vencido. ACK HTTP ou da venue não comprova encerramento.
+Retry após resposta perdida ou recarga conserva a mesma chave; nenhum token é
+persistido no navegador. Restart e troca de perfil preservam pausa, solicitação
+de fechamento, âncoras, perdas e histórico. Não há botão de retomada ou ordem manual.
+
+A publicação aplica 0069 e mantém backend/signer/entradas desativados. Reversão
+usa código compatível com 0068/0069, preservando controle, proteção e reconciliação,
+sem desfazer migrations ou apagar journals. JE17 e gates operacionais permanecem
+etapas próprias; a capacidade de intervenção não autoriza entradas reais.

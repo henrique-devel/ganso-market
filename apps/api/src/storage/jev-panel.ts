@@ -26,7 +26,8 @@ export async function readJevPanel(
       await tx.query<JevPanelAccount>(
         `SELECT a.account_id,a.mode,b.profile_id,b.profile_version,p.manifest_hash,
       (p.profile->>'horizon_minutes')::int AS horizon_minutes,COALESCE(c.admitted,false) AS admitted,
-      COALESCE(c.entries_paused,true) AS entries_paused FROM jev_accounts a
+      COALESCE(c.entries_paused,true) AS entries_paused,
+      (COALESCE(c.admitted,false) AND (a.mode<>'live' OR EXISTS(SELECT 1 FROM jev_live_activations x WHERE x.account_id=a.account_id AND x.owner_id=a.owner_id))) AS control_available FROM jev_accounts a
       JOIN LATERAL (SELECT * FROM jev_bindings WHERE account_id=a.account_id ORDER BY binding->>'started_at' DESC,experiment_id DESC LIMIT 1) b ON true
       JOIN jev_profiles p ON p.owner_id=b.owner_id AND p.profile_id=b.profile_id AND p.profile_version=b.profile_version LEFT JOIN jev_worker_controls c ON c.account_id=a.account_id
       WHERE a.owner_id=$1 AND (a.mode='live' OR a.account_id IN(SELECT paper_account_id FROM jev_active_pairs UNION SELECT stress_account_id FROM jev_active_pairs)) ORDER BY b.profile_id,a.mode,a.account_id LIMIT 8`,
@@ -127,8 +128,12 @@ export async function readJevPanel(
         };
       });
       const intervention = (
-        await tx.query<{ action: string; recorded_at: Date }>(
-          `SELECT action,recorded_at FROM jev_operator_commands WHERE owner_id=$1 AND $2=ANY(account_ids) ORDER BY recorded_at DESC,idempotency_key DESC LIMIT 1`,
+        await tx.query<{
+          action: string;
+          recorded_at: Date;
+          idempotency_key: string;
+        }>(
+          `SELECT action,recorded_at,idempotency_key FROM jev_operator_commands WHERE owner_id=$1 AND $2=ANY(account_ids) ORDER BY recorded_at DESC,idempotency_key DESC LIMIT 1`,
           [owner, row.account_id],
         )
       ).rows[0];
@@ -140,6 +145,44 @@ export async function readJevPanel(
             [row.account_id, intervention.recorded_at],
           )
         ).rows[0]?.flat === true;
+      let liveIntervention: Pick<
+        NonNullable<JevPanelAccount["intervention"]>,
+        "status" | "observed_at" | "position_btc_raw" | "reasons"
+      > | null = null;
+      if (intervention && row.mode === "live") {
+        const progress = (
+          await tx.query<{
+            payload: {
+              status: NonNullable<JevPanelAccount["intervention"]>["status"];
+              observed_at: number;
+              position_raw: string;
+              reasons: string[];
+            };
+            current: boolean;
+          }>(
+            `SELECT e.payload,
+          (r.observed_at>clock_timestamp()-interval '3 seconds' AND r.state->>'connected'='true' AND (r.state->'reasons' ? 'JEV_LIVE_RECOVERY_UNAVAILABLE') IS NOT TRUE AND h.lease_until>clock_timestamp()) AS current
+          FROM jev_live_identities i LEFT JOIN jev_live_runtime r USING(identity_hash) LEFT JOIN execution_worker_head h ON h.generation=r.generation
+          LEFT JOIN LATERAL (SELECT payload FROM jev_live_events WHERE identity_hash=i.identity_hash AND kind='intervention' AND payload->>'command_key'=$3 ORDER BY recorded_at DESC,event_key DESC LIMIT 1) e ON true
+          WHERE i.owner_id=$1 AND i.account_id=$2`,
+            [owner, row.account_id, intervention.idempotency_key],
+          )
+        ).rows[0];
+        liveIntervention = {
+          status: progress?.current
+            ? (progress.payload?.status ?? "pending_reconciliation")
+            : "unavailable",
+          ...(progress?.payload
+            ? {
+                observed_at: new Date(
+                  progress.payload.observed_at,
+                ).toISOString(),
+                position_btc_raw: progress.payload.position_raw,
+                reasons: progress.payload.reasons,
+              }
+            : {}),
+        };
+      }
       accounts.push({
         ...(intervention
           ? {
@@ -149,6 +192,7 @@ export async function readJevPanel(
                 status: flat
                   ? ("reconciled_flat" as const)
                   : ("pending_reconciliation" as const),
+                ...(liveIntervention ?? {}),
               },
             }
           : {}),

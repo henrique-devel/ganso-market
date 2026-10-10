@@ -20,7 +20,11 @@ export function runtimeVenue() {
     loseAck = false,
     loseCancel = false,
     rejectStop = false,
-    reducedOnce = false;
+    reducedOnce = false,
+    loseClose = false,
+    retainStops = false,
+    stopOnClose = false,
+    noLiquidity = false;
   let stale = false;
   function fill(order: Record<string, unknown>, q: bigint, close = false) {
     const buy = order.b === true,
@@ -109,17 +113,34 @@ export function runtimeVenue() {
         const q = BigInt(Math.round(Number(order.s) * 1e8));
         statuses.set(order.c as string, { oid, status: "open" });
         if (order.r === true && !trigger) {
+          if (stopOnClose) {
+            stopOnClose = false;
+            const stop = orders.find((o) => o.isTrigger);
+            if (stop) {
+              fill(
+                stop._order as Record<string, unknown>,
+                BigInt(stop._remaining as string),
+                true,
+              );
+              statuses.get(stop.cloid as string)!.status = "triggered";
+              orders.splice(orders.indexOf(stop), 1);
+            }
+          }
           const residual = reducedOnce ? q : (q / 2n / 1000n) * 1000n || q;
           reducedOnce = true;
-          fill(order, residual, true);
+          if (!noLiquidity) fill(order, residual, true);
           statuses.get(order.c as string)!.status = "filled";
-          if (position === 0n)
+          if (position === 0n && !retainStops)
             for (let i = orders.length - 1; i >= 0; i--)
               if (orders[i]!.reduceOnly) {
                 const o = statuses.get(orders[i]!.cloid as string);
                 if (o) o.status = "canceled";
                 orders.splice(i, 1);
               }
+          if (loseClose) {
+            loseClose = false;
+            throw new Error("synthetic IOC response loss");
+          }
         } else {
           const part =
             partialOnEntry && !trigger ? (q / 2n / 1000n) * 1000n : 0n;
@@ -255,6 +276,10 @@ export function runtimeVenue() {
       lost_cancel?: boolean;
       reject_stop?: boolean;
       stale?: boolean;
+      lost_close?: boolean;
+      retain_stops?: boolean;
+      stop_on_close?: boolean;
+      no_liquidity?: boolean;
     }) => {
       partialOnEntry = c.partial ?? false;
       fillOnCancel = c.late_fill ?? false;
@@ -262,6 +287,10 @@ export function runtimeVenue() {
       loseCancel = c.lost_cancel ?? false;
       rejectStop = c.reject_stop ?? false;
       stale = c.stale ?? false;
+      loseClose = c.lost_close ?? false;
+      retainStops = c.retain_stops ?? false;
+      stopOnClose = c.stop_on_close ?? false;
+      noLiquidity = c.no_liquidity ?? false;
     },
   };
 }

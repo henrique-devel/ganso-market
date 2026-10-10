@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import type { JevPanelAccount } from "@ganso-market/contracts/trading";
-import { JevAccountCard, JevPanelView } from "../src/JevPanel.tsx";
+import { JevAccountCard, JevPanelView, JevControls } from "../src/JevPanel.tsx";
 export const account = (): JevPanelAccount => ({
   account_id: "paper:h1",
   mode: "paper",
@@ -89,4 +89,72 @@ describe("JE11 financial presentation", () => {
     expect(html).toContain("Live indisponível");
     expect(html).not.toContain("Ativar");
   });
+});
+
+describe("JE16 intervention presentation", () => {
+  it("selects activated real/all accounts and clearly distinguishes fictitious money", () => {
+    const paper = { ...account(), admitted: true, control_available: true },
+      live = {
+        ...account(),
+        account_id: "live:h1",
+        mode: "live" as const,
+        metrics: null,
+        admitted: true,
+        control_available: true,
+      };
+    const html = renderToStaticMarkup(
+      <JevControls
+        value={{
+          schema_version: "jev.panel.v1",
+          as_of: "now",
+          accounts: [paper, live],
+          live_activation_available: false,
+          alternative_banks_summable: false,
+        }}
+        accessToken="fixture"
+        onUnauthorized={() => {}}
+        refresh={() => {}}
+      />,
+    );
+    expect(html).toContain("1 fictícias e 1 real (live)");
+    expect(html).toContain("REAL · live");
+    expect(html).toContain("FICTÍCIA · paper");
+    expect(html).toContain(
+      "A confirmação do pedido não comprova cancelamento nem posição encerrada",
+    );
+    expect(html).not.toContain("Retomar");
+    expect(html).not.toContain("Negociar");
+  });
+  it.each([
+    ["pending_reconciliation", "Pedido recebido"],
+    ["cancelling", "Cancelando entradas"],
+    ["reducing", "Redução da posição pendente"],
+    ["protected", "posição protegida"],
+    ["reconciled_flat", "Posição zero, ordens e reservas reconciliadas"],
+    ["unavailable", "Confirmação indisponível"],
+  ] as const)(
+    "shows worker evidence %s without turning an accepted command into flat",
+    (status, label) => {
+      const html = renderToStaticMarkup(
+        <JevAccountCard
+          account={{
+            ...account(),
+            mode: "live",
+            metrics: null,
+            intervention: {
+              action: "emergency",
+              recorded_at: "now",
+              status,
+              position_btc_raw: status === "reconciled_flat" ? "0" : "14400000",
+            },
+          }}
+        />,
+      );
+      expect(html).toContain(label);
+      if (status !== "reconciled_flat")
+        expect(html).not.toContain(
+          "Posição zero, ordens e reservas reconciliadas",
+        );
+    },
+  );
 });
